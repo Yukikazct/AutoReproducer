@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# 环境与密钥
+.env
+.env.local
+*.key
+secrets/
+
+# 数据与输出
+**/data/raw/
+**/data/logs/
+*.log
+
+# 系统文件
+.DS_Store
