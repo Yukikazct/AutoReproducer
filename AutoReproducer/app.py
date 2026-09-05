@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from src.orchestrator import Orchestrator
 from src.llm.ollama_client import LLMClient
 from src.audit.audit_logger import AuditLogger
+from src.corpus import list_papers
 
 # 页面配置
 st.set_page_config(
@@ -102,6 +103,13 @@ with st.sidebar:
     else:
         uploaded_file = st.file_uploader("上传PDF文件", type=["pdf"], key="pdf_uploader")
 
+    # 语料对照层(可选):选择真实论文作为轻量锚点
+    st.markdown("### 🗂️ 语料对照(可选)")
+    _corpus = [p["id"] for p in list_papers()]
+    _corpus_choice = st.selectbox("选择 PaperBench 论文", ["无"] + _corpus, index=0,
+                                  key="corpus_paper_select")
+    corpus_paper = None if _corpus_choice == "无" else _corpus_choice
+
     # 启动按钮
     col1, col2 = st.columns(2)
     with col1:
@@ -116,6 +124,7 @@ with st.sidebar:
     state_colors = {
         "INIT": "⚪", "READ_PAPER": "📖", "FIND_RESOURCES": "🔍",
         "BUILD_ENV": "🔧", "EXECUTE_CODE": "⚡", "VALIDATE": "✅",
+        "OPTIMIZING": "🧪", "OPTIMIZED": "🏆",
         "GENERATE_REPORT": "📝", "COMPLETED": "🎉", "ERROR": "❌"
     }
     st.markdown(f"**当前状态**: {state_colors.get(st.session_state.current_state, '⚪')} "
@@ -143,6 +152,8 @@ with tab1:
         ("🔧 EnvBuilder", "环境构建", "自动搭建运行环境"),
         ("⚡ CodeExecutor", "代码执行", "在沙箱中运行论文代码"),
         ("✅ ResultValidator", "结果验证", "比对论文声明值与运行结果"),
+        ("🛡️ Verifier", "质量验证", "Prompt-Free 检查各步骤输出质量"),
+        ("🧪 Optimizer", "智能优化", "UCB 预算调度尝试优化方案"),
         ("📝 ReportGenerator", "报告生成", "生成Markdown复现报告"),
     ]
 
@@ -175,7 +186,8 @@ with tab1:
 
     # 进度条
     agent_order = ["📖 PaperReader", "🔍 ResourceFinder", "🔧 EnvBuilder",
-                   "⚡ CodeExecutor", "✅ ResultValidator", "📝 ReportGenerator"]
+                   "⚡ CodeExecutor", "✅ ResultValidator", "🛡️ Verifier",
+                   "🧪 Optimizer", "📝 ReportGenerator"]
     completed = sum(1 for a in agent_order
                     if st.session_state.agent_status.get(a) == "success")
     progress = completed / len(agent_order) if len(agent_order) > 0 else 0
@@ -257,13 +269,17 @@ stateDiagram-v2
     FIND_RESOURCES --> BUILD_ENV
     BUILD_ENV --> EXECUTE_CODE
     EXECUTE_CODE --> VALIDATE
-    VALIDATE --> GENERATE_REPORT
+    VALIDATE --> OPTIMIZING: 复现成功
+    VALIDATE --> GENERATE_REPORT: 复现失败
+    OPTIMIZING --> OPTIMIZED
+    OPTIMIZED --> GENERATE_REPORT
     GENERATE_REPORT --> COMPLETED
     READ_PAPER --> ERROR
     FIND_RESOURCES --> ERROR
     BUILD_ENV --> ERROR
     EXECUTE_CODE --> ERROR
     VALIDATE --> ERROR
+    OPTIMIZING --> ERROR
     GENERATE_REPORT --> ERROR
     ERROR --> INIT
     COMPLETED --> [*]
@@ -279,6 +295,8 @@ stateDiagram-v2
         {"状态": "BUILD_ENV", "说明": "构建Docker/虚拟环境", "Agent": "EnvBuilder"},
         {"状态": "EXECUTE_CODE", "说明": "在沙箱中执行代码", "Agent": "CodeExecutor"},
         {"状态": "VALIDATE", "说明": "验证结果与论文一致性", "Agent": "ResultValidator"},
+        {"状态": "OPTIMIZING", "说明": "复现成功后,UCB 预算调度优化", "Agent": "Optimizer"},
+        {"状态": "OPTIMIZED", "说明": "优化完成,产出最优方案", "Agent": "Optimizer"},
         {"状态": "GENERATE_REPORT", "说明": "生成Markdown复现报告", "Agent": "ReportGenerator"},
         {"状态": "COMPLETED", "说明": "流水线完成", "Agent": "—"},
         {"状态": "ERROR", "说明": "出错状态，可重试", "Agent": "—"},
@@ -286,8 +304,8 @@ stateDiagram-v2
     st.table(state_data)
 
 # ========== 事件处理 ==========
-def run_pipeline(paper_title="", uploaded_file=None):
-    """运行完整的复现流水线"""
+def run_pipeline(paper_title="", uploaded_file=None, corpus_paper=None):
+    """运行完整的复现流水线(复现 -> 验证 -> 优化 -> 报告)"""
     st.session_state.running = True
     st.session_state.logs = []
     st.session_state.agent_status = {}
@@ -303,7 +321,7 @@ def run_pipeline(paper_title="", uploaded_file=None):
     orchestrator = Orchestrator(llm_client=llm, mock_mode=mock_mode, logger=logger)
     st.session_state.orchestrator = orchestrator
 
-    input_data = {"paper_title": paper_title or "AutoReproducer项目方案"}
+    data = {"corpus_paper": corpus_paper}
 
     agents_info = [
         ("READ_PAPER", "📖 PaperReader", "reader"),
@@ -311,10 +329,8 @@ def run_pipeline(paper_title="", uploaded_file=None):
         ("BUILD_ENV", "🔧 EnvBuilder", "builder"),
         ("EXECUTE_CODE", "⚡ CodeExecutor", "executor"),
         ("VALIDATE", "✅ ResultValidator", "validator"),
-        ("GENERATE_REPORT", "📝 ReportGenerator", "reporter"),
     ]
 
-    data = {}
     for state_name, display_name, agent_key in agents_info:
         st.session_state.current_state = state_name
         st.session_state.agent_status[display_name] = "running"
@@ -335,8 +351,15 @@ def run_pipeline(paper_title="", uploaded_file=None):
                 data["execution"] = result
             elif state_name == "VALIDATE":
                 data["validation"] = result
-            elif state_name == "GENERATE_REPORT":
-                data["report"] = result.get("report", "")
+
+            # Prompt-Free 验证:复用该 Agent 系统提示词检查输出质量
+            verif = orchestrator.agents["verifier"].run({
+                "agent_name": agent.name,
+                "system_prompt": getattr(agent, "system_prompt", "") or agent.name,
+                "output": result,
+            })
+            data.setdefault("verifications", []).append(
+                {"state": state_name, "agent": agent.name, **verif})
 
             st.session_state.agent_status[display_name] = "success"
             st.session_state.logs = logger.get_summary()
@@ -348,6 +371,41 @@ def run_pipeline(paper_title="", uploaded_file=None):
             st.session_state.logs = logger.get_summary()
             yield
             break
+
+    st.session_state.agent_status["🛡️ Verifier"] = "success"
+
+    # 优化阶段:仅在复现成功后触发
+    if st.session_state.current_state != "ERROR":
+        if data.get("validation", {}).get("is_reproduced"):
+            st.session_state.current_state = "OPTIMIZING"
+            st.session_state.agent_status["🧪 Optimizer"] = "running"
+            yield
+            try:
+                data["optimization"] = orchestrator.agents["optimizer"].run(data)
+                st.session_state.current_state = "OPTIMIZED"
+                st.session_state.agent_status["🧪 Optimizer"] = "success"
+            except Exception as e:
+                st.session_state.current_state = "ERROR"
+                st.session_state.agent_status["🧪 Optimizer"] = "error"
+        else:
+            data["optimization"] = {"optimized": False, "reason": "复现未成功,跳过优化"}
+            st.session_state.agent_status["🧪 Optimizer"] = "waiting"
+        st.session_state.logs = logger.get_summary()
+        yield
+
+    # 报告生成(合并复现 + 优化)
+    if st.session_state.current_state != "ERROR":
+        st.session_state.current_state = "GENERATE_REPORT"
+        st.session_state.agent_status["📝 ReportGenerator"] = "running"
+        yield
+        try:
+            data["report"] = orchestrator.agents["reporter"].run(data).get("report", "")
+            st.session_state.agent_status["📝 ReportGenerator"] = "success"
+        except Exception as e:
+            st.session_state.current_state = "ERROR"
+            st.session_state.agent_status["📝 ReportGenerator"] = "error"
+        st.session_state.logs = logger.get_summary()
+        yield
 
     if st.session_state.current_state != "ERROR":
         st.session_state.current_state = "COMPLETED"
@@ -372,7 +430,8 @@ if start_btn:
         st.error("请先输入论文标题或上传PDF文件")
     else:
         with st.spinner("正在执行复现流程..."):
-            for _ in run_pipeline(paper_title=pt, uploaded_file=uploaded_file):
+            for _ in run_pipeline(paper_title=pt, uploaded_file=uploaded_file,
+                                   corpus_paper=corpus_paper):
                 time.sleep(0.3)
         st.rerun()
 

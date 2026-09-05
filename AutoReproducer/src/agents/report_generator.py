@@ -37,6 +37,7 @@ class ReportGeneratorAgent(BaseAgent):
         env_config = data.get("env_config", {})
         execution = data.get("execution", {})
         validation = data.get("validation", {})
+        optimization = data.get("optimization", {})
 
         lines = []
         lines.append(f"# 论文复现报告")
@@ -67,7 +68,7 @@ class ReportGeneratorAgent(BaseAgent):
         lines.append("## 3. 环境配置")
         env = env_config if env_config else {}
         lines.append(f"- **Python版本**: {env.get('python_version', '3.12')}")
-        lines.append(f"- **依赖数**: {len(env.get('requirements_txt', '').split('\\n'))}")
+        lines.append(f"- **依赖数**: {len(env.get('requirements_txt', '').splitlines())}")
         lines.append(f"- **预估磁盘**: {env.get('estimated_disk_gb', 'N/A')} GB")
         lines.append("")
         lines.append("### requirements.txt")
@@ -128,6 +129,26 @@ class ReportGeneratorAgent(BaseAgent):
         lines.append(f"- **成功步数**: {audit.get('success', 'N/A')}")
         lines.append(f"- **错误步数**: {audit.get('errors', 'N/A')}")
         lines.append(f"- **执行时长**: {audit.get('duration_sec', 'N/A')} 秒")
+        lines.append("")
+
+        # 7. 智能优化
+        lines.append("## 7. 智能优化")
+        opt = optimization if optimization else {}
+        if not opt.get("optimized"):
+            lines.append(f"- **优化状态**: 未触发({opt.get('reason', '复现未成功或未运行优化')})")
+        else:
+            lines.append("- **优化状态**: ✅ 已优化")
+            lines.append(f"- **基线指标**: {opt.get('baseline', 'N/A')}")
+            lines.append(f"- **最优方向**: {opt.get('best_arm', 'N/A')}")
+            lines.append(f"- **改进幅度**: {opt.get('improvement', 0):.2%}")
+            lines.append(f"- **最优结果**: {opt.get('best_result', 'N/A')}")
+            lines.append("")
+            lines.append("### 尝试记录(UCB 预算调度)")
+            lines.append("| 方向 | 改进幅度 | 判定 |")
+            lines.append("|------|----------|------|")
+            for r in opt.get("optimization_report", []):
+                mark = "✅ Keep" if r.get("kept") else "❌ Reject"
+                lines.append(f"| {r.get('arm')} | {r.get('improvement'):.4f} | {mark} |")
         lines.append("")
 
         lines.append("---")

@@ -8,6 +8,8 @@ from src.agents.env_builder import EnvBuilderAgent
 from src.agents.code_executor import CodeExecutorAgent
 from src.agents.result_validator import ResultValidatorAgent
 from src.agents.report_generator import ReportGeneratorAgent
+from src.agents.verifier import VerifierAgent
+from src.agents.optimizer import OptimizerAgent
 
 
 class Orchestrator:
@@ -21,6 +23,8 @@ class Orchestrator:
         "BUILD_ENV",
         "EXECUTE_CODE",
         "VALIDATE",
+        "OPTIMIZING",
+        "OPTIMIZED",
         "GENERATE_REPORT",
         "COMPLETED",
         "ERROR"
@@ -39,6 +43,8 @@ class Orchestrator:
             "builder": EnvBuilderAgent(self.llm, self.logger),
             "executor": CodeExecutorAgent(self.llm, self.logger),
             "validator": ResultValidatorAgent(self.llm, self.logger),
+            "verifier": VerifierAgent(self.llm, self.logger),
+            "optimizer": OptimizerAgent(self.llm, self.logger),
             "reporter": ReportGeneratorAgent(self.logger),
         }
 
@@ -46,18 +52,20 @@ class Orchestrator:
         self.error = None
 
     def run(self, input_data: dict) -> dict:
-        """执行完整的复现流程"""
+        """执行完整的复现流程(复现 -> 验证 -> 优化 -> 报告)"""
         self.logger.log("Orchestrator", "start_pipeline", "START",
                         "开始自动复现流水线", input_data)
 
-        # 状态机流转
+        # 语料对照层:可选的真实论文锚点
+        self.data["corpus_paper"] = input_data.get("corpus_paper")
+
+        # 复现阶段状态机流转(优化在 VALIDATE 之后按需触发)
         pipeline = [
             ("READ_PAPER", self.agents["reader"]),
             ("FIND_RESOURCES", self.agents["finder"]),
             ("BUILD_ENV", self.agents["builder"]),
             ("EXECUTE_CODE", self.agents["executor"]),
             ("VALIDATE", self.agents["validator"]),
-            ("GENERATE_REPORT", self.agents["reporter"]),
         ]
 
         for state_name, agent in pipeline:
@@ -80,8 +88,9 @@ class Orchestrator:
                     self.data["execution"] = result
                 elif state_name == "VALIDATE":
                     self.data["validation"] = result
-                elif state_name == "GENERATE_REPORT":
-                    self.data["report"] = result.get("report", "")
+
+                # Prompt-Free 验证:复用该 Agent 系统提示词检查输出质量
+                self._verify_step(state_name, agent, result)
 
                 # 记录LLM调用次数
                 llm_calls = result.get("llm_calls", 0)
@@ -99,6 +108,38 @@ class Orchestrator:
                                f"阶段失败: {e}")
                 break
 
+        # 优化阶段:仅在复现成功后触发
+        if self.state != "ERROR":
+            if self.data.get("validation", {}).get("is_reproduced"):
+                self.state = "OPTIMIZING"
+                self.logger.log("Orchestrator", "enter_OPTIMIZING", "RUNNING",
+                               "进入优化阶段")
+                try:
+                    self.data["optimization"] = self.agents["optimizer"].run(self.data)
+                    self.state = "OPTIMIZED"
+                    self.logger.log("Orchestrator", "exit_OPTIMIZING", "SUCCESS",
+                                   "优化阶段完成")
+                except Exception as e:
+                    self.state = "ERROR"
+                    self.error = str(e)
+                    self.logger.log("Orchestrator", "OPTIMIZING", "ERROR",
+                                   f"优化失败: {e}")
+            else:
+                self.data["optimization"] = {"optimized": False,
+                                             "reason": "复现未成功,跳过优化"}
+
+        # 报告生成(合并复现 + 优化)
+        if self.state != "ERROR":
+            self.state = "GENERATE_REPORT"
+            self.data["audit_summary"] = self.logger.get_stats()
+            try:
+                self.data["report"] = self.agents["reporter"].run(self.data).get("report", "")
+            except Exception as e:
+                self.state = "ERROR"
+                self.error = str(e)
+                self.logger.log("Orchestrator", "GENERATE_REPORT", "ERROR",
+                               f"报告生成失败: {e}")
+
         if self.state != "ERROR":
             self.state = "COMPLETED"
             self.data["audit_summary"] = self.logger.get_stats()
@@ -106,6 +147,20 @@ class Orchestrator:
                            "流水线完成", self.data.get("audit_summary"))
 
         return self.get_result()
+
+    def _verify_step(self, state_name: str, agent, result: dict):
+        """Prompt-Free 验证某一步的输出质量,结果记入 data["verifications"]。"""
+        verifier = self.agents["verifier"]
+        verif = verifier.run({
+            "agent_name": agent.name,
+            "system_prompt": getattr(agent, "system_prompt", "") or agent.name,
+            "output": result,
+        })
+        self.data.setdefault("verifications", []).append(
+            {"state": state_name, "agent": agent.name, **verif})
+        if not verif.get("pass", False):
+            self.logger.log("Verifier", state_name, "WARNING",
+                           f"{agent.name} 输出未通过质量验证", verif)
 
     def get_result(self) -> dict:
         """获取最终结果"""
@@ -132,7 +187,9 @@ class Orchestrator:
             "FIND_RESOURCES": ["BUILD_ENV", "ERROR"],
             "BUILD_ENV": ["EXECUTE_CODE", "ERROR"],
             "EXECUTE_CODE": ["VALIDATE", "ERROR"],
-            "VALIDATE": ["GENERATE_REPORT", "ERROR"],
+            "VALIDATE": ["OPTIMIZING", "GENERATE_REPORT", "ERROR"],
+            "OPTIMIZING": ["OPTIMIZED", "ERROR"],
+            "OPTIMIZED": ["GENERATE_REPORT"],
             "GENERATE_REPORT": ["COMPLETED", "ERROR"],
             "COMPLETED": [],
             "ERROR": ["INIT"],

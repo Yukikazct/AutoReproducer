@@ -8,6 +8,8 @@ from src.llm.ollama_client import LLMClient
 class PaperReaderAgent(BaseAgent):
     """从论文PDF中提取标题、方法、依赖、数值声明等结构化信息"""
 
+    system_prompt = "从论文中提取标题、作者、方法、依赖列表、数值声明与数据集,输出结构化 JSON"
+
     def __init__(self, llm_client: LLMClient, logger=None):
         super().__init__("PaperReader", logger)
         self.llm = llm_client
@@ -27,10 +29,8 @@ class PaperReaderAgent(BaseAgent):
             pdf_text = f"论文标题: {paper_title}\n摘要: 这是一篇关于{paper_title}的论文..."
 
         if not pdf_text:
-            # 使用项目方案PDF作为演示
-            pdf_text = self._extract_text(
-                "/Users/a/Desktop/人工智能实践/project/AutoReproducer-项目方案.pdf"
-            )
+            # 无 PDF 文本时降级为空,交由 Mock/LLM 处理(移除硬编码平台路径)
+            pdf_text = ""
 
         # 2. 用LLM提取结构化信息
         prompt = f"""请从以下论文内容中提取结构化信息，返回JSON格式：

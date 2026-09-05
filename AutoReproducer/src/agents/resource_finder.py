@@ -8,6 +8,8 @@ from src.llm.ollama_client import LLMClient
 class ResourceFinderAgent(BaseAgent):
     """从论文信息中查找代码仓库、数据集和相关资源"""
 
+    system_prompt = "根据论文信息定位代码仓库与数据集,输出仓库 URL、数据源列表及置信度"
+
     def __init__(self, llm_client: LLMClient, logger=None):
         super().__init__("ResourceFinder", logger)
         self.llm = llm_client

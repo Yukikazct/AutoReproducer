@@ -19,3 +19,7 @@ secrets/
 
 # 系统文件
 .DS_Store
+
+# 第三方参照仓库(不提交)
+PaperGuru-Benchmark/
+ResearchStudio/

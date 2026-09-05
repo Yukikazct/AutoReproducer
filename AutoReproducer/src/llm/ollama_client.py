@@ -59,8 +59,46 @@ class LLMClient:
             return f"[Ollama API Error: {e}]"
 
     def _mock_response(self, prompt: str) -> str:
-        """Mock模式返回模拟数据"""
-        if "paper" in prompt.lower() or "论文" in prompt:
+        """Mock模式返回模拟数据(按提示词关键特征精确分发,避免关键词误命中)"""
+        # Verifier: 质量验证
+        if "质量验证器" in prompt or "待验证输出" in prompt:
+            return json.dumps({"pass": True, "issues": [],
+                               "fix_suggestions": [], "confidence": 0.9})
+        # ResultValidator: 比对验证
+        if "比对论文声明" in prompt or "提取到的实际指标" in prompt:
+            return json.dumps({"match": True, "differences": [],
+                               "confidence": 0.85,
+                               "analysis": "运行结果与论文声明基本一致(复现成功)"})
+        # ResourceFinder: 资源定位
+        if "代码仓库" in prompt and "推测" in prompt:
+            return json.dumps({"code_repo_url": "https://github.com/example/repo",
+                               "alternative_repos": [],
+                               "dataset_url": "https://example.com/dataset",
+                               "confidence": 0.7})
+        # EnvBuilder: 环境配置
+        if "运行环境配置" in prompt or "Dockerfile" in prompt:
+            return json.dumps({
+                "required_packages": ["torch>=2.0.0", "torchvision>=0.15.0",
+                                      "numpy>=1.24.0", "tqdm>=4.65.0"],
+                "python_version": "3.12",
+                "dockerfile": "FROM python:3.12-slim\nWORKDIR /app\nCOPY requirements.txt .\nRUN pip install -r requirements.txt",
+                "setup_commands": ["pip install -r requirements.txt"],
+                "estimated_disk_gb": 3.0
+            })
+        # CodeExecutor: 生成训练代码
+        if "训练代码" in prompt:
+            return "print('Training complete. Test accuracy: 85.2%')"
+        # Optimizer: 优化建议
+        if "优化建议" in prompt or "optimize" in prompt.lower():
+            return json.dumps({
+                "suggestions": [
+                    "将学习率从0.01降至0.005",
+                    "增加Batch Normalization层",
+                    "使用AdamW优化器替代SGD"
+                ]
+            })
+        # PaperReader: 结构化解析
+        if "提取结构化信息" in prompt or "论文内容" in prompt:
             return json.dumps({
                 "title": "AutoReproducer: 基于多智能体协作的论文自动复现与优化系统",
                 "authors": ["AutoReproducer Team"],
@@ -70,25 +108,7 @@ class LLMClient:
                 "dataset": "CIFAR-10",
                 "code_url": "https://github.com/example/autoreproducer"
             })
-        elif "environment" in prompt.lower() or "环境" in prompt:
-            return json.dumps({
-                "required_packages": ["torch>=2.0.0", "torchvision>=0.15.0",
-                                      "numpy>=1.24.0", "tqdm>=4.65.0"],
-                "python_version": "3.12",
-                "cuda_version": "12.1"
-            })
-        elif "code" in prompt.lower() or "代码" in prompt:
-            return "print('Training complete. Test accuracy: 85.2%')"
-        elif "optimize" in prompt.lower() or "优化" in prompt:
-            return json.dumps({
-                "suggestions": [
-                    "将学习率从0.01降至0.005",
-                    "增加Batch Normalization层",
-                    "使用AdamW优化器替代SGD"
-                ]
-            })
-        else:
-            return f"[Mock Response] 收到请求: {prompt[:50]}..."
+        return f"[Mock Response] 收到请求: {prompt[:50]}..."
 
     def get_call_count(self) -> int:
         return self.call_count

@@ -8,6 +8,8 @@ from src.llm.ollama_client import LLMClient
 class ResultValidatorAgent(BaseAgent):
     """验证运行结果是否与论文声明一致"""
 
+    system_prompt = "比对实际运行指标与论文声明值,输出复现成功/失败、数值差异与原因分析"
+
     def __init__(self, llm_client: LLMClient, logger=None):
         super().__init__("ResultValidator", logger)
         self.llm = llm_client
@@ -24,6 +26,14 @@ class ResultValidatorAgent(BaseAgent):
         paper_metrics = paper_info.get("metrics", {})
         stdout = execution.get("stdout", "")
         stderr = execution.get("stderr", "")
+
+        # 语料对照层:若无声明指标,用语料中的复现分作为论文声明值
+        corpus_paper = input_data.get("corpus_paper") or paper_info.get("corpus_paper")
+        if not paper_metrics and corpus_paper:
+            from src.corpus import get_declared_score
+            score = get_declared_score(corpus_paper)
+            if score is not None:
+                paper_metrics = {"reproduction_score": round(score, 4)}
 
         # 从输出中提取数值指标
         actual_metrics = self._extract_metrics(stdout)
