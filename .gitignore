@@ -15,6 +15,7 @@ secrets/
 # 数据与输出
 **/data/raw/
 **/data/logs/
+data/
 *.log
 
 # 系统文件
