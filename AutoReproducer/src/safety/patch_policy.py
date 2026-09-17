@@ -40,6 +40,23 @@ DEFAULT_PROTECTED_FILES: Tuple[str, ...] = (
     ".gitignore",
     "poetry.lock",
     "Pipfile.lock",
+    ".env",
+    ".env.local",
+    "id_rsa",
+    "id_ed25519",
+    "id_dsa",
+    "credentials.json",
+    "credentials.yml",
+    "credentials.yaml",
+)
+
+# 密钥/凭据类文件后缀（任意文件名命中，如 server.key / ca.pem）
+DEFAULT_PROTECTED_SUFFIXES: Tuple[str, ...] = (
+    ".pem",
+    ".key",
+    ".p12",
+    ".pfx",
+    ".crt",
 )
 
 
@@ -48,12 +65,15 @@ class PatchPolicy:
 
     def __init__(self, editable: Optional[Iterable[str]] = None,
                  protected_prefixes: Optional[Iterable[str]] = None,
-                 protected_files: Optional[Iterable[str]] = None) -> None:
+                 protected_files: Optional[Iterable[str]] = None,
+                 protected_suffixes: Optional[Iterable[str]] = None) -> None:
         self._editable = {self._normalize(p) for p in (editable or [])
                           if self._normalize(p)}
         self._protected_prefixes = tuple(
             protected_prefixes or DEFAULT_PROTECTED_PREFIXES)
         self._protected_files = tuple(protected_files or DEFAULT_PROTECTED_FILES)
+        self._protected_suffixes = tuple(
+            protected_suffixes or DEFAULT_PROTECTED_SUFFIXES)
 
     @staticmethod
     def _normalize(path: object) -> str:
@@ -78,7 +98,11 @@ class PatchPolicy:
             return "unknown"
         if any(norm == f or norm.endswith("/" + f) for f in self._protected_files):
             return "protected"
-        if norm.split("/", 1)[0] in self._protected_prefixes:
+        if any(norm.endswith(s) for s in self._protected_suffixes):
+            return "protected"
+        # protected 目录前缀：任意层级命中即拒绝（不只首段），
+        # 例如 src/data/x 与 data/x 一样受保护。
+        if any(seg in self._protected_prefixes for seg in norm.split("/")):
             return "protected"
         return "editable" if norm in self._editable else "unknown"
 

@@ -64,6 +64,24 @@ def test_patch_policy_default_protected_prefixes():
         assert policy.check(path)[0] is False, path
 
 
+def test_patch_policy_nested_protected_dir():
+    """受保护目录在任意层级都应判 protected（不只首段）。"""
+    policy = PatchPolicy(editable=["run.py"])
+    for path in ("data/config.py", "src/data/config.py",
+                 "tests/unit/test_x.py", "pkg/checkpoints/best.pt"):
+        assert policy.classify(path) == "protected", path
+
+
+def test_patch_policy_protects_secret_files():
+    """密钥/凭据文件（含后缀 .pem/.key）一律 protected。"""
+    policy = PatchPolicy(editable=["run.py"])
+    for path in (".env", "config/.env", "id_rsa", "server.key", "ca.pem",
+                 "credentials.json"):
+        assert policy.classify(path) == "protected", path
+    # 正常文件不受影响
+    assert policy.classify("run.py") == "editable"
+
+
 # ---------------- WorkspaceSnapshot 快照与回滚 ----------------
 
 @pytest.fixture

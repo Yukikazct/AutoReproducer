@@ -51,6 +51,31 @@ _UNKNOWN_RE = re.compile(
     r"^\s*(|未知.*|未找到|无|n/?a|none|null)\s*$", re.IGNORECASE)
 # Exit code：代码在进入沙箱前就被拦下（信息不足/语法错误）
 EXIT_NOT_RUNNABLE = -5
+# Exit code：本地执行被危险代码静态门拦下（命令执行/动态执行/网络/递归删除）
+EXIT_DANGER_BLOCKED = -6
+
+# 本地无沙箱执行前的危险代码静态门：命中即拒绝执行。高信号、对「复现
+# 训练脚本」低误报；是正则兜底而非正式沙箱，生产复现不可信代码请用 Docker。
+_DANGEROUS_PATTERNS = (
+    (re.compile(r"\bsubprocess\b"), "subprocess 进程/命令执行"),
+    (re.compile(r"\bos\.system\b"), "os.system 命令执行"),
+    (re.compile(r"\bos\.popen\b"), "os.popen 命令执行"),
+    (re.compile(r"\bos\.spawn\w*\b"), "os.spawn* 进程创建"),
+    (re.compile(r"\bpty\b"), "pty 终端"),
+    (re.compile(r"\beval\s*\("), "eval 动态执行"),
+    (re.compile(r"\bexec\s*\("), "exec 动态执行"),
+    (re.compile(r"\b__import__\s*\("), "__import__ 动态导入"),
+    (re.compile(r"\bsocket\b"), "socket 网络"),
+    (re.compile(r"\brequests\b"), "requests 网络外联"),
+    (re.compile(r"\burllib\b"), "urllib 网络外联"),
+    (re.compile(r"\bhttp\.client\b"), "http.client 网络"),
+    (re.compile(r"\bftplib\b"), "ftplib 网络"),
+    (re.compile(r"\bsmtplib\b"), "smtplib 邮件外发"),
+    (re.compile(r"\bparamiko\b"), "paramiko SSH"),
+    (re.compile(r"\bhttpx\b"), "httpx 网络外联"),
+    (re.compile(r"\baiohttp\b"), "aiohttp 网络外联"),
+    (re.compile(r"\bshutil\.rmtree\b"), "shutil.rmtree 递归删除"),
+)
 
 # markdown 代码块围栏（可能带 python 语言标注）
 _CODE_FENCE = re.compile(r"```(?:python|py)?\s*\n(.*?)```", re.DOTALL)
@@ -116,6 +141,14 @@ class CodeExecutorAgent(BaseAgent):
         if syntax_error:
             return self._not_runnable(
                 f"代码存在语法错误，未执行: {syntax_error}", code=code)
+
+        # 危险代码静态门：本地执行无沙箱，拒绝明显危险的调用（命令执行/
+        # 动态执行/网络外联/递归删除）。Docker 已是隔离沙箱，不必拦。
+        if not self.use_docker:
+            danger = self._dangerous_constructs(code)
+            if danger:
+                return self._not_runnable(
+                    f"代码含危险调用，已拒绝执行: {danger}", code=code)
 
         smoke = self._execute_code(code, stage="smoke")
         if not smoke["success"]:
@@ -275,6 +308,21 @@ class CodeExecutorAgent(BaseAgent):
     # ---------------- 执行前检查 ----------------
 
     @staticmethod
+    def _dangerous_constructs(code: str) -> Optional[str]:
+        """扫描代码中的危险调用，命中返回可读原因，否则 None。
+
+        仅针对本地无沙箱执行（_execute_code_local）：本地模式以完整用户权限
+        运行 LLM 代码，明显危险的调用（命令执行/动态执行/网络外联/递归删除）
+        一律拒绝。正则兜底，非正式沙箱；生产复现不可信代码请用 Docker。
+        """
+        if not code:
+            return None
+        for pattern, label in _DANGEROUS_PATTERNS:
+            if pattern.search(code):
+                return label
+        return None
+
+    @staticmethod
     def _syntax_error(code: str) -> Optional[str]:
         """编译检查：语法错误返回可读信息，通过则返回 None。"""
         if not code or not code.strip():
@@ -362,6 +410,21 @@ class CodeExecutorAgent(BaseAgent):
         执行前按 env_config 依赖清单自动安装依赖（_ensure_local_deps），
         依赖安装失败时直接返回失败诊断，不浪费脚本执行预算。
         """
+        # 危险代码静态门（兜底）：Optimizer 真实执行 execute_in_workspace
+        # 绕过 run() 直接进这里，仍需拦截危险调用。
+        danger = self._dangerous_constructs(code)
+        if danger:
+            return {"success": False, "stdout": "",
+                    "stderr": f"拒绝执行(危险代码): {danger}",
+                    "exit_code": EXIT_DANGER_BLOCKED, "danger_blocked": True}
+
+        # 本地无沙箱边界提示（一次性，避免 smoke/full/优化重跑反复刷屏）
+        if not getattr(self, "_warned_unsandboxed", False):
+            self._warned_unsandboxed = True
+            self.log("execute_local", "WARNING",
+                     "本地模式无沙箱隔离，仅用于演示/可信代码；"
+                     "生产复现请 use_docker=True")
+
         cleanup = workdir is None
         if workdir is None:
             workdir = tempfile.mkdtemp(prefix="autorepro_exec_")

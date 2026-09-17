@@ -5,6 +5,36 @@
 
 ---
 
+## [2026.09.17-1] - 2026-09-17
+
+### 修复（安全加固，Batch 3）
+
+- **本地执行危险代码静态门**：`src/agents/code_executor.py` 本地模式（无沙箱）执行
+  LLM 代码前新增 `_dangerous_constructs()` 静态扫描，拦截明显危险调用——
+  `subprocess`/`os.system`/`os.popen`/`os.spawn*`/`pty`（命令执行）、`eval`/`exec`/
+  `__import__`（动态执行）、`socket`/`requests`/`urllib`/`http.client`/`ftplib`/
+  `smtplib`/`paramiko`/`httpx`/`aiohttp`（网络外联）、`shutil.rmtree`（递归删除）；
+  - `run()` 语法门之后命中即 `_not_runnable`（exit_code=-5，下游判「无法验证」）；
+  - `_execute_code_local` 开头兜底拦截（exit_code=-6 / `danger_blocked`），覆盖
+    Optimizer 真实执行（`execute_in_workspace` 绕过 `run()`）；
+  - 正则兜底、非正式沙箱；生产复现不可信代码请用 Docker。
+- **patch_policy 收紧**：`src/safety/patch_policy.py`
+  - `classify` 的 protected 目录前缀由「只查首段」改为「任意层级命中」
+    （`src/data/x` 与 `data/x` 一样判 protected）；
+  - 新增 `DEFAULT_PROTECTED_SUFFIXES`（`.pem`/`.key`/`.p12`/`.pfx`/`.crt`）与
+    密钥文件（`.env`/`id_rsa`/`credentials.*` 等）到 protected_files。
+- **明确执行边界**：`_execute_code_local` 首次执行记 WARNING 审计日志
+  （「本地模式无沙箱隔离…请 use_docker=True」）；README「两种模式」补安全提示。
+
+### 测试
+
+- 新增 `tests/test_code_executor_safety.py`（28 例：危险命中/良性不误报/run 短路/
+  本地兜底拦截/良性仍执行）。
+- 扩展 `tests/test_safety.py`（2 例：嵌套受保护目录、密钥文件拦截）。
+- 全量 **163 passed**。
+
+---
+
 ## [2026.09.10-3] - 2026-09-10
 
 ### 修复（前端可观测性 / 诚实性，Batch 2）

@@ -91,6 +91,11 @@ INIT → READ_PAPER → FIND_RESOURCES → BUILD_ENV → EXECUTE_CODE → VALIDA
 - **Mock 模式**（默认）— 无需 LLM API / Docker，直接演示完整流程
 - **真实模式** — 调用任意 **OpenAI 兼容的远程 LLM API**（不依赖本地部署；需配置 `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL`），可选 Docker 真实执行论文代码
 
+> **安全提示**：真实模式的代码执行分两种沙箱——**本地子进程**（默认，便捷但
+> 无沙箱隔离，运行前会做一道「危险代码静态门」拦截 `subprocess`/`os.system`/
+> `eval`/网络外联/递归删除等明显危险调用）与 **Docker 容器**（`use_docker=True`，
+> 隔离运行）。执行不可信 LLM 代码请用 Docker。
+
 ## LLM API 配置（真实模式）
 
 通过环境变量注入，客户端不绑定具体厂商：
