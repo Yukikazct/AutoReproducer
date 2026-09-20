@@ -393,17 +393,25 @@ class EnvBuilderAgent(BaseAgent):
                           encoding="utf-8") as f:
                     f.write(reqs)
             self.log("build_image", "START", f"构建镜像 {tag}")
+            # encoding/errors 显式给：docker build 输出是 UTF-8，不指定就按
+            # Windows 中文 locale（GBK）解码，非 GBK 字节会让 reader 线程抛
+            # UnicodeDecodeError、`stdout` 变 None，随后 `result.stdout[-300:]`
+            # 抛 TypeError 被下面的 except 兜住 —— 用户看到的构建失败原因
+            # 是 "TypeError: 'NoneType' object is not subscriptable"，
+            # 而不是 docker 真正报的错。
             result = subprocess.run(
                 [docker_cmd, "build", "-t", tag, build_dir],
-                capture_output=True, text=True, timeout=1800)
+                capture_output=True, text=True, timeout=1800,
+                encoding="utf-8", errors="replace")
             ok = result.returncode == 0
+            out_tail = (result.stdout or "")[-300:]
+            err_tail = (result.stderr or "")[-300:]
             self.log("build_image", "SUCCESS" if ok else "ERROR",
                      f"镜像构建{'成功' if ok else '失败'}: {tag}",
-                     {"stdout": result.stdout[-300:],
-                      "stderr": result.stderr[-300:]})
+                     {"stdout": out_tail, "stderr": err_tail})
             return {"success": ok, "tag": tag,
-                    "stdout": result.stdout[-500:],
-                    "stderr": result.stderr[-500:]}
+                    "stdout": (result.stdout or "")[-500:],
+                    "stderr": (result.stderr or "")[-500:]}
         except subprocess.TimeoutExpired:
             return {"success": False, "error": "构建超时(1800s)"}
         except Exception as e:
@@ -464,8 +472,9 @@ class EnvBuilderAgent(BaseAgent):
         try:
             res = subprocess.run(
                 [docker_cmd, "images", "-q", tag],
-                capture_output=True, text=True, timeout=60)
-            return res.returncode == 0 and bool(res.stdout.strip())
+                capture_output=True, text=True, timeout=60,
+                encoding="utf-8", errors="replace")
+            return res.returncode == 0 and bool((res.stdout or "").strip())
         except Exception:
             return False
 

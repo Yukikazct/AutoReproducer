@@ -1165,10 +1165,15 @@ class CodeExecutorAgent(BaseAgent):
         不在加固级别间重试（避免重复等待）。返回 (subprocess.CompletedProcess,
         sandbox 元信息 dict)。
         """
+        # encoding/errors 必须显式给：docker 的构建与运行输出是 UTF-8，父进程
+        # 不指定就按系统 locale（Windows 中文 = GBK）解码，遇到非 GBK 字节
+        # reader 线程抛 UnicodeDecodeError，`stdout` 变成 None —— 下游把它塞进
+        # 报告时 `"\n".join(lines)` 直接崩（与 _run_local_script 同一根因）。
         if not DOCKER_HARDEN:
             result = subprocess.run(
                 base_cmd + [image] + runner,
-                capture_output=True, text=True, timeout=timeout)
+                capture_output=True, text=True, timeout=timeout,
+                encoding="utf-8", errors="replace")
             return result, {"hardened": False, "level": None, "degraded": False}
         result = None  # 循环内必赋值；None 仅用于静态类型安抚
         last_meta: Dict = {"hardened": True, "level": 0, "degraded": False}
@@ -1177,7 +1182,8 @@ class CodeExecutorAgent(BaseAgent):
             cmd = base_cmd + args + [image] + runner
             try:
                 result = subprocess.run(
-                    cmd, capture_output=True, text=True, timeout=timeout)
+                    cmd, capture_output=True, text=True, timeout=timeout,
+                    encoding="utf-8", errors="replace")
             except subprocess.TimeoutExpired:
                 raise
             meta = {"hardened": True, "level": level,
@@ -1330,8 +1336,11 @@ class CodeExecutorAgent(BaseAgent):
             assert result is not None
             result = {
                 "success": result.returncode == 0,
-                "stdout": result.stdout,
-                "stderr": result.stderr,
+                # `or ""` 兜底：解码失败等异常路径下 stdout/stderr 可能是 None，
+                # 而 None 会让下游 `full.get("stdout", "无输出")` 拿到 None、
+                # 报告 `"\n".join(lines)` 崩（dict.get 的默认值对 None 不生效）。
+                "stdout": result.stdout or "",
+                "stderr": result.stderr or "",
                 "exit_code": result.returncode,
                 "sandbox": sandbox_meta,
             }

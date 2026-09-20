@@ -50,16 +50,6 @@ def _proc(returncode=0, stdout="ok", stderr=""):
                           "stdout": stdout, "stderr": stderr})()
 
 
-class _NoDocker:
-    """模拟无 Docker 环境：_resolve_docker_cmd 返回 None。"""
-
-    def __init__(self, agent):
-        self._agent = agent
-
-    def _resolve_docker_cmd(self):
-        return None
-
-
 # ---------------- 1. 底座 Dockerfile ----------------
 
 def test_base_dockerfile_content():
@@ -234,11 +224,16 @@ def test_swap_no_from_untouched():
 
 # ---------------- 5. 既有兼容 ----------------
 
-def test_docker_not_required_for_mock():
-    """Mock 模式不依赖 Docker；空 Dockerfile 仍短路报错。"""
+def test_docker_not_required_for_mock(monkeypatch):
+    """Mock 模式不依赖 Docker；无 Docker 时同样诚实报错（不伪造成功）。
+
+    无 Docker 分支必须**显式构造**：原用例靠「本机 Docker 恰好不可用」才
+    通过，Docker Desktop 一启动，降级路径就真去 docker build 并成功，断言
+    翻车——判定依据成了机器状态而不是代码行为。
+    """
     agent = _agent()
     assert agent.build_image({"dockerfile": ""})["success"] is False
-    # doctype: 无 Docker 时同样诚实报错
+    monkeypatch.setattr(agent, "_resolve_docker_cmd", lambda: None)
     assert agent.build_image(
         {"dockerfile": "FROM python:3.11-slim\n"})["success"] is False
 
@@ -249,6 +244,56 @@ def _engine_down(monkeypatch,
                  reason="Docker 引擎未启动或不可用（daemon 连接失败）"):
     monkeypatch.setattr(BaseAgent, "docker_engine_available",
                         staticmethod(lambda *a, **k: (False, reason)))
+
+
+def test_build_dockerfile_capture_declares_utf8(monkeypatch):
+    """docker build 捕获输出必须显式 UTF-8 解码。
+
+    中文 Windows 上不指定 encoding 就按 GBK 解码 UTF-8 构建输出，非 GBK
+    字节让 reader 线程抛 UnicodeDecodeError、`stdout` 变 None，随后
+    `result.stdout[-300:]` 抛 TypeError 被兜底 except 吞掉——用户看到的
+    构建失败原因是 "TypeError: 'NoneType' object is not subscriptable"。
+    """
+    agent = _agent()
+    monkeypatch.setattr(agent, "_resolve_docker_cmd", lambda: "docker")
+    calls: list = []
+
+    def fake_run(cmd, **kw):
+        calls.append((list(cmd), kw))
+        return _proc(stdout=BASE_IMAGE_TAG)
+
+    monkeypatch.setattr("src.agents.env_builder.subprocess.run", fake_run)
+    res = agent.build_image({"dockerfile": "FROM python:3.11-slim\n",
+                             "requirements_txt": ""})
+
+    assert res["success"] is True
+    builds = [kw for cmd, kw in calls if "build" in cmd]
+    assert builds, "应发起 docker build"
+    for kw in builds:
+        assert kw.get("encoding") == "utf-8"
+        assert kw.get("errors") == "replace"
+
+
+def test_build_dockerfile_none_stdout_is_plain_failure(monkeypatch):
+    """解码失败导致 stdout/stderr 为 None 时，报的是构建失败而非 TypeError。"""
+    agent = _agent()
+    monkeypatch.setattr(agent, "_resolve_docker_cmd", lambda: "docker")
+
+    def fake_run(cmd, **kw):
+        if "images" in cmd:
+            return _proc(stdout=BASE_IMAGE_TAG)
+        return type("P", (), {"returncode": 1, "stdout": None,
+                              "stderr": None})()
+
+    monkeypatch.setattr("src.agents.env_builder.subprocess.run", fake_run)
+    res = agent.build_image({"dockerfile": "FROM python:3.11-slim\n",
+                             "requirements_txt": ""})
+
+    assert res["success"] is False
+    # 报的是构建失败本身（输出已兜成空串），而不是 TypeError 字符串
+    assert "NoneType" not in repr(res)
+    assert res.get("stderr") == ""
+    assert res.get("stdout") == ""
 
 
 def test_build_image_engine_down_honest_error(monkeypatch):

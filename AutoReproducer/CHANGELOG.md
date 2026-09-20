@@ -5,6 +5,68 @@
 
 ---
 
+## [2026.09.20-12] - 2026-09-20
+
+### 回滚 / 修复（深色 IDE 面板回滚；docker 输出在中文 Windows 上丢输出）
+
+**1. 回滚深色 IDE 面板**（用户反馈：「回滚掉 ide 修改吧 我现在都看不到代码了」）
+
+[2026.09.20-10] 引入 `frontend/markdown_render.py`，把报告里的围栏代码块
+渲染成自绘深色面板。**它只被 AppTest 断言过 HTML 字符串、并在独立预览页里
+看过，从未在真实 Streamlit 页面里打开验证**——用户打开页面看到的是代码
+不可见。自绘 HTML 这条路到此为止：原生 `st.markdown` 至少是「能看见」的。
+
+删除 `frontend/markdown_render.py`、`tests/test_markdown_render.py`、
+`tests/test_app_report_tab.py`，以及 `app.py` 里的 `.autorepro-code*` /
+`.autorepro-plain` / 行号 / 滚动条 CSS 段与 `render_markdown` 导入，Tab 2
+恢复 `st.markdown(report)`。
+
+**保留**同批次里的「不再截断」（那是用户明确提的「能不能不截断啊」，与
+面板渲染是两件独立的事），排版代价回到「长输出会把页面拉长」，接受。
+
+**2. docker 路径的 GBK 解码丢输出**（回滚验证时全量测试暴露）
+
+```
+PytestUnhandledThreadExceptionWarning: Exception in thread Thread-4 (_readerthread)
+UnicodeDecodeError: 'gbk' codec can't decode byte 0xaf in position 4124
+```
+
+[2026.09.20-3] 已修过同一根因，但当时只覆盖了**本地执行**路径的
+`subprocess.run`：`env_builder` 的 `docker build` / `docker images`、
+`code_executor` 的 `docker run`、`base_agent` 的引擎探测都还是
+`text=True` 不带 encoding —— 中文 Windows 上按 GBK 解码 UTF-8 的 docker
+输出，非 GBK 字节让 reader 线程抛 `UnicodeDecodeError`、`stdout` 变成
+**None**。两处后果：
+
+- `env_builder`：`result.stdout[-300:]` 抛 `TypeError: 'NoneType' object is
+  not subscriptable`，被兜底 `except Exception` 吞掉 → 用户读到的构建失败
+  原因是这行 TypeError，而不是 docker 真正报的错；
+- `code_executor`：None 直接进 `final["stdout"]`，`report_generator` 的
+  `"\n".join(lines)` 崩（`dict.get("stdout", "无输出")` 对「键存在且值为
+  None」不生效）→ 报告页整块渲染不出来。
+
+**改法**：四处 docker 调用补 `encoding="utf-8", errors="replace"`；
+`stdout`/`stderr` 统一 `or ""` 兜底；`report_generator` 新增 `_txt()` 并
+把三个会崩的 join 位点（`requirements_txt` / `code` / `final["stdout"]`）
+改为经它取出。本机 Docker Desktop 此刻是启用的（用户已启动），这条路径
+不再是纸面问题。
+
+**3. 一个靠机器状态才通过的测试**
+
+`test_docker_not_required_for_mock` 断言「无 Docker 时构建诚实失败」，却
+没构造「无 Docker」—— 它靠**本机 Docker 恰好不可用**才通过。引擎一启动，
+降级路径真去 `docker build`（本机 python:3.11-slim 已在本地，几秒构建成功），
+断言翻车，全量耗时也从 48s 涨到 307s。改为显式
+`monkeypatch.setattr(agent, "_resolve_docker_cmd", lambda: None)`，
+并删掉文件里从未被引用的 `_NoDocker` 辅助类。
+
+**测试**：`test_exec_output_encoding.py` +1（docker run 捕获必须声明
+UTF-8）；`test_env_builder_base.py` +2（docker build 捕获声明 UTF-8、
+stdout 为 None 时报的是构建失败而非 TypeError）；`test_code_generation_
+completeness.py` +1（stdout/requirements 为 None 时报告仍渲染）。
+
+---
+
 ## [2026.09.20-11] - 2026-09-20
 
 ### 修复（Docker「已就绪」是假的：CLI 在 PATH ≠ 引擎在跑）
@@ -66,6 +128,9 @@ Docker 状态漂移，`test_usage_metering` 还会因多出一条 `subprocess` �
 ---
 
 ## [2026.09.20-10] - 2026-09-20
+
+<!-- 本条的「深色 IDE 面板」部分已在 [2026.09.20-12] 回滚（面板在真实浏览器
+里代码不可见）；「全文不再截断」部分保留有效。 -->
 
 ### 新增 / 修复（报告代码块：深色 IDE 面板 + 全文不再截断）
 

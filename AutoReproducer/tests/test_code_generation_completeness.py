@@ -315,10 +315,11 @@ class TestNoSilentLineDeletion:
 class TestReportSurfacesSanitize:
 
     @staticmethod
-    def _report(execution: dict) -> str:
+    def _report(execution: dict, **extra) -> str:
         from src.agents.report_generator import ReportGeneratorAgent
-        return ReportGeneratorAgent().run(
-            {"execution": execution, "paper_info": {}})["report"]
+        data = {"execution": execution, "paper_info": {}}
+        data.update(extra)
+        return ReportGeneratorAgent().run(data)["report"]
 
     def test_code_drop_is_flagged_in_report(self):
         report = self._report({
@@ -345,7 +346,7 @@ class TestReportSurfacesSanitize:
 
         此前 `_clip` 把 code/stdout/stderr 砍到 6000/6000/3000 字符，实测
         一次 10627 字符的输出在报告里只剩前 6000——读报告的人拿到半截内容。
-        代码块现已由前端渲染成可滚动面板，长度不再有排版代价。
+        代价是长输出会把页面拉长，这是刻意换来的：可读性优先于版面。
         """
         code = "# 生成代码\n" + "\n".join(
             f"print('step {i}')" for i in range(400))          # ≈ 8000 字符
@@ -359,6 +360,20 @@ class TestReportSurfacesSanitize:
         assert stdout.splitlines()[-1] in report     # 输出末行必须在
         assert "截断" not in report
         assert len(report) > len(code) + len(stdout)
+
+    def test_none_stdout_still_renders_report(self):
+        """stdout/requirements 为 None 时报告仍须生成（曾整段崩在 join 上）。
+
+        docker 执行路径在中文 Windows 下 GBK 解码失败会把 stdout 置成 None，
+        而 `dict.get("stdout", "无输出")` 对「键存在且值为 None」不生效，
+        `"\\n".join(lines)` 随即 TypeError：expected str instance,
+        NoneType found —— 报告页直接空白。
+        """
+        report = self._report(
+            {"code": "a = 1\n", "stages": [],
+             "final": {"stdout": None, "stderr": None}},
+            env_config={"requirements_txt": None})
+        assert "无输出" in report
 
 
 # ============================================================

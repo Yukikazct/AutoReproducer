@@ -97,7 +97,8 @@ class BaseAgent(ABC):
         try:
             res = subprocess.run(
                 list(probe_cmd) + ["version", "--format", "{{.Server.Version}}"],
-                capture_output=True, text=True, timeout=timeout)
+                capture_output=True, text=True, timeout=timeout,
+                encoding="utf-8", errors="replace")
         except subprocess.TimeoutExpired:
             return False, f"Docker 探测超时({timeout:g}s)"
         except Exception as e:                  # CLI 不可执行 / 编码异常等

@@ -71,6 +71,32 @@ def test_child_gets_utf8_stdio():
     assert env.get("PYTHONIOENCODING") == "utf-8"
 
 
+def test_docker_run_capture_declares_utf8(monkeypatch):
+    """docker run 捕获输出必须显式 UTF-8 解码，与本地执行同一条规矩。
+
+    docker 的输出是 UTF-8；不指定 encoding 就按系统 locale（Windows 中文 =
+    GBK）解码，非 GBK 字节让 reader 线程抛 UnicodeDecodeError、`stdout` 变
+    None（实测 docker build 输出即触发："'gbk' codec can't decode byte 0xaf"）。
+    """
+    import src.agents.code_executor as ce_mod
+
+    seen = []
+
+    def fake_run(cmd, **kw):
+        seen.append((list(cmd), kw))
+        return type("P", (), {"returncode": 0, "stdout": "容器输出 ok",
+                              "stderr": ""})()
+
+    monkeypatch.setattr(ce_mod.subprocess, "run", fake_run)
+    _executor()._run_docker_cmd_with_sandbox_impl(
+        ["docker", "run"], "python:3.11-slim", ["python", "run.py"], 30)
+
+    assert seen, "应发起 docker run"
+    for _cmd, kw in seen:
+        assert kw.get("encoding") == "utf-8"
+        assert kw.get("errors") == "replace"
+
+
 def test_run_pipeline_survives_chinese_stdout():
     """整条 run() 链路不因中文输出崩溃（曾在此处 TypeError）。"""
     agent = _executor()

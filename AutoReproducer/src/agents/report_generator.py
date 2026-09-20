@@ -16,12 +16,24 @@ def _fmt(value, spec: str = ".2f", default: float = 0.0) -> str:
         return format(float(default), spec)
 
 
+def _txt(value, default: str = "") -> str:
+    """文本字段兜底：`dict.get` 的默认值对「键存在且值为 None」不生效。
+
+    docker 执行路径曾因 GBK 解码失败把 stdout 置成 None，报告整段崩在
+    `"\\n".join(lines)`（TypeError: expected str instance, NoneType found）。
+    非字符串值一律转成字符串，保证拼进 lines 的永远是 str。
+    """
+    if isinstance(value, str):
+        return value
+    return default if value is None else str(value)
+
+
 # 报告内代码与执行输出**全文内嵌**，不设展示上限。
 # 此前是截断到 6000/6000/3000 字符 + 一句「完整内容见 *_execution.txt 附件」，
 # 但报告本身才是用户真正在读的东西：实测一次 10627 字符的输出被砍到 6000，
 # 读报告的人拿到的是半截内容，还得去翻附件才知道后一半是什么。
-# 前端 `frontend/markdown_render.py` 会把代码块渲染成可滚动的深色面板，
-# 长度不再等于页面高度，全文内嵌没有排版代价。
+# 前端按原生 Markdown 渲染（代码块 = 灰底 `<pre>`），全文内嵌意味着长输出会
+# 把页面拉长——这是刻意换来的：可读性优先于版面，附件仍提供纯文本旁路。
 
 
 class ReportGeneratorAgent(BaseAgent):
@@ -79,7 +91,8 @@ class ReportGeneratorAgent(BaseAgent):
         # 3. 环境配置 + 依赖诊断
         lines += ["## 3. 环境配置",
                   f"- **Python版本**: {env_config.get('python_version', 'N/A')}",
-                  f"- **依赖数**: {len(env_config.get('requirements_txt', '').splitlines())}",
+                  f"- **依赖数**: "
+                  f"{len(_txt(env_config.get('requirements_txt')).splitlines())}",
                   f"- **预估磁盘**: {env_config.get('estimated_disk_gb', 'N/A')} GB"]
         diag = env_config.get("dependency_diagnosis", {}) or {}
         if diag:
@@ -98,11 +111,11 @@ class ReportGeneratorAgent(BaseAgent):
                 lines.append(
                     f"- 第 {rnd.get('round')} 轮: 🔧 发现 {descs} -> {fixs}")
         lines += ["", "### requirements.txt", "```",
-                  env_config.get("requirements_txt", "无"), "```", ""]
+                  _txt(env_config.get("requirements_txt"), "无"), "```", ""]
 
         # 4. 代码执行（smoke + full）
         lines += ["## 4. 代码执行",
-                  f"- **代码长度**: {len(execution.get('code', ''))} 字符"]
+                  f"- **代码长度**: {len(_txt(execution.get('code')))} 字符"]
         # 清洗记录：清洗层碰过代码就必须让人看见——丢掉疑似代码行是"结果可能
         # 已被洗残"的信号，静默吞掉正是此前"代码不完整却查不出来"的成因。
         sstats = execution.get("sanitize_stats") or {}
@@ -130,11 +143,11 @@ class ReportGeneratorAgent(BaseAgent):
                 f"(退出码 {st.get('exit_code')})")
         if execution.get("code"):
             lines += ["", "### 生成代码", "```python",
-                      execution["code"], "```"]
+                      _txt(execution["code"]), "```"]
         lines += ["", "### 执行输出(full)", "```",
-                  final.get("stdout", "无输出"), "```"]
+                  _txt(final.get("stdout"), "无输出"), "```"]
         if final.get("stderr"):
-            lines += ["### 错误输出", "```", final["stderr"], "```"]
+            lines += ["### 错误输出", "```", _txt(final["stderr"]), "```"]
         lines.append("")
 
         # 5. 验证结果 + 指标对比

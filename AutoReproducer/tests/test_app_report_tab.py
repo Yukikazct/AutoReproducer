@@ -1,14 +1,16 @@
 """报告 Tab 的端到端测试（AppTest 驱动真实 app.py）。
 
 锁死两条性质：
-1. **渲染器真的被接线**——报告里的围栏代码块必须经过 `render_markdown`
-   变成深色 IDE 面板，而不是退回 `st.markdown` 的灰底 `<pre>`；
+1. **报告真的上屏**——`session_state.result["data"]["report"]` 经**原生
+   `st.markdown`** 渲染。这条线此前断过：自绘深色面板（[2026.09.20-10]）
+   的单元测试与预览页全绿，用户打开页面却「看不到代码」，见
+   [2026.09.20-12] 的回滚。断言「围栏原样出现在 markdown 值里」正是
+   「没有中间层再吃掉它」的证据；
 2. **内容不截断**——超长执行输出在页面上完整出现，不带「截断展示」标注。
 
-为什么必须走 AppTest：`render_markdown` 的分支逻辑由纯函数测试覆盖
-（tests/test_markdown_render.py），但「app.py 到底调没调它」只有把
-app.py 真跑起来才能证明——这正是此前多次「单元测试全绿、页面上还是旧的」
-那类问题的所在。
+为什么必须走 AppTest：单元测试能证明 `st.markdown(report)` 这一行本身没
+问题，但证明不了 app.py 的那个分支真的被执行到（Tab 2 的渲染在
+`st.session_state.result` 有值时才会走）。
 
 数据目录经 monkeypatch 指向 tmp_path，不触碰真实 data/。
 
@@ -52,18 +54,14 @@ def _markdown_values(app) -> str:
     return "\n".join(m.value for m in app.markdown)
 
 
-def test_report_code_is_rendered_as_ide_panel(at_report):
-    """围栏代码块必须走深色 IDE 面板（接线断言），不是裸 Markdown。"""
+def test_report_is_rendered_through_native_markdown(at_report):
+    """报告经原生 st.markdown 上屏：围栏原样保留，无自绘面板残留。"""
     assert not at_report.exception
     blob = _markdown_values(at_report)
 
-    assert 'class="autorepro-code"' in blob        # 面板外壳
-    assert 'class="autorepro-code-bar"' in blob    # IDE 标题栏
-    assert "autorepro-highlight" in blob           # pygments 高亮结果
-    # 令牌颜色的样式表必须一起下发，否则 token 全是默认色
-    assert ".autorepro-highlight .k" in blob
-    # 原始围栏不能残留成裸文本（那说明又走回 st.markdown 了）
-    assert "```python" not in blob
+    assert "# 论文复现与优化报告" in blob
+    assert "```python" in blob                     # 原生渲染保留围栏
+    assert "autorepro-code" not in blob            # 自绘面板已回滚，不得复活
 
 
 def test_report_body_still_markdown(at_report):
