@@ -29,13 +29,18 @@ def cli_env(tmp_path):
     env = dict(os.environ)
     env["AUTOREPRO_DATA_ROOT"] = str(data_root)
     env["AUTOREPRO_L0_QUOTA_GB"] = "0.001"      # 1MB
+    # 与 run_cli 的 encoding="utf-8" 配套，保证子进程输出编码可预期
+    env["PYTHONIOENCODING"] = "utf-8"
     return env, data_root
 
 
 def run_cli(env, *argv):
+    # 显式钉死两侧编码：不指定 encoding 时父进程按系统 locale(Windows 中文
+    # 默认 GBK)解码，而子进程的输出编码受 PYTHONIOENCODING 影响——两者不一致
+    # 会在 reader 线程抛 UnicodeDecodeError，使 res.stdout 变成 None。
     return subprocess.run(
         [_PY, str(_SCRIPT), *argv], capture_output=True,
-        text=True, env=env, timeout=120)
+        text=True, encoding="utf-8", env=env, timeout=120)
 
 
 def _seed_paper(data_root: Path, pid: str, title: str = "Test Paper") -> None:
