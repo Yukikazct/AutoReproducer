@@ -243,7 +243,7 @@ class CodeExecutorAgent(BaseAgent):
                 inputs={"code": code}, outputs=smoke,
                 result={"success": False})
             self.log("execute_code", "ERROR",
-                     f"smoke test 失败: {smoke.get('stderr', '')[:120]}",
+                     f"smoke test 失败: {(smoke.get('stderr') or '')[:120]}",
                      {"stage": "smoke", "exit_code": smoke.get("exit_code")})
             return {**result, "llm_calls": self._delta_llm_calls()}
 
@@ -265,7 +265,7 @@ class CodeExecutorAgent(BaseAgent):
                  f"(smoke 通过, full {'通过' if full['success'] else '失败'})",
                  {"smoke_exit": smoke.get("exit_code"),
                   "full_exit": full.get("exit_code"),
-                  "stdout_tail": full.get("stdout", "")[-300:]})
+                  "stdout_tail": (full.get("stdout") or "")[-300:]})
 
         return {**result, "llm_calls": self._delta_llm_calls()}
 
@@ -821,11 +821,18 @@ class CodeExecutorAgent(BaseAgent):
         result = subprocess.run(
             [sys.executable, script],
             capture_output=True, text=True, timeout=timeout,
+            # 与 _exec_env 的 PYTHONIOENCODING=utf-8 配套：显式指定 UTF-8 解码，
+            # 不依赖系统 locale。缺了它，Windows 中文环境下捕获中文输出会抛
+            # UnicodeDecodeError，stdout 变成 None。
+            encoding="utf-8", errors="replace",
             cwd=workdir, env=self._exec_env())
         return {
             "success": result.returncode == 0,
-            "stdout": result.stdout,
-            "stderr": result.stderr,
+            # `or ""` 兜底：解码失败等异常路径下 stdout/stderr 可能是 None，
+            # 而 None 会让下游 `full.get("stdout", "")[-300:]` 直接崩
+            # （key 存在但值为 None 时默认值不生效）。
+            "stdout": result.stdout or "",
+            "stderr": result.stderr or "",
             "exit_code": result.returncode,
             "deps_prepared": True,
         }
@@ -859,6 +866,7 @@ class CodeExecutorAgent(BaseAgent):
                 cmd += ["--find-links", PIP_FIND_LINKS]
             cmd += [package]
             res = subprocess.run(cmd, capture_output=True, text=True,
+                                 encoding="utf-8", errors="replace",
                                  timeout=LOCAL_PIP_TIMEOUT)
             if res.returncode == 0:
                 ready_mark.write_text("ok\n", encoding="utf-8")
@@ -934,6 +942,7 @@ class CodeExecutorAgent(BaseAgent):
                 cmd += ["--find-links", PIP_FIND_LINKS]
             cmd += ["-r", req_file]
             res = subprocess.run(cmd, capture_output=True, text=True,
+                                 encoding="utf-8", errors="replace",
                                  timeout=LOCAL_PIP_TIMEOUT)
             if res.returncode == 0:
                 ready_mark.write_text("ok\n", encoding="utf-8")
@@ -963,6 +972,11 @@ class CodeExecutorAgent(BaseAgent):
         site-packages；无隔离目录时返回环境副本（行为与改造前一致）。
         """
         env = os.environ.copy()
+        # 钉死子进程的标准流编码：父进程按 UTF-8 解码捕获到的输出，子进程
+        # 就必须按 UTF-8 写出。否则在 Windows 中文环境下子进程默认用 GBK 写、
+        # 父进程按 locale 解码，一旦生成代码打印中文/非 GBK 字节，reader 线程
+        # 抛 UnicodeDecodeError，`stdout` 直接变成 None（后续切片即崩）。
+        env["PYTHONIOENCODING"] = "utf-8"
         paths = []
         if self._deps_dir:
             paths.append(self._deps_dir)

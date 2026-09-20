@@ -355,7 +355,7 @@ class EnvBuilderAgent(BaseAgent):
                      f"底座镜像就绪: {tag}")
         return {"success": build.get("success", False),
                 "tag": tag, "cached": False,
-                "error": build.get("error") or build.get("stderr", "")[-300:]}
+                "error": build.get("error") or (build.get("stderr") or "")[-300:]}
 
     def _build_dockerfile(self, dockerfile: str, tag: str,
                           reqs: str = "") -> dict:

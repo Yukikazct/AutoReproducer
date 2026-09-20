@@ -5,6 +5,69 @@
 
 ---
 
+## [2026.09.20-3] - 2026-09-20
+
+### 修复（本地执行输出解码崩溃 —— 真实模式实测发现）
+
+**这是本轮唯一由真实 API 实测暴露的缺陷**，首次真实模式运行即崩：
+
+```
+UnicodeDecodeError: 'gbk' codec can't decode byte 0xa2 ...
+TypeError: 'NoneType' object is not subscriptable
+  at code_executor.py: "stdout_tail": full.get("stdout", "")[-300:]
+```
+
+**根因**：`_run_local_script` 用 `subprocess.run(..., text=True)` 且**未指定
+encoding**，父进程按系统 locale（Windows 中文 = GBK）解码捕获到的输出；
+而子进程的标准流编码受 `PYTHONIOENCODING` 影响。两者不一致时 reader 线程抛
+`UnicodeDecodeError`，`CompletedProcess.stdout` 变成 **None**；随后
+`full.get("stdout", "")[-300:]` 崩溃——**key 存在且值为 None 时，`dict.get`
+的默认值不生效**。
+
+触发条件很常见：真实 LLM 生成的复现脚本会打印中文（"训练集 MSE: ..."），
+而本轮提示词又明确**允许中文字符串**，等于把这个坑踩实了。
+
+**改法**（`src/agents/code_executor.py`）：
+- `_exec_env()` 设 `PYTHONIOENCODING=utf-8`——把子进程标准流钉死为 UTF-8，
+  与父进程解码一致，不再依赖系统 locale；
+- `_run_local_script` 显式 `encoding="utf-8", errors="replace"`；
+- 两处 pip（依赖预装 / 运行时自愈）同样补 `encoding`——pip 输出也可能含
+  非 GBK 字节；
+- `stdout`/`stderr` 统一 `or ""` 兜底，杜绝 None 流向下游；
+- 三处会崩的下标切片改为 None 安全：`code_executor` 的
+  `smoke.get('stderr','')[:120]`、`full.get("stdout","")[-300:]`，
+  以及 `src/agents/env_builder.py` 的 `build.get("stderr","")[-300:]`。
+
+### 真实模式实测结果（首次端到端）
+
+用真实 DeepSeek API 跑 numpy 线性回归复现：
+
+| 观测项 | 结果 |
+|---|---|
+| LLM 调用次数 | **1**（一次生成即完整，未触发续写/重生成） |
+| `finish_reason` | **`stop`** |
+| 代码规模 | 2381 字符 / 101 行 |
+| `sanitize_stats` | `{prose_dropped: 0, code_dropped: 0}` —— 清洗**一个字都没丢** |
+| 语法门 / 结构门 | 通过 / 通过 |
+| 执行 | `exit_code=0`，正常打印指标（含大量中文，全部保留） |
+
+**续写机制专项验证**（人为把 127 行脚本截断到 76 行）：模型续写首行恰好是
+被截断的末行（遵守契约），拼接后 104 行、可编译、结构完整、末行 `main()`，
+重写行仅出现 1 次（去重生效）。
+
+**旁证**：该次生成**未使用代码围栏**（模型没遵守提示词里的围栏要求），
+但 `prose_dropped=0 / code_dropped=0`——说明保真清洗的"只丢确定是叙述的行"
+这条改法本身就能兜住无围栏输出，不必依赖模型守约。
+
+### 测试
+
+- 新增 `tests/test_exec_output_encoding.py`（5 例：中文输出被完整捕获且为
+  `str`、emoji 等非 GBK 字符不丢、stdout/stderr 永不为 None、
+  `_exec_env` 钉死 UTF-8、整条 `run()` 不因中文输出崩溃）。
+- 全量 **563 passed**。
+
+---
+
 ## [2026.09.20-2] - 2026-09-20
 
 ### 修复（清洗层静默篡改合法代码——「代码不完整」的真正残余通道）
