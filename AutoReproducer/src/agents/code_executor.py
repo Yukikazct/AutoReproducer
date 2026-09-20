@@ -104,6 +104,11 @@ _TRUNCATION_HINTS = (
 )
 # 末尾行以这些字符结尾 -> 语句明显没写完（截断的典型特征）
 _TRUNCATION_TAIL_CHARS = "=*+-([{,:\\"
+# 拼接时判定"末行没写完、需要由续写重写"的悬挂尾字符。
+# 与 _TRUNCATION_TAIL_CHARS 的区别：**不含 `:`**——`for i in range(3):`
+# 是语法完整的行，正等着后续代码块，丢掉它反而会毁掉循环。
+_DANGLING_TAIL_CHARS = "=*+-([{,|\\"
+# 续写契约要求模型先重写 head 末行；该约定只在末行确实悬挂时生效
 # 判定"未知/占位"论文信息用的空值模式（与 PaperReader._UNKNOWN_RE 判据一致）
 _UNKNOWN_RE = re.compile(
     r"^\s*(|未知.*|未找到|无|n/?a|none|null)\s*$", re.IGNORECASE)
@@ -200,21 +205,23 @@ class CodeExecutorAgent(BaseAgent):
 
         if code:
             # 外部提供的真实复现代码：只做清洗，不走生成/再生成
-            code = self._sanitize_code(code)
+            code, sanitize_stats = self._sanitize_code_ex(code)
+            self._record_sanitize("外部代码清洗", code, sanitize_stats)
         else:
             # 信息不足时不生成针对性代码，诚实短路（下游判"无法验证"）
             if self._info_insufficient(paper_info):
                 return self._not_runnable(
                     "论文信息不足（缺少方法/数据集/指标），无法生成"
                     "针对性复现代码；请提供完整 PDF 或更完整的摘要", code="")
-            code = self._produce_code(paper_info)
+            code, sanitize_stats = self._produce_code(paper_info)
 
         # 语法门：不可编译的代码绝不进沙箱——残码在沙箱里会被报成
         # IndentationError 之类，掩盖"输出被截断"这个真实原因。
         syntax_error = self._syntax_error(code)
         if syntax_error:
             return self._not_runnable(
-                f"代码存在语法错误，未执行: {syntax_error}", code=code)
+                f"代码存在语法错误，未执行: {syntax_error}", code=code,
+                sanitize_stats=sanitize_stats)
 
         # 危险代码静态门：本地执行无沙箱，拒绝明显危险的调用（命令执行/
         # 动态执行/网络外联/递归删除）。Docker 已是隔离沙箱，不必拦。
@@ -222,14 +229,15 @@ class CodeExecutorAgent(BaseAgent):
             danger = self._dangerous_constructs(code)
             if danger:
                 return self._not_runnable(
-                    f"代码含危险调用，已拒绝执行: {danger}", code=code)
+                    f"代码含危险调用，已拒绝执行: {danger}", code=code,
+                    sanitize_stats=sanitize_stats)
 
         smoke = self._execute_code(code, stage="smoke")
         if not smoke["success"]:
             # smoke 失败：不浪费预算跑 full，返回诊断信息
             result = {"stages": [{"stage": "smoke", **smoke}],
                       "success": False, "final": smoke,
-                      "code": code}
+                      "code": code, "sanitize_stats": sanitize_stats}
             self.log_experiment(
                 "EXECUTE_CODE", "smoke test 失败,终止 full run",
                 inputs={"code": code}, outputs=smoke,
@@ -242,7 +250,8 @@ class CodeExecutorAgent(BaseAgent):
         full = self._execute_code(code, stage="full")
         stages = [{"stage": "smoke", **smoke}, {"stage": "full", **full}]
         result = {"stages": stages, "success": full["success"],
-                  "final": full, "code": code}
+                  "final": full, "code": code,
+                  "sanitize_stats": sanitize_stats}
 
         self.log_experiment(
             "EXECUTE_CODE", "完成 smoke + full 两阶段执行",
@@ -262,7 +271,7 @@ class CodeExecutorAgent(BaseAgent):
 
     # ---------------- 代码生成 ----------------
 
-    def _produce_code(self, paper_info: Dict) -> str:
+    def _produce_code(self, paper_info: Dict) -> tuple:
         """生成复现代码：截断则**续写拼接**，仍不完整才从头再生成。
 
         修复「代码生成不完整」的主路径：单次调用的输出上限（默认 8192）
@@ -270,25 +279,25 @@ class CodeExecutorAgent(BaseAgent):
         续写"把总长度累加上去（最多 MAX_CODE_CONTINUE 轮），每轮都过语法门。
         续写仍不完整时，才回落到"从头再生成"作为最后手段。
 
-        返回仍可能是不可编译的代码——由调用方 run() 的语法门统一判定并
-        短路为"未运行"，此处不负责掩盖失败。
+        返回 `(代码, 清洗统计)`；代码仍可能是不可编译的——由调用方 run()
+        的语法门统一判定并短路为"未运行"，此处不负责掩盖失败。
         """
-        code, dropped = self._sanitize_code_ex(self._generate_code(paper_info))
-        self._record_sanitize("初次生成", code, dropped)
+        code, stats = self._sanitize_code_ex(self._generate_code(paper_info))
+        self._record_sanitize("初次生成", code, stats)
 
-        # ---- 阶段 1：续写拼接（针对"输出被截断"） ----
+        # ---- 阶段 1：续写拼接（针对"输出被截断"/代码被洗残） ----
         prev_err = self._syntax_error(code)
         for round_no in range(1, MAX_CODE_CONTINUE + 1):
-            if not self._needs_continuation(code):
-                return code
+            if not self._needs_continuation(code, stats):
+                return code, stats
             finish = getattr(self.llm, "last_finish_reason", "")
             self.log("generate_code", "WARNING",
                      f"生成代码疑似未写完，触发续写（第 {round_no} 轮）: "
-                     f"{prev_err or '结构不完整'}"
+                     f"{prev_err or self._incomplete_reason(code, stats)}"
                      + (f" [finish_reason={finish}]" if finish else ""))
             raw = self._continue_code(paper_info, code)
-            more, dropped = self._sanitize_code_ex(raw)
-            self._record_sanitize(f"续写第 {round_no} 轮", more, dropped)
+            more, stats = self._sanitize_code_ex(raw)
+            self._record_sanitize(f"续写第 {round_no} 轮", more, stats)
             if not more.strip():
                 break           # 模型没给新内容，别再空转（保留已有 code）
             if more.strip() in code:
@@ -305,36 +314,42 @@ class CodeExecutorAgent(BaseAgent):
                          f"续写未改善语法错误（仍是 {new_err}），停止续写")
                 break
             code, prev_err = new_code, new_err
-        if not self._needs_continuation(code):
-            return code
+        if not self._needs_continuation(code, stats):
+            return code, stats
 
         # ---- 阶段 2：续写仍不完整 -> 从头再生成（最后手段） ----
         for attempt in range(1, MAX_CODE_REGEN + 1):
             err = self._syntax_error(code)
-            if err is None:
-                return code
-            reason = ("疑似输出被截断" if self._looks_truncated(code, err)
-                      else "语法错误")
+            if err is None and not self._needs_continuation(code, stats):
+                return code, stats
+            reason = ("疑似输出被截断" if err and self._looks_truncated(code, err)
+                      else (err or self._incomplete_reason(code, stats)))
             finish = getattr(self.llm, "last_finish_reason", "")
             self.log("generate_code", "WARNING",
-                     f"续写后仍不可编译（{reason}，重生成第 {attempt} 次）: {err}"
+                     f"续写后仍不完整（{reason}，重生成第 {attempt} 次）"
                      + (f" [finish_reason={finish}]" if finish else ""))
-            new_code, dropped = self._sanitize_code_ex(
-                self._regenerate_code(paper_info, err, attempt))
-            self._record_sanitize(f"重生成第 {attempt} 次", new_code, dropped)
+            new_code, stats = self._sanitize_code_ex(
+                self._regenerate_code(paper_info, err or reason, attempt))
+            self._record_sanitize(f"重生成第 {attempt} 次", new_code, stats)
             code = new_code
-        return code
+        return code, stats
 
-    def _needs_continuation(self, code: str) -> bool:
+    def _needs_continuation(self, code: str, stats: Optional[Dict] = None) -> bool:
         """判断代码是否"还没写完"，应该续写而不是从头重写。
 
         判据（任一命中即续写）：
-        1. API 明确说这次撞了 max_tokens（`finish_reason == "length"`）——
+        1. 清洗时丢掉了**疑似代码行**（`code_dropped > 0`）——说明代码可能被
+           洗残了，必须让模型重写，不能带着缺损继续跑；
+        2. API 明确说这次撞了 max_tokens（`finish_reason == "length"`）——
            比"末尾字符像断句"这类启发式可靠得多；
-        2. 语法错误且形态像"话没说完"（尾部悬挂运算符/未闭合括号等）；
-        3. 能编译但结构上不做任何事（只有 def/class/import，无顶层调用）——
+        3. 语法错误且形态像"话没说完"（尾部悬挂运算符/未闭合括号等）；
+        4. 能编译但结构上不做任何事（只有 def/class/import，无顶层调用）——
            语法门查不出的"残缺"，同样属于没写完。
+
+        注意：`prose_dropped`（剥叙述行）是预期行为，**不**触发续写。
         """
+        if int((stats or {}).get("code_dropped", 0) or 0) > 0:
+            return True
         is_truncated = getattr(self.llm, "is_truncated", None)
         if callable(is_truncated) and is_truncated():
             return True
@@ -342,6 +357,14 @@ class CodeExecutorAgent(BaseAgent):
         if err is not None:
             return self._looks_truncated(code, err)
         return not self._structurally_complete(code)
+
+    @staticmethod
+    def _incomplete_reason(code: str, stats: Optional[Dict] = None) -> str:
+        """给"不完整"一个人话原因，用于日志与重生成提示。"""
+        dropped = int((stats or {}).get("code_dropped", 0) or 0)
+        if dropped:
+            return f"清洗丢弃了 {dropped} 行疑似代码行"
+        return "结构不完整（无顶层执行语句）"
 
     def _continue_code(self, paper_info: Dict, partial: str) -> str:
         """续写：把已写部分的尾部交给模型，让它从断点接着写完。
@@ -385,7 +408,11 @@ class CodeExecutorAgent(BaseAgent):
             return "\n".join(tail_lines)
         if not tail_lines:
             return "\n".join(head_lines)
-        head_lines = head_lines[:-1]        # 末行由 tail 首行重写
+        # 只在 head 末行**确实没写完**时才丢它，交给 tail 首行重写；末行本身
+        # 完整时保留，重复交给下面的去重处理。旧实现无条件丢弃，模型一旦
+        # 没按约定重写末行就会静默吞掉一行。
+        if CodeExecutorAgent._line_incomplete(head_lines[-1]):
+            head_lines = head_lines[:-1]
 
         # 去重：head 尾部与 tail 头部若有若干行相同（忽略缩进差异），去掉重复
         for k in range(min(len(head_lines), len(tail_lines)), 0, -1):
@@ -396,6 +423,28 @@ class CodeExecutorAgent(BaseAgent):
                 tail_lines = tail_lines[k:]
                 break
         return "\n".join(head_lines + tail_lines)
+
+    @staticmethod
+    def _line_incomplete(line: str) -> bool:
+        """这一行是否"没写完"：括号未闭合，或以悬挂运算符结尾。
+
+        只看末字符是不够的——`print('%s' % best` 少了右括号，末字符却是
+        `t`；因此先数括号。`:` 不算悬挂：`for i in range(3):` 是语法完整的
+        行，正等着后续代码块，丢掉它反而会毁掉循环。
+
+        （括号计数不含字符串字面量里的括号，属已知近似；判错时由语法门
+        与续写流程兜住。）
+        """
+        stripped = line.strip()
+        if not stripped:
+            return False
+        opens = (stripped.count("(") + stripped.count("[")
+                 + stripped.count("{"))
+        closes = (stripped.count(")") + stripped.count("]")
+                  + stripped.count("}"))
+        if opens > closes:
+            return True
+        return stripped[-1] in _DANGLING_TAIL_CHARS
 
     @staticmethod
     def _structurally_complete(code: str) -> bool:
@@ -419,14 +468,25 @@ class CodeExecutorAgent(BaseAgent):
             return True
         return False
 
-    def _record_sanitize(self, stage: str, code: str, dropped: int) -> None:
-        """记录清洗结果；有丢弃就告警——丢弃行是"可能不完整"的信号。"""
-        if dropped:
+    def _record_sanitize(self, stage: str, code: str, stats: Dict) -> None:
+        """记录清洗结果。
+
+        `prose_dropped`（剥掉叙述行）是预期行为，记一条即可；
+        `code_dropped`（丢了疑似代码行）则意味着**可能把代码洗残了**——
+        记 WARNING，并由 `_needs_continuation` 据此触发补救。
+        """
+        prose = int((stats or {}).get("prose_dropped", 0) or 0)
+        code_drop = int((stats or {}).get("code_dropped", 0) or 0)
+        if code_drop:
             self.log("sanitize_code", "WARNING",
-                     f"{stage}：清洗丢弃了 {dropped} 行非代码行"
+                     f"{stage}：清洗丢弃了 {code_drop} 行疑似代码行"
                      f"（剩余 {len(code.splitlines())} 行）——"
-                     f"若结果异常，这可能是代码不完整的原因",
-                     {"dropped_lines": dropped, "stage": stage})
+                     f"结果可能已被洗残，将触发补救重写",
+                     {"code_dropped": code_drop, "stage": stage})
+        elif prose:
+            self.log("sanitize_code", "RUNNING",
+                     f"{stage}：剥离了 {prose} 行叙述文字（预期行为）",
+                     {"prose_dropped": prose, "stage": stage})
 
     def _generate_code_prompt(self, paper_info: Dict) -> str:
         return f"""根据论文信息生成一份**完整**的复现脚本。
@@ -472,15 +532,21 @@ class CodeExecutorAgent(BaseAgent):
         return self._sanitize_code_ex(raw)[0]
 
     def _sanitize_code_ex(self, raw: str) -> tuple:
-        """清洗代码，返回 (代码, 被丢弃的非空行数)。
+        """清洗代码，返回 (代码, 统计)。
 
-        保真优先：**有围栏就整块原样取用**（只做 compile 校验，不改一个
-        字符），因为围栏内按约定就是纯代码；只有当没有围栏、或围栏内仍不可
-        编译时，才降级到有损的逐行过滤。丢弃行数一并返回——上层据此判断
-        这次清洗是否可能把代码洗残了，不再让"丢行"这件事静默发生。
+        统计: {"prose_dropped": n, "code_dropped": m}
+        - `prose_dropped`：丢弃的**叙述行**（如"为了复现该论文…"），预期行为；
+        - `code_dropped` ：丢弃的**疑似代码行**——可疑信号，意味着可能把代码
+          洗残了，上层应据此触发补救，而不是带着缺损继续执行。
+
+        三级策略（保真优先）：
+        1. 有围栏且可编译 -> 整块原样返回，一个字符都不改；
+        2. 否则只丢"确定是叙述"的行，**其余一律保留**；
+        3. 保留版仍编译不过，才启用"像不像代码行"的白名单过滤兜底（有损）。
         """
+        empty = {"prose_dropped": 0, "code_dropped": 0}
         if not raw or not raw.strip():
-            return (raw or ""), 0
+            return (raw or ""), dict(empty)
         # 只去首尾空行与行尾空白，**绝不 strip 首行缩进**——续写片段的第一行
         # 本来就可能是缩进行（如 `    print(...)`），一旦被 strip 掉就会变成
         # 顶格，拼起来直接 IndentationError。与 Batch 1 修的"缩进丢失"同源。
@@ -491,32 +557,17 @@ class CodeExecutorAgent(BaseAgent):
         if fenced:
             candidate = max(fenced, key=len).strip("\n").rstrip()
             if self._syntax_error(candidate) is None:
-                return candidate, 0        # 原样返回，一个字符都不改
+                return candidate, dict(empty)   # 原样返回，一个字符都不改
             text = candidate
 
-        # 2) 无围栏 / 围栏内不可编译：逐行剥离叙述行，并统计丢弃行数
-        code, dropped = self._filter_lines(text)
+        # 2) 只丢"确定是叙述"的行，其余一律保留（不靠"像不像代码"猜）
+        code, prose = self._drop_prose_only(text)
 
-        # 3) 语法兜底: 若整体不可编译,再去掉围栏残片/行首行号后重新过滤
+        # 3) 仍不可编译 -> 才启用白名单过滤兜底，并单独计数被丢的疑似代码行
+        code_dropped = 0
         if self._syntax_error(code) is not None:
-            code = _FENCE_LEFT.sub("", code)
-            lines = []
-            for ln in code.splitlines():
-                # 只清掉行首行号与行尾空白,保留前导缩进——缩进一旦被抹掉,
-                # 函数体/循环体会整体塌陷,把"输出被截断"这个真实原因
-                # 伪装成一个更难定位的 IndentationError。
-                fixed = _LINE_NO_RE.sub(r"\1", ln).rstrip()
-                # 去行号后不像代码行（如续行 "  2)"）时保留原行,避免误删
-                if not _CODE_LINE_START.match(fixed) \
-                        and _CODE_LINE_START.match(ln.rstrip()):
-                    fixed = ln.rstrip()
-                ln = fixed
-                if not ln.strip():
-                    continue
-                if _CODE_LINE_START.match(ln) and not self._looks_like_prose(ln):
-                    lines.append(ln)
-            code = "\n".join(lines)
-        return code, dropped
+            code, code_dropped = self._filter_code_lines(code)
+        return code, {"prose_dropped": prose, "code_dropped": code_dropped}
 
     @staticmethod
     def _looks_like_prose(line: str) -> bool:
@@ -537,21 +588,54 @@ class CodeExecutorAgent(BaseAgent):
         return not (set(stripped) & _CODEISH_CHARS)
 
     @classmethod
-    def _filter_lines(cls, text: str) -> tuple:
-        """逐行保留代码行与代码内空行，返回 (代码, 丢弃的非空行数)。"""
-        cleaned, dropped = [], 0
+    def _drop_prose_only(cls, text: str) -> tuple:
+        """保真清洗：只丢弃"确定是叙述"的行，返回 (代码, 丢弃的叙述行数)。
+
+        刻意**不**判断"这一行像不像代码"——那种白名单判据天然不完整，
+        `)`、`*x, y = [1, 2, 3]`、docstring 里的 `* bullet` 都是合法代码却会
+        被误杀；而误杀之后剩下的代码往往仍能编译，残缺就被静默放过了
+        （实测：删掉 `*x, y = [1, 2, 3]` 后脚本照跑，只在运行期 NameError）。
+        这里只做显式判据（`_looks_like_prose`），丢弃的行确定是叙述。
+        """
+        kept, prose = [], 0
         for ln in text.splitlines():
             stripped = ln.strip()
             if not stripped:
-                if cleaned and cleaned[-1].strip():
-                    cleaned.append(ln)
+                if kept and kept[-1].strip():
+                    kept.append(ln)
                 continue
-            if cls._looks_like_prose(stripped) \
-                    or not _CODE_LINE_START.match(stripped):
+            if cls._looks_like_prose(stripped):
+                prose += 1
+                continue
+            kept.append(ln)
+        return "\n".join(kept).strip("\n"), prose
+
+    @classmethod
+    def _filter_code_lines(cls, text: str) -> tuple:
+        """有损兜底：按"像不像代码行"丢弃，返回 (代码, 丢弃的非空行数)。
+
+        仅在保真清洗后仍不可编译时调用。丢弃的行计入 `code_dropped`，
+        因为其中可能混有被误杀的合法代码（`)`、`*x, y = ...` 等）——
+        上层据此触发补救。
+        """
+        text = _FENCE_LEFT.sub("", text)
+        kept, dropped = [], 0
+        for ln in text.splitlines():
+            # 只清掉行首行号与行尾空白，保留前导缩进——缩进一旦被抹掉，
+            # 函数体/循环体会整体塌陷，把"输出被截断"这个真实原因
+            # 伪装成一个更难定位的 IndentationError。
+            fixed = _LINE_NO_RE.sub(r"\1", ln).rstrip()
+            # 去行号后不像代码行（如续行 "  2)"）时保留原行,避免误删
+            if not _CODE_LINE_START.match(fixed) \
+                    and _CODE_LINE_START.match(ln.rstrip()):
+                fixed = ln.rstrip()
+            if not fixed.strip():
+                continue
+            if _CODE_LINE_START.match(fixed) and not cls._looks_like_prose(fixed):
+                kept.append(fixed)
+            else:
                 dropped += 1
-                continue
-            cleaned.append(ln)
-        return "\n".join(cleaned).strip("\n"), dropped
+        return "\n".join(kept), dropped
 
     # ---------------- 执行前检查 ----------------
 
@@ -610,7 +694,8 @@ class CodeExecutorAgent(BaseAgent):
         return bool(_UNKNOWN_RE.match(method) and _UNKNOWN_RE.match(dataset)
                     and not metrics)
 
-    def _not_runnable(self, reason: str, code: str) -> dict:
+    def _not_runnable(self, reason: str, code: str,
+                      sanitize_stats: Optional[Dict] = None) -> dict:
         """代码未进入执行阶段（信息不足/语法错误）时的统一返回。
 
         与"跑了但失败"区分：exit_code=EXIT_NOT_RUNNABLE 且带 not_runnable
@@ -626,6 +711,8 @@ class CodeExecutorAgent(BaseAgent):
                  {"exit_code": EXIT_NOT_RUNNABLE, "not_runnable": True})
         return {"stages": [stage], "success": False, "final": stage,
                 "code": code, "not_runnable": True, "reason": reason,
+                "sanitize_stats": sanitize_stats or
+                {"prose_dropped": 0, "code_dropped": 0},
                 "llm_calls": self._delta_llm_calls()}
 
     # ---------------- 执行 ----------------

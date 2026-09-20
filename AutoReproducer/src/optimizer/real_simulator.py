@@ -37,9 +37,10 @@ _PATCH_PROMPT = """针对优化方向「{arm}」生成改进后的完整 Python 
 ```
 
 【关键输出约束 - 必须严格遵守】
-1. 只输出一份可直接运行的 Python 脚本（完整训练+评估流程,末尾打印关键指标）；
-2. 输出的每一行都必须是合法 Python 代码,严禁任何解释性文字、中文叙述、
-   说明语句或 markdown 围栏；
+1. 输出一份**完整**的可直接运行脚本（完整训练+评估流程，末尾打印关键指标），
+   不要为了简短而省略训练循环或评估步骤；
+2. 用**单个** ```python 围栏把整份脚本包起来，围栏内只有代码；不要写围栏外的
+   解释文字或中文叙述段落。中文字符**允许**出现在字符串字面量与 # 注释里；
 3. 末尾必须以 `accuracy = 0.xxx` 或 `accuracy: 0.xxx` 形式打印改进后的指标。
 """
 
@@ -120,6 +121,20 @@ class RealSimulator:
             return 0.0, detail
         if not code or code == original:
             detail.update({"status": "rejected", "note": "补丁为空或与基线无变化"})
+            return 0.0, detail
+
+        # 3b) 语法门：不可编译的补丁**不写盘、不执行**。
+        # 旧实现直接把补丁写到工作区再跑，运行期才炸 SyntaxError —— 一次
+        # trial 白白烧掉，而且残码还落在了工作区里。（快照回滚虽能兜住，
+        # 但没必要先把垃圾写进去。）
+        syntax_err = self.executor._syntax_error(code)
+        if syntax_err:
+            detail.update({"status": "rejected",
+                           "reason": f"补丁不可编译，未执行: {syntax_err}",
+                           "patch_len": len(code)})
+            if self.logger:
+                self.logger.log("Optimizer", "patch_syntax_gate", "WARNING",
+                                f"补丁未通过语法门，已拒绝: {syntax_err}")
             return 0.0, detail
 
         # 4) 应用补丁并真实重跑

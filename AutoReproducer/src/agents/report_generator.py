@@ -111,6 +111,18 @@ class ReportGeneratorAgent(BaseAgent):
         # 4. 代码执行（smoke + full）
         lines += ["## 4. 代码执行",
                   f"- **代码长度**: {len(execution.get('code', ''))} 字符"]
+        # 清洗记录：清洗层碰过代码就必须让人看见——丢掉疑似代码行是"结果可能
+        # 已被洗残"的信号，静默吞掉正是此前"代码不完整却查不出来"的成因。
+        sstats = execution.get("sanitize_stats") or {}
+        prose_n = int(sstats.get("prose_dropped", 0) or 0)
+        code_n = int(sstats.get("code_dropped", 0) or 0)
+        if code_n:
+            lines.append(f"- **⚠️ 清洗丢弃**: {code_n} 行疑似代码行"
+                         f"（其余叙述行 {prose_n} 行）——"
+                         f"生成代码可能已被清洗截短，请对照审计日志核对")
+        elif prose_n:
+            lines.append(f"- **清洗丢弃**: 叙述行 {prose_n} 行"
+                         f"（预期行为，未触碰代码）")
         stages = execution.get("stages", []) or []
         final = execution.get("final", {}) or {}
         if execution.get("not_runnable"):

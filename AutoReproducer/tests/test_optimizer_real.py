@@ -126,6 +126,22 @@ def test_real_simulator_rolls_back_after_execution_failure(workspace):
     assert (workspace / "run.py").read_text(encoding="utf-8") == _BASELINE_CODE
 
 
+def test_patch_syntax_gate_rejects_before_touching_workspace(workspace):
+    """不可编译的补丁必须被语法门拦下：不写盘、不执行。"""
+    llm = _BadPatchLLM("def broken(: 语法错误\n")
+    sim = RealSimulator(llm=llm, executor=CodeExecutorAgent(llm),
+                        workspace_dir=str(workspace))
+    sim.bind_paper({"metrics": {"accuracy": 0.852}})
+    reward, detail = sim("超参数调优(学习率)", 0.852)
+
+    assert reward == 0.0
+    assert detail["status"] == "rejected"
+    assert "不可编译" in detail.get("reason", "")
+    # 关键：工作区一个字都没动过（连快照回滚都用不上）
+    assert (workspace / "run.py").read_text(encoding="utf-8") == _BASELINE_CODE
+    assert "restored" not in detail
+
+
 # ---------------- 4. execute_in_workspace 指定目录执行 ----------------
 
 def test_execute_in_workspace_runs_in_given_dir(tmp_path, mock_llm):

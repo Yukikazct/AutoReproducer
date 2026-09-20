@@ -136,9 +136,26 @@ class TestContinuationStitching:
 
     def test_continuation_preserves_first_line_indentation(self):
         """续写片段首行是缩进行时，拼接后缩进不能被吃掉。"""
-        code, dropped = _agent(_ScriptedLLM([""]))._sanitize_code_ex(_PART2)
+        code, stats = _agent(_ScriptedLLM([""]))._sanitize_code_ex(_PART2)
         assert code.startswith("    print("), repr(code)
-        assert dropped == 0
+        assert stats["code_dropped"] == 0
+
+    def test_stitch_keeps_complete_last_line(self):
+        """模型没按约定重写末行时，head 的完整末行不能被吞掉。"""
+        head = "def f():\n    total = 0\n"
+        tail = "    return total\n"
+        out = CodeExecutorAgent._stitch(head, tail)
+        assert "    total = 0" in out
+        assert "    return total" in out
+
+    def test_stitch_drops_dangling_last_line(self):
+        """末行确实没写完（悬挂运算符/未闭合括号）时，才交给续写重写。"""
+        assert CodeExecutorAgent._line_incomplete("    m_w = beta1 *") is True
+        assert CodeExecutorAgent._line_incomplete(
+            "    print('%s' % best") is True          # 少右括号
+        # 完整的块首行 / 普通语句不算没写完
+        assert CodeExecutorAgent._line_incomplete("    for i in range(3):") is False
+        assert CodeExecutorAgent._line_incomplete("    x = 1") is False
 
 
 # ============================================================
@@ -187,9 +204,9 @@ class TestSanitizeIsLossless:
                 "    print(f\"准确率: {x:.4f}\")\n"
                 "    return x\n")
         raw = f"这是说明文字，应该被忽略。\n```python\n{body}```\n"
-        code, dropped = self._agent()._sanitize_code_ex(raw)
+        code, stats = self._agent()._sanitize_code_ex(raw)
         assert code == body.strip("\n")
-        assert dropped == 0
+        assert stats == {"prose_dropped": 0, "code_dropped": 0}
         assert "准确率" in code
 
     def test_chinese_print_is_not_dropped(self):
@@ -199,32 +216,129 @@ class TestSanitizeIsLossless:
                "    print(f\"准确率: {x:.4f}\")\n"
                "    return x\n"
                "f(0.85)\n")
-        code, dropped = self._agent()._sanitize_code_ex(raw)
+        code, stats = self._agent()._sanitize_code_ex(raw)
         assert "准确率" in code
-        assert dropped == 0
+        assert stats["code_dropped"] == 0
 
     def test_prose_lines_are_dropped_and_counted(self):
-        """纯中文叙述行仍会被丢弃，且丢弃行数被如实统计。"""
+        """纯中文叙述行仍会被丢弃，且计入 prose_dropped。"""
         raw = ("为了复现该论文，我们采用如下配置。\n"
                "import math\n"
                "下面是训练函数：\n"
                "def f(x):\n"
                "    return x\n"
                "f(1)\n")
-        code, dropped = self._agent()._sanitize_code_ex(raw)
+        code, stats = self._agent()._sanitize_code_ex(raw)
         assert "为了复现" not in code
         assert "下面是训练函数" not in code
-        assert dropped == 2
+        assert stats["prose_dropped"] == 2
+        assert stats["code_dropped"] == 0       # 叙述不算"洗残代码"
         assert "import math" in code
 
-    def test_dropped_lines_are_reported_not_silent(self):
-        """丢弃行时会写审计告警，不再静默。"""
+    def test_dropped_code_lines_are_reported_not_silent(self):
+        """丢掉疑似代码行时会写 WARNING，不再静默。"""
         agent = self._agent()
-        agent._record_sanitize("测试", "import math\n", 3)
+        agent._record_sanitize("测试", "import math\n",
+                               {"prose_dropped": 0, "code_dropped": 3})
         entries = [e for e in agent.logger.get_summary()
                    if e.get("action") == "sanitize_code"]
         assert entries and entries[-1]["status"] == "WARNING"
-        assert entries[-1]["data"]["dropped_lines"] == 3
+        assert entries[-1]["data"]["code_dropped"] == 3
+
+
+# ---- 实测过的三条"静默篡改"回归用例：内容必须一字不少 ----
+
+class TestNoSilentLineDeletion:
+    """这些输入里的合法代码行曾被白名单静默删掉，且删完仍能编译。
+
+    典型后果：`*x, y = [1, 2, 3]` 被删 -> 沙箱里 NameError；
+    docstring 内容被删 -> 字符串被悄悄改写。
+    """
+
+    @staticmethod
+    def _clean(raw):
+        return CodeExecutorAgent(LLMClient(mock_mode=True)) \
+            ._sanitize_code_ex(raw)
+
+    def test_star_unpacking_line_survives(self):
+        raw = "a = 1\n*x, y = [1, 2, 3]\nprint(y)\n"
+        code, stats = self._clean(raw)
+        assert code == raw.strip("\n")
+        assert stats["code_dropped"] == 0
+
+    def test_docstring_content_survives(self):
+        raw = ('def f():\n'
+               '    """说明\n'
+               '    ) paren\n'
+               '    * bullet\n'
+               '    """\n'
+               '    return 1\n'
+               'f()\n')
+        code, stats = self._clean(raw)
+        assert ") paren" in code
+        assert "* bullet" in code
+        assert stats["code_dropped"] == 0
+
+    def test_multiline_call_closing_bracket_survives(self):
+        raw = ("def load(a, b):\n"
+               "    return a + b\n"
+               "data = load(\n"
+               "    1,\n"
+               "    2,\n"
+               ")\n"
+               "print(data)\n")
+        code, stats = self._clean(raw)
+        assert "\n)\n" in code
+        assert stats["code_dropped"] == 0
+
+    def test_deleted_code_line_triggers_remediation(self):
+        """若保真清洗后仍编译不过、只能丢行，必须触发补救。"""
+        agent = CodeExecutorAgent(LLMClient(mock_mode=True))
+        stats = {"prose_dropped": 0, "code_dropped": 2}
+        assert agent._needs_continuation("print(1)\n", stats) is True
+
+    def test_prose_only_drop_does_not_trigger_remediation(self):
+        """只剥叙述行是预期行为，不该触发续写、也不该告警。"""
+        agent = CodeExecutorAgent(LLMClient(mock_mode=True))
+        stats = {"prose_dropped": 5, "code_dropped": 0}
+        assert agent._needs_continuation("print(1)\n", stats) is False
+        agent._record_sanitize("测试", "print(1)\n", stats)
+        entries = [e for e in agent.logger.get_summary()
+                   if e.get("action") == "sanitize_code"]
+        assert entries and entries[-1]["status"] == "RUNNING"
+
+
+# ============================================================
+# 6. 报告如实展示清洗记录
+# ============================================================
+
+class TestReportSurfacesSanitize:
+
+    @staticmethod
+    def _report(execution: dict) -> str:
+        from src.agents.report_generator import ReportGeneratorAgent
+        return ReportGeneratorAgent().run(
+            {"execution": execution, "paper_info": {}})["report"]
+
+    def test_code_drop_is_flagged_in_report(self):
+        report = self._report({
+            "code": "a = 1\n", "stages": [], "final": {},
+            "sanitize_stats": {"prose_dropped": 2, "code_dropped": 3},
+        })
+        assert "⚠️ 清洗丢弃" in report
+        assert "3 行疑似代码行" in report
+
+    def test_prose_only_drop_is_not_flagged_as_danger(self):
+        report = self._report({
+            "code": "a = 1\n", "stages": [], "final": {},
+            "sanitize_stats": {"prose_dropped": 2, "code_dropped": 0},
+        })
+        assert "⚠️ 清洗丢弃" not in report
+        assert "叙述行 2 行" in report
+
+    def test_no_sanitize_stats_no_noise(self):
+        report = self._report({"code": "a = 1\n", "stages": [], "final": {}})
+        assert "清洗丢弃" not in report
 
 
 # ============================================================
