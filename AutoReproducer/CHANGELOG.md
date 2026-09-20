@@ -5,6 +5,57 @@
 
 ---
 
+## [2026.09.20-13] - 2026-09-20
+
+### 修复（Docker 沙箱把 /tmp 挂成 noexec，C 扩展全部加载失败）
+
+用户启动 Docker Desktop 后首次真正走加固沙箱，报：
+
+```
+ImportError: /tmp/site-packages/numpy/_core/_multiarray_umath.cpython-311-x86_64-linux-gnu.so:
+failed to map segment from shared object
+```
+
+**根因**：加固参数 `--tmpfs /tmp:rw,nosuid,size=256m` 没写 `exec`，而
+Docker `--tmpfs` 的默认挂载选项是 `rw,nosuid,nodev,noexec`（本机实测
+`mount` 输出确认）。加固模式又恰好把依赖 `pip --target` 装进
+`/tmp/site-packages` —— C 扩展的 `.so` 需要 `mmap(PROT_EXEC)`，noexec 下
+直接 EPERM。**凡是带 C 扩展的包（numpy/torch/scipy…）都装得进去、导不进来**，
+用户看到的是一长串 numpy 安装建议，像是论文代码或环境坏了。
+
+本机真实容器实测（Docker 29.7.2，`--read-only` + 非 root + 同一组加固参数）：
+
+- 往 /tmp 拷二进制执行 → `Permission denied`（126）；
+- 装 numpy 后 import → 复现上述报错，`PY-RC=1`；
+- **同一条命令把挂载选项改成 `rw,exec,nosuid,size=256m` → `numpy ok 2.4.6`，`PY-RC=0`**。
+
+**为什么此前没暴露**：引擎一直没启动，加固沙箱这条路在这台机器上从未真正
+跑过（[2026.09.20-11] 修的正是「引擎没起却假装就绪」）。引擎一启动，第一个
+带 C 扩展的依赖就撞上。
+
+**改法**（`src/agents/code_executor.py::_sandbox_args`）：
+`--tmpfs /tmp:rw,exec,nosuid,nodev,size=256m`。保留 `nosuid`/`nodev`：要挡的
+是 setuid 与设备节点，不是「执行刚装进来的库」——容器里跑的本来就是不可信
+代码，它本来就要被执行，这点上不构成新的攻击面。
+
+**兜底**：`_HARDEN_INCOMPATIBLE_HINTS` 增加 `"failed to map segment"`——成因
+已修，但别的机器/别的 Docker 版本仍可能给出 noexec 的 tmpfs，命中即按既有
+降级链退到 level 2（无 tmpfs，`pip --target` 落到可执行的可写层）继续跑，
+而不是把基础设施问题报成「论文代码失败」。
+
+**验证**：走**生产代码路径**（`CodeExecutorAgent._execute_code_docker`，
+`image_tag=python:3.11-slim` + `requirements_txt=numpy>=1.24`）真实跑容器：
+`success=True, exit=0, sandbox={level: 0, degraded: False}, stdout="numpy ok 2.4.6"`
+——完整加固、零降级。
+
+**测试**（`tests/test_sandbox_hardening.py` +2）：`test_tmpfs_mount_allows_exec`
+锁死挂载选项（判据按逗号切分取成员——`"exec" in "noexec"` 是子串为真，
+用字符串 `in` 判断会恰好把这个 bug 判成「有 exec」）；
+`test_degrade_on_tmpfs_noexec` 覆盖他机 noexec 时逐级降级到 level 2 跑通。
+`test_full_hardening_present` 增补 exec 断言。
+
+---
+
 ## [2026.09.20-12] - 2026-09-20
 
 ### 回滚 / 修复（深色 IDE 面板回滚；docker 输出在中文 Windows 上丢输出）

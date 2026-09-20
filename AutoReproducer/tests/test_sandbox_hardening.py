@@ -13,7 +13,12 @@
 5. AUTOREPRO_DOCKER_HARDEN=0 时完全不加固（兼容极端环境）；
 6. 加固开启时 pip 安装走 tmpfs（--target /tmp/site-packages +
    PYTHONPATH 注入），兼容只读 rootfs 与非 root 用户；
-7. 白名单可通过 AUTOREPRO_DOCKER_IMAGE_ALLOWLIST 扩展。
+7. 白名单可通过 AUTOREPRO_DOCKER_IMAGE_ALLOWLIST 扩展；
+8. tmpfs 挂载必须**可执行**：Docker `--tmpfs` 默认 noexec，而依赖装在
+   /tmp/site-packages 里，C 扩展的 .so 需要 mmap(PROT_EXEC)——本机实测
+   numpy 报 "failed to map segment from shared object"（Permission denied,
+   126），同一命令加 exec 后通过。挂载选项判据按逗号切分取成员，
+   `"exec" in "noexec"` 是子串，用字符串 in 会把这个 bug 判成「有 exec」。
 
 运行: python -m pytest tests/test_sandbox_hardening.py -v
 """
@@ -56,6 +61,21 @@ def _executor() -> CodeExecutorAgent:
 
 def _cmd_str(calls, index=-1) -> str:
     return " ".join(str(c) for c in calls[index])
+
+
+def tmpfs_opts(joined: str):
+    """从命令行字符串里取出 `--tmpfs` 的挂载选项列表；没有则 None。
+
+    按逗号切分是有意的：挂载选项里 `"exec" in "noexec"` 是子串为真，
+    用字符串 in 判断会恰好把「noexec」误判成「有 exec」——那正是要防的 bug。
+    """
+    parts = joined.split()
+    for i, tok in enumerate(parts):
+        if tok == "--tmpfs" and i + 1 < len(parts):
+            spec = parts[i + 1]
+            if ":" in spec:
+                return spec.split(":", 1)[1].split(",")
+    return None
 
 
 # ---------------- 1. 镜像白名单 ----------------
@@ -167,6 +187,7 @@ class TestHardeningArgs:
         assert "--security-opt" in joined and "no-new-privileges" in joined
         assert "--read-only" in joined
         assert "--tmpfs" in joined and "/tmp:rw" in joined
+        assert "exec" in (tmpfs_opts(joined) or []), "tmpfs 需可执行（见 8.）"
         assert "--user" in joined and "65534:65534" in joined
         assert "--cpus" in joined and "2.0" in joined
         assert "--memory" in joined and "2g" in joined
@@ -175,6 +196,24 @@ class TestHardeningArgs:
         run_idx = joined.index("--rm")
         image_idx = joined.index("python:3.11-slim")
         assert run_idx < image_idx
+
+    def test_tmpfs_mount_allows_exec(self):
+        """tmpfs 挂载选项必须显式 exec（不能是 noexec）。
+
+        实测（真实容器，本机 Docker 29.7.2）：`--tmpfs /tmp:rw,nosuid,
+        size=256m` 挂出来是 rw,nosuid,nodev,**noexec**，往 /tmp 拷个二进制
+        执行即 Permission denied（126）；加固模式下依赖 pip --target 装进
+        /tmp/site-packages，C 扩展的 .so 需要 mmap(PROT_EXEC)，于是 numpy
+        报 "failed to map segment from shared object"。同一命令加 exec 后
+        `numpy ok 2.4.6`。
+        """
+        opts = tmpfs_opts(_cmd_str([
+            ["docker", "run"] + _executor()._sandbox_args(0)]))
+        assert opts is not None, "加固参数里应有 --tmpfs"
+        assert "exec" in opts
+        assert "noexec" not in opts
+        # 其余收紧项不许被顺手丢掉
+        assert "nosuid" in opts and "nodev" in opts and "rw" in opts
 
     def test_sandbox_meta_reported(self, monkeypatch, tmp_path):
         result, _ = self._capture(monkeypatch, tmp_path)
@@ -236,6 +275,42 @@ class TestHardeningArgs:
 # ---------------- 3. 加固不兼容自动降级 ----------------
 
 class TestHardeningDegrade:
+    def test_degrade_on_tmpfs_noexec(self, monkeypatch, tmp_path):
+        """tmpfs 不可执行（他机 noexec）-> 逐级降级到无 tmpfs 的 level 2 跑通。
+
+        成因已在 _sandbox_args 修掉（挂载选项带 exec），这条覆盖「另一台
+        机器/另一版 Docker 仍然 noexec」的兜底：不降级的话，用户拿到的
+        是 numpy 的 ImportError，看起来像论文代码坏了。
+        """
+        calls: list = []
+
+        def fake_run(cmd, **kw):
+            calls.append(cmd)
+            joined = " ".join(str(c) for c in cmd)
+            if "--tmpfs" in joined:
+                return subprocess.CompletedProcess(
+                    cmd, 1, stdout="",
+                    stderr="ImportError: /tmp/site-packages/numpy/_core/"
+                           "_multiarray_umath.cpython-311-x86_64-linux-gnu.so:"
+                           " failed to map segment from shared object")
+            return subprocess.CompletedProcess(cmd, 0, stdout="ok", stderr="")
+
+        monkeypatch.setattr(ce_mod.subprocess, "run", fake_run)
+        executor = _executor()
+        monkeypatch.setattr(executor, "_resolve_docker_cmd",
+                            lambda: "docker")
+        executor.env_config = {"image_tag": "python:3.11-slim",
+                               "requirements_txt": ""}
+        result = executor._execute_code_docker("import numpy\n", "smoke",
+                                               workdir=str(tmp_path))
+        assert result["success"] is True
+        assert len(calls) == 3                    # level 0 -> 1 -> 2
+        assert "--tmpfs" in _cmd_str(calls, 0)
+        assert "--tmpfs" in _cmd_str(calls, 1)    # level 1 仍有 tmpfs
+        assert "--tmpfs" not in _cmd_str(calls, 2)
+        assert result["sandbox"]["level"] == 2
+        assert result["sandbox"]["degraded"] is True
+
     def test_degrade_on_unknown_flag_then_success(self, monkeypatch,
                                                   tmp_path):
         """老 Docker 不支持 --pids-limit：首轮 unknown flag -> 自动降级重跑。"""

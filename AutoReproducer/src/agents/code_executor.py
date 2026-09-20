@@ -76,6 +76,10 @@ _HARDEN_INCOMPATIBLE_HINTS = (
     "operation not permitted", "permission denied",
     "read-only file system", "readonly file system",
     "cannot create directory", "mkdir", "no space left",
+    # tmpfs 挂载不可执行时 C 扩展加载失败的特征（见 _sandbox_args 的 exec 说明）。
+    # 成因已修，但另一台机器/另一版 Docker 可能仍有 noexec 的 tmpfs，降级到
+    # level 2（无 tmpfs）能让 pip --target 落到可执行的可写层，跑得下去。
+    "failed to map segment",
 )
 
 # ---- L0 依赖缓存（对齐方案「三层存储」：热缓存统一收敛到项目 data/ 下） ----
@@ -1126,8 +1130,15 @@ class CodeExecutorAgent(BaseAgent):
                 "--security-opt", "no-new-privileges"]
         if level >= 2:
             return args
+        # tmpfs 的 exec 必须显式给：Docker `--tmpfs` 默认挂载选项是
+        # rw,nosuid,nodev,**noexec**（本机实测 mount 输出），而加固模式下
+        # pip --target 把依赖装进 /tmp/site-packages —— C 扩展的 .so 需要
+        # mmap(PROT_EXEC)，noexec 下 numpy 直接
+        # "failed to map segment from shared object"（Permission denied，126）。
+        # 保留 nosuid/nodev：要挡的是 setuid 与设备节点，不是「执行刚装进来的
+        # 库」——容器里跑的本来就是不可信代码，它本来就要被执行。
         args += ["--read-only",
-                 "--tmpfs", "/tmp:rw,nosuid,size=256m",
+                 "--tmpfs", "/tmp:rw,exec,nosuid,nodev,size=256m",
                  "--user", DOCKER_DEFAULT_USER]
         if level <= 0:
             args += ["--cpus", f"{DOCKER_DEFAULT_CPUS}",
