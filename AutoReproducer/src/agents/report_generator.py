@@ -16,21 +16,12 @@ def _fmt(value, spec: str = ".2f", default: float = 0.0) -> str:
         return format(float(default), spec)
 
 
-# 报告内嵌代码/输出的展示上限（字符数）。
-# 完整内容由流水线落盘为 `<报告名>_execution.txt` 附件，报告内超长仅做展示截断
-# （不再静默丢弃：截断处标注实际长度与附件位置，避免「输出一半」）。
-CODE_SHOW_LIMIT = 6000
-STDOUT_SHOW_LIMIT = 6000
-STDERR_SHOW_LIMIT = 3000
-
-
-def _clip(text: str, limit: int) -> str:
-    """截断展示用长文本：超长时在末尾标注实际长度与附件提醒。"""
-    if not text or len(text) <= limit:
-        return text
-    return (f"{text[:limit]}\n\n"
-            f"[⚠️ 输出过长，此处仅截断展示前 {limit} / {len(text)} 字符——"
-            f"完整内容见随报告生成的 `*_execution.txt` 附件]")
+# 报告内代码与执行输出**全文内嵌**，不设展示上限。
+# 此前是截断到 6000/6000/3000 字符 + 一句「完整内容见 *_execution.txt 附件」，
+# 但报告本身才是用户真正在读的东西：实测一次 10627 字符的输出被砍到 6000，
+# 读报告的人拿到的是半截内容，还得去翻附件才知道后一半是什么。
+# 前端 `frontend/markdown_render.py` 会把代码块渲染成可滚动的深色面板，
+# 长度不再等于页面高度，全文内嵌没有排版代价。
 
 
 class ReportGeneratorAgent(BaseAgent):
@@ -139,12 +130,11 @@ class ReportGeneratorAgent(BaseAgent):
                 f"(退出码 {st.get('exit_code')})")
         if execution.get("code"):
             lines += ["", "### 生成代码", "```python",
-                      _clip(execution["code"], CODE_SHOW_LIMIT), "```"]
+                      execution["code"], "```"]
         lines += ["", "### 执行输出(full)", "```",
-                  _clip(final.get("stdout", "无输出"), STDOUT_SHOW_LIMIT), "```"]
+                  final.get("stdout", "无输出"), "```"]
         if final.get("stderr"):
-            lines += ["### 错误输出", "```",
-                      _clip(final["stderr"], STDERR_SHOW_LIMIT), "```"]
+            lines += ["### 错误输出", "```", final["stderr"], "```"]
         lines.append("")
 
         # 5. 验证结果 + 指标对比

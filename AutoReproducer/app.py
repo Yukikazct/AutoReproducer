@@ -32,6 +32,7 @@ from frontend.backend_pipeline import (
     ProgressStore,
     run_pipeline_background,
 )
+from frontend.markdown_render import render_markdown
 from frontend.history_manager import (
     list_sessions,
     get_storage_stats,
@@ -87,6 +88,67 @@ st.markdown("""
     div[data-testid="stSidebar"] {
         min-width: 300px;
         max-width: 400px;
+    }
+
+    /* ---- 报告内的代码块：深色 IDE 面板（frontend/markdown_render.py） ----
+       浅色页面里嵌一块深色代码区，边界一眼可见；
+       结构 = 标题栏(.autorepro-code-bar) + 滚动区(.autorepro-code-body)。
+       配色取 Monokai 原色（令牌颜色由 pygments 样式表下发）：
+       #272822 底 / #3e3d32 标题栏 / #f8f8f2 前景 / #75715e 注释灰。 */
+    .autorepro-code {
+        margin: 0.6rem 0 1rem 0;
+        border-radius: 8px;
+        overflow: hidden;
+        background: #272822;
+        border: 1px solid #3e3d32;
+    }
+    .autorepro-code-bar {
+        padding: 6px 12px;
+        background: #3e3d32;
+        color: #cfcfc2;
+        font-size: 0.78rem;
+        font-family: Consolas, "Cascadia Mono", "Courier New", monospace;
+        border-bottom: 1px solid #1e1e1f;
+        user-select: none;
+    }
+    .autorepro-code-body { overflow: auto; }
+    .autorepro-code pre {
+        margin: 0;
+        padding: 12px 14px;
+        background: transparent;
+        color: #f8f8f2;
+        font-family: Consolas, "Cascadia Mono", "Courier New", monospace;
+        font-size: 0.82rem;
+        line-height: 1.45;
+    }
+    /* 行号沟槽：右对齐 + 不可选中，复制代码时不会把行号一起复制走 */
+    .autorepro-code .linenos {
+        color: #75715e;
+        padding-right: 10px;
+        border-right: 1px solid #3e3d32;
+        user-select: none;
+        text-align: right;
+        width: 1%;
+        white-space: nowrap;
+        vertical-align: top;
+    }
+    .autorepro-code .linenodiv pre { color: #75715e; }
+    .autorepro-code td.code { width: 100%; }
+    /* 无高亮的终端输出：等宽 + 深色，贴近控制台观感 */
+    .autorepro-plain {
+        margin: 0;
+        padding: 12px 14px;
+        color: #f8f8f2;
+        font-family: Consolas, "Cascadia Mono", "Courier New", monospace;
+        font-size: 0.82rem;
+        line-height: 1.45;
+        white-space: pre-wrap;
+        word-break: break-word;
+    }
+    .autorepro-code-body::-webkit-scrollbar { width: 10px; height: 10px; }
+    .autorepro-code-body::-webkit-scrollbar-track { background: #272822; }
+    .autorepro-code-body::-webkit-scrollbar-thumb {
+        background: #4a4a44; border-radius: 5px;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -359,7 +421,9 @@ with tab2:
     st.markdown("### 📄 复现与优化报告")
     if st.session_state.result and st.session_state.result.get("data", {}).get("report"):
         report = st.session_state.result["data"]["report"]
-        st.markdown(report)
+        # 代码块渲染成深色 IDE 面板（行号 + 高亮 + 溢出滚动），
+        # 正文仍是 Markdown——见 frontend/markdown_render.py。
+        render_markdown(report)
     else:
         st.info("运行复现流程后，这里将显示完整的复现与优化报告。")
 

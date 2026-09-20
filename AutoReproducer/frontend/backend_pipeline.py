@@ -289,8 +289,9 @@ def run_pipeline_core(progress_path: str,
             report_file.write_text(report_text, encoding="utf-8")
             report_path = str(report_file)
 
-            # 完整执行输出附件：报告内仅截断展示，完整 code/stdout/stderr 落盘
-            # 供需要全文时查看（修复「输出一半」问题：附件永远完整）。
+            # 完整执行输出附件：报告现已**全文内嵌** code/stdout/stderr，
+            # 附件保留作为可直接下载/归档的纯文本旁路（终端里 wc/grep、
+            # 或想脱离 Markdown 单独留档时用）。
             execution_raw = data.get("execution", {}) or {}
             final_raw = execution_raw.get("final", {}) or {}
             attach_lines = ["# 完整执行输出（未被截断）",

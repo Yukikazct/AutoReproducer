@@ -340,6 +340,26 @@ class TestReportSurfacesSanitize:
         report = self._report({"code": "a = 1\n", "stages": [], "final": {}})
         assert "清洗丢弃" not in report
 
+    def test_report_embeds_full_output_without_truncation(self):
+        """报告全文内嵌代码与执行输出，不截断。
+
+        此前 `_clip` 把 code/stdout/stderr 砍到 6000/6000/3000 字符，实测
+        一次 10627 字符的输出在报告里只剩前 6000——读报告的人拿到半截内容。
+        代码块现已由前端渲染成可滚动面板，长度不再有排版代价。
+        """
+        code = "# 生成代码\n" + "\n".join(
+            f"print('step {i}')" for i in range(400))          # ≈ 8000 字符
+        stdout = "\n".join(f"result[{i}] = {i * 1.5:.3f}"
+                           for i in range(900))                # ≈ 20000 字符
+        report = self._report({
+            "code": code, "stages": [], "final": {"stdout": stdout},
+        })
+
+        assert code.splitlines()[-1] in report       # 代码末行必须在
+        assert stdout.splitlines()[-1] in report     # 输出末行必须在
+        assert "截断" not in report
+        assert len(report) > len(code) + len(stdout)
+
 
 # ============================================================
 # 7. 报告如实展示验证结论的依据
