@@ -8,6 +8,7 @@
   （OpenAI 兼容端点 / Key / 模型真实生效）。
 """
 import os
+import shutil
 import sys
 import tempfile
 import time
@@ -37,6 +38,8 @@ from frontend.history_manager import (
     cleanup_runtime,
     format_size,
     get_session_detail,
+    delete_session,
+    clear_sessions,
 )
 
 # 页面自动刷新（可选依赖）：未安装时退化为手动刷新
@@ -114,11 +117,28 @@ with st.sidebar:
     st.image("https://img.icons8.com/fluency/96/idea.png", width=60)
     st.markdown("## ⚙️ 控制面板")
 
-    # 模式选择
+# 模式选择
     st.session_state.mock_mode = st.toggle(
         "🧪 Mock模式（无需API）",
         value=st.session_state.mock_mode,
         help="启用Mock模式可直接演示，无需连接任何LLM服务")
+
+    # Docker 沙箱执行开关（真实模式生效）
+    if "use_docker" not in st.session_state:
+        st.session_state.use_docker = True
+    docker_available = shutil.which("docker") is not None
+    st.session_state.use_docker = st.toggle(
+        "🐳 Docker 沙箱执行（真实模式）",
+        value=st.session_state.use_docker,
+        disabled=st.session_state.mock_mode or not docker_available,
+        help="真实模式下启用 Docker 隔离执行：依赖在容器内安装，"
+             "不污染本机环境；未安装 Docker 或 Mock 模式时自动降级为本地隔离执行")
+    if st.session_state.mock_mode:
+        st.caption("🧪 Mock 模式不执行真实代码，无需 Docker")
+    elif not docker_available:
+        st.caption("⚠️ 未检测到 Docker，将使用本地隔离执行（依赖安装在隔离目录）")
+    else:
+        st.caption(f"✅ Docker 已就绪 ({'将使用' if st.session_state.use_docker else '未启用，将使用本地隔离执行'})")
 
     # LLM API 配置（真实模式；OpenAI 兼容接口，不依赖本地部署）
     with st.expander("🔗 LLM API 配置", expanded=not st.session_state.mock_mode):
@@ -442,7 +462,7 @@ with tab5:
                 use_container_width=True,
             )
 
-    # -- 存储仪表板 --
+# -- 存储仪表板 --
     st.markdown("#### 💾 存储占用")
     try:
         storage = get_storage_stats()
@@ -453,6 +473,11 @@ with tab5:
             ("实时进度", "runtime"),
             ("复现报告", "reports"),
             ("优化产物", "optimization_demo"),
+            ("数据集", "datasets"),
+            ("依赖缓存", "deps"),
+            ("代码仓库", "repos"),
+            ("清单/归档", "manifests"),
+            ("归档快照", "archive"),
             ("其他", "pinn-output"),
         ]
         for i, (label, key) in enumerate(metrics):
@@ -466,9 +491,23 @@ with tab5:
     # -- 一键清理 --
     with st.expander("🧹 清理管理"):
         keep_days = st.slider("保留 runtime 文件天数", 1, 30, 7)
-        if st.button("清理过期 runtime 文件", use_container_width=True):
+        if st.button("清理过期/终态 runtime 文件", use_container_width=True,
+                     help="删除已结束复现（done/error）遗留的进度文件，以及超过保留天数的旧进度文件"):
             removed, freed = cleanup_runtime(keep_days=keep_days)
             st.success(f"已删除 {removed} 个文件，释放 {format_size(freed)}")
+            st.rerun()
+
+        st.markdown("---")
+        st.markdown("**🗑️ 历史会话清理**（危险操作，请谨慎）")
+        confirm_clear = st.checkbox(
+            "我确认清空全部历史复现会话（实验账本/审计日志/复现报告/runtime 进度）",
+            key="confirm_clear_all")
+        if st.button("🧹 清空全部历史", use_container_width=True,
+                     type="secondary",
+                     disabled=not confirm_clear):
+            removed, freed = clear_sessions()
+            st.success(f"已清空全部历史：删除 {removed} 个文件，"
+                       f"释放 {format_size(freed)}")
             st.rerun()
 
     # -- 历史会话列表 --
@@ -509,7 +548,7 @@ with tab5:
                     else:
                         st.caption("无报告文件")
 
-                    # 详情按钮
+# 详情按钮
                     if st.button("查看详情", key=f"detail_{sid}"):
                         detail = get_session_detail(sid)
                         if detail:
@@ -518,6 +557,19 @@ with tab5:
                                 st.json(entry)
                         else:
                             st.warning("未找到详情")
+
+                    # 删除本会话（危险操作：需勾选确认）
+                    st.markdown("---")
+                    confirm_del = st.checkbox(
+                        "确认删除本会话（账本/日志/报告/progress 一并删除）",
+                        key=f"confirm_del_{sid}")
+                    if st.button("🗑️ 删除本会话", key=f"del_btn_{sid}",
+                                 type="secondary",
+                                 disabled=not confirm_del):
+                        removed, freed = delete_session(sid)
+                        st.success(f"已删除该会话 {removed} 个文件，"
+                                   f"释放 {format_size(freed)}")
+                        st.rerun()
     except Exception as e:
         st.error(f"加载历史记录失败: {e}")
 
@@ -552,6 +604,15 @@ if start_btn:
                  + "）。请在侧边栏填写，或设置环境变量 "
                    "LLM_BASE_URL / LLM_MODEL 后重试。")
     else:
+        # 真实模式且未填 API Key：多数云端端点（DeepSeek/OpenAI 等）会返回
+        # 401，且流水线会把错误文本当 LLM 输出继续跑，表象类似「没反应」。
+        # 此处不阻断（部分自建端点无需鉴权），但给出明确预警。
+        if (not st.session_state.mock_mode
+                and not (api_key.strip()
+                         or os.environ.get("LLM_API_KEY", "").strip())):
+            st.warning("⚠️ 未填写 API Key：如果上游服务需要鉴权"
+                       "（如 DeepSeek/OpenAI），调用会返回 401 错误文本；"
+                       "建议先在侧边栏填写 Key 并点击「🔌 测试 AI 连接」验证。")
         tmp_pdf = _save_uploaded_pdf(uploaded_file) if uploaded_file else ""
         progress_file = _new_progress_file()
         st.session_state.progress_file = progress_file
@@ -570,6 +631,9 @@ if start_btn:
             api_key=api_key,
             mock_mode=st.session_state.mock_mode,
             max_trials=max_trials,
+            use_docker=(not st.session_state.mock_mode
+                        and docker_available
+                        and st.session_state.use_docker),
             cleanup_pdf=True)   # 临时 PDF 由后台线程负责删除
         st.rerun()
 

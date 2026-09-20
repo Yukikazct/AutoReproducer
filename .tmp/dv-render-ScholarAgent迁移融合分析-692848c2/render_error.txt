@@ -1,0 +1,1 @@
+浏览器渲染失败: browser connect failed: dumate-browser-cli init failed: [ERROR RelayUnreachable] 浏览器通道不可用：当前没有可用页面，无法建立调试会话。 | hint: 请让用户在浏览器里新开一个标签页，或稍后重试 init。不要反复 recover 或切换 --mode。

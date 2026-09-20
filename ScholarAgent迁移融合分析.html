@@ -1,0 +1,591 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ScholarAgent 深度解析与 AutoReproducer 迁移融合方案</title>
+<style>
+  :root {
+    --navy: #16324f;
+    --navy-light: #1f4270;
+    --blue: #2563eb;
+    --blue-soft: #eaf1fe;
+    --green: #059669;
+    --green-soft: #e7f6f0;
+    --amber: #d97706;
+    --amber-soft: #fdf3e2;
+    --red: #dc2626;
+    --red-soft: #fdecec;
+    --gray-50: #f8fafc;
+    --gray-100: #f1f5f9;
+    --gray-200: #e2e8f0;
+    --gray-500: #64748b;
+    --gray-700: #334155;
+    --gray-900: #0f172a;
+    --radius: 10px;
+    --shadow: 0 1px 3px rgba(15,23,42,.08), 0 4px 14px rgba(15,23,42,.06);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: "Microsoft YaHei", "PingFang SC", "Segoe UI", -apple-system, sans-serif;
+    color: var(--gray-700);
+    background: var(--gray-100);
+    line-height: 1.75;
+  }
+  .page { max-width: 1120px; margin: 0 auto; padding: 32px 28px 80px; }
+  code {
+    font-family: "Cascadia Code", Consolas, Menlo, monospace;
+    background: #eef2f7; border: 1px solid var(--gray-200);
+    border-radius: 5px; padding: 1px 6px; font-size: .86em; color: #1e3a5f;
+  }
+  h1, h2, h3 { color: var(--navy); line-height: 1.4; }
+  h1 { font-size: 30px; margin-bottom: 6px; }
+  h2 { font-size: 23px; margin: 0 0 14px; padding-bottom: 8px; border-bottom: 2px solid var(--blue-soft); }
+  h3 { font-size: 17px; margin: 20px 0 8px; }
+  p { margin: 8px 0; }
+  ul, ol { margin: 8px 0 8px 22px; }
+  li { margin: 4px 0; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0 20px; font-size: 13.5px; background: #fff; border-radius: var(--radius); overflow: hidden; box-shadow: var(--shadow); }
+  th { background: var(--navy); color: #fff; text-align: left; padding: 9px 12px; font-weight: 600; white-space: nowrap; }
+  td { padding: 9px 12px; border-bottom: 1px solid var(--gray-100); vertical-align: top; }
+  tr:nth-child(even) td { background: var(--gray-50); }
+  tr:hover td { background: #f0f6ff; }
+  .badge {
+    display: inline-block; padding: 1px 9px; border-radius: 999px;
+    font-size: 12px; font-weight: 600; white-space: nowrap; line-height: 1.7;
+  }
+  .b-green { background: var(--green-soft); color: var(--green); }
+  .b-blue  { background: var(--blue-soft); color: var(--blue); }
+  .b-amber { background: var(--amber-soft); color: var(--amber); }
+  .b-red   { background: var(--red-soft); color: var(--red); }
+  .b-gray  { background: var(--gray-100); color: var(--gray-500); }
+  .card {
+    background: #fff; border-radius: var(--radius); box-shadow: var(--shadow);
+    padding: 20px 24px; margin: 18px 0;
+  }
+  .hero {
+    background: linear-gradient(135deg, var(--navy) 0%, var(--navy-light) 60%, #2b5b9e 100%);
+    color: #fff; border-radius: 14px; padding: 34px 36px; margin-bottom: 26px;
+  }
+  .hero h1 { color: #fff; border: none; }
+  .hero .sub { color: #cdddf5; font-size: 15px; margin-top: 6px; }
+  .hero .meta { margin-top: 16px; font-size: 12.5px; color: #9fb9dd; }
+  .toc {
+    background: #fff; border-radius: var(--radius); box-shadow: var(--shadow);
+    padding: 18px 24px; margin-bottom: 26px; columns: 2; column-gap: 40px;
+  }
+  .toc a { display: block; color: var(--blue); text-decoration: none; font-size: 14px; padding: 3px 0; }
+  .toc a:hover { text-decoration: underline; }
+  .section { margin-top: 44px; }
+  .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin: 20px 0; }
+  .kpi { background: #fff; border-radius: var(--radius); box-shadow: var(--shadow); padding: 16px 18px; }
+  .kpi .num { font-size: 26px; font-weight: 700; color: var(--navy); }
+  .kpi .lbl { font-size: 12.5px; color: var(--gray-500); margin-top: 2px; }
+  .layers { margin: 16px 0; }
+  .layer {
+    border: 1px solid var(--gray-200); border-radius: 9px; margin: 8px 0;
+    padding: 10px 16px 12px; background: #fff;
+  }
+  .layer .lt { font-weight: 700; font-size: 14.5px; color: var(--navy); margin-bottom: 4px; }
+  .layer .ld { font-size: 13px; color: var(--gray-500); }
+  .layer .boxes { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+  .box {
+    background: var(--blue-soft); border: 1px solid #c7dcfc; color: #1e4b8f;
+    font-size: 12.5px; border-radius: 6px; padding: 3px 10px;
+  }
+  .box.g { background: var(--green-soft); border-color: #bbe8d5; color: #0b6b4f; }
+  .box.a { background: var(--amber-soft); border-color: #f2ddb8; color: #92560b; }
+  .callout { border-left: 4px solid var(--blue); background: var(--blue-soft); padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 14px 0; font-size: 14px; }
+  .callout.warn { border-color: var(--amber); background: var(--amber-soft); }
+  .callout.good { border-color: var(--green); background: var(--green-soft); }
+  .callout.bad { border-color: var(--red); background: var(--red-soft); }
+  .filepath { font-family: Consolas, Menlo, monospace; font-size: 12px; color: var(--gray-500); }
+  .pill-row { margin: 6px 0; }
+  .arrow-down { text-align: center; color: var(--gray-500); font-size: 18px; margin: 2px 0; }
+  @media (max-width: 860px) {
+    .kpis { grid-template-columns: repeat(2, 1fr); }
+    .toc { columns: 1; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- ================= HERO ================= -->
+  <div class="hero">
+    <h1>ScholarAgent 深度解析 × AutoReproducer 迁移融合方案</h1>
+    <div class="sub">面向「论文复现与预算受限自动研究」的同行系统对照分析 —— 可迁移关键技术识别、自身创新点保留、P0/P1/P2 融合路径</div>
+    <div class="meta">分析日期：2026-09-16 ｜ 参照项目：<code style="background:rgba(255,255,255,.15);border-color:rgba(255,255,255,.25);color:#fff">参考项目/ScholarAgent</code>（wenliu3/ScholarAgent @ local clone）｜ 分析对象：AutoReproducer 多智能体复现系统（本工作区）</div>
+  </div>
+
+  <div class="toc">
+    <a href="#s1">1 结论速览（TL;DR）</a>
+    <a href="#s2">2 ScholarAgent 项目全貌</a>
+    <a href="#s3">3 架构全景与技术路线</a>
+    <a href="#s4">4 核心机制逐层解析</a>
+    <a href="#s5">5 关键技术清单</a>
+    <a href="#s6">6 与 AutoReproducer 的对照矩阵</a>
+    <a href="#s7">7 迁移融合方案</a>
+    <a href="#s8">8 融合后目标架构</a>
+    <a href="#s9">9 风险与边界</a>
+    <a href="#s10">10 参考来源</a>
+  </div>
+
+  <!-- ================= S1 ================= -->
+  <div class="section" id="s1">
+    <h2>1 结论速览（TL;DR）</h2>
+    <div class="callout">
+      <b>核心判断：</b>ScholarAgent 与 AutoReproducer 属于<b>同一课题域（论文自动复现 + 多智能体 + 沙箱执行 + 预算受限）</b>，技术路线高度重合，但侧重点不同 ——
+      ScholarAgent 胜在<b>工程化可信度</b>（DAG 调度与断点恢复、经验库先验、证据链防篡改、防泄漏评测、补丁安全策略），
+      AutoReproducer 独有<b>存储工程与分级策略</b>（三层缓存/懒加载/配额、镜像级共享底座、数据集注册表、L1/L2/L3 分级复现与升级验收机制、Prompt-Free 验证）。
+    </div>
+    <div class="kpis">
+      <div class="kpi"><div class="num">1.8 万行</div><div class="lbl">ScholarAgent Python 代码规模</div></div>
+      <div class="kpi"><div class="num">9 个</div><div class="lbl">ScholarAgent 专业 Agent（+DAG 引擎）</div></div>
+      <div class="kpi"><div class="num">6 项</div><div class="lbl">高价值可直接迁移的技术（P0）</div></div>
+      <div class="kpi"><div class="num">0 冲突</div><div class="lbl">与 AutoReproducer 创新点（均可保留）</div></div>
+    </div>
+    <h3>三条最重要的发现</h3>
+    <ol>
+      <li><b>优化闭环（UCB→BeamUCT+经验先验）可无缝升级：</b>AutoReproducer 已有 UCB1 方向调度与 RealSimulator 的 Keep/Reject 真实闭环，ScholarAgent 的 <code>BeamUCTSearch</code>（参数树 UCT + Beam 宽）与 <code>ExperienceStore</code>（跨论文经验 JSONL + 先验播种）是纯增量补强，不破坏现有护栏（max_trials、LLM 调用预算）。</li>
+      <li><b>验证可信度层是最值得融合的部分：</b>AutoReproducer 的 Prompt-Free 验证负责「质量合规」，ScholarAgent 的证据链（Claim/Criterion/Evidence + SHA-256 锚定 + 确定性裁决门控）负责「可追溯与防篡改」 —— 两者正交，可叠加：迁移后「无真实执行证据一律不判 verified」的硬规则直接强化 L1/L2 的验收可靠性。</li>
+      <li><b>「补丁安全策略」是当前最薄弱、迁移成本最低的一环：</b>AutoReproducer 的 <code>safety/patch_policy.py</code>（99 行）相对 ScholarAgent 完整版（197 行）缺少目录级禁改模式、禁改扩展名（数据/权重）、文件名正则、单文件体积预算 —— 而这一层直接决定优化闭环「不会作弊地改掉评测代码/数据集」，属于 <span class="badge b-red">P0 必修</span>。</li>
+    </ol>
+  </div>
+
+  <!-- ================= S2 ================= -->
+  <div class="section" id="s2">
+    <h2>2 ScholarAgent 项目全貌</h2>
+    <table>
+      <tr><th style="width:180px">维度</th><th>信息</th></tr>
+      <tr><td>定位</td><td>面向<b>论文复现</b>与<b>预算受限自动研究</b>的多智能体科研执行系统（系结合检索增强工作流、智能体分工与自检验证的 Agent 科研框架）</td></tr>
+      <tr><td>仓库 / 许可</td><td>github.com/wenliu3/ScholarAgent ｜ MIT ｜ Python ≥3.11（迁移无许可障碍，保留版权声明即可）</td></tr>
+      <tr><td>规模</td><td>161 个文件、<b>18,327 行 Python</b>、12 张架构/评测截图（docs/）、tests/ 含证据链/优化器/Benchmark/引擎测试</td></tr>
+      <tr><td>技术栈</td><td>前端 Vue3 + Vite；后端 FastAPI + LangChain ChatModel（OpenAI 兼容：DeepSeek/Qwen）+ <b>LangGraph StateGraph</b> + AsyncSqliteSaver（Checkpointer）；执行层独立 Docker 沙箱服务（docker-sandbox，双引擎 docker/opensandbox）</td></tr>
+      <tr><td>前端能力</td><td>计划生命周期管理、单任务直连执行、文件上传、<b>SSE 实时事件流</b>（计划/任务/日志/心跳）、PDF 代理（SSRF 防护）、Bearer 鉴权 + Cookie 身份</td></tr>
+      <tr><td>功能面</td><td>✓ 意图分类与规划（6 类模板 + LLM 规划代理）　✓ 9 个专业 Agent　✓ 有界调试/自动研究闭环　✓ 方法与超参搜索（UCB/UCT/Beam/经验库）　✓ 证据链图谱　✓ 防泄漏 Benchmark 评测　✓ 用量计量</td></tr>
+    </table>
+    <p style="font-size:13.5px;color:var(--gray-500)">核心目录（本地路径前缀 <code>参考项目/ScholarAgent/</code>）：<code>backend/app/graph</code>（调度）、<code>backend/app/planner</code>（规划）、<code>backend/app/agents</code>（9 Agent）、<code>backend/app/research</code>（研究闭环+optimizer）、<code>backend/app/evidence</code>（证据链）、<code>docker-sandbox</code>（沙箱）、<code>frontend</code>（Vue3）。</p>
+  </div>
+
+  <!-- ================= S3 ================= -->
+  <div class="section" id="s3">
+    <h2>3 架构全景与技术路线</h2>
+    <p>ScholarAgent 的总体技术路线可概括为：<b>「意图 → 规划 → DAG 调度 → 专业 Agent 执行 → 确定性守卫 → 证据链结算」</b>。与 AutoReproducer 的流水线不同，它把流程显式建模为带依赖关系的任务图（LangGraph），并用一层贯穿始终的确定性机制（补丁策略、哈希锚定、契约冻结、防泄漏切分）约束 LLM 的自由度。</p>
+    <div class="layers">
+      <div class="layer">
+        <div class="lt">① 前端交互层（Vue3 + SSE）</div>
+        <div class="ld">计划列表/详情/审批门禁、任务级实时日志流（EventSource 订阅 plan_event/heartbeat）、单任务直连执行、结果图 base64 回显</div>
+        <div class="boxes"><span class="box">SSE 事件流</span><span class="box">审批/预算门禁</span><span class="box">plan_runtime API</span></div>
+      </div>
+      <div class="arrow-down">▼</div>
+      <div class="layer">
+        <div class="lt">② 意图与规划层</div>
+        <div class="ld">LLM 并行「意图分类 + 查询改写 + 论文检索字段抽取」，正则回退；6 类模板计划（论文复现/框架对比/代码执行/自定义 Benchmark/AutoResearch）；LLM 规划代理输出节点图，契约校验失败自动回退模板</div>
+        <div class="boxes"><span class="box">intent/classifier.py</span><span class="box">planner/planner.py（1308 行）</span><span class="box">agent_planner.py</span></div>
+      </div>
+      <div class="arrow-down">▼</div>
+      <div class="layer">
+        <div class="lt">③ 调度引擎层（LangGraph StateGraph + Checkpointer）</div>
+        <div class="ld">START → router（就绪提升/预算门禁/串行互斥/并行槽位/任务租约/执行纪元）→ Send 扇出 execute_task×N → 收敛 router → finalize（死锁检测+终态结算）；AsyncSqliteSaver 计划快照、进程重启后 IN_PROGRESS 计划重置恢复</div>
+        <div class="boxes"><span class="box">graph/engine.py（734 行）</span><span class="box">events/bus.py</span><span class="box">store/plan_store.py</span></div>
+      </div>
+      <div class="arrow-down">▼</div>
+      <div class="layer">
+        <div class="lt">④ 专业 Agent 层（9 个）</div>
+        <div class="ld">Librarian（冻结 Claim Rubric）、Data（有界 ToT 消融设计）、Coder（静态依赖解析 + pip 自愈）、ResearchCoding（有界调试 ≤3 运行/≤2 修复、AutoResearch 试验循环）、Benchmark（防泄漏评测）、repo_ops（确定性发现链）、Chat/Registry/Base</div>
+        <div class="boxes"><span class="box">agents/base.py</span><span class="box">librarian.py</span><span class="box">data.py</span><span class="box">coder.py</span><span class="box">research_coding.py</span><span class="box">benchmark.py</span><span class="box">repo_ops.py</span></div>
+      </div>
+      <div class="arrow-down">▼</div>
+      <div class="layer">
+        <div class="lt">⑤ 研究闭环与优化层（AutoResearch / Experiment）</div>
+        <div class="ld">冻结 ResearchSpec（SHA-256）→ 基线评估 → 循环：候选生成 → PatchPolicy 过滤 → 快照回滚 + apply → 多重评估 → Keep/Reject（回滚）→ TrialLedger → 隐藏 Holdout 验收；优化器：UCB 选方向 + UCT 参数树 + Beam 宽 + ExperienceStore 跨任务先验播种，≤4 并行试验</div>
+        <div class="boxes"><span class="box">research/harness.py</span><span class="box">spec.py</span><span class="box">patch_policy.py</span><span class="box">workspace_snapshot.py</span><span class="box">optimizer/coordinator.py</span><span class="box">optimizer/beam_uct.py</span><span class="box">optimizer/experience_store.py</span></div>
+      </div>
+      <div class="arrow-down">▼</div>
+      <div class="layer">
+        <div class="lt">⑥ 证据链与结算层（Evidence Graph）</div>
+        <div class="ld">Claim / Criterion / Evidence 三层图谱；每条证据带内容 SHA-256；「authentic 执行证据」判定（仅 status=completed 且有真实 metrics 的 run_metrics 才算）；确定性裁决门控：无执行证据→unverifiable、smoke 模式顶格 smoke_verified、未知模式顶格 partially_reproduced、缺资源→blocked_by_missing_asset</div>
+        <div class="boxes"><span class="box">evidence/graph.py（323 行）</span><span class="box">canonical rubric 冻结哈希</span></div>
+      </div>
+      <div class="arrow-down">▼</div>
+      <div class="layer">
+        <div class="lt">⑦ 沙箱执行层（独立服务 + 加固）与计量层</div>
+        <div class="ld">docker-sandbox：镜像白名单、cap_drop ALL、no-new-privileges、只读 rootfs + tmpfs、非 root、CPU/mem/pids 限额、Bearer 鉴权、NDJSON 流式协议；usage.py 用 ContextVar 把 LLM tokens 与沙箱耗时归集到对应 plan</div>
+        <div class="boxes"><span class="box">docker-sandbox/main.py</span><span class="box">sandbox_config.py</span><span class="box">app/usage.py</span></div>
+      </div>
+    </div>
+    <div class="callout good">
+      <b>对 AutoReproducer 的映射：</b>①↔Streamlit 前端（无 SSE）；②↔无（直接收 title/语料 ID 起流程）；③↔线性状态机（orchestrator.py，同步流水线）；④↔8 Agent（同名职责高度对应）；⑤↔OptimizerAgent + RealSimulator 已有雏形；⑥↔ResultValidator + Verifier（Prompt-Free 验证，无图谱/哈希/门控）；⑦↔EnvBuilder Docker 执行（无独立沙箱服务与加固）。
+    </div>
+  </div>
+
+  <!-- ================= S4 ================= -->
+  <div class="section" id="s4">
+    <h2>4 核心机制逐层解析</h2>
+
+    <div class="card">
+      <h3>4.1 调度引擎（graph/engine.py + state.py + store/plan_store.py）</h3>
+      <ul>
+        <li><b>图结构：</b><code>START → router →(条件边)→ Send(execute_task)×N → router … → finalize/done → END</code>。state 用带 reducer 的通道承载 tasks/artifacts/events，支持并行节点安全合并更新。</li>
+        <li><b>router 六职责：</b>①就绪提升（依赖 COMPLETED 且 required_artifacts 齐备 → PENDING→READY）；②预算/审批门禁（未批准/超时/超尝试次数 → 停发或 finalize）；③串行互斥（serial 节点独占本 superstep）；④并行槽位（parallel 节点按 priority 排序取 max_concurrent 个）；⑤任务租约（execution_id + lease_owner + lease_expires_at）；⑥执行纪元（execution_epoch 防陈旧结果）。</li>
+        <li><b>execute_task：</b><code>asyncio.wait_for</code> 超时 → FAILED；执行返回前重读 store 做陈旧守卫，lease/纪元不符则丢弃并广播 <code>task_result_discarded</code>；失败且 run_count ≤ retry_limit → 回 PENDING 重试，否则 FAILED 并沿 control/data 边 DFS 将全部后裔置 BLOCKED（<b>失败级联阻塞</b>）。</li>
+        <li><b>finalize：</b>死锁检测（无就绪节点且非全终态 → plan_failed）；预算超限/取消 → 取消其余节点；否则按是否存在 FAILED/BLOCKED/CANCELED 判 completed/failed。</li>
+        <li><b>Checkpointer：</b>AsyncSqliteSaver（thread_id=plan_id）+ 进程内快照事务读改写；进程重启后 <code>recover_interrupted_plans()</code> 把 IN_PROGRESS 计划重置为 PENDING（清租约、保留已完成节点），发 <code>plan_recovered</code> 事件 —— 这是 AutoReproducer 完全缺失的「断点续跑」能力。</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h3>4.2 规划层（intent/classifier.py + planner/planner.py + agent_planner.py）</h3>
+      <ul>
+        <li><b>意图分类：</b><code>_classify_parallel</code> 用 asyncio.gather 并行发 3 个独立 LLM 调用（意图分类 + 查询改写 + 论文检索字段抽取：paper_title/arxiv_id/search_query/method_name），各自降级；无 Key 或 JSON 非法时回退确定性正则（复现/对比/代码执行/自研，抽取 arXiv id、GitHub URL、commit SHA、框架列表、smoke/full 标记、ablation/plot/fix 标记）。</li>
+        <li><b>六类模板计划：</b>论文复现（parse → 冻结 Claim Rubric → repo_discovery → 消融设计(可选) → prepare → resolve → runtime → install → 有界调试执行 → 对比 → fix/plot(可选) → 主张证据图）；框架对比（调研 + 每框架并行 generate/run）；代码执行；自定义 Benchmark（audit → 防泄漏切分 → 冻结指标契约 → 生成适配器 → 两段执行 → 隐藏验证）；AutoResearch（冻结 spec → 试验循环 → holdout 验收；数据集版走 ToT 消融）。节点带 contract（allowed_tools/输入输出 artifact），边分 control/data 两类。</li>
+        <li><b>LLM 规划代理 + 校验回退：</b>输出 <code>{nodes:[{ref,name,type,assigned_to,deps,artifacts}]}</code> → 归一化（Agent 白名单、task_type 关键词映射、伪模式补 artifact 缺省）→ 物化 TaskNode → 按 <code>_CANONICAL_NODE_CONTRACTS</code> 与意图必需节点校验，任一失败整体回退模板（丢悬挂 artifact、环检测）。</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h3>4.3 专业 Agent 层（agents/）</h3>
+      <ul>
+        <li><b>Librarian：</b>文献分析；<code>claim_rubric_extract</code> 把论文冻结为 ≤16 claims × ≤6 criteria 的分层 Rubric，附 <code>canonical_rubric_sha256</code> 冻结，下游先验哈希校验防篡改。</li>
+        <li><b>Data：</b><code>ablation_design</code> 有界 ToT（候选 LLM → 评估 LLM → score = mean(information_gain, relevance, reproducibility) − 0.25×risk → 排序剪枝）；<code>claim_evidence_build</code> 按冻结 Rubric 与 authentic 执行证据构建主张-证据图。</li>
+        <li><b>Coder：</b>静态依赖解析（AST import + requirements/env.yml/pyproject，std-lib 过滤、py39 版本钉归一化）；<b>pip 自愈 ≤3 次</b>（LLM 给 remove/replace/rewrite/upgrade_python 或规则回退）；运行时缺模块自动补装；按 pyproject requires-python 升级沙箱镜像。</li>
+        <li><b>ResearchCoding（论文复现核心）：</b>有界调试 <b>≤3 次运行、≤2 次 LLM 修复</b>（每轮失败且 repairs_used&lt;2 才打补丁）；补丁前备份原文件、仅允许改已有文件且过 PatchPolicy；每轮前后对整个 workspace 的 .py 做 <b>SHA 指纹</b>，运行中被篡改即中止并恢复；全失败 restore_backups 回滚。AutoResearch：冻结 spec → Harness 试验循环 → best → holdout 验收。</li>
+        <li><b>Benchmark（纯确定性、无 LLM）：</b>数据审计（列统计/重复检测/映射自动识别，弱信号或平局拒绝猜测）；防泄漏切分（hash/random/group/time 四策略；test/preflight 只留特征 + <code>__benchmark_id</code>，<b>隐藏标签存后端私有目录</b>，写后重读断言无目标列且 id 集合一致）；冻结指标/奖励契约（后端复算）；隐藏验证按 id join 复算指标并报告覆盖率。</li>
+        <li><b>repo_ops（确定性绕过 LLM）：</b>发现链 = 用户 URL → Papers with Code(HF) → GitHub 搜索 → curated 回退；prepare = 缓存 → 浅克隆 → git init/fetch → pin revision 校验；入口文件打分 + <b>复现模式决策</b>（auto → 生成 120s 预算的 smoke runner；full/smoke 分级）。</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h3>4.4 研究闭环（research/：harness.py + spec.py + patch_policy.py + workspace_snapshot.py）</h3>
+      <ul>
+        <li><b>冻结契约：</b><code>ResearchSpec</code>（frozen dataclass）一次性物化并 sha256：eval_command、metric_key、direction、editable/protected_files、holdout_command、min_delta、target_score、max_trials(≤20)、max_wall_seconds、eval_repeats(≤5)；任何 trial 中不可变。</li>
+        <li><b>闭环流程：</b>freeze spec → 基线评估（baseline 无效即终止）→ 循环：候选生成 →（候选永远基于当前 best 快照）restore best 快照 → apply → 多重评估 → <code>improves()</code> 判定（超 min_delta 才 Keep）→ Keep 则捕获新快照、Reject 则回滚 → TrialLedger 逐条记录 → 结束后恢复到 best 状态 → <b>隐藏 Holdout</b>（只对最终 best 状态运行，多轮取 mean，要求 exit 全 0 且达 target）。</li>
+        <li><b>补丁安全策略（patch_policy.py）：</b>目录级禁改模式（eval/test/data/benchmark/gold/label/verifier/checker…）、禁改扩展名（csv/tsv/jsonl/parquet/pkl/npy/h5/db/pt/pth/safetensors/bin…）、文件名正则（test_*/eval_*/dataset_* 等）、单文件 ≤96KB、editable 白名单 glob、路径穿越/符号链接防护、每候选 ≤3 文件；拒绝项返回结构化 <code>PatchDecision</code> 记录进 Ledger。</li>
+        <li><b>快照：</b>capture/fingerprint(sha256)/restore，Best-state 全程可由 SHA-256 追溯。</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h3>4.5 优化器（research/optimizer/：ucb.py + beam_uct.py + experience_store.py + coordinator.py + policy.py + retrieval_adapter.py）</h3>
+      <ul>
+        <li><b>双层搜索：</b>UCB1 选「研究方向」（method/hyperparameter 等 arm，未试先选，支持 <code>seed()</code> 注入历史先验伪拉次与 <code>retire()</code> 退役）；<b>UCTSearch</b> 对每个方向维护一棵参数树（每层 = 一个超参，未试值先扩展，UCT 分数探索/利用，评估结果沿路径回溯）；<b>Beam</b> 保留 top-width 配置；<b>BeamUCTSearch</b> 门面把三者绑定。</li>
+        <li><b>ExperienceStore（经验库）：</b>每次<b>已验证</b>（真实评估非猜测）的试验追加 JSONL（repo/direction/params/metric/score/validated/context），上限 10k 条截断；提供 all/best/summarize；<b>先验播种</b>在启动时回放：direction_priors 喂给 UCB seed()，select_candidate 按上下文匹配挑出历史最佳配置作首个候选。</li>
+        <li><b>ExperimentCoordinator：</b>批量 propose（≤4 并行，eval_command 含 <code>{candidate_config}</code> 占位符则每候选独立配置文件并行跑，否则串行 candidate.json）；结果回馈 UCB/UCT/Beam/ExperienceStore；收敛条件（预算/墙钟/target/空间耗尽）；结束对 best 跑隐藏 Holdout（validation_runs 次，报 mean/std/target_ok）；输出结构化 LEDGER v2（含 UCB state、最终 best、experience_summary）。</li>
+        <li><b>内置适配器（retrieval.v1）：</b>无需仓库代码即可做检索实验（角色识别 + BM25，ndcg@k/MRR/precision@k/recall@k，cutoff 截断）—— 一种「无代码候选评估」的插件模式。</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h3>4.6 证据链（evidence/graph.py）—— 确定性裁决，绝不委托 LLM</h3>
+      <ul>
+        <li>证据注册表：从真实 artifact 构建（非 LLM 声明），每条带内容 SHA-256 + <code>authentic</code> 判定：只有 <code>run_metrics/rerun_metrics</code> 中 status=completed 且 metrics 非空才视为「真实执行证据」。</li>
+        <li>裁决门控：criterion 只有引用了至少一条 authentic 执行证据才允许 verified/partially_reproduced/contradicted；「进程退出码为 0 不能证明任何主张」。模式天花板：smoke 模式顶格 smoke_verified，未知模式顶格 partially_reproduced；无任何执行证据且存在资源缺失报告 → blocked_by_missing_asset（诚实降级）。</li>
+        <li>产物：Claim→Criterion→Evidence 三层图谱 + 全图 graph_sha256，供报告与审计直接消费。</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h3>4.7 沙箱与计量（docker-sandbox/ + usage.py）</h3>
+      <ul>
+        <li>独立容器服务进程（默认 :8082），REST 创建持久会话（Bearer、<code>dk-</code> 前缀 id）+ NDJSON 流式执行 + artifact（含图片 base64）返回；计划终态统一清理会话。</li>
+        <li>安全加固清单：镜像白名单（精确/repo 匹配）、cap_drop ALL、no-new-privileges、可选只读 rootfs + /tmp tmpfs(noexec,nosuid)、可选非 root、CPU/mem/pids 限额、bridge 网络、挂载路径强制位于 WORKSPACE_ROOTS。</li>
+        <li>计量：<code>current_plan_id</code> ContextVar 在 run 节点设置，LLM tokens（usage_metadata）与沙箱耗时自动归集到 plan 桶，REST 暴露 <code>/usage</code>。</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ================= S5 ================= -->
+  <div class="section" id="s5">
+    <h2>5 ScholarAgent 关键技术清单</h2>
+    <table>
+      <tr><th style="width:200px">技术点</th><th>所在模块</th><th>一句话要点</th><th>迁移价值</th></tr>
+      <tr><td>DAG 图调度 + 任务租约/纪元/失败级联/死锁检测</td><td>graph/engine.py</td><td>LangGraph 条件路由 + Send 扇出；陈旧结果丢弃、被阻塞后裔自动 BLOCKED</td><td><span class="badge b-amber">高（重构成本高）</span></td></tr>
+      <tr><td>Checkpointer 计划快照与崩溃恢复</td><td>store/plan_store.py</td><td>AsyncSqliteSaver 落盘，重启后 IN_PROGRESS→PENDING 续跑</td><td><span class="badge b-amber">中高</span></td></tr>
+      <tr><td>意图分类 + 六类模板/LLM 规划代理 + 契约校验回退</td><td>intent/, planner/</td><td>并行三路 LLM + 正则兜底；规划产物规范化与白名单校验，失败回模板</td><td><span class="badge b-blue">中</span></td></tr>
+      <tr><td>冻结 Claim Rubric（≤16×6，SHA-256）</td><td>agents/librarian.py</td><td>主张/判据先验冻结防下游篡改，作为证据图骨架</td><td><span class="badge b-green">高</span></td></tr>
+      <tr><td>有界调试循环（≤3 run / ≤2 repair + 指纹防篡改 + 回滚）</td><td>agents/research_coding.py</td><td>失败才打补丁、补丁前备份、运行中被改即中止恢复</td><td><span class="badge b-green">高</span></td></tr>
+      <tr><td>冻结 ResearchSpec + TrialLedger + 隐藏 Holdout</td><td>research/spec.py, harness.py</td><td>评测口径不可变；只对最终 best 状态做多轮隐藏验收</td><td><span class="badge b-green">高</span></td></tr>
+      <tr><td>完整补丁安全策略（目录/扩展名/正则/体积/白名单）</td><td>research/patch_policy.py</td><td>LLM 补丁永远改不了 eval/test/data/gold 相关文件</td><td><span class="badge b-red">极高（必修）</span></td></tr>
+      <tr><td>快照 capture/指纹/恢复（SHA-256）</td><td>research/workspace_snapshot.py</td><td>best-state 重建与全程可追溯</td><td><span class="badge b-green">高</span></td></tr>
+      <tr><td>UCB(方向) + UCT(参数树) + Beam + 先验播种</td><td>research/optimizer/</td><td>双层搜索：方向由 UCB、参数由 UCT 延展，Beam 保 top-k</td><td><span class="badge b-green">极高（直接替换现有 UCB）</span></td></tr>
+      <tr><td>ExperienceStore 跨任务经验库（JSONL + 指纹匹配 + 先验播种）</td><td>research/optimizer/experience_store.py</td><td>已验证试验持久化，下次运行自动回放最佳候选</td><td><span class="badge b-green">极高（AutoReproducer 无此项）</span></td></tr>
+      <tr><td>并行试验协调器（≤4）与 LEDGER 结构化产出</td><td>research/optimizer/coordinator.py</td><td>{candidate_config} 占位符驱动并行/串行两态</td><td><span class="badge b-blue">中</span></td></tr>
+      <tr><td>证据链图谱（Claim/Criterion/Evidence + 哈希 + 裁决门控）</td><td>evidence/graph.py</td><td>无真实执行证据一律不判 verified；smoke 顶格降级</td><td><span class="badge b-red">极高（验证可信度）</span></td></tr>
+      <tr><td>防泄漏 Benchmark（审计/四策略切分/隐藏标签/契约复算）</td><td>agents/benchmark.py</td><td>测试集标签永不进容器，指标后端复算防作弊</td><td><span class="badge b-green">高</span></td></tr>
+      <tr><td>确定性仓库发现链（URL→PwC→GitHub→curated）</td><td>agents/repo_ops.py</td><td>绕过 LLM 的多策略回退；复现模式决策（auto/smoke/full）</td><td><span class="badge b-green">高</span></td></tr>
+      <tr><td>静态依赖解析 + pip 自愈（≤3 次）</td><td>agents/coder.py</td><td>AST+清单双来源、std-lib 过滤、py39 归一；LLM 修复或规则回退</td><td><span class="badge b-green">高</span></td></tr>
+      <tr><td>独立沙箱服务 + 安全加固</td><td>docker-sandbox/</td><td>镜像白名单/cap-drop/只读根/非 root/限额/Bearer</td><td><span class="badge b-amber">中（加固参数可摘）</span></td></tr>
+      <tr><td>用量计量（plan 级 token/秒数归集）</td><td>usage.py</td><td>ContextVar + response_metadata 提取 tokens</td><td><span class="badge b-blue">中</span></td></tr>
+      <tr><td>SSE 实时事件流（历史回放 + 心跳补洞）</td><td>events/bus.py, api/</td><td>fingerprint 去重、慢订阅者丢事件不阻塞</td><td><span class="badge b-blue">中低（需前端配合）</span></td></tr>
+    </table>
+  </div>
+
+  <!-- ================= S6 ================= -->
+  <div class="section" id="s6">
+    <h2>6 与 AutoReproducer 的对照矩阵</h2>
+    <p style="font-size:13.5px;color:var(--gray-500)">依据本工作区 AutoReproducer 源码（src/ + 项目文档）逐项核对；「迁移方向」中 ★=建议直接采纳，◎=按需选用，✗=不迁移保持自身方案。</p>
+    <table>
+      <tr><th style="width:150px">维度</th><th>AutoReproducer 现状</th><th>ScholarAgent 对应实现</th><th>差距 / 迁移方向</th></tr>
+      <tr>
+        <td><b>编排调度</b></td>
+        <td>线性状态机（orchestrator.py：INIT→READ_PAPER→FIND_RESOURCES→BUILD_ENV→EXECUTE_CODE→VALIDATE→OPTIMIZING→GENERATE_REPORT），同步串行、无并行/依赖图/断点恢复</td>
+        <td>LangGraph DAG：router 六职责 + Send 扇出 + 失败级联 + Checkpointer 恢复</td>
+        <td>差距最大。P2 引入可选 DAG 执行径（保留状态机为兼容路径）◎</td>
+      </tr>
+      <tr>
+        <td><b>修复闭环</b></td>
+        <td>MAX_FIX_RETRIES=1 的「生成→验证→修正→再验证」；RealSimulator 有简化 Keep/Reject（补丁→白名单→快照→重跑→真实指标）</td>
+        <td>有界调试 ≤3 run / ≤2 repair；AutoResearch 冻结 spec + 快照回滚 + TrialLedger + 隐藏 Holdout</td>
+        <td>AutoReproducer 缺「冻结评测契约、终态 holdout、逐 trial 账本」。P1 迁移 harness 骨架 ★</td>
+      </tr>
+      <tr>
+        <td><b>优化搜索</b></td>
+        <td>UCBScheduler（59 行，扁平 UCB1，仅「方向」级，无参数树、无先验）</td>
+        <td>UCB(方向)+UCT(参数树)+Beam(宽)+seed 先验播种</td>
+        <td>纯增量升级。P0/P1 迁移 beam_uct.py + ucb.py.seed/retire ★（保留 max_trials 护栏）</td>
+      </tr>
+      <tr>
+        <td><b>经验库</b></td>
+        <td>无（src 中无 experience 相关实现；方案早有「经验沉淀」意图但未落地）</td>
+        <td>ExperienceStore：JSONL 持久化 + 上下文匹配 + 先验播种 + summarize</td>
+        <td>直接补缺口。P0 迁移并挂到三层存储 L0/L1 经验目录 ★</td>
+      </tr>
+      <tr>
+        <td><b>验证可信度</b></td>
+        <td>Prompt-Free 验证（复用 Agent 自身 system_prompt 作质量标准的创新点）+ 数值本地比对（_local_compare）</td>
+        <td>证据链图谱：SHA-256 锚定 + authentic 判定 + 裁决门控 + smoke 模式天花板</td>
+        <td>正交可叠加：Prompt-Free 管质量合规、证据链管可追溯防篡改。P1 迁移 evidence/graph.py ★</td>
+      </tr>
+      <tr>
+        <td><b>补丁安全</b></td>
+        <td>safety/patch_policy.py（99 行，简化版：editable/deny 白名单）</td>
+        <td>197 行完整版：禁改目录模式、禁改扩展名（数据/权重）、文件名正则、96KB 体积预算、结构化拒绝理由</td>
+        <td>直接增强现有文件。P0 补三段规则 ★</td>
+      </tr>
+      <tr>
+        <td><b>快照/指纹</b></td>
+        <td>safety/workspace_snapshot.py（112 行：snapshot/changed_files/restore）</td>
+        <td>capture/fingerprint/restore + 运行中 SHA 指纹防篡改（被改即中止）</td>
+        <td>补 fingerprint 与运行中校验。P0 小改 ★</td>
+      </tr>
+      <tr>
+        <td><b>资源发现</b></td>
+        <td>ResourceFinderAgent（LLM 搜索链路）</td>
+        <td>repo_ops 确定性发现链（URL→PwC→GitHub→curated 回退）+ 复现模式决策（smoke/full/120s smoke runner）</td>
+        <td>确定性通道兜底 LLM。P1 迁移发现链并接入 ResourceManager 懒加载 ★</td>
+      </tr>
+      <tr>
+        <td><b>环境构建</b></td>
+        <td>EnvBuilder：底座镜像（P1-1）+ 隔离依赖安装（P0-3）+ 依赖锁定</td>
+        <td>Coder：静态依赖解析（AST+清单+py39 归一）+ pip 自愈 ≤3 次 + 镜像按需升级</td>
+        <td>互补：底座镜像保留，迁移「静态解析 + pip 自愈」增强 EnvBuilder/CodeExecutor ★</td>
+      </tr>
+      <tr>
+        <td><b>数据集评测</b></td>
+        <td>数据集注册表 + 复现级别数据策略（L1 子集、按级取数）</td>
+        <td>Benchmark Agent：数据审计/防泄漏切分/隐藏标签/指标契约后端复算</td>
+        <td>防泄漏评测是 AutoReproducer 空白。P1 迁移并挂接 dataset_registry（hash 切分保证跨复现可比）★</td>
+      </tr>
+      <tr>
+        <td><b>入口规划</b></td>
+        <td>直接按 paper_title/corpus_paper 起流程</td>
+        <td>意图分类 + 6 类模板计划 + LLM 规划代理 + 校验回退</td>
+        <td>可选增强前端入口。P1◎（模板计划可先引入人工选择）</td>
+      </tr>
+      <tr>
+        <td><b>沙箱安全</b></td>
+        <td>Docker 容器直接执行（本地 Docker/CPU 队列），无独立沙箱服务</td>
+        <td>独立沙箱服务：白名单/cap-drop/no-new-privileges/只读根/非 root/限额</td>
+        <td>服务化改动大；先摘「加固参数集」应用到现有容器参数。P1◎</td>
+      </tr>
+      <tr>
+        <td><b>计量审计</b></td>
+        <td>audit_logger（LLM 调用计数、审计轨迹）</td>
+        <td>usage.py：plan 级 LLM tokens + 沙箱耗时归集</td>
+        <td>给 audit 补 token/时长维度。P1◎</td>
+      </tr>
+      <tr>
+        <td><b>前端</b></td>
+        <td>Streamlit + st_autorefresh 轮询</td>
+        <td>Vue3 + SSE 实时流（历史回放/心跳补洞）</td>
+        <td>保持 Streamlit（零成本）；如需实时性可用 SSE 长轮询适配。P2◎</td>
+      </tr>
+      <tr>
+        <td><b>语料/基准</b></td>
+        <td>内置 23 篇论文语料库（含 PaperBench 对照层）</td>
+        <td>无内置语料，靠模板计划 + 检索</td>
+        <td>保留 AutoReproducer 语料库（ScholarAgent 无此项）✗</td>
+      </tr>
+      <tr>
+        <td><b>存储/资源</b></td>
+        <td>三层存储 L0/L1/L2 + 懒加载 + 配额（默认 20GB）+ manifest + 镜像共享 + 数据集注册表</td>
+        <td>无存储管理概念</td>
+        <td>保留 AutoReproducer 全部存储能力（ScholarAgent 空白）✗</td>
+      </tr>
+      <tr>
+        <td><b>分级复现</b></td>
+        <td>L1 浅复现（全自动 smoke）→ L2 深度复现 → L3 专家确认，验收：L1 成功率 ≥60% 且 ≥2 篇升级 L2</td>
+        <td>仅 full/smoke 两档 + 证据链模式天花板，无升级验收机制</td>
+        <td>保留 AutoReproducer 分级与验收（核心创新）✗，可吸收 smoke/full 语义补强</td>
+      </tr>
+    </table>
+    <div class="callout good">
+      <b>对照结论：</b>两系统「互有对方的空白」。AutoReproducer 的空白 = ScholarAgent 的强项（经验库、证据链、参数树搜索、防泄漏评测、补丁策略完备性、断点恢复）；ScholarAgent 的空白 = AutoReproducer 的强项（存储工程、分级验收、语料基准、Prompt-Free 验证）。融合的净效果接近于「各自补全为完整形态」。
+    </div>
+  </div>
+
+  <!-- ================= S7 ================= -->
+  <div class="section" id="s7">
+    <h2>7 迁移融合方案</h2>
+
+    <h3>7.1 总体策略与融合原则</h3>
+    <ol>
+      <li><b>补位不替代：</b>ScholarAgent 组件作为「增强层」并入 AutoReproducer 现有流水线，不推翻现有 8 Agent 状态机与存储体系；验证口径、验收指标（L1≥60%、2 篇升级）保持不变。</li>
+      <li><b>确定性优先：</b>优先迁移「不用 LLM、纯确定性、可测试」的模块（补丁策略、证据链裁决、经验库、防泄漏切分）—— 它们不增加 LLM 预算、不引入运行时不确定性，且正好补强 AutoReproducer 的验证可信度。</li>
+      <li><b>护栏继承：</b>所有迁移的搜索/闭环组件都必须跑在 AutoReproducer 既有护栏内（max_trials=10 优化预算、方案级 100 次 LLM 调用上限、L0 配额）。</li>
+      <li><b>路径对齐：</b>迁移代码落位 <code>src/</code> 既有分层：<code>src/optimizer/</code>、<code>src/safety/</code>、<code>src/evidence/</code>（新增）、<code>src/experience/</code>（新增）、<code>src/agents/</code>（增强）。</li>
+    </ol>
+
+    <h3>7.2 保留的 AutoReproducer 创新点（不迁移、不覆盖）</h3>
+    <table>
+      <tr><th style="width:220px">创新点</th><th>保留理由与融合方式</th></tr>
+      <tr><td>分级复现 L1/L2/L3 + 升级验收（≥60% / 2 篇）</td><td>ScholarAgent 无此机制；融合时其 smoke/full 模式语义映射到 L1/L2，证据链「模式天花板」反过来强化分级判定。</td></tr>
+      <tr><td>Prompt-Free 验证（复用系统提示词做质量标准）</td><td>ScholarAgent 的证据链裁决是确定性门控、不替代质量评估；两层叠加 = 「质量合规（Prompt-Free）＋ 真实性门槛（证据链）」。</td></tr>
+      <tr><td>三层存储 + 按需懒加载 + 配额 + manifest（ResourceManager 644 行）</td><td>ScholarAgent 无存储管理；经验库 JSONL 直接挂到 L0/L1 存储目录，利用既有配额与归档机制。</td></tr>
+      <tr><td>镜像级共享底座（1 底座 + 通用依赖层 + 论文特定层）</td><td>保留；ScholarAgent 的 pip 自愈/静态解析作为论文特定层之上的运行期自愈，不冲突。</td></tr>
+      <tr><td>数据集注册表 + 复现级别数据策略（L1 冒烟子集等）</td><td>保留；ScholarAgent 防泄漏切分（hash 策略）改造成注册表的标准切分器，保证同一数据集跨复现可比。</td></tr>
+      <tr><td>UCB 预算护栏与方案级调用预算</td><td>保留为全局上限；UCB 升级为 UCB+UCT+Beam 后仍受同一护栏约束。</td></tr>
+      <tr><td>内置 23 篇论文语料库（PaperGuru-Benchmark 对照）</td><td>保留；作为规划器「论文复现」模板的本地候选源，与 ScholarAgent 的远程发现链互补。</td></tr>
+      <tr><td>本地零成本策略（CPU 队列 + 按需租云 GPU）</td><td>保留；新增的 Benchmark 防泄漏评测是纯 CPU 确定性任务，天然相容。</td></tr>
+    </table>
+
+    <h3>7.3 分阶段迁移清单</h3>
+
+    <div class="card">
+      <h3>P0 —— 纯代码迁移 · 无新依赖 · 可立即合并（预计 1–2 天）</h3>
+      <table>
+        <tr><th style="width:210px">迁移项</th><th style="width:230px">来源</th><th>落位与要点</th></tr>
+        <tr><td><span class="badge b-red">① 补丁安全策略增强</span></td><td>research/patch_policy.py</td><td>将 DENIED_SEGMENT 目录模式、禁改扩展名（.csv/.pkl/.pt/.safetensors/.bin 等）、文件名正则（test_*/eval_*/dataset_*）、96KB 体积预算并入 <code>src/safety/patch_policy.py</code>；返回结构化拒绝理由，供 Ledger 记录。</td></tr>
+        <tr><td><span class="badge b-red">② 证据链模块移植</span></td><td>evidence/graph.py</td><td>新增 <code>src/evidence/</code>：build_evidence_registry（SHA-256 + authentic 判定）、normalize_findings（Jud 裁决门控）、build_graph（Claim/Criterion/Evidence + graph_sha256）。挂到 ResultValidator 输出之后，产出证据链 artifact。纯函数、无 LLM、可直接单测。</td></tr>
+        <tr><td><span class="badge b-red">③ ExperienceStore 经验库</span></td><td>research/optimizer/experience_store.py</td><td>新增 <code>src/experience/</code>：JSONL 追加（validated 标记）、上限截断、summarize/best；路径挂到 <code>AUTOREPRO_DATA_ROOT/experience/</code>（受 L0 配额与归档管理）。UCBScheduler 增加 seed(count, mean) 以便回放先验。</td></tr>
+        <tr><td><span class="badge b-blue">④ 快照指纹增强</span></td><td>research/workspace_snapshot.py</td><td>为 <code>src/safety/workspace_snapshot.py</code> 补 fingerprint(sha256)（全工作区 .py 指纹）与运行中校验钩子：执行前后指纹不一致 → 中止并恢复（防 LLM 补丁运行期自改）。</td></tr>
+        <tr><td><span class="badge b-blue">⑤ TrialLedger 结构化账本</span></td><td>research/ledger.py（连带 harness 数据模型）</td><td>OptimizerAgent 每次 Keep/Reject 落结构化记录（candidate/评估/理由/restored/apply 文件），供报告与经验库消费，替代现有零散日志。</td></tr>
+      </table>
+      <p style="font-size:13.5px;color:var(--gray-500)">P0 完成后即可获得：越权补丁被拒、验证结果可哈希追溯、跨论文经验可回放 —— 三项都不依赖新包，风险极低。</p>
+    </div>
+
+    <div class="card">
+      <h3>P1 —— 核心闭环升级（预计 1 周）</h3>
+      <table>
+        <tr><th style="width:210px">迁移项</th><th style="width:230px">来源</th><th>落位与要点</th></tr>
+        <tr><td><span class="badge b-green">⑥ 双层搜索：BeamUCT + 先验播种</span></td><td>research/optimizer/beam_uct.py, ucb.py</td><td>新增 <code>src/optimizer/beam_uct.py</code>（无第三方依赖，纯算法）：方向级 UCB（保留现有 UCBScheduler 兼容）＋ 每方向 UCT 参数树 ＋ Beam(top-k)；启动时用经验库 summarize 播种先验候选；仍受 max_trials 与 LLM 预算护栏约束。</td></tr>
+        <tr><td><span class="badge b-green">⑦ 冻结 ResearchSpec + 隐藏 Holdout 验收</span></td><td>research/spec.py, harness.py</td><td>OptimizerAgent 接管前先物化 ResearchSpec（eval_command/metric/direction/editable/protected/min_delta/holdout），sha256 冻结；优化结束后只对最终 best 状态跑多轮隐藏 Holdout（mean/exit/target 三条件）——与 L2 深度复现验收强绑定。</td></tr>
+        <tr><td><span class="badge b-green">⑧ 静态依赖解析 + pip 自愈</span></td><td>agents/coder.py（依赖解析/自愈段）</td><td>EnvironBuilder 产物之上：AST import + requirements/pyproject 双来源解析、std-lib 过滤、py39 版本钉归一；运行时缺模块自动补装（≤3 次，LLM 修复或规则回退）。底座镜像层之上做运行期自愈，镜像无需重建。</td></tr>
+        <tr><td><span class="badge b-green">⑨ 确定性仓库发现链</span></td><td>agents/repo_ops.py</td><td>ResourceFinder 增加确定性通道：用户 URL → Papers with Code → GitHub 搜索 → curated 回退；浅克隆/缓存/pin revision；复现模式决策（auto→L1 smoke runner 120s 预算 / full）。与 ResourceManager 懒加载联动。</td></tr>
+        <tr><td><span class="badge b-blue">⑩ 防泄漏 Benchmark 评测</span></td><td>agents/benchmark.py</td><td>数据集评测新能力（对 registry 数据集）：四策略防泄漏切分（hash/random/group/time，优先 hash 保证复现内可比）、隐藏标签私有目录、指标契约冻结后端复算。挂接 L1 冒烟验收，防「小数据通大数据挂」。</td></tr>
+        <tr><td><span class="badge b-blue">⑪ 沙箱加固参数集</span></td><td>docker-sandbox/sandbox_config.py</td><td>在现有容器启动参数中加入：镜像白名单（env_builder 记录）、cap-drop ALL、no-new-privileges、只读 rootfs（工作区外）+ /tmp tmpfs、非 root（可行时）、CPU/mem/pids 限额。不引入独立沙箱服务。</td></tr>
+        <tr><td><span class="badge b-blue">⑫ 用量计量增强</span></td><td>usage.py（机制参考）</td><td>audit_logger 增加 plan 级 LLM token 统计（response_metadata 提取）与容器耗时维度，与现有调用计数并存。</td></tr>
+      </table>
+    </div>
+
+    <div class="card">
+      <h3>P2 —— 架构级演进（可选，按需启动，预计 2 周+）</h3>
+      <table>
+        <tr><th style="width:210px">迁移项</th><th style="width:230px">来源</th><th>落位与要点</th></tr>
+        <tr><td><span class="badge b-amber">⑬ DAG 调度 + 断点恢复</span></td><td>graph/engine.py, store/plan_store.py</td><td>引入 langgraph + aiosqlite；将状态机表示为 DAG（依赖/并行/失败级联/租约）作为 L2/L3 的执行径；保留现有状态机为 L1 兼容路径。注意与 mock 模式并存需适配层。</td></tr>
+        <tr><td><span class="badge b-amber">⑭ 意图分类 + 模板计划接入前端</span></td><td>intent/, planner/</td><td>Streamlit 入口增加意图路由与六类模板（论文复现/框架对比/代码执行/Benchmark/AutoResearch）选择，规划产物可预览确认。</td></tr>
+        <tr><td><span class="badge b-amber">⑮ SSE 实时事件流</span></td><td>events/bus.py, api/</td><td>Streamlit 兼容方案：后端加事件总线 + /stream 端点（历史回放 + 心跳补洞），前端保留轮询作为降级路径。</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <!-- ================= S8 ================= -->
+  <div class="section" id="s8">
+    <h2>8 融合后目标架构</h2>
+    <div class="layers">
+      <div class="layer">
+        <div class="lt">入口与规划（保留 + 扩展）</div>
+        <div class="ld">CLI（保留）｜ Streamlit 工作台（保留，P2 可选加 SSE）｜ 意图分类与模板计划（P1◎，新增）｜ 23 篇语料库（保留）</div>
+        <div class="boxes"><span class="box">输入 paper_title / pdf / corpus / URL</span><span class="box">分级入口 L1/L2/L3</span></div>
+      </div>
+      <div class="arrow-down">▼</div>
+      <div class="layer">
+        <div class="lt">编排层（保留状态机，P2 可选 DAG 径）</div>
+        <div class="ld">Orchestrator 8-Agent 流水线（保留）｜ 追加任务契约/依赖（P2）｜ Prompt-Free 验证闭环（保留）</div>
+        <div class="boxes"><span class="box">INIT→READ_PAPER→FIND_RESOURCES→BUILD_ENV→EXECUTE→VALIDATE→OPTIMIZE→REPORT</span><span class="box g">MAX_FIX_RETRIES=1 护栏</span></div>
+      </div>
+      <div class="arrow-down">▼</div>
+      <div class="layer">
+        <div class="lt">执行 Agent（保留 8 个 + 增强 3 处）</div>
+        <div class="ld">ResourceFinder + 确定性发现链（P1⑨）｜ EnvBuilder/CodeExecutor + 静态依赖解析/pip 自愈（P1⑧）｜ OptimizerAgent + BeamUCT/冻结 spec/Holdout（P1⑥⑦）｜ Benchmark 防泄漏评测（P1⑩）</div>
+        <div class="boxes"><span class="box g">PaperReader</span><span class="box g">ResourceFinder+链</span><span class="box g">EnvBuilder+自愈</span><span class="box g">CodeExecutor</span><span class="box g">ResultValidator</span><span class="box g">Verifier(Prompt-Free)</span><span class="box g">Optimizer+BeamUCT</span><span class="box g">Reporter</span></div>
+      </div>
+      <div class="arrow-down">▼</div>
+      <div class="layer">
+        <div class="lt">优化与研究闭环（迁移层）</div>
+        <div class="ld">ResearchSpec 冻结（sha256）→ UCB/BeamUCT 候选（经验库先验播种）→ PatchPolicy 过滤 → 快照回滚+apply → 真实指标评估 → Keep/Reject（TrialLedger）→ 隐藏 Holdout 验收</div>
+        <div class="boxes"><span class="box a">BeamUCTSearch</span><span class="box a">ExperienceStore</span><span class="box a">PatchPolicy 完整版</span><span class="box a">workspace_snapshot+指纹</span><span class="box a">TrialLedger</span><span class="box a">Hidden Holdout</span></div>
+      </div>
+      <div class="arrow-down">▼</div>
+      <div class="layer">
+        <div class="lt">验证可信度层（叠加，非替代）</div>
+        <div class="ld">Prompt-Free 质量验证（保留创新点）＋ 证据链图谱（P0②）：artifact SHA-256 锚定、authentic 判定、裁决门控、模式天花板（smoke→smoke_verified / full→verified / 无证据→unverifiable）</div>
+        <div class="boxes"><span class="box a">Evidence Registry</span><span class="box a">Verdict Gate</span><span class="box a">Claim/Criterion/Evidence 图</span><span class="box g">Prompt-Free 验证</span></div>
+      </div>
+      <div class="arrow-down">▼</div>
+      <div class="layer">
+        <div class="lt">安全层（增强）</div>
+        <div class="ld">PatchPolicy 扩展（禁改评测/数据/权重）｜ 运行期 SHA 指纹防篡改｜ 沙箱加固参数（白名单/cap-drop/只读根/限额）</div>
+        <div class="boxes"><span class="box a">src/safety/patch_policy.py</span><span class="box a">src/safety/workspace_snapshot.py</span><span class="box a">Docker 加固</span></div>
+      </div>
+      <div class="arrow-down">▼</div>
+      <div class="layer">
+        <div class="lt">存储与数据层（保留 · AutoReproducer 核心资产，不动）</div>
+        <div class="ld">三层存储 L0（配额 20GB）/L1（温）/L2（冷清单）+ 懒加载 + manifest｜ 镜像级共享底座｜ 数据集注册表（接入 hash 防泄漏切分）｜ 新增经验库 JSONL（挂 L0/L1）</div>
+        <div class="boxes"><span class="box g">ResourceManager</span><span class="box g">dataset_registry</span><span class="box g">底座镜像</span><span class="box a">experience store（新增）</span></div>
+      </div>
+    </div>
+    <div class="callout">
+      <b>融合后数据流（L2 完整复现）：</b>输入论文 → 发现链取码+数据（注册表决策，L1 冒烟取子集）→ 底座镜像+依赖自愈构建环境 → 有界执行 → ResultValidator 数值比对 + Prompt-Free 验证 → 优化闭环（BeamUCT 候选在冻结 spec 与完整 PatchPolicy 下真实评估，Keep/Reject 记录 TrialLedger 并与经验库双向回写）→ 证据链结算（真实执行证据 + 模式天花板 → 分级判定 L1/L2/L3）→ 报告（含证据图 + holdout 验收 + 存储 manifest）。
+    </div>
+  </div>
+
+  <!-- ================= S9 ================= -->
+  <div class="section" id="s9">
+    <h2>9 风险与边界</h2>
+    <table>
+      <tr><th style="width:230px">风险项</th><th>说明与应对</th></tr>
+      <tr><td>LangGraph 依赖重（P2）</td><td>引入 langgraph/aiosqlite/async 栈与现有同步流水线并存成本高，须做适配层并使 mock 模式全绿；P2 门前不触碰主线，避免「为架构而架构」。</td></tr>
+      <tr><td>裁决门控改变现有验证语义</td><td>证据链的 unverifiable/blocked_by_missing_asset 会改变 ResultValidator 现有 pass/fail 口径，若直接替换会影响 L1≥60% 验收统计。融合策略：证据链作为<b>新增审计 artifact</b>并行产出，验收口径迁移期双轨统计，确认一致后再切换。</td></tr>
+      <tr><td>冻结 spec 与 L1 浅复现的张力</td><td>冻结评测契约在「动代码不动评测」场景无副作用；但 L1 冒烟模式可能移动/裁剪文件触发 protected 规则。应对：editable_files/protected_files 白名单随复现级别预置（L1 最小集、L2 放开），并在 patch 决策中记录原因。</td></tr>
+      <tr><td>防泄漏切分与「1% 子集」策略联动</td><td>若 L1 冒烟用随机子集且不加种子，跨复现不可比。应对：统一用<b>确定性 hash 切分</b>（按 id hash 取子集），子集由数据集注册表标准化登记，Benchmark 防泄漏切分器与注册表共用同一实现。</td></tr>
+      <tr><td>经验库跨论文复用噪声</td><td>Jaccard 上下文匹配粒度粗，可能把不相关论文的经验当成先验。应对：先验仅作用于「方向级 UCB seed（伪拉次）」与「参数是否在搜索空间内」两点，任一不匹配即丢弃；经验记录必须带 validated 标记与数据集指纹。</td></tr>
+      <tr><td>量化存储不适用于精确数值复现</td><td>沿用此前结论不迁移 FP16→INT8 到复现比对链路；量化仅保留为 L3 专家模式的体积压缩可选。</td></tr>
+      <tr><td>许可与代码来源</td><td>ScholarAgent 为 MIT，可自由迁移，但需在新增文件中保留版权声明并记录来源路径；不迁移其前端整体（避免引入 Vue 构建链）。</td></tr>
+    </table>
+  </div>
+
+  <!-- ================= S10 ================= -->
+  <div class="section" id="s10">
+    <h2>10 参考来源</h2>
+    <ul style="font-size:14px">
+      <li>ScholarAgent README.md（本地：<code>参考项目/ScholarAgent/README.md</code>）</li>
+      <li>调度引擎：<code>backend/app/graph/engine.py</code>、<code>state.py</code>、<code>store/plan_store.py</code>、<code>events/bus.py</code>、<code>models/task.py</code></li>
+      <li>规划层：<code>backend/app/intent/classifier.py</code>、<code>planner/planner.py</code>、<code>planner/agent_planner.py</code></li>
+      <li>研究闭环：<code>backend/app/research/harness.py</code>、<code>spec.py</code>、<code>patch_policy.py</code>、<code>workspace_snapshot.py</code></li>
+      <li>优化器：<code>backend/app/research/optimizer/ucb.py</code>、<code>beam_uct.py</code>、<code>experience_store.py</code>、<code>coordinator.py</code>、<code>policy.py</code>、<code>retrieval_adapter.py</code></li>
+      <li>证据链：<code>backend/app/evidence/graph.py</code></li>
+      <li>Agent 层：<code>backend/app/agents/base.py、librarian.py、data.py、coder.py、research_coding.py、benchmark.py、repo_ops.py、registry.py</code></li>
+      <li>沙箱与 API：<code>docker-sandbox/main.py</code>、<code>sandbox_config.py</code>、<code>backend/app/sandbox/client.py</code>、<code>backend/app/api/</code>、<code>backend/app/usage.py</code></li>
+      <li>AutoReproducer 现状核验：<code>src/orchestrator.py</code>、<code>src/agents/verifier.py</code>、<code>src/agents/result_validator.py</code>、<code>src/optimizer/ucb_scheduler.py</code>、<code>src/safety/patch_policy.py</code>、<code>src/safety/workspace_snapshot.py</code>、<code>README.md</code>（存储管理章节）</li>
+      <li>AutoReproducer 项目方案（交付于 2026-09-08，含 L1/L2/L3 分级与验收指标）</li>
+    </ul>
+  </div>
+
+  <div style="margin-top:40px;padding-top:16px;border-top:1px solid var(--gray-200);font-size:12.5px;color:var(--gray-500)">
+    AutoReproducer × ScholarAgent 迁移融合分析报告 · 2026-09-16 · 本报告为项目内部研究资料，所有路径均为本地工作区相对路径。
+  </div>
+</div>
+</body>
+</html>

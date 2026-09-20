@@ -1,0 +1,20 @@
+{
+  "schema_version": 2,
+  "id": "pdf-autorepro-scheme-read-20260916-812e6c2f",
+  "name": "autorepro-scheme-read",
+  "type": "general",
+  "created_at": "2026-09-16T14:02:04.154189",
+  "status": "initialized",
+  "project_dir": ".",
+  "directories": [
+    "sources",
+    "exports",
+    "assets/images",
+    "build",
+    "helpers",
+    "artifacts/imports",
+    "artifacts/runs",
+    "cache",
+    "logs"
+  ]
+}

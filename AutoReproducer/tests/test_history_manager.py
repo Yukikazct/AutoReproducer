@@ -15,6 +15,10 @@ from frontend.history_manager import (
     get_session_detail,
     get_storage_stats,
     list_sessions,
+    delete_session,
+    clear_sessions,
+    _is_finished_progress,
+    _session_id_from_progress,
 )
 
 
@@ -193,6 +197,154 @@ def test_cleanup_runtime_removes_old_only(fake_data: Path):
 
 def test_cleanup_runtime_no_dir(fake_data: Path):
     assert cleanup_runtime() == (0, 0)
+
+
+def test_cleanup_runtime_removes_finished_progress(fake_data: Path):
+    """已终态（done/error 事件）的 progress 文件应立即清理，不等待超期。"""
+    runtime = fake_data / "runtime"
+    runtime.mkdir(parents=True, exist_ok=True)
+    finished = runtime / "progress_finished.jsonl"
+    running = runtime / "progress_running.jsonl"
+    finished.write_text(
+        json.dumps({"type": "state", "state": "EXECUTE_CODE", "status": "success"}) + "\n"
+        + json.dumps({"type": "done", "result": {"state": "COMPLETED"}}) + "\n",
+        encoding="utf-8")
+    running.write_text(
+        json.dumps({"type": "state", "state": "EXECUTE_CODE", "status": "running"}) + "\n",
+        encoding="utf-8")
+    expected = finished.stat().st_size
+    removed, freed = cleanup_runtime(keep_days=7)
+    assert removed == 1
+    assert freed == expected
+    assert not finished.exists()
+    assert running.exists()
+
+
+def test_cleanup_runtime_removes_error_progress(fake_data: Path):
+    runtime = fake_data / "runtime"
+    runtime.mkdir(parents=True, exist_ok=True)
+    err = runtime / "progress_err.jsonl"
+    err.write_text(json.dumps({"type": "error", "error": "boom"}) + "\n",
+                   encoding="utf-8")
+    removed, freed = cleanup_runtime()
+    assert removed == 1
+    assert freed > 0
+    assert not err.exists()
+
+
+# ---------- delete_session / clear_sessions ----------
+
+def test_delete_session_removes_related_files(fake_data: Path):
+    sid = "20260910_100000"
+    _mk_ledger(fake_data, sid, "线性回归复现")
+    _write_jsonl(fake_data / "logs" / f"session_{sid}.jsonl", [{"type": "log"}])
+    report = fake_data / "reports" / f"线性回归复现_{sid}.md"
+    report.parent.mkdir(parents=True, exist_ok=True)
+    report.write_text("# 报告", encoding="utf-8")
+    # runtime progress 通过内容时间戳关联
+    runtime = fake_data / "runtime"
+    runtime.mkdir(parents=True, exist_ok=True)
+    progress = runtime / "progress_1234567890123.jsonl"
+    progress.write_text(json.dumps({"type": "log", "log": {
+        "timestamp": "2026-09-10T10:00:00"}}) + "\n",
+        encoding="utf-8")
+
+    removed, freed = delete_session(sid)
+    assert removed == 4  # ledger + log + report + progress
+    assert freed > 0
+    # 全部删除
+    assert not (fake_data / "experiment_ledger" / f"ledger_{sid}.jsonl").exists()
+    assert not (fake_data / "logs" / f"session_{sid}.jsonl").exists()
+    assert not report.exists()
+    assert not progress.exists()
+    # 其他会话不受影响
+    other = fake_data / "reports" / "其他_{20260911_000000}.md"
+    other.write_text("x", encoding="utf-8")
+    assert other.exists()
+
+
+def test_delete_session_unknown_returns_zero(fake_data: Path):
+    assert delete_session("20260101_000000") == (0, 0)
+
+
+def test_delete_session_skip_other_sessions_progress(fake_data: Path):
+    sid = "20260910_100000"
+    other_sid = "20260911_000000"
+    _mk_ledger(fake_data, sid)
+    _mk_ledger(fake_data, other_sid)
+    runtime = fake_data / "runtime"
+    runtime.mkdir(parents=True, exist_ok=True)
+    mine = runtime / "progress_mine.jsonl"
+    theirs = runtime / "progress_theirs.jsonl"
+    mine.write_text(json.dumps({"type": "log", "log": {
+        "timestamp": "2026-09-10T10:00:00"}}) + "\n", encoding="utf-8")
+    theirs.write_text(json.dumps({"type": "log", "log": {
+        "timestamp": "2026-09-11T00:00:00"}}) + "\n", encoding="utf-8")
+    removed, _ = delete_session(sid)
+    assert removed == 2  # ledger + mine progress
+    assert mine.exists() is False
+    assert theirs.exists()  # 其他会话的 progress 保留
+
+
+def test_clear_sessions_removes_everything(fake_data: Path):
+    _mk_ledger(fake_data, "20260910_100000", "A")
+    _mk_ledger(fake_data, "20260911_000000", "B")
+    _write_jsonl(fake_data / "logs" / "session_20260910_100000.jsonl", [{"a": 1}])
+    _write_jsonl(fake_data / "logs" / "session_20260911_000000.jsonl", [{"b": 2}])
+    reports = fake_data / "reports"
+    reports.mkdir(parents=True, exist_ok=True)
+    (reports / "A_20260910_100000.md").write_text("r1", encoding="utf-8")
+    (reports / "B_20260911_000000.md").write_text("r2", encoding="utf-8")
+    # 保留一个仍在运行的 progress（无终态、非超期）
+    runtime = fake_data / "runtime"
+    runtime.mkdir(parents=True, exist_ok=True)
+    (runtime / "progress_running.jsonl").write_text(
+        json.dumps({"type": "state", "status": "running"}) + "\n", encoding="utf-8")
+    # 一个已终态 progress 应被清掉
+    (runtime / "progress_done.jsonl").write_text(
+        json.dumps({"type": "done", "result": {}}) + "\n", encoding="utf-8")
+
+    removed, freed = clear_sessions()
+    assert removed == 7  # 2 ledger + 2 log + 2 report + 1 finished progress
+    assert freed > 0
+    assert list_sessions() == []
+    # 仍在运行的 progress 保留
+    assert (runtime / "progress_running.jsonl").exists()
+    assert not (runtime / "progress_done.jsonl").exists()
+
+
+# ---------- 终态判断辅助 ----------
+
+def test_is_finished_progress(fake_data: Path):
+    d = fake_data / "runtime"
+    d.mkdir(parents=True, exist_ok=True)
+    done = d / "a.jsonl"
+    done.write_text(json.dumps({"type": "done", "result": {}}) + "\n", encoding="utf-8")
+    assert _is_finished_progress(done)
+    err = d / "b.jsonl"
+    err.write_text(json.dumps({"type": "error", "error": "x"}) + "\n", encoding="utf-8")
+    assert _is_finished_progress(err)
+    running = d / "c.jsonl"
+    running.write_text(json.dumps({"type": "state", "status": "running"}) + "\n",
+                       encoding="utf-8")
+    assert not _is_finished_progress(running)
+    broken = d / "d.jsonl"
+    broken.write_text("not json\n", encoding="utf-8")
+    assert not _is_finished_progress(broken)
+
+
+def test_session_id_from_progress_strict(fake_data: Path):
+    d = fake_data / "runtime"
+    d.mkdir(parents=True, exist_ok=True)
+    p = d / "p.jsonl"
+    p.write_text(json.dumps({"type": "log", "log": {
+        "timestamp": "2026-09-10T10:00:00"}}) + "\n", encoding="utf-8")
+    assert _session_id_from_progress(p) == "20260910_100000"
+    # 无 log 时间戳时返回 None（不 mtime 回退）
+    empty = d / "empty.jsonl"
+    empty.write_text(json.dumps({"type": "state", "status": "running"}) + "\n",
+                     encoding="utf-8")
+    assert _session_id_from_progress(empty) is None
 
 
 # ---------- get_session_detail ----------

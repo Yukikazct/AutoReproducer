@@ -35,6 +35,78 @@
 
 ---
 
+## [2026.09.16-1] - 2026-09-16
+
+### 新增（ScholarAgent 融合：工程可信度）
+
+基于参考项目 ScholarAgent 的迁移融合（P0 五项全部落地，P1 七项推进至 ⑫ 完成）。
+
+- **P0-① 补丁安全策略（`src/safety/patch_policy.py`）**：禁改目录段模式、禁改扩展名（数据/权重）、文件名正则、单文件体积预算、结构化拒绝决策；优化补丁越界即拒。
+- **P0-④ 快照指纹（`src/safety/workspace_snapshot.py`）**：全工作区 SHA-256 fingerprint，运行中篡改检测（指纹不一致 → 中止恢复），实验前快照。
+- **P0-③ 经验库（`src/experience/experience_store.py`）**：JSONL 持久化（`validated` 标记）、上限截断、`summarize`/`best`、线程安全；路径接入 `AUTOREPRO_DATA_ROOT/experience`。
+- **P0-⑤ TrialLedger 账本（`src/experience/trial_ledger.py`）**：Keep/Reject 结构化记录（candidate/评估/理由/restored/apply 文件），供报告与经验库消费。
+- **P0-② 证据链模块（`src/evidence/`）**：`build_evidence_registry`（SHA-256 + authentic 判定）、`normalize_findings`（确定性裁决门控：无真实执行证据不判 verified、smoke 天花板）、`build_graph`（Claim/Criterion/Evidence + graph_sha256），纯函数无 LLM。
+- **P1-⑥ BeamUCT 双层搜索+先验播种（`src/optimizer/beam_uct.py`）**：方向级 UCB + 参数树 UCT + Beam top-k；`direction_priors`/`seed_from_summary`/`seed_from_store` 经验库播种；`ucb_scheduler` 增 seed/retire/retired。
+- **P1-⑦ 冻结 Spec + 隐藏 Holdout**：ResearchSpec sha256 冻结验收，只对最终 best 状态做隐藏留出多轮评估，优化结果按 spec 判定。
+- **P1-⑧ 静态依赖解析 + pip 自愈（`src/agents/dependency_resolver.py`）**：AST+requirements 双源解析、stdlib 过滤、py39 归一、运行时缺模块 pip 自愈（≤3 轮，本地隔离目录 / Docker 累积重跑）。
+- **P1-⑨ 确定性仓库发现链（`src/agents/repo_discovery.py`）**：用户URL→PwC→GitHub 搜索→curated 回退四级降级链 + 离线开关；`fetch_code` revision pin + `.autorepro-repo-source.json` 溯源标记。
+- **P1-⑩ 防泄漏 Benchmark 评测（`src/benchmark/leakage_safe.py`）**：确定性 hash 切分（60/20/20）、隐藏标签私有目录、指标契约冻结后端复算；`dataset_registry` 增 `benchmark_hint`；`ResourceManager.prepare_leakage_safe_benchmark`（纯 Python 零依赖）。
+- **P1-⑪ Docker 沙箱加固（`src/agents/code_executor.py`）**：镜像白名单（拒非官方镜像 `exit_code=-5`）、cap-drop ALL + no-new-privileges + 只读 rootfs + tmpfs + 非 root + CPU/mem/pids 限额，随 Docker 可用性三级降级（level 0→1→2）；加固时 pip 走 `--target /tmp/site-packages` + PYTHONPATH 注入；`AUTOREPRO_DOCKER_IMAGE_ALLOWLIST`/`AUTOREPRO_DOCKER_HARDEN` 可配。
+- **P1-⑫ 用量计量增强（`src/audit/audit_logger.py` + `src/llm/llm_client.py`）**：plan 级 LLM token 统计（`begin_plan`/`end_plan` 界定流水线阶段，`extract_token_usage` 兼容 standard/别名/推算三种 usage 形态，`usage_hook` 直连归账）+ 容器耗时维度（`record_sandbox_exec`，docker 执行 try/finally 墙钟计量）；`get_stats()` 增 `plans`/`usage` 汇总（llm_calls/tokens/llm_seconds/container_exec_calls/container_exec_seconds/models）；Orchestrator 各阶段接线（含异常路径出栈、兼容外部 mock LLM）。
+
+### 测试
+
+- 新增 **266 项** 用例：补丁安全（P0-①）23 项、快照指纹（P0-④）14 项、经验库（P0-③）16 项、TrialLedger（P0-⑤）14 项、证据链（P0-②）17 项、BeamUCT 融合（P1-⑥）24 项、冻结 Spec/Holdout（P1-⑦）24 项、依赖解析自愈（P1-⑧）23 项、仓库发现链（P1-⑨）37 项、防泄漏 Benchmark（P1-⑩）38 项、沙箱加固（P1-⑪）13 项、用量计量（P1-⑫）23 项。
+- 全量 **478 passed, 1 skipped**（真实模式 21s 全绿）。
+
+---
+
+## [2026.09.16-0] - 2026-09-16
+
+### 新增（存储管理：按需懒加载 + 三层缓存 + 体积瘦身）
+
+解决「多篇论文复现累加后磁盘耗尽」：ImageNet 约 150GB vs CIFAR-10 仅 170MB，
+按需懒加载只拉当前任务最小集，任务完成归档后清理 L0。
+
+- **P0-1 ResourceManager（`src/resource_manager.py`）**：`fetch_code` /
+  `fetch_dataset` / `fetch_weights` 懒加载（git depth-1 克隆、冒烟子集、
+  本地/URL/HF 子路径权重），重复 fetch 幂等；manifest 生成/读取兼容
+  2026-09-09 存量格式；cleanup 记 `cleaned_at`；archive/restore 对接 L1
+  温存储（zip 内路径 `repos/<pid>/...` 与 restore 对齐）；L0 配额守护
+  `AUTOREPRO_L0_QUOTA_GB`（默认 20GB），超限按 LRU 给建议不自动删除。
+- **P0-2 编排器存储钩子（`src/orchestrator.py`）**：`paper_id`（corpus 键或
+  sha1(title)[:12]）注入数据上下文；FIND_RESOURCES 后自动 fetch、
+  COMPLETED 前生成 manifest + 统计；fetch 失败仅告警不阻断流水线。
+- **P0-3 隔离依赖安装（`src/agents/code_executor.py`）**：真实模式
+  `pip install --target data/deps/<sha1(reqs)>` 一次性安装 + `.ready`
+  磁盘就绪标记，执行时经 PYTHONPATH 注入隔离目录；同名依赖清单
+  跨论文只落一份天然去重，不污染全局 Python（`AUTOREPRO_DEPS_ROOT`
+  可覆盖）。此前真实模式无条件重装 torch（2GB+ 被 timeout 杀）的问题解除。
+- **P1-1 共享底座镜像（`src/agents/env_builder.py`）**：`autorepro-base`
+  （python:3.11-slim + CPU torch/torchvision/numpy/tqdm + 国内源注入），
+  `build_base_image` / `ensure_base_image` 一次构建多论文复用；论文
+  Dockerfile `FROM python:*` 自动替换为底座，底座缺失按需构建、失败
+  自动降级原 Dockerfile（`degraded` 标注不阻断）。
+- **P1-2 数据集注册表（`src/dataset_registry.py`）**：15 类常见数据集的
+  别名归一化 / 体积预估 / 子集策略（torchvision 内建懒加载、full、
+  percent:N 降采样、synthetic 零数据）/ 国内镜像备注 / 下载入口
+  （url: / hf: / script:）；ResourceManager 默认启用，`fetch_dataset`
+  按 kind 决策，未知或失败诚实降级合成冒烟集并注明非数值复现。
+- **P2 缓存管理 CLI（`scripts/resource_cli.py`）**：`status` / `list` /
+  `manifest` / `archive` / `restore` / `prune` / `quota-check` 七子命令
+  （argparse 纯净实现）；`prune --yes` 先归档 L1 再清理 L0（不丢数据）；
+  `quota-check` 拉取前预检，不足拒绝（退出码 2）并按 LRU 给释放建议；
+  `enforce_quota` 新增 `excess_bytes` 支持"预计超限"投影。
+
+### 测试
+
+- 新增 68 用例：存储钩子 8（test_orchestrator_storage）、底座镜像 13
+  （test_env_builder_base）、注册表策略 18（test_dataset_registry）、
+  CLI 12（test_resource_cli）、隔离依赖与既有资源管理 19 回归。
+- 全量 **201 passed, 1 skipped**（修复前 300s 卡死 → 21s 全绿）。
+
+---
+
 ## [2026.09.10-3] - 2026-09-10
 
 ### 修复（前端可观测性 / 诚实性，Batch 2）

@@ -1,0 +1,51 @@
+{
+  "schema_version": 2,
+  "source_document": "source_document.md",
+  "sources": [
+    {
+      "id": "AutoReproducer-项目方案-pdf-c0de4d42",
+      "type": "pdf",
+      "external_source": "C:\\Users\\lenovo\\Desktop\\AutoReproducer\\AutoReproducer-项目方案.pdf",
+      "sha256": "c0de4d4299548fd6e2914586b62f5b03fb9617426d099ac42cd26275315a5889",
+      "copied_to": "sources/AutoReproducer-项目方案-pdf-c0de4d42/AutoReproducer-项目方案.pdf",
+      "imported_at": "2026-09-16T14:02:04.657092",
+      "status": "imported",
+      "assets": [
+        {
+          "artifact": "artifacts/imports/AutoReproducer-项目方案-pdf-c0de4d42/media/AutoReproducer-项目方案.pdf-0007-02.jpg",
+          "asset": "assets/images/AutoReproducer-项目方案.pdf-0007-02-cc3c5aa04921.jpg"
+        }
+      ],
+      "warnings": [],
+      "media_dir": "artifacts/imports/AutoReproducer-项目方案-pdf-c0de4d42/media",
+      "normalized_markdown": "artifacts/imports/AutoReproducer-项目方案-pdf-c0de4d42/normalized.md",
+      "fragment": "artifacts/imports/AutoReproducer-项目方案-pdf-c0de4d42/fragment.md"
+    }
+  ],
+  "runs": [
+    {
+      "id": "import-20260916T140204641220-0473e2f4",
+      "created_at": "2026-09-16T14:02:30.880188",
+      "imported": [
+        "AutoReproducer-项目方案-pdf-c0de4d42"
+      ],
+      "outputs": [
+        {
+          "source_id": "AutoReproducer-项目方案-pdf-c0de4d42",
+          "normalized_markdown": "artifacts/imports/AutoReproducer-项目方案-pdf-c0de4d42/normalized.md",
+          "fragment": "artifacts/imports/AutoReproducer-项目方案-pdf-c0de4d42/fragment.md",
+          "assets": [
+            "assets/images/AutoReproducer-项目方案.pdf-0007-02-cc3c5aa04921.jpg"
+          ],
+          "status": "imported"
+        }
+      ],
+      "already_imported": [],
+      "failed": [],
+      "warnings": [],
+      "snapshot_dir": "artifacts/runs/import-20260916T140204641220-0473e2f4"
+    }
+  ],
+  "warnings": [],
+  "updated_at": "2026-09-16T14:02:30.883296"
+}

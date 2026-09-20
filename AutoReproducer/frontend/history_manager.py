@@ -162,7 +162,8 @@ def get_storage_stats() -> Dict[str, Any]:
     stats = {}
     total = 0
     for sub in ("experiment_ledger", "logs", "runtime", "reports",
-                "optimization_demo", "pinn-output"):
+                "optimization_demo", "pinn-output",
+                "datasets", "deps", "repos", "archive", "manifests"):
         d = base / sub
         if not d.exists():
             stats[sub] = {"files": 0, "bytes": 0}
@@ -176,8 +177,35 @@ def get_storage_stats() -> Dict[str, Any]:
     return stats
 
 
+def _is_finished_progress(path: Path) -> bool:
+    """判断 runtime 进度文件是否已终态（含 type=done 或 type=error 事件）。
+
+    只读取不修改，供 cleanup_runtime / clear_sessions 复用。
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            for line in fh:
+                if not line.strip():
+                    continue
+                try:
+                    ev = json.loads(line)
+                except ValueError:
+                    continue
+                if ev.get("type") in ("done", "error"):
+                    return True
+    except Exception:
+        return False
+    return False
+
+
 def cleanup_runtime(keep_days: int = 7) -> Tuple[int, int]:
-    """清理超过 keep_days 天的 runtime 进度文件，返回 (删除文件数, 释放字节数)。"""
+    """清理 runtime 中的过期/终态进度文件，返回 (删除文件数, 释放字节数)。
+
+    清理范围（两条规则任一命中即删）：
+    1. 进度文件已终态（内容含 type=done / type=error 事件）——
+       会话结束后 progress 只是展示缓存，ledger/logs 才是权威记录；
+    2. 超过 keep_days 天未更新的遗留文件（含异常中断、卡死残留）。
+    """
     cutoff = time.time() - keep_days * 86400
     runtime_dir = get_project_data_dir() / "runtime"
     removed = 0
@@ -186,13 +214,122 @@ def cleanup_runtime(keep_days: int = 7) -> Tuple[int, int]:
         return 0, 0
     for f in runtime_dir.glob("*.jsonl"):
         try:
-            if f.stat().st_mtime < cutoff:
+            stale = f.stat().st_mtime < cutoff
+            if stale or _is_finished_progress(f):
                 freed += f.stat().st_size
                 f.unlink()
                 removed += 1
         except Exception:
             pass
     return removed, freed
+
+
+def _session_id_from_progress(path: Path) -> Optional[str]:
+    """从 progress 文件内容的 log 时间戳提取 session_id（严格版，无 mtime 回退）。
+
+    仅当文件中存在可解析的 log.timestamp 时才返回，避免把不同会话的
+    progress 误归到目标会话（删除操作宁可少删、不可误删）。
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            for line in fh:
+                if not line.strip():
+                    continue
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                if rec.get("type") == "log":
+                    ts = (rec.get("log") or {}).get("timestamp", "")
+                    if ts:
+                        try:
+                            dt = datetime.fromisoformat(
+                                ts.replace("Z", "+00:00"))
+                            return dt.strftime("%Y%m%d_%H%M%S")
+                        except ValueError:
+                            continue
+    except Exception:
+        pass
+    return None
+
+
+def _related_files(session_id: str) -> List[Path]:
+    """收集某会话关联的全部文件（ledger/logs/reports/runtime 四类）。"""
+    base = get_project_data_dir()
+    files: List[Path] = []
+
+    ledger = base / "experiment_ledger" / f"ledger_{session_id}.jsonl"
+    if ledger.exists():
+        files.append(ledger)
+
+    log = base / "logs" / f"session_{session_id}.jsonl"
+    if log.exists():
+        files.append(log)
+
+    # reports: {title}_{sid}.md —— 匹配文件名尾部 _{sid}.md
+    reports_dir = base / "reports"
+    if reports_dir.exists():
+        for f in reports_dir.glob("*.md"):
+            if f.stem.endswith(f"_{session_id}"):
+                files.append(f)
+
+    # runtime: progress_*.jsonl 文件名是毫秒时间戳，需按内容提取 session_id
+    runtime_dir = base / "runtime"
+    if runtime_dir.exists():
+        for f in runtime_dir.glob("progress_*.jsonl"):
+            if _session_id_from_progress(f) == session_id:
+                files.append(f)
+
+    # 去重（保留顺序）
+    seen = set()
+    unique = []
+    for f in files:
+        key = str(f)
+        if key not in seen:
+            seen.add(key)
+            unique.append(f)
+    return unique
+
+
+def _unlink_files(paths: List[Path]) -> Tuple[int, int]:
+    """删除文件列表，返回 (删除数, 释放字节)。"""
+    removed = 0
+    freed = 0
+    for p in paths:
+        try:
+            freed += p.stat().st_size
+            p.unlink()
+            removed += 1
+        except Exception:
+            pass
+    return removed, freed
+
+
+def delete_session(session_id: str) -> Tuple[int, int]:
+    """删除单次历史复现会话的全部关联文件（ledger/logs/reports/runtime）。
+
+    返回 (删除文件数, 释放字节数)。文件全部不存在时返回 (0, 0)。
+    """
+    return _unlink_files(_related_files(session_id))
+
+
+def clear_sessions() -> Tuple[int, int]:
+    """清空全部历史复现会话：ledger/logs/reports 全部文件 + runtime 终态/过期文件。
+
+    保留 runtime 中仍在运行（未终态且未过期）的进度文件，避免破坏正在
+    执行的复现任务。返回 (删除文件数, 释放字节数)。
+    """
+    base = get_project_data_dir()
+    targets: List[Path] = []
+    for sub in ("experiment_ledger", "logs", "reports"):
+        d = base / sub
+        if d.exists():
+            targets.extend(f for f in d.glob("**/*") if f.is_file())
+    targets.extend(f for f in (base / "runtime").glob("*.jsonl")
+                   if f.is_file() and (_is_finished_progress(f) or
+                                       f.stat().st_mtime <
+                                       time.time() - 7 * 86400))
+    return _unlink_files(targets)
 
 
 def get_session_detail(session_id: str) -> Optional[Dict[str, Any]]:

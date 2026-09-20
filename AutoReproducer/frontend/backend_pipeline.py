@@ -273,7 +273,7 @@ def run_pipeline_core(progress_path: str,
         logger.log("Orchestrator", "finish_pipeline", "SUCCESS",
                    "流水线完成", data.get("audit_stats"))
 
-    # 报告落盘（供历史记录与下载）
+# 报告落盘（供历史记录与下载）
     report_path = ""
     report_text = data.get("report", "")
     if report_text:
@@ -288,6 +288,24 @@ def run_pipeline_core(progress_path: str,
             report_file = reports_dir / f"{paper_title_safe}_{ts}.md"
             report_file.write_text(report_text, encoding="utf-8")
             report_path = str(report_file)
+
+            # 完整执行输出附件：报告内仅截断展示，完整 code/stdout/stderr 落盘
+            # 供需要全文时查看（修复「输出一半」问题：附件永远完整）。
+            execution_raw = data.get("execution", {}) or {}
+            final_raw = execution_raw.get("final", {}) or {}
+            attach_lines = ["# 完整执行输出（未被截断）",
+                            "", "## 生成代码", "```python",
+                            execution_raw.get("code", "（无）"), "```",
+                            "", "## 标准输出 (full)", "```",
+                            final_raw.get("stdout", "（无输出）"), "```",
+                            "", "## 错误输出 (stderr)", "```",
+                            final_raw.get("stderr", "（无）"), "```", ""]
+            attach_file = reports_dir / f"{paper_title_safe}_{ts}_execution.txt"
+            attach_file.write_text("\n".join(attach_lines), encoding="utf-8")
+            # 在报告末尾补充附件说明，保证用户知道完整输出的位置
+            report_text += (f"\n\n---\n\n> 📎 **完整执行输出附件**: "
+                            f"`{attach_file.name}`（同一目录下，未被截断）\n")
+            report_file.write_text(report_text, encoding="utf-8")
         except Exception:
             pass  # 落盘失败不阻断主流程
 

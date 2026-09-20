@@ -20,6 +20,7 @@ import json
 import os
 import urllib.request
 import urllib.error
+import time
 from typing import Optional
 
 # 任务标识 -> Mock 响应（确定性、可复现，用于演示完整流水线）
@@ -116,13 +117,25 @@ class LLMClient:
 
     def __init__(self, base_url: str = "", model: str = "",
                  api_key: str = "", timeout: Optional[int] = None,
-                 mock_mode: bool = False):
+                 mock_mode: bool = False,
+                 usage_hook=None):
         self.base_url = (base_url or _env_or("LLM_BASE_URL")).rstrip("/")
         self.model = model or _env_or("LLM_MODEL")
         self.api_key = api_key or _env_or("LLM_API_KEY")
         self.timeout = timeout or _env_int("LLM_TIMEOUT", 120)
         self.mock_mode = mock_mode
         self.call_count = 0
+        # 用量计量钩子（可选）：真实调用成功且响应含 usage 时回调
+        # usage_hook(model=..., prompt_tokens=..., completion_tokens=...,
+        #            duration_seconds=...)，由上层（AuditLogger）按 plan 归账。
+        self.usage_hook = usage_hook
+        # 真实调用累计用量（plan 级计量源）：token 与 LLM 侧耗时
+        self.total_prompt_tokens = 0
+        self.total_completion_tokens = 0
+        self.total_llm_seconds = 0.0
+        # 最近一次真实调用的 usage（{"prompt_tokens","completion_tokens",
+        # "total_tokens"}）
+        self.last_usage: dict = {}
         # 最近一次真实调用的 finish_reason（"stop"/"length"/...）。
         # 供上层诊断"输出被截断"——"length"表示撞到 max_tokens。
         self.last_finish_reason = ""
@@ -182,12 +195,15 @@ class LLMClient:
             data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
             req = urllib.request.Request(self._endpoint(), data=data,
                                          headers=headers)
+            t0 = time.monotonic()
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 result = json.loads(resp.read().decode("utf-8"))
+                elapsed = time.monotonic() - t0
                 try:
                     choice = result["choices"][0]
                     # 记录 finish_reason，便于上层判断输出是否被 max_tokens 截断
                     self.last_finish_reason = str(choice.get("finish_reason") or "")
+                    self._record_usage(result, elapsed)
                     return choice["message"]["content"] or ""
                 except (KeyError, IndexError, TypeError):
                     return f"[LLM API Error: 响应缺少 choices[0].message.content: {json.dumps(result, ensure_ascii=False)[:200]}]"
@@ -200,6 +216,60 @@ class LLMClient:
             return f"[LLM API Error: HTTP {e.code} {body}]"
         except Exception as e:
             return f"[LLM API Error: {e}]"
+
+    def _record_usage(self, result: dict, elapsed: float) -> None:
+        """按 OpenAI 兼容响应的 usage 字段累计用量并触发计量 hook。
+
+        响应 usage 缺失（部分网关不返回）时视为 0 token，不误伤累计；
+        usage_hook 供 AuditLogger 按当前 plan 归账（LLM token + 耗时）。
+        """
+        p, c, t = self.extract_token_usage(result)
+        self.last_usage = {
+            "prompt_tokens": p,
+            "completion_tokens": c,
+            "total_tokens": t,
+        }
+        if p or c:
+            self.total_prompt_tokens += p
+            self.total_completion_tokens += c
+            self.total_llm_seconds += elapsed
+            if self.usage_hook:
+                try:
+                    self.usage_hook(
+                        model=self.model,
+                        prompt_tokens=p,
+                        completion_tokens=c,
+                        duration_seconds=elapsed)
+                except Exception:
+                    # 计量钩子失败不影响正常调用返回
+                    pass
+
+    @staticmethod
+    def extract_token_usage(result: Optional[dict]) -> tuple:
+        """从 OpenAI 兼容响应提取 (prompt_tokens, completion_tokens, total_tokens)。
+
+        兼容两种常见的 usage 形态：
+        - {"usage": {"prompt_tokens": n, "completion_tokens": n, "total_tokens": n}}
+        - {"usage": {"input_tokens": n, "output_tokens": n}}（部分网关别名）
+        total_tokens 缺失时按 prompt + completion 推算；均缺失返回 (0, 0, 0)。
+        """
+        usage = (result or {}).get("usage") or {}
+        if not isinstance(usage, dict):
+            return 0, 0, 0
+        prompt = usage.get("prompt_tokens",
+                           usage.get("input_tokens", 0)) or 0
+        completion = usage.get("completion_tokens",
+                               usage.get("output_tokens", 0)) or 0
+        total = usage.get("total_tokens", 0) or 0
+        try:
+            prompt = int(prompt)
+            completion = int(completion)
+            total = int(total)
+        except (TypeError, ValueError):
+            return 0, 0, 0
+        if not total:
+            total = prompt + completion
+        return prompt, completion, total
 
     # ---------------- Mock 模式 ----------------
 

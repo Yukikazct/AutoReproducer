@@ -21,6 +21,7 @@ from src.agents.report_generator import ReportGeneratorAgent
 from src.agents.verifier import VerifierAgent
 from src.agents.optimizer import OptimizerAgent
 from src.optimizer.real_simulator import RealSimulator
+from src.resource_manager import ResourceManager
 
 # 每步验证失败时最多触发的修正重试次数（预算约束）
 MAX_FIX_RETRIES = 1
@@ -43,23 +44,35 @@ class Orchestrator:
     def __init__(self, llm_client: Optional[LLMClient] = None,
                  mock_mode: bool = True, logger: Optional[AuditLogger] = None,
                  max_trials: int = 10, use_docker: bool = False,
-                 workspace_dir: Optional[str] = None):
+                 workspace_dir: Optional[str] = None,
+                 resource_manager: Optional[ResourceManager] = None):
         self.state = "INIT"
         self.logger = logger or AuditLogger()
         self.llm = llm_client or LLMClient(mock_mode=mock_mode)
+        # P1-⑫ 用量计量：把 LLM 调用的 token/耗时通过 hook 归入当前 plan
+        # （AuditLogger 按流水线阶段的 begin_plan/end_plan 界定 plan 边界）
+        # 兼容外部注入的 mock/脚本 LLM（无 usage_hook 属性时静默跳过）。
+        if hasattr(self.llm, "usage_hook"):
+            self.llm.usage_hook = self.logger.record_llm_usage
         self.max_trials = max_trials
         self.use_docker = use_docker
         # 优化工作区:提供时启用 Optimizer 真实执行闭环(补丁 -> 白名单 ->
         # 快照 -> 重跑 -> 真实指标 -> Keep/Reject);缺省保持哈希模拟。
         self.workspace_dir = workspace_dir
+        # L0 热缓存资源管理（三层存储）：FIND_RESOURCES 后按需懒加载，
+        # COMPLETED 前落盘 manifest 与统计；可注入以隔离数据根（测试）。
+        self.resource_manager = resource_manager or ResourceManager(
+            logger=self.logger)
 
         # 初始化所有 Agent
         self.agents: Dict[str, Any] = {
             "reader": PaperReaderAgent(self.llm, self.logger),
-            "finder": ResourceFinderAgent(self.llm, self.logger),
+            "finder": ResourceFinderAgent(self.llm, self.logger,
+                                          offline=mock_mode),
             "builder": EnvBuilderAgent(self.llm, self.logger),
             "executor": CodeExecutorAgent(self.llm, self.logger,
-                                          use_docker=use_docker),
+                                          use_docker=use_docker,
+                                          mock_mode=mock_mode),
             "validator": ResultValidatorAgent(self.llm, self.logger),
             "verifier": VerifierAgent(self.llm, self.logger),
             "optimizer": OptimizerAgent(self.llm, self.logger,
@@ -97,6 +110,15 @@ class Orchestrator:
             "fix_records": [],
         }
 
+        # 论文稳定 ID（三层存储索引）：corpus 语料键 / sha1(title) 前 12 位
+        paper_id = self.resource_manager.paper_id_for(
+            self.data.get("paper_title", ""),
+            corpus_key=self.data.get("corpus_paper") or "")
+        self.data["paper_id"] = paper_id
+        self.data["storage"] = {"paper_id": paper_id,
+                                "repro_level": input_data.get(
+                                    "repro_level", "smoke") or "smoke"}
+
         # 复现阶段状态机流转
         pipeline = [
             ("READ_PAPER", self.agents["reader"]),
@@ -108,12 +130,19 @@ class Orchestrator:
 
         for state_name, agent in pipeline:
             self.state = state_name
+            # P1-⑫ 用量计量：阶段级 plan（enter/exit 界定，失败也出栈）
+            self.logger.begin_plan(state_name)
             self.logger.log("Orchestrator", f"enter_{state_name}", "RUNNING",
                             f"进入阶段: {state_name}")
             try:
                 result = agent.run(self.data)
                 self._merge_result(state_name, result)
                 self._accumulate_llm_calls(result)
+
+                # 三层存储：FIND_RESOURCES 后按需懒加载代码/数据集/权重
+                # 到 L0（失败不阻断流水线，仅告警）
+                if state_name == "FIND_RESOURCES":
+                    self._fetch_resources()
 
                 # Docker 真实模式：BUILD_ENV 产出配置后即真实构建镜像，
                 # 成功把 image_tag 透传给 EXECUTE_CODE；失败不阻断（slim 降级）
@@ -144,7 +173,9 @@ class Orchestrator:
 
                 self.logger.log("Orchestrator", f"exit_{state_name}", "SUCCESS",
                                 f"完成阶段: {state_name}")
+                self.logger.end_plan(state_name)
             except Exception as e:
+                self.logger.end_plan(state_name)
                 self._fail(state_name, str(e))
                 break
 
@@ -152,6 +183,7 @@ class Orchestrator:
         if self.state != "ERROR":
             if self.data.get("validation", {}).get("is_reproduced"):
                 self.state = "OPTIMIZING"
+                self.logger.begin_plan("OPTIMIZING")
                 self.logger.log("Orchestrator", "enter_OPTIMIZING", "RUNNING",
                                 "进入优化阶段")
                 try:
@@ -165,7 +197,9 @@ class Orchestrator:
                     self.state = "OPTIMIZED"
                     self.logger.log("Orchestrator", "exit_OPTIMIZING", "SUCCESS",
                                     "优化阶段完成")
+                    self.logger.end_plan("OPTIMIZING")
                 except Exception as e:
+                    self.logger.end_plan("OPTIMIZING")
                     self._fail("OPTIMIZING", str(e))
             else:
                 self.data["optimization"] = {
@@ -175,14 +209,19 @@ class Orchestrator:
         # 报告生成（合并复现 + 优化）
         if self.state != "ERROR":
             self.state = "GENERATE_REPORT"
+            self.logger.begin_plan("GENERATE_REPORT")
             self.data["audit_stats"] = self.logger.get_stats()
             try:
                 self.data["report"] = self.agents["reporter"].run(self.data) \
                     .get("report", "")
+                self.logger.end_plan("GENERATE_REPORT")
             except Exception as e:
+                self.logger.end_plan("GENERATE_REPORT")
                 self._fail("GENERATE_REPORT", str(e))
 
         if self.state != "ERROR":
+            # 三层存储：COMPLETED 前落盘资源 manifest 与存储统计
+            self._finalize_storage()
             self.state = "COMPLETED"
             self.data["audit_stats"] = self.logger.get_stats()
             self.logger.log("Orchestrator", "finish_pipeline", "SUCCESS",
@@ -212,6 +251,90 @@ class Orchestrator:
         if validation.get("status") == "not_runnable":
             return f"代码未能运行，无法优化（{validation.get('reason', '未运行')}）"
         return "复现未成功,跳过优化"
+
+    # ---------------- 三层存储：懒加载与 manifest ----------------
+
+    def _fetch_resources(self) -> None:
+        """FIND_RESOURCES 后按需懒加载代码/数据集/权重到 L0。
+
+        只拉当前任务最小集（代码仓库 + smoke 级数据集子集）；'未找到'
+        等占位引用归一化为空。任何 fetch 异常仅记录 WARNING，不阻断流水线。
+        """
+        rm = self.resource_manager
+        resources = self.data.get("resources", {}) or {}
+        paper_id = self.data.get("paper_id", "")
+        # P1-⑨: 确定性发现链选中的仓库为权威主线，LLM 猜测仅兜底
+        discovery = resources.get("repo_discovery") or {}
+        code_url = self._clean_ref(
+            discovery.get("selected_repo")
+            or resources.get("code_repo_url", ""))
+        pinned_revision = discovery.get("pinned_revision") or ""
+        dataset_name = self._clean_ref(resources.get("dataset_url", ""))
+        weights_ref = self._clean_ref(
+            resources.get("weights_url") or resources.get("weights_ref", ""))
+        # 复现模式: ResourceFinder 的决策优先（考虑显式 full/内存），
+        # 无决策时回退 storage.repro_level（默认 smoke）
+        repro_mode = resources.get("repro_mode") or {}
+        level = (repro_mode.get("effective_mode")
+                 or (self.data.get("storage") or {}).get(
+                     "repro_level", "smoke")) or "smoke"
+        try:
+            fetched = {
+                "code": rm.fetch_code(paper_id, code_url,
+                                      revision=pinned_revision),
+                "dataset": rm.fetch_dataset(paper_id, dataset_name,
+                                            level=level),
+                "weights": rm.fetch_weights(paper_id, weights_ref),
+            }
+            self.data.setdefault("storage", {})["fetched"] = {
+                k: {"path": v.get("path", ""), "state": v.get("state", "")}
+                for k, v in fetched.items()}
+        except Exception as exc:
+            self.logger.log("Orchestrator", "fetch_resources", "WARNING",
+                            f"资源拉取失败，不阻断流水线: {str(exc)[-200:]}")
+
+    def _finalize_storage(self) -> None:
+        """COMPLETED 前落盘资源 manifest 与存储统计。
+
+        依赖 ResourceManager 的存量兼容格式（paper_id / created_at /
+        resources / paper_title / code_url / dataset_name）；失败仅告警，
+        不影响报告生成。
+        """
+        rm = self.resource_manager
+        resources = self.data.get("resources", {}) or {}
+        paper_id = self.data.get("paper_id", "")
+        try:
+            manifest = rm.build_manifest(
+                paper_id=paper_id,
+                paper_title=self.data.get("paper_title", ""),
+                code_url=self._clean_ref(
+                    resources.get("code_repo_url", "")),
+                dataset_name=self._clean_ref(
+                    resources.get("dataset_url", "")),
+                weights_ref=self._clean_ref(
+                    resources.get("weights_url") or
+                    resources.get("weights_ref", "")))
+            path = rm.save_manifest(manifest)
+            stats = rm.stats()
+            storage = self.data.setdefault("storage", {})
+            storage["manifest"] = manifest
+            storage["manifest_path"] = path
+            storage["stats"] = stats
+            self.logger.log("Orchestrator", "finalize_storage", "SUCCESS",
+                            f"资源清单已落盘: {path}")
+        except Exception as exc:
+            self.logger.log("Orchestrator", "finalize_storage", "WARNING",
+                            f"资源清单落盘失败: {str(exc)[-200:]}")
+
+    @staticmethod
+    def _clean_ref(ref: str) -> str:
+        """'未找到' 等占位文本归一化为空引用。"""
+        if not ref:
+            return ""
+        if ref.strip().lower() in ("未找到", "未知", "无", "none", "n/a",
+                                   "null", "nan"):
+            return ""
+        return ref.strip()
 
     def _materialize_workspace(self, code: str) -> None:
         """把复现代码写入优化工作区（run.py），供真实优化闭环使用。"""
