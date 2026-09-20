@@ -25,3 +25,7 @@ data/
 PaperGuru-Benchmark/
 ResearchStudio/
 参考项目/
+
+# 工具临时目录（dumate / dv-run 等本地工作区，机器相关、频繁变动，不入库）
+.tmp/
+.dumate/
