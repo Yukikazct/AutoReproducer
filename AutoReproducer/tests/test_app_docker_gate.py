@@ -103,7 +103,13 @@ def test_engine_down_disables_toggle_and_forces_off(at_app):
 
 # ---------------- 2. 引擎可用：仍然报就绪 ----------------
 
-def test_engine_up_reports_ready_and_enables_toggle(at_app):
+def test_engine_up_reports_ready_and_offers_opt_in(at_app):
+    """引擎可用：报就绪、开关可点，但沙箱**默认关闭**（显式开启才进容器）。
+
+    默认关的理由：容器沙箱每次运行都要在容器里现装依赖（tmpfs 随 `--rm`
+    清空），首跑慢且难以解释；本地隔离执行才是开箱即跑的那条路。判据是
+    「默认关 + 打开后真的改口说要进容器」，缺一半都会让用户以为沙箱开着。
+    """
     make, probe = at_app
     probe.ok = True
     at = make()
@@ -111,9 +117,17 @@ def test_engine_up_reports_ready_and_enables_toggle(at_app):
     _to_real_mode(at)
 
     assert "已就绪" in _captions(at)
+    assert "本地隔离" in _captions(at)            # 默认去向写在文案里
     toggle = _docker_toggle(at)
     assert toggle.disabled is False
-    assert toggle.value is True
+    assert toggle.value is False
+    assert at.session_state["use_docker"] is False
+
+    toggle.set_value(True)                        # 显式打开 -> 容器沙箱
+    at.run()
+    assert not at.exception, at.exception
+    assert at.session_state["use_docker"] is True
+    assert "容器沙箱" in _captions(at)
 
 
 # ---------------- 3. 重新检测：启动引擎后无需刷新页面 ----------------

@@ -128,9 +128,14 @@ with st.sidebar:
         value=st.session_state.mock_mode,
         help="启用Mock模式可直接演示，无需连接任何LLM服务")
 
-    # Docker 沙箱执行开关（真实模式生效）
+    # Docker 沙箱执行开关（真实模式生效）。
+    # 默认**关闭**：容器沙箱的代价是每次运行都要在容器里现装依赖（tmpfs 随
+    # `--rm` 清空，numpy 级别约 20 秒、torch 级别几分钟），默认开着会让用户
+    # 的第一次真实运行无声地落在容器里、慢且难解释；本地隔离执行（依赖装进
+    # data/deps/<hash>/，多论文共享）才是开箱即跑的那条路。
+    # 要用容器随时手动打开——今天它已在真实容器里实测跑通。
     if "use_docker" not in st.session_state:
-        st.session_state.use_docker = True
+        st.session_state.use_docker = False
     if "docker_probe" not in st.session_state:
         st.session_state.docker_probe = None       # None = 尚未探测
 
@@ -167,7 +172,11 @@ with st.sidebar:
             st.session_state.docker_probe = None
             st.rerun()
     else:
-        st.caption(f"✅ Docker 已就绪 ({'将使用' if st.session_state.use_docker else '未启用，将使用本地隔离执行'})")
+        st.caption("✅ Docker 已就绪 ("
+                   + ("将使用容器沙箱，首跑会在容器内安装依赖，偏慢"
+                      if st.session_state.use_docker
+                      else "未启用容器沙箱，将使用本地隔离执行")
+                   + ")")
 
     # LLM API 配置（真实模式；OpenAI 兼容接口，不依赖本地部署）
     with st.expander("🔗 LLM API 配置", expanded=not st.session_state.mock_mode):
