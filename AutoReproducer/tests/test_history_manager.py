@@ -1,9 +1,11 @@
-"""历史记录管理模块单元测试：list_sessions / get_storage_stats / cleanup_runtime / get_session_detail / format_size。
+"""历史记录管理模块单元测试：list_sessions / get_storage_stats / cleanup_runtime / get_session_detail / format_size / 依赖缓存管理。
 
 通过 monkeypatch 将数据目录指向临时目录，不触碰真实 data/。
 """
 import json
+import os
 import time
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -20,6 +22,9 @@ from frontend.history_manager import (
     clear_sessions,
     _is_finished_progress,
     _session_id_from_progress,
+    cleanup_deps_cache,
+    delete_deps_cache,
+    list_deps_cache,
 )
 
 
@@ -399,6 +404,146 @@ def test_clear_sessions_removes_everything(fake_data: Path):
     # 仍在运行的 progress 保留
     assert (runtime / "progress_running.jsonl").exists()
     assert not (runtime / "progress_done.jsonl").exists()
+
+
+# ---------- 依赖缓存管理（data/deps/） ----------
+
+@pytest.fixture
+def fake_deps(tmp_path: Path, monkeypatch) -> Path:
+    """依赖缓存根指向 tmp_path/deps（覆盖 AUTOREPRO_DEPS_ROOT，双保险）。
+
+    conftest 已把该环境变量指向一次性临时目录，这里再显式指到本用例的
+    tmp_path，让每条断言都只针对自己造的数据。
+    """
+    root = tmp_path / "deps"
+    monkeypatch.setenv("AUTOREPRO_DEPS_ROOT", str(root))
+    return root
+
+
+def _mk_deps_dir(root: Path, name: str, *, packages=(), payload: int = 10,
+                 meta=None, mtime: float = None) -> Path:
+    """造一个隔离依赖目录：meta.json + <pkg>.dist-info/ + 若干字节。"""
+    d = root / name
+    (d / "somepkg").mkdir(parents=True, exist_ok=True)
+    (d / "somepkg" / "__init__.py").write_text("x" * payload, encoding="utf-8")
+    for pkg in packages:
+        info = d / f"{pkg}-1.0.dist-info"
+        info.mkdir(parents=True, exist_ok=True)
+        (info / "METADATA").write_text("Name: " + pkg, encoding="utf-8")
+    if meta is not None:
+        (d / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
+    if mtime is not None:
+        os.utime(d, (mtime, mtime))
+    return d
+
+
+def test_list_deps_cache_reads_meta_and_packages(fake_deps: Path):
+    """条目要能看出「装的是什么、占多大、什么时候用的」。"""
+    _mk_deps_dir(fake_deps, "abc123", packages=("numpy", "scipy"),
+                 meta={"kind": "reqs", "installed_at": "2026-09-01T10:00:00",
+                       "last_used": "2026-09-19T10:00:00",
+                       "requirements": "numpy\nscipy"})
+
+    items = list_deps_cache()
+
+    assert len(items) == 1
+    it = items[0]
+    assert it["name"] == "abc123"
+    assert it["kind"] == "reqs"
+    assert it["packages"] == ["numpy", "scipy"]
+    assert it["requirements"] == "numpy\nscipy"
+    assert it["last_used"] == "2026-09-19T10:00:00"
+    assert it["files"] == 4          # __init__ + 2 个 METADATA + meta.json
+    assert it["bytes"] > 0
+
+
+def test_list_deps_cache_legacy_dir_falls_back_to_mtime(fake_deps: Path):
+    """改造前建的目录没有 meta.json：不能消失、也不能报错，
+    类型标 legacy、最后使用回退到目录 mtime（否则永远清不掉）。"""
+    _mk_deps_dir(fake_deps, "old_no_meta", packages=("numpy",), mtime=1000.0)
+
+    items = list_deps_cache()
+
+    assert len(items) == 1
+    assert items[0]["kind"] == "legacy"
+    assert items[0]["packages"] == ["numpy"]
+    assert items[0]["last_used"].startswith("1970-01-01")   # mtime=1000s
+
+
+def test_list_deps_cache_sorted_by_last_used_desc(fake_deps: Path):
+    _mk_deps_dir(fake_deps, "hot", meta={"kind": "reqs",
+                                         "last_used": "2026-09-19T10:00:00"})
+    _mk_deps_dir(fake_deps, "cold", meta={"kind": "reqs",
+                                          "last_used": "2026-01-01T10:00:00"})
+    assert [i["name"] for i in list_deps_cache()] == ["hot", "cold"]
+
+
+def test_list_deps_cache_missing_root_is_empty(fake_deps: Path):
+    assert not fake_deps.exists()      # 前提：根目录还没建
+    assert list_deps_cache() == []
+
+
+def test_delete_deps_cache_removes_only_named(fake_deps: Path):
+    _mk_deps_dir(fake_deps, "keep", packages=("numpy",))
+    victim = _mk_deps_dir(fake_deps, "victim", packages=("numpy",))
+    expected_bytes = sum(f.stat().st_size for f in victim.rglob("*") if f.is_file())
+
+    removed, freed = delete_deps_cache(["victim"])
+
+    assert removed == 1
+    assert freed == expected_bytes
+    assert not victim.exists()
+    assert (fake_deps / "keep").is_dir()
+
+
+def test_delete_deps_cache_ignores_unknown_names(fake_deps: Path):
+    assert delete_deps_cache([]) == (0, 0)
+    assert delete_deps_cache(["nope"]) == (0, 0)
+
+
+def test_delete_deps_cache_rejects_path_escape(fake_deps: Path, tmp_path: Path):
+    """只接受直接子目录名：路径穿越/嵌套路径一律拒绝，绝不越界删除。"""
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "important.txt").write_text("别删我", encoding="utf-8")
+    inside = _mk_deps_dir(fake_deps, "inside")
+
+    removed, _ = delete_deps_cache(
+        ["../outside", str(outside), "inside/../inside", "", "."])
+
+    assert removed == 0
+    assert outside.is_dir() and (outside / "important.txt").exists()
+    assert inside.is_dir()          # 嵌套路径同样被拒（不是「恰好删对了」）
+
+
+def test_cleanup_deps_cache_keeps_recent(fake_deps: Path):
+    """「保留最近 N 天」按 last_used 判断冷热，旧目录（无 meta）按 mtime。"""
+    now = datetime.now()
+    _mk_deps_dir(fake_deps, "cold_meta", meta={
+        "kind": "reqs",
+        "last_used": (now - timedelta(days=200)).isoformat(timespec="seconds")})
+    _mk_deps_dir(fake_deps, "hot_meta", meta={
+        "kind": "reqs",
+        "last_used": (now - timedelta(days=1)).isoformat(timespec="seconds")})
+    _mk_deps_dir(fake_deps, "cold_legacy", mtime=time.time() - 200 * 86400)
+
+    removed, freed = cleanup_deps_cache(keep_days=30)
+
+    assert removed == 2
+    assert freed > 0
+    assert sorted(i["name"] for i in list_deps_cache()) == ["hot_meta"]
+
+
+def test_deps_meta_name_matches_executor():
+    """`_DEPS_META_NAME` 是跨模块契约：执行器写入、前端读取。
+
+    history_manager 刻意不 import src.*（保持纯 stdlib、前端加载更轻），
+    所以用这条测试钉住两边的常量一致，而不是靠跨层 import。
+    """
+    import frontend.history_manager as hm
+    import src.agents.code_executor as ce
+
+    assert ce._DEPS_META_NAME == hm._DEPS_META_NAME
 
 
 # ---------- 终态判断辅助 ----------

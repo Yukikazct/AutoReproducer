@@ -377,6 +377,126 @@ def clear_sessions() -> Tuple[int, int]:
     return _unlink_files(targets)
 
 
+# ---------------- 依赖缓存管理（data/deps/） ----------------
+# 与 src.agents.code_executor 的 _DEPS_META_NAME 必须一致；那边是写入方，
+# 这里是读取方。本模块刻意不 import src.*（纯 stdlib，便于单测与前端加载），
+# 故用同名常量 + 一条一致性测试来钉住，而不是跨层 import。
+_DEPS_META_NAME = "meta.json"
+
+
+def _deps_root() -> Path:
+    """依赖缓存根目录（尊重 AUTOREPRO_DEPS_ROOT 覆盖，与执行器同口径）。"""
+    override = os.environ.get("AUTOREPRO_DEPS_ROOT", "").strip()
+    if override:
+        return Path(override)
+    return get_project_data_dir() / "deps"
+
+
+def _dir_size(path: Path) -> Tuple[int, int]:
+    """返回 (文件数, 字节数)。"""
+    files = 0
+    total = 0
+    for f in path.rglob("*"):
+        try:
+            if f.is_file():
+                files += 1
+                total += f.stat().st_size
+        except OSError:
+            continue
+    return files, total
+
+
+def list_deps_cache() -> List[Dict[str, Any]]:
+    """列出依赖缓存里每个隔离安装目录。
+
+    依赖缓存按「归一化后的依赖清单」哈希寻址，**跨论文跨会话共享**，因此
+    它不属于任何一次复现记录，不随删除历史一起清（删了下次要重新下载安装）。
+    但会随论文数量无限增长，所以需要一个看得见、删得掉的入口。
+
+    每个条目：
+      name        目录名（哈希 / heal-<模块>）
+      bytes/files 占用
+      kind        reqs | heal | legacy（无 meta.json 的旧目录）
+      packages    装了哪些包（取 *.dist-info 名字）
+      requirements 原始依赖清单（旧目录为空）
+      installed_at / last_used  ISO 时间串（旧目录回退到目录 mtime）
+    """
+    root = _deps_root()
+    items: List[Dict[str, Any]] = []
+    if not root.is_dir():
+        return items
+    for p in sorted(root.iterdir()):
+        if not p.is_dir():
+            continue
+        meta = {}
+        try:
+            meta = json.loads((p / _DEPS_META_NAME).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            pass
+        files, size = _dir_size(p)
+        mtime = datetime.fromtimestamp(p.stat().st_mtime).isoformat(
+            timespec="seconds")
+        items.append({
+            "name": p.name,
+            "path": str(p),
+            "bytes": size,
+            "files": files,
+            "kind": meta.get("kind", "legacy"),
+            # dist-info 目录名是 `<包名>-<版本>.dist-info`（包名里的 - 已被
+            # 归一为 _），所以从右往左切一次即得包名，不带版本号。
+            "packages": sorted(d.name[:-len(".dist-info")].rsplit("-", 1)[0]
+                               for d in p.glob("*.dist-info")),
+            "requirements": meta.get("requirements", ""),
+            "module": meta.get("module", ""),
+            "installed_at": meta.get("installed_at", ""),
+            "last_used": meta.get("last_used", "") or mtime,
+        })
+    return sorted(items, key=lambda i: i["last_used"], reverse=True)
+
+
+def delete_deps_cache(names: List[str]) -> Tuple[int, int]:
+    """按目录名删除依赖缓存目录，返回 (删除目录数, 释放字节数)。
+
+    只接受 data/deps 下的**直接子目录名**（拒绝含路径分隔符的输入，
+    避免越界删除）；目录不存在则跳过。删掉后该依赖下次执行会重新安装。
+    """
+    root = _deps_root()
+    removed = 0
+    freed = 0
+    for name in dict.fromkeys(names or []):
+        if not name or Path(name).name != name:
+            continue
+        target = root / name
+        if not target.is_dir():
+            continue
+        _, size = _dir_size(target)
+        try:
+            shutil.rmtree(target)
+            removed += 1
+            freed += size
+        except OSError:
+            pass
+    return removed, freed
+
+
+def cleanup_deps_cache(keep_days: int = 30) -> Tuple[int, int]:
+    """清理超过 keep_days 天未使用过的依赖缓存目录。
+
+    冷热以 meta.json 的 last_used 为准（每次命中缓存都会刷新），
+    没有 meta.json 的旧目录回退到目录 mtime。返回 (删除目录数, 释放字节数)。
+    """
+    cutoff = datetime.now() - timedelta(days=keep_days)
+    stale: List[str] = []
+    for item in list_deps_cache():
+        try:
+            used = datetime.fromisoformat(item["last_used"])
+        except ValueError:
+            continue
+        if used < cutoff:
+            stale.append(item["name"])
+    return delete_deps_cache(stale)
+
+
 def get_session_detail(session_id: str) -> Optional[Dict[str, Any]]:
     """获取单次会话的详细记录（ledger + logs）。"""
     base = get_project_data_dir()

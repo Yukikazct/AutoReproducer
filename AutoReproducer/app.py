@@ -36,6 +36,9 @@ from frontend.history_manager import (
     list_sessions,
     get_storage_stats,
     cleanup_runtime,
+    list_deps_cache,
+    delete_deps_cache,
+    cleanup_deps_cache,
     format_size,
     get_session_detail,
     delete_session,
@@ -454,6 +457,10 @@ with tab5:
     _hist_flash = st.session_state.pop("_hist_flash", "")
     if _hist_flash:
         st.success(_hist_flash)
+    # 上一轮刚做过删除 -> 在此复位确认勾选，避免下次一键误删。
+    # 必须在这里做：widget 一旦实例化，就不能再改它的 session_state 了。
+    for _ck in st.session_state.pop("_reset_confirm_keys", []):
+        st.session_state[_ck] = False
 
     # -- 当前会话报告下载（如果本次复现已完成） --
     if st.session_state.result and st.session_state.result.get("report_path"):
@@ -505,6 +512,60 @@ with tab5:
                 f"已删除 {removed} 个文件，释放 {format_size(freed)}")
             st.rerun()
 
+        # -- 依赖缓存：不随历史记录一起删（跨会话共享，删了要重新下载） --
+        st.markdown("---")
+        st.markdown("**📦 依赖缓存**（跨会话共享，不随历史记录删除）")
+        st.caption("隔离安装按**依赖清单内容**哈希寻址，同一份依赖跨论文复用。"
+                   "删掉后下次执行同一依赖要重新下载安装，因此不并入"
+                   "「清空历史」；需要腾空间时才在这里单独清。")
+        try:
+            deps_items = list_deps_cache()
+        except Exception as e:
+            deps_items = []
+            st.error(f"读取依赖缓存失败: {e}")
+        if deps_items:
+            total_deps = sum(d["bytes"] for d in deps_items)
+            st.dataframe(
+                [{"目录": d["name"],
+                  "类型": {"reqs": "依赖清单", "heal": "自愈补装",
+                           "legacy": "旧目录（无元数据）"}.get(d["kind"], d["kind"]),
+                  "包含包": ", ".join(d["packages"]) or "—",
+                  "占用": format_size(d["bytes"]),
+                  "最后使用": (d["last_used"] or "")[:16].replace("T", " ")}
+                 for d in deps_items],
+                use_container_width=True, hide_index=True)
+            st.caption(f"{len(deps_items)} 个目录 · 合计 {format_size(total_deps)}")
+
+            deps_keep = st.slider("清理多少天未使用的依赖缓存", 1, 180, 30,
+                                  key="deps_keep_days")
+            if st.button("清理冷缓存（按最后使用时间）",
+                         use_container_width=True,
+                         help="依赖缓存每次命中都会刷新「最后使用」时间；"
+                              "无元数据的旧目录按目录修改时间判断"):
+                n, freed = cleanup_deps_cache(keep_days=deps_keep)
+                st.session_state["_hist_flash"] = (
+                    f"已清理 {n} 个冷依赖目录，释放 {format_size(freed)}")
+                st.rerun()
+
+            picked_deps = st.multiselect(
+                "选择要删除的依赖目录（下次执行会重新下载安装）",
+                [d["name"] for d in deps_items], key="deps_del_pick")
+            confirm_deps = st.checkbox(
+                "我确认删除所选依赖缓存（下次执行同一依赖需重新下载安装）",
+                key="confirm_deps_del")
+            if st.button(f"🗑️ 删除所选 {len(picked_deps)} 个依赖目录",
+                         key="deps_del_btn", use_container_width=True,
+                         type="secondary",
+                         disabled=not picked_deps or not confirm_deps):
+                with st.spinner("正在删除..."):
+                    n, freed = delete_deps_cache(picked_deps)
+                st.session_state["_reset_confirm_keys"] = ["confirm_deps_del"]
+                st.session_state["_hist_flash"] = (
+                    f"已删除 {n} 个依赖目录，释放 {format_size(freed)}")
+                st.rerun()
+        else:
+            st.caption("暂无依赖缓存。")
+
         st.markdown("---")
         st.markdown("**🗑️ 历史会话清理**（危险操作，请谨慎）")
         confirm_clear = st.checkbox(
@@ -514,6 +575,7 @@ with tab5:
                      type="secondary",
                      disabled=not confirm_clear):
             removed, freed = clear_sessions()
+            st.session_state["_reset_confirm_keys"] = ["confirm_clear_all"]
             st.session_state["_hist_flash"] = (
                 f"已清空全部历史：删除 {removed} 个文件，"
                 f"释放 {format_size(freed)}")
@@ -645,10 +707,6 @@ with tab5:
                 st.caption(f"已选 {len(selected)} 条（仅统计上方可见列表；"
                            f"被筛选隐藏的已勾选会话不会被删除）")
 
-                # 上一轮刚删完 -> 在此复位确认框。必须在 checkbox 实例化前
-                # 执行，否则触发 "cannot be modified after ... instantiated"。
-                if st.session_state.pop("_reset_batch_confirm", False):
-                    st.session_state["confirm_batch_del"] = False
                 confirm_batch = st.checkbox(
                     "我确认批量删除以上所选会话（账本/日志/报告/progress 一并删除）",
                     key="confirm_batch_del")
@@ -658,7 +716,7 @@ with tab5:
                     with st.spinner("正在删除..."):
                         removed, freed = delete_sessions(
                             [s["session_id"] for s in selected])
-                    st.session_state["_reset_batch_confirm"] = True
+                    st.session_state["_reset_confirm_keys"] = ["confirm_batch_del"]
                     st.session_state["_hist_flash"] = (
                         f"已批量删除 {len(selected)} 个会话，共 {removed} 个文件，"
                         f"释放 {format_size(freed)}")

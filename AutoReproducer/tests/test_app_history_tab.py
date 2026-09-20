@@ -150,6 +150,70 @@ def test_batch_delete_reports_result_and_resets_confirm(at, tmp_path):
     assert at.checkbox(key="confirm_batch_del").value is False
 
 
+# ---------------- 依赖缓存面板 ----------------
+
+DEPS_HOT = "a" * 16
+DEPS_COLD = "b" * 16
+
+
+def _mk_deps_dir(root: Path, name: str, last_used: str, packages=("numpy",)):
+    d = root / name
+    (d / "somepkg").mkdir(parents=True, exist_ok=True)
+    (d / "somepkg" / "__init__.py").write_text("x" * 64, encoding="utf-8")
+    for pkg in packages:
+        (d / f"{pkg}-1.0.dist-info").mkdir(parents=True, exist_ok=True)
+    (d / "meta.json").write_text(
+        json.dumps({"kind": "reqs", "installed_at": last_used,
+                    "last_used": last_used, "requirements": "numpy"}),
+        encoding="utf-8")
+
+
+@pytest.fixture
+def at_with_deps(tmp_path, monkeypatch):
+    """带两个依赖缓存目录（一热一冷）的 AppTest。"""
+    monkeypatch.setattr(hm, "get_project_data_dir", lambda: tmp_path)
+    deps_root = tmp_path / "deps"
+    monkeypatch.setenv("AUTOREPRO_DEPS_ROOT", str(deps_root))
+    _mk_deps_dir(deps_root, DEPS_HOT, "2026-09-19T10:00:00")
+    _mk_deps_dir(deps_root, DEPS_COLD, "2026-01-01T10:00:00")
+
+    from streamlit.testing.v1 import AppTest
+    app = AppTest.from_file(APP_PATH, default_timeout=120)
+    app.run()
+    return app
+
+
+def test_deps_cache_panel_lists_entries(at_with_deps, tmp_path):
+    """依赖缓存要在「清理管理」里可见（含包名/占用/总占用）。"""
+    assert not at_with_deps.exception
+    assert set(at_with_deps.multiselect(key="deps_del_pick").options) == {
+        DEPS_HOT, DEPS_COLD}
+    assert "2 个目录" in _captions(at_with_deps)
+
+
+def test_deps_cache_delete_requires_pick_and_confirmation(at_with_deps, tmp_path):
+    """未选目录/未勾确认时不可删；确认后才删得掉，且确认框自动复位。"""
+    app = at_with_deps
+    assert app.button(key="deps_del_btn").disabled is True
+
+    app.multiselect(key="deps_del_pick").set_value([DEPS_COLD])
+    app.run()
+    assert app.button(key="deps_del_btn").disabled is True     # 仍未确认
+
+    app.checkbox(key="confirm_deps_del").set_value(True)
+    app.run()
+    assert app.button(key="deps_del_btn").disabled is False
+    assert (tmp_path / "deps" / DEPS_COLD).is_dir()           # 只渲染不点击
+
+    app.button(key="deps_del_btn").click()
+    app.run()
+    assert not app.exception
+    assert not (tmp_path / "deps" / DEPS_COLD).exists()
+    assert (tmp_path / "deps" / DEPS_HOT).is_dir()            # 没选的不受牵连
+    assert any("已删除 1 个依赖目录" in s.value for s in app.success)
+    assert app.checkbox(key="confirm_deps_del").value is False
+
+
 def test_select_all_visible_only_checks_visible(at):
     """「全选可见」只勾可见的那些，隐藏的既不被勾也不算进已选。"""
     at.selectbox(key="hist_state_filter").set_value("COMPLETED")

@@ -29,6 +29,8 @@ import sys
 import tempfile
 import time
 import hashlib
+import json
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 from src.base_agent import BaseAgent
@@ -86,6 +88,84 @@ DEPS_CACHE_ROOT = Path(os.environ.get(
     str(_PROJECT_ROOT / "data" / "deps")))
 # 安装完成标志文件：存在即视为该隔离目录已就绪
 _DEPS_READY_MARK = ".ready"
+# 隔离目录自带的元数据文件名（requirements / 安装与最后使用时间），
+# 供「依赖缓存」管理界面识别与清理；不参与安装，写失败也不影响执行。
+_DEPS_META_NAME = "meta.json"
+
+
+def normalize_requirements(reqs: str) -> str:
+    """依赖清单归一：只折叠**写法**差异，不改变 pip 的解析结果。
+
+    隔离目录按清单哈希寻址，清单写法（行序、空行、缩进、重复行）一变就是
+    另一个目录，同一份依赖会被整份重装。实测本机有两个内容等价、各
+    53 MB / 1553 文件的 numpy 目录，只因清单文本不同就各存了一份。
+
+    因此只做不改语义的折叠：去空行、去纯注释行、去首尾空白、保序去重、
+    按包名排序（大小写不敏感）。
+
+    例外：清单里若含 `-r` / `-c` / `--index-url` 这类**选项行**，顺序是有
+    意义的（选项对其后的行生效），此时只去重去空白、**不排序**。
+    """
+    lines: List[str] = []
+    for raw in (reqs or "").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        lines.append(line)
+    lines = list(dict.fromkeys(lines))          # 保序去重
+    if any(l.startswith("-") for l in lines):
+        return "\n".join(lines)
+    return "\n".join(sorted(lines, key=str.lower))
+
+
+def reqs_digest(reqs: str) -> str:
+    """隔离目录名：归一化清单的 sha1 前 16 位。"""
+    return hashlib.sha1(
+        normalize_requirements(reqs).encode("utf-8")).hexdigest()[:16]
+
+
+def _deps_meta_path(deps_dir: Path) -> Path:
+    return deps_dir / _DEPS_META_NAME
+
+
+def read_deps_meta(deps_dir: Path) -> Dict:
+    """读隔离目录元数据；缺失/损坏时返回 {}（调用方回退到目录 mtime）。"""
+    try:
+        return json.loads(_deps_meta_path(deps_dir).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def _write_deps_meta(deps_dir: Path, kind: str, requirements: str = "",
+                     module: str = "") -> None:
+    """安装完成后写元数据：目录里到底装的是什么、什么时候装的。"""
+    now = datetime.now().isoformat(timespec="seconds")
+    meta: Dict = {"kind": kind, "installed_at": now, "last_used": now}
+    if requirements:
+        meta["requirements"] = requirements
+        meta["normalized"] = normalize_requirements(requirements)
+    if module:
+        meta["module"] = module
+    try:
+        _deps_meta_path(deps_dir).write_text(
+            json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+        if requirements:
+            (deps_dir / "requirements.txt").write_text(
+                requirements, encoding="utf-8")
+    except OSError:
+        pass        # 元数据只是可观测性，写不进去不能影响安装与执行
+
+
+def touch_deps_meta(deps_dir: Path) -> None:
+    """命中缓存时刷新 last_used（「保留最近 N 天」据此判断冷热）。"""
+    meta = read_deps_meta(deps_dir)
+    meta["last_used"] = datetime.now().isoformat(timespec="seconds")
+    meta.setdefault("kind", "reqs")
+    try:
+        _deps_meta_path(deps_dir).write_text(
+            json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError:
+        pass
 
 # 代码不可编译时的再生成次数上限（LLM 输出被截断是常见故障）
 MAX_CODE_REGEN = 2
@@ -876,6 +956,7 @@ class CodeExecutorAgent(BaseAgent):
         ready_mark = heal_dir / _DEPS_READY_MARK
         if ready_mark.is_file():
             self._heal_dirs.add(str(heal_dir))
+            touch_deps_meta(heal_dir)       # 与清单目录同口径，便于统一清理
             self.log("self_heal", "RUNNING",
                      f"复用自愈目录 {heal_dir.name}（{package}）")
             return None
@@ -896,6 +977,7 @@ class CodeExecutorAgent(BaseAgent):
             if res.returncode == 0:
                 ready_mark.write_text("ok\n", encoding="utf-8")
                 self._heal_dirs.add(str(heal_dir))
+                _write_deps_meta(heal_dir, "heal", module=module)
                 self.log("self_heal", "SUCCESS",
                          f"自愈安装完成 {module}->{package}: {heal_dir.name}")
                 return None
@@ -937,8 +1019,9 @@ class CodeExecutorAgent(BaseAgent):
                  f"按依赖清单安装环境依赖: {reqs[:120]}...")
 
         # ---- 隔离安装目录（对齐三层存储 L0 热缓存）----
-        reqs_digest = hashlib.sha1(reqs.encode("utf-8")).hexdigest()[:16]
-        deps_dir = DEPS_CACHE_ROOT / reqs_digest
+        # 按**归一化**清单取哈希：清单写法差异（行序/空行/重复行）不再各存
+        # 一份完整依赖（实测因此白占 53 MB）。
+        deps_dir = DEPS_CACHE_ROOT / reqs_digest(reqs)
         ready_mark = deps_dir / _DEPS_READY_MARK
 
         if self.mock_mode:
@@ -953,6 +1036,7 @@ class CodeExecutorAgent(BaseAgent):
         if ready_mark.is_file():
             self._deps_dir = str(deps_dir)
             _INSTALLED_DEPS[key] = ""
+            touch_deps_meta(deps_dir)       # 刷新 last_used，供冷热清理判断
             self.log("install_deps", "SUCCESS",
                      f"复用隔离依赖目录: {deps_dir.name}")
             return None
@@ -975,6 +1059,7 @@ class CodeExecutorAgent(BaseAgent):
                 ready_mark.write_text("ok\n", encoding="utf-8")
                 self._deps_dir = str(deps_dir)
                 _INSTALLED_DEPS[key] = ""
+                _write_deps_meta(deps_dir, "reqs", requirements=reqs)
                 self.log("install_deps", "SUCCESS",
                          f"隔离依赖安装完成: {deps_dir.name}")
                 return None
