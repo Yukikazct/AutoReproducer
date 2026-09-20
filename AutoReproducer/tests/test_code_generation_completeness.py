@@ -342,6 +342,64 @@ class TestReportSurfacesSanitize:
 
 
 # ============================================================
+# 7. 报告如实展示验证结论的依据
+# ============================================================
+
+class TestReportSurfacesVerdictBasis:
+
+    @staticmethod
+    def _report(validation: dict) -> str:
+        from src.agents.report_generator import ReportGeneratorAgent
+        return ReportGeneratorAgent().run(
+            {"validation": validation, "execution": {}, "paper_info": {}})["report"]
+
+    def test_metric_differences_are_listed(self):
+        """只给"失败"结论、不给逐项差异，用户无从判断判定是否合理。"""
+        report = self._report({
+            "status": "not_reproduced", "is_reproduced": False,
+            "confidence": 0.4,
+            "validation": {
+                "analysis": "本地数值比对完成",
+                "differences": ["MSE: 声明 0.0892 vs 实际 0.0869 "
+                                "(归一化后相对差异 2.6%)"],
+            },
+            "metrics_comparison": {"paper": {"MSE": 0.0892},
+                                   "actual": {"mse": 0.0869}},
+        })
+        assert "指标差异" in report
+        assert "2.6%" in report
+
+    def test_metric_table_pairs_case_variant_keys(self):
+        """论文声明 MSE、运行输出 mse 是同一个指标，必须排成一行。
+
+        按精确键名配对会排成两行、各缺一半，看起来像"没跑出来"——
+        与判定层误报未复现是同一个 bug 的两种表现。
+        """
+        report = self._report({
+            "status": "reproduced", "is_reproduced": True, "confidence": 0.9,
+            "validation": {"analysis": "ok", "differences": []},
+            "metrics_comparison": {"paper": {"MSE": 0.0892},
+                                   "actual": {"mse": 0.0869}},
+        })
+        rows = [ln for ln in report.splitlines()
+                if ln.startswith("| ") and ("0.0892" in ln or "0.0869" in ln)]
+        assert len(rows) == 1, f"同一指标应只占一行，实际:\n{report}"
+        assert "0.0892" in rows[0] and "0.0869" in rows[0]
+
+    def test_unmatched_metrics_still_shown_as_na(self):
+        report = self._report({
+            "status": "not_reproduced", "is_reproduced": False,
+            "confidence": 0.4,
+            "validation": {"analysis": "缺指标",
+                           "missing_metrics": ["f1_score: 声明 0.8，未提取到"]},
+            "metrics_comparison": {"paper": {"accuracy": 0.85, "f1_score": 0.8},
+                                   "actual": {"accuracy": 0.85}},
+        })
+        assert "无法比对的指标" in report
+        assert "| f1_score | 0.8 | N/A |" in report
+
+
+# ============================================================
 # 4. 结构完整性门
 # ============================================================
 

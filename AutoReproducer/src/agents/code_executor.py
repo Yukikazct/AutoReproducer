@@ -767,6 +767,12 @@ class CodeExecutorAgent(BaseAgent):
             workdir = tempfile.mkdtemp(prefix="autorepro_exec_")
         else:
             os.makedirs(workdir, exist_ok=True)
+            # 必须转绝对路径：脚本以 `[python, os.path.join(workdir, "run.py")]`
+            # 启动、同时 cwd=workdir。workdir 若是相对路径（如 Optimizer 真实
+            # 执行传入的 `data/_e2e_ws`），脚本参数会被 cwd 再解析一次，实际去找
+            # `data/_e2e_ws/data/_e2e_ws/run.py` —— 报 "No such file or directory"，
+            # exit_code=2、stdout 为空，看起来像"补丁跑不起来"。
+            workdir = os.path.abspath(workdir)
 
         # 依赖预装：缺失依赖时运行必然失败，先安装再执行
         deps_err = self._ensure_local_deps(workdir)
@@ -837,6 +843,23 @@ class CodeExecutorAgent(BaseAgent):
             "deps_prepared": True,
         }
 
+    def _pip_env(self) -> Dict:
+        """本地 pip 子进程环境：强制关闭 user 安装。
+
+        本机（真实模式实测）site 级 pip.ini 里写死了 `install.user = yes`，
+        pip 于是总是追加 `--user`，与隔离安装的 `--target` 互斥，直接报
+        `ERROR: Can not combine '--user' and '--target'` —— 结果**任何**
+        真实模式依赖都装不上、代码永远跑不起来。
+
+        PIP_USER=0 的优先级高于配置文件（环境变量 > 配置文件），与命令行
+        的 `--no-user` 双保险。PYTHONIOENCODING 与脚本执行一致，保证 pip
+        自己的输出也按 UTF-8 编码，父进程按 UTF-8 解码不会乱码。
+        """
+        env = os.environ.copy()
+        env["PIP_USER"] = "0"
+        env["PYTHONIOENCODING"] = "utf-8"
+        return env
+
     def _heal_install_local(self, module: str) -> Optional[str]:
         """把缺失模块对应 PyPI 包隔离安装到 data/deps/heal-<module>/。
 
@@ -860,6 +883,7 @@ class CodeExecutorAgent(BaseAgent):
             heal_dir.mkdir(parents=True, exist_ok=True)
             cmd = [sys.executable, "-m", "pip", "install",
                    "--disable-pip-version-check", "-q",
+                   "--no-user",
                    "--target", str(heal_dir),
                    "-i", PIP_INDEX_URL]
             if PIP_FIND_LINKS:
@@ -867,6 +891,7 @@ class CodeExecutorAgent(BaseAgent):
             cmd += [package]
             res = subprocess.run(cmd, capture_output=True, text=True,
                                  encoding="utf-8", errors="replace",
+                                 env=self._pip_env(),
                                  timeout=LOCAL_PIP_TIMEOUT)
             if res.returncode == 0:
                 ready_mark.write_text("ok\n", encoding="utf-8")
@@ -936,6 +961,7 @@ class CodeExecutorAgent(BaseAgent):
             deps_dir.mkdir(parents=True, exist_ok=True)
             cmd = [sys.executable, "-m", "pip", "install",
                    "--disable-pip-version-check", "-q",
+                   "--no-user",
                    "--target", str(deps_dir),
                    "-i", PIP_INDEX_URL]
             if PIP_FIND_LINKS:
@@ -943,6 +969,7 @@ class CodeExecutorAgent(BaseAgent):
             cmd += ["-r", req_file]
             res = subprocess.run(cmd, capture_output=True, text=True,
                                  encoding="utf-8", errors="replace",
+                                 env=self._pip_env(),
                                  timeout=LOCAL_PIP_TIMEOUT)
             if res.returncode == 0:
                 ready_mark.write_text("ok\n", encoding="utf-8")
@@ -1123,6 +1150,8 @@ class CodeExecutorAgent(BaseAgent):
             workdir = tempfile.mkdtemp(prefix="autorepro_docker_")
         else:
             os.makedirs(workdir, exist_ok=True)
+            # 同本地路径：相对 workdir 会被 docker 的 -v 以错误形式解析
+            workdir = os.path.abspath(workdir)
         script = os.path.join(workdir, "run.py")
         timeout = DOCKER_TIMEOUT_SMOKE if stage == "smoke" else DOCKER_TIMEOUT_FULL
         try:

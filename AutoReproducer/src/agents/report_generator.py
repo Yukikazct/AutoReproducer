@@ -5,6 +5,7 @@
 """
 from datetime import datetime
 from src.base_agent import BaseAgent
+from src.metric_keys import norm_metric_key
 
 
 def _fmt(value, spec: str = ".2f", default: float = 0.0) -> str:
@@ -159,7 +160,14 @@ class ReportGeneratorAgent(BaseAgent):
                   f"- **置信度**: {_fmt(validation.get('confidence', 0.0))}",
                   f"- **分析**: "
                   f"{(validation.get('validation') or {}).get('analysis', '无')}"]
-        missing = (validation.get("validation") or {}).get("missing_metrics") or []
+        inner = validation.get("validation") or {}
+        # 逐项数值差异（"声明 X vs 实际 Y，相对差异 Z%"）——判定结论的依据，
+        # 只给"成功/失败"而不给差异，用户无法判断判定是否合理。
+        diffs = inner.get("differences") or []
+        if diffs:
+            lines.append("- **指标差异**:")
+            lines += [f"  - {d}" for d in diffs]
+        missing = inner.get("missing_metrics") or []
         if missing:
             lines.append("- **无法比对的指标**:")
             lines += [f"  - {m}" for m in missing]
@@ -168,12 +176,23 @@ class ReportGeneratorAgent(BaseAgent):
             paper_m = metrics_comp.get("paper", {}) or {}
             actual_m = metrics_comp.get("actual", {}) or {}
             if paper_m or actual_m:
+                # 按归一化键配对：论文声明 `MSE`、运行输出 `mse` 是同一个指标，
+                # 不配对就会在表里排成两行各缺一半，看起来像"没跑出来"。
+                rows: dict = {}
+                for k, v in paper_m.items():
+                    rows.setdefault(norm_metric_key(k), {})["paper"] = (k, v)
+                for k, v in actual_m.items():
+                    rows.setdefault(norm_metric_key(k), {})["actual"] = (k, v)
                 lines += ["", "### 指标对比",
                           "| 指标 | 论文声明 | 实际运行 |",
                           "|------|----------|----------|"]
-                for k in sorted(set(paper_m) | set(actual_m)):
-                    lines.append(f"| {k} | {paper_m.get(k, 'N/A')} "
-                                 f"| {actual_m.get(k, 'N/A')} |")
+                for nk in sorted(rows):
+                    cell = rows[nk]
+                    pk, pv = cell.get("paper", (nk, "N/A"))
+                    ak, av = cell.get("actual", (nk, "N/A"))
+                    # 两侧键名写法不同则标注原写法，避免"对不上号"的疑惑
+                    name = pk if pk == ak else f"{pk} / {ak}"
+                    lines.append(f"| {name} | {pv} | {av} |")
         lines.append("")
 
         # 6. 智能优化
@@ -182,21 +201,49 @@ class ReportGeneratorAgent(BaseAgent):
             lines.append(f"- **优化状态**: 未触发("
                          f"{optimization.get('reason', '复现未成功或未运行优化')})")
         else:
-            lines += ["- **优化状态**: ✅ 已优化",
-                      f"- **基线指标**: {optimization.get('baseline', 'N/A')}",
-                      f"- **最优方向**: {optimization.get('best_arm', 'N/A')}",
-                      f"- **改进幅度**: {optimization.get('improvement', 0):.2%}",
-                      f"- **最优结果**: {optimization.get('best_result', 'N/A')}",
+            # 模拟优化必须与真实执行区分开：`_simulate_trial` 是拿方向名的
+            # 哈希当"改进潜力"的假数据，与代码、指标都无关。不标注的话，
+            # "改进幅度 1.80% / 最优结果 0.0908" 会被当成实测结果读。
+            records = optimization.get("optimization_report", []) or []
+            sim_types = {(r.get("detail") or {}).get("type") for r in records}
+            simulated = bool(records) and "real_exec" not in sim_types
+
+            state_text = "⚠️ 已优化（模拟）" if simulated else "✅ 已优化"
+            lines += [f"- **优化状态**: {state_text}",
+                      f"- **基线指标**: {optimization.get('baseline', 'N/A')}"]
+            if simulated:
+                lines += [
+                    "  > ⚠️ **本轮优化未真实执行**：以下「改进幅度 / 最优结果」"
+                    "由方向名哈希模拟得出（`ucb_mock`），**不是**跑出来的实测值，"
+                    "不能作为代码改进效果的依据。",
+                ]
+            lines += [f"- **最优方向**: {optimization.get('best_arm', 'N/A')}",
+                      f"- **改进幅度**: {optimization.get('improvement', 0):.2%}"
+                      + ("（模拟）" if simulated else ""),
+                      f"- **最优结果**: {optimization.get('best_result', 'N/A')}"
+                      + ("（模拟）" if simulated else ""),
                       f"- **预算使用**: {optimization.get('budget_used', 'N/A')} / "
                       f"{optimization.get('budget', 'N/A')} 次尝试",
                       "",
                       "### 尝试记录(UCB 预算调度)",
-                      "| 方向 | 改进幅度 | 判定 |",
-                      "|------|----------|------|"]
-            for r in optimization.get("optimization_report", []) or []:
+                      "| 方向 | 改进幅度 | 依据 | 判定 |",
+                      "|------|----------|------|------|"]
+            for r in records:
                 mark = "✅ Keep" if r.get("kept") else "❌ Reject"
+                rd = r.get("detail") or {}
+                basis = {"real_exec": "真实执行",
+                         "ucb_mock": "⚠️ 哈希模拟"}.get(rd.get("type") or "",
+                                                       rd.get("type") or "未知")
+                # 真实执行时补上"按哪个指标、哪个方向"判的——退回启发式选键
+                # 时方向可能是错的，不写清楚就无从分辨。
+                rb = rd.get("reward_basis") or {}
+                if rb.get("metric_key"):
+                    arrow = "↓" if rb.get("direction") == "越小越好" else "↑"
+                    note = "" if rb.get("metric_source") == "论文声明指标" \
+                        else "，启发式选键"
+                    basis += f" · {rb['metric_key']}{arrow}{note}"
                 lines.append(f"| {r.get('arm')} | {r.get('improvement'):.4f} "
-                             f"| {mark} |")
+                             f"| {basis} | {mark} |")
         lines.append("")
 
         # 7. Prompt-Free 验证闭环

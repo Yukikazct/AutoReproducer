@@ -10,6 +10,7 @@ import re
 from typing import Dict
 from src.base_agent import BaseAgent
 from src.llm.llm_client import LLMClient
+from src.metric_keys import norm_metric_key
 
 # 指标提取模式：键名 -> 输出中的统一指标名
 # 注意 rmse 必须排在 mse 之前，否则 "rmse: 1.2" 会被 mse 分支抢先匹配
@@ -87,17 +88,33 @@ class ResultValidatorAgent(BaseAgent):
 
         actual_metrics = self._extract_metrics(stdout)
 
-        # LLM 比对 + 本地数值校验兜底
+        # LLM 比对 + 本地数值校验兜底。
+        # 判据必须写进 prompt：不写的话模型只能凭感觉判，实测同样的输入
+        # （声明 0.0892 / 实际 0.0869）会在 true/false 之间反复横跳，而它
+        # 与本地规则取交集，一次 false 就把正确结论否决掉。
         prompt = f"""比对论文声明的指标与代码运行结果。
 
 论文声明指标: {json.dumps(paper_metrics, ensure_ascii=False)}
 代码运行输出: {stdout[:2000]}
 提取到的实际指标: {json.dumps(actual_metrics, ensure_ascii=False)}
 
+判定规则（必须严格遵守，不要自行加严或放宽）:
+1. 以"提取到的实际指标"为运行结果的准据。输出里若同时出现论文声明值
+   （例如复现脚本自己打印了一行声明指标做对照），**不得**把它当成运行结果。
+2. 指标名的大小写与分隔符差异不构成不同指标：MSE 与 mse、F1_score 与
+   "F1 Score" 是同一个指标，必须照常比对。
+3. 逐项算相对差异 |实际-声明|/|声明|：
+   - ≤ {_TOLERANCE:.0%} 视为一致（实验存在随机性，这是正常波动）；
+   - > {_TOLERANCE:.0%} 视为不一致；
+   - 声明了但确实没跑出该指标，视为不一致（无法证实），并在 differences 里写明。
+4. match=true 当且仅当所有声明指标都一致。只要有一项超阈值或无对应输出，
+   match 必须为 false。
+5. 分析里给出每个指标的实际相对差异百分比，不要只说"接近"或"有差异"。
+
 返回JSON格式:
 {{
     "match": true/false,
-    "differences": ["指标1: 声明值 vs 实际值"],
+    "differences": ["指标1: 声明值 vs 实际值 (相对差异 X%)"],
     "confidence": 0.0-1.0,
     "analysis": "分析说明"
 }}
@@ -108,17 +125,31 @@ class ResultValidatorAgent(BaseAgent):
             parsed = self._local_compare(paper_metrics, actual_metrics)
 
         # 本地校验：与 LLM 结果取交集（两者都判成功才算成功）
-        local_ok = self._local_compare(paper_metrics, actual_metrics).get("match", False)
-        match = bool(parsed.get("match", False)) and local_ok
+        local = self._local_compare(paper_metrics, actual_metrics)
+        llm_ok = bool(parsed.get("match", False))
+        local_ok = bool(local.get("match", False))
+        match = llm_ok and local_ok
         if paper_metrics and not actual_metrics:
             match = False  # 有声明无实测值 -> 不可判定为复现成功
 
+        confidence = float(parsed.get("confidence", 0.0) or 0.0)
+        differences = list(parsed.get("differences", []) or [])
+        # 两个独立判据结论相反时，如实记下分歧并按"最弱一环"报置信度。
+        # 否则会出现"LLM 说 match=true/置信度 1.0，最终却报未复现且置信度 1.0"
+        # 这种自相矛盾的结论——用户无法分辨到底是"确定没复现"还是"判据打架"。
+        if llm_ok != local_ok:
+            differences.append(
+                f"判据分歧: 模型判定 match={llm_ok}，本地数值比对判定 "
+                f"match={local_ok}；以交集为准（{match}）")
+            confidence = min(confidence, float(local.get("confidence", 0.0) or 0.0))
+
         result = {
-            "validation": {**parsed, "match": match},
+            "validation": {**parsed, "match": match, "differences": differences,
+                           "verdict_sources": {"llm": llm_ok, "local": local_ok}},
             "metrics_comparison": {"paper": paper_metrics, "actual": actual_metrics},
             "is_reproduced": match,
             "status": "reproduced" if match else "not_reproduced",
-            "confidence": round(float(parsed.get("confidence", 0.0)), 4),
+            "confidence": round(confidence, 4),
         }
 
         self.log_experiment(
@@ -154,6 +185,17 @@ class ResultValidatorAgent(BaseAgent):
             return (detail[:200] if detail else "执行未产出任何输出")
         return ""
 
+    @staticmethod
+    def _norm_metric_key(key) -> str:
+        """指标键归一（规则见 `src/metric_keys.py`，与报告展示层同源）。
+
+        实测（真实模式）：论文声明 `{"MSE": 0.0892}`，运行输出打印
+        `MSE: 0.0869`，经 `_extract_metrics` 归一成键 `mse`；而这里原先用
+        `akey == key` 精确比对，`"MSE" != "mse"` 于是判"声明了但没提取到"，
+        把 2.6%（远小于 5% 阈值）的差异**误报成未复现**，理由还写反了。
+        """
+        return norm_metric_key(key)
+
     def _local_compare(self, paper_metrics: Dict, actual_metrics: Dict) -> Dict:
         """本地规则比对：同键指标相对差异 <= 5% 视为匹配。"""
         if not paper_metrics:
@@ -164,6 +206,11 @@ class ResultValidatorAgent(BaseAgent):
             return {"match": False, "differences": ["论文声明指标但运行输出未提取到数值"],
                     "confidence": 0.3, "analysis": "运行输出缺少可解析的数值指标"}
 
+        # 键归一后再比对（大小写/分隔符不敏感）；同归一键取首次出现值
+        norm_actual: Dict[str, object] = {}
+        for akey, aval in actual_metrics.items():
+            norm_actual.setdefault(self._norm_metric_key(akey), aval)
+
         differences, missing = [], []
         match_all = True
         matched = 0
@@ -173,13 +220,12 @@ class ResultValidatorAgent(BaseAgent):
             except (TypeError, ValueError):
                 continue
             actual = None
-            for akey, aval in actual_metrics.items():
-                if akey == key:
-                    try:
-                        actual = float(aval)
-                    except (TypeError, ValueError):
-                        actual = None
-                    break
+            aval = norm_actual.get(self._norm_metric_key(key))
+            if aval is not None:
+                try:
+                    actual = float(aval)
+                except (TypeError, ValueError):
+                    actual = None
             if actual is None:
                 # 声明了但输出里没提取到：如实记为"无法比对"（不再静默跳过）
                 missing.append(

@@ -12,6 +12,7 @@
 
 运行: python -m pytest tests/test_reproduction_core.py -v
 """
+import json
 import sys
 from pathlib import Path
 
@@ -24,7 +25,9 @@ from src.agents.code_executor import (  # noqa: E402
     CodeExecutorAgent, EXIT_NOT_RUNNABLE, MAX_CODE_REGEN,
 )
 from src.agents.paper_reader import PaperReaderAgent  # noqa: E402
-from src.agents.result_validator import ResultValidatorAgent  # noqa: E402
+from src.agents.result_validator import (  # noqa: E402
+    ResultValidatorAgent, _TOLERANCE,
+)
 from src.llm.llm_client import LLMClient  # noqa: E402
 
 
@@ -299,6 +302,23 @@ def _validator():
     return ResultValidatorAgent(LLMClient(mock_mode=True))
 
 
+def _stub_llm(match: bool, confidence: float) -> LLMClient:
+    """固定判定的假 LLM：把"模型侧结论"与"本地数值结论"解耦，便于测分歧。"""
+    class _Stub(LLMClient):
+        def chat(self, prompt, **kw):        # type: ignore[override]
+            return json.dumps({"match": match, "differences": [],
+                               "confidence": confidence, "analysis": "stub"})
+
+    return _Stub(mock_mode=True)
+
+
+def _ran_execution(stdout: str) -> dict:
+    """构造"确实跑起来了"的 execution（结构与 CodeExecutor 输出一致）。"""
+    full = {"stage": "full", "success": True, "stdout": stdout,
+            "stderr": "", "exit_code": 0}
+    return {"success": True, "stages": [full], "final": full}
+
+
 class TestValidatorThreeStates:
 
     def test_not_runnable_reports_cannot_verify(self):
@@ -326,12 +346,7 @@ class TestValidatorThreeStates:
         assert result["status"] == "not_runnable"
         assert "IndentationError" in result["reason"]
 
-    @staticmethod
-    def _ran(stdout: str) -> dict:
-        """构造"确实跑起来了"的 execution（结构与 CodeExecutor 输出一致）。"""
-        full = {"stage": "full", "success": True, "stdout": stdout,
-                "stderr": "", "exit_code": 0}
-        return {"success": True, "stages": [full], "final": full}
+    _ran = staticmethod(_ran_execution)
 
     def test_ran_but_mismatched_is_not_reproduced(self):
         agent = _validator()
@@ -368,3 +383,114 @@ class TestValidatorMetricDetails:
         cmp = _validator()._local_compare(
             {"reproduction_score": 0.85}, {"accuracy": 0.85})
         assert cmp["match"] is False
+
+
+class TestValidatorKeyNormalization:
+    """键名大小写/分隔符差异不得导致误判（真实模式实测）。
+
+    实测：论文声明 `{"MSE": 0.0892}`，脚本打印 `MSE: 0.0869`，提取成键
+    `mse`。原先的精确比对判"未提取到该指标"，把 2.6% 的差异（阈值 5%）
+    误报成未复现，且理由写反。
+    """
+
+    def test_uppercase_declared_key_matches_lowercase_actual(self):
+        agent = _validator()
+        actual = agent._extract_metrics("学到的偏置 b: 0.5012\nMSE: 0.0869\n")
+        assert actual == {"mse": pytest.approx(0.0869)}
+        cmp = agent._local_compare({"MSE": 0.0892}, actual)
+        assert cmp["match"] is True, cmp["differences"]
+        assert not cmp["missing_metrics"]
+        assert "2.6%" in cmp["differences"][0]
+
+    def test_real_e2e_shape_verdict_is_reproduced(self):
+        """端到端复现真实模式那一跑的判定结果。"""
+        stdout = ("数据形状: X=(1000, 2), y=(1000,)\n"
+                  "学到的权重 w: [ 1.50833009 -1.99485473]\n"
+                  "学到的偏置 b: 0.5012\nMSE: 0.0869\n")
+        agent = ResultValidatorAgent(_stub_llm(match=True, confidence=0.9))
+        result = agent.run({"paper_info": {"metrics": {"MSE": 0.0892}},
+                            "execution": _ran_execution(stdout)})
+        assert result["status"] == "reproduced"
+        assert result["is_reproduced"] is True
+        assert result["metrics_comparison"]["actual"]["mse"] == pytest.approx(0.0869)
+        assert result["confidence"] == pytest.approx(0.9)
+
+    @pytest.mark.parametrize("declared", ["f1_score", "F1_score", "f1-score",
+                                          "F1 Score", " f1_score "])
+    def test_separator_and_case_variants_all_match(self, declared):
+        cmp = _validator()._local_compare({declared: 0.80}, {"f1_score": 0.80})
+        assert cmp["match"] is True, cmp["differences"]
+
+    def test_distinct_metrics_are_not_conflated(self):
+        """归一化不得把不同指标混为一谈（rmse 与 mse 必须各自比对）。"""
+        cmp = _validator()._local_compare({"rmse": 0.9, "mse": 0.9},
+                                          {"rmse": 0.9, "mse": 0.1})
+        assert cmp["match"] is False
+        assert any(d.startswith("mse:") for d in cmp["differences"])
+
+
+class TestValidatorVerdictHonesty:
+    """两个判据结论相反时，汇报必须自洽（不能报"未复现 且 置信度 1.0"）。"""
+
+    @staticmethod
+    def _run_with_llm(llm_match: bool, conf: float, stdout: str,
+                      paper_metrics: dict):
+        agent = ResultValidatorAgent(_stub_llm(llm_match, conf))
+        return agent.run({"paper_info": {"metrics": paper_metrics},
+                          "execution": _ran_execution(stdout)})
+
+    def test_disagreement_is_reported_and_confidence_lowered(self):
+        """LLM 说匹配、本地数值说不匹配 -> 以交集为准，且写明分歧。"""
+        result = self._run_with_llm(llm_match=True, conf=1.0,
+                                    stdout="accuracy: 0.42", paper_metrics={"accuracy": 0.85})
+        assert result["is_reproduced"] is False
+        assert result["confidence"] <= 0.4, "分歧时不得沿用模型的高置信度"
+        assert result["validation"]["verdict_sources"] == {"llm": True, "local": False}
+        assert any("判据分歧" in d for d in result["validation"]["differences"])
+
+    def test_agreement_keeps_llm_confidence(self):
+        result = self._run_with_llm(llm_match=True, conf=0.9,
+                                    stdout="Test accuracy: 85.2%",
+                                    paper_metrics={"accuracy": 0.85})
+        assert result["is_reproduced"] is True
+        assert result["confidence"] == pytest.approx(0.9)
+        assert not any("判据分歧" in d for d in result["validation"]["differences"])
+
+
+class TestValidatorPromptCarriesCriteria:
+    """比对准则必须写进 prompt——否则模型凭感觉判，同样的数字会随机横跳。
+
+    实测：声明 0.0892 / 实际 0.0869 固定输入下，模型在 true/false 之间
+    来回变（账本里 12:58 false、13:00 true、13:01 true、13:02 false）；
+    补上判据后重复 5 次稳定判为一致。这里锁住判据不被重新删掉。
+    """
+
+    @staticmethod
+    def _prompt() -> str:
+        captured = {}
+
+        class _Capture(LLMClient):
+            def chat(self, prompt, **kw):        # type: ignore[override]
+                captured["prompt"] = prompt
+                return json.dumps({"match": True, "confidence": 0.5,
+                                   "differences": [], "analysis": ""})
+
+        ResultValidatorAgent(_Capture(mock_mode=True)).run(
+            {"paper_info": {"metrics": {"MSE": 0.0892}},
+             "execution": _ran_execution("MSE: 0.0869\n")})
+        return captured["prompt"]
+
+    def test_tolerance_ratio_is_stated(self):
+        """阈值直接由 _TOLERANCE 插值，改阈值时 prompt 跟着走。"""
+        assert f"{_TOLERANCE:.0%}" in self._prompt()
+
+    def test_states_all_declared_metrics_must_match(self):
+        prompt = self._prompt()
+        assert "所有声明指标都一致" in prompt
+
+    def test_warns_declared_value_in_stdout_is_not_the_result(self):
+        """复现脚本常自己打印一行论文声明值做对照，不得被当成运行结果。"""
+        assert "不得" in self._prompt()
+
+    def test_states_case_insensitive_metric_names(self):
+        assert "大小写" in self._prompt()

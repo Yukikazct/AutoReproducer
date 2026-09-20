@@ -5,6 +5,266 @@
 
 ---
 
+## [2026.09.20-7] - 2026-09-20
+
+### 修复（相对工作区把脚本路径拼成两遍）
+
+接上一条：为了确认真实优化的 trial 为什么全是 `rejected`，读了一次真实
+trial 的 `detail` —— `stdout_tail` 为空、`metric=None`、`reward_basis={}`，
+而 `exit_code` 是 **2**（`NOENT`）。stderr 里是：
+
+```
+python: can't open file 'D:\...\data\_e2e_ws\data\_e2e_ws\run.py':
+[Errno 2] No such file or directory
+```
+
+**根因**：`_execute_code_local` 把脚本以
+`[python, os.path.join(workdir, "run.py")]` 启动，**同时** `cwd=workdir`
+（[code_executor.py:770](AutoReproducer/src/agents/code_executor.py#L770)）。
+`workdir` 是相对路径（`workspace_dir="data/_e2e_ws"` 由调用方传入）时，
+相对路径的脚本参数会被这个 cwd **再解析一次**，于是去找
+`data/_e2e_ws/data/_e2e_ws/run.py`。
+
+这条 bug 与真实优化是**同一处**：只有走真实执行才会传入工作区目录，
+所以它一直被哈希模拟掩盖着——模拟不执行任何代码，自然不暴露。
+
+危险之处在于**表象具有误导性**：`exit_code=2` + 空 stdout 看起来就像
+"生成的代码/补丁跑不起来"，会被误判成代码质量问题（正是用户反复反馈
+的那一类），而实际是执行器自己的路径拼接错。
+
+**改法**：`_execute_code_local` 与 `_execute_code_docker` 在使用外部传入的
+`workdir` 时统一 `os.path.abspath()` 一次（Docker 侧同样是 `-v` 挂载被相对
+路径坑），临时目录分支本就走绝对路径，不受影响。
+
+**验证**：修复前踩坑的工作区（`data/_e2e_ws`，numpy 依赖）现在真实执行
+`success=True, exit_code=0`，stdout 正常产出指标；补齐后的真实优化闭环
+首次跑通——trial 能拿到真实指标与 `reward_basis`。
+
+**测试**：`tests/test_code_executor_deps.py` 新增
+`test_relative_workdir_is_not_double_joined`。用例把工作区建在**仓库内**
+（`tempfile.mkdtemp(dir=os.getcwd())`）——pytest 的 `tmp_path` 落在 C: 盘、
+仓库在 D: 盘，跨盘构不出相对路径，`os.path.relpath` 会直接抛
+`ValueError: path is on mount 'C:', start on mount 'D:'`。用完即删。
+
+---
+
+## [2026.09.20-6] - 2026-09-20
+
+### 修复（模拟优化的数字被当成实测结果展示）
+
+复用样例论文做端到端验证时发现：真实模式下，**优化阶段根本没真跑**，
+但报告把它当实测结果呈现。
+
+```
+## 6. 智能优化
+- **优化状态**: ✅ 已优化
+- **改进幅度**: 1.80%
+- **最优结果**: 0.0908056
+```
+
+**根因**：真实优化执行器只在 `Orchestrator.workspace_dir` 存在时才注入
+（[orchestrator.py:83](AutoReproducer/src/orchestrator.py#L83)），而
+**`app.py` 调用 `run_pipeline_background` 时从不传 `workspace_dir`**
+（[app.py:626](AutoReproducer/app.py#L626)）——于是前端跑起来时
+`workspace_dir` 恒为 `None`，`RealSimulator` 永不注入，优化**永远**走
+哈希模拟 `OptimizerAgent._simulate_trial`。
+
+那个模拟函数是拿**方向名的 md5** 当"改进潜力"（
+[optimizer.py:270](AutoReproducer/src/agents/optimizer.py#L270)）：
+
+```python
+h = int(hashlib.md5(arm.encode("utf-8")).hexdigest()[:8], 16)
+return round((((h % 10000) / 10000.0) - 0.35) * 0.15, 4)
+```
+
+与生成的代码、与指标方向**都无关**。实测那一跑里：
+
+| 方向 | 模拟结果 | 相对基线 0.0892 | 判定 |
+|---|---|---|---|
+| 岭回归/Lasso 替代 OLS | 0.096764（更差） | +8.48% | ✅ Keep |
+| QR/SVD/Cholesky 求解 | 0.090806（更差） | +1.80% | ✅ Keep |
+
+MSE 越小越好，两条都**变差**却都被判为"改进"并 Keep——因为模拟奖励是
+哈希值，压根不知道指标方向。
+
+**改法**（`src/agents/report_generator.py`）：把模拟与实测在报告里分开。
+
+- 优化状态按记录里的 `detail.type` 区分：全为 `ucb_mock` 时显示
+  **`⚠️ 已优化（模拟）`** 并加一条醒目说明——"以下改进幅度/最优结果由
+  方向名哈希模拟得出，不是跑出来的实测值，不能作为代码改进效果的依据"；
+- 「改进幅度」「最优结果」两处数值各带 **`（模拟）`** 后缀；
+- 尝试记录表新增**「依据」**列：`真实执行` / `⚠️ 哈希模拟`；
+- `real_exec` 记录不受影响，仍显示 `✅ 已优化`。
+
+**测试**：`tests/test_optimizer_real.py` 新增
+`TestReportDisclosesSimulatedOptimization` 3 例（模拟须标注、数值须带
+后缀、真实执行不得被误标）。
+
+### 顺带修复（真实优化的奖励方向会悄悄退化）
+
+排查上面那条时发现 `RealSimulator` 里有同一族的键匹配 bug：`bind_paper`
+把论文声明的**原始大小写**键存进 `_metric_key`（
+[real_simulator.py:78](AutoReproducer/src/optimizer/real_simulator.py#L78)，
+`next(iter({"MSE": ...}))` → `"MSE"`），而 `_compute_reward` 拿它去
+`in metrics` 比对，`metrics` 的键是 `_extract_metrics` 提取的小写 `mse`
+→ **永远不匹配** → 静默退回"取与基线绝对值最接近的指标"这条启发式，
+连奖励方向（`_LOWER_IS_BETTER`）都跟着按启发式选中的键来定。
+
+后果是**该 Keep 的被 Reject、该 Reject 的被 Keep**，例如论文声明 `F1`、
+输出同时有 `f1_score: 0.86` 与 `accuracy: 0.84` 时，可能与 `accuracy`
+比、按"越大越好"判。
+
+**改法**：
+
+- `bind_paper` 存归一化键（复用 `src/metric_keys.py`，与判定层同源）；
+- `_compute_reward` 按归一化键匹配，命中即用声明指标；
+- 新增 `_reward_basis()`，把「用了哪个键 / 键从哪来（论文声明 or 启发式）
+  / 方向」写进 trial 的 `detail.reward_basis`；
+- 报告尝试记录表的「依据」列据此补注：`真实执行 · mse↓`，启发式选键时
+  标 `真实执行 · loss↓，启发式选键`。
+
+`_compute_reward` 的返回值由 `(reward, metric)` 改为
+`(reward, metric, basis)`（私有方法，仅一处调用）。
+
+**测试**：`tests/test_optimizer_real.py` 新增 `TestRewardMetricResolution`
+5 例 —— `MSE`/`mse` 须匹配上、MSE 变大必须得负奖励、`Accuracy` 这类
+越大越好的指标方向不变、启发式选键须如实标注、trial detail 须带
+`reward_basis`；另在报告族补 2 例（真实执行须显示指标与方向、启发式
+选键须标注）。
+
+> **未修（需决策）**：`app.py` 不传 `workspace_dir` 意味着**前端永远
+> 不做真实优化**。真正的修法是让 app 为每个会话分配工作区并传入，
+> 但那会让优化阶段真实重跑 `max_trials` 次（每次一次 LLM 调用 + 一次
+> 沙箱执行），显著改变运行时长与成本，且与待排期的「Batch 5 可编辑
+> 代码面板」共用同一套工作区生命周期——单独拿出来做决策更稳妥。
+> 本轮只保证：**要么真跑，要么说清楚没真跑**。
+
+---
+
+## [2026.09.20-5] - 2026-09-20
+
+### 修复（指标键大小写不匹配导致复现结果误判 —— 真实模式实测发现）
+
+第三条由真实模式实测暴露的缺陷。pip 修好后代码第一次真正跑起来，输出：
+
+```
+MSE: 0.0869           <- 实际运行
+论文声明: {'MSE': 0.0892}
+→ status: not_reproduced, is_reproduced: False, confidence: 1.0
+```
+
+打眼一看是"没复现"，但**两者只差 2.6%**，而判定阈值是 5%。
+
+**根因**：`_extract_metrics` 把输出里的指标名一律归一成小写（`MSE` →
+`mse`），而 `paper_metrics` 直接来自论文解析结果、保留原大小写。随后
+`_local_compare` 用 `akey == key` 做**精确字符串比对**，`"MSE" != "mse"`
+于是判定"论文声明了但运行输出未提取到该指标"，`matched == 0` 直接把
+`match_all` 置 False，**veto 掉 LLM 的 match=true**。
+
+比误判本身更糟的是**理由写反了**：报告里写"运行输出未提取到该指标"，
+而实际上值就在 stdout 里、也成功提取到了——只是键名大小写不同。
+
+**改法**：
+
+- 新增 `src/metric_keys.py::norm_metric_key()`：键归一为「小写 + 空白/
+  连字符折叠成下划线」。`MSE`/`mse`/`F1 Score`/`f1-score` 等写法差异
+  不再构成"不同指标"；归一化**不合并真正不同的指标**（`rmse` ≠ `mse`）；
+  归一键冲突时取首次出现值（`setdefault`），保证确定性；
+- 判定层（`_local_compare`）与展示层（`report_generator` 的指标对比表）
+  **共用同一条规则**——此前报告表格也按精确键名配对，会把 `MSE` 与
+  `mse` 排成两行、各缺一半，看起来同样像"没跑出来"；
+- 报告新增「指标差异」小节，把逐项差异（声明 X vs 实际 Y，相对差异 Z%）
+  如实列出。原先只给"成功/失败"结论而不给差异依据，用户无从判断判定
+  是否合理。
+
+**顺带修掉一处自相矛盾的汇报**：`confidence` 原先无条件透传 LLM 的置信度，
+于是"LLM 说 match=true/置信度 1.0、本地数值说不匹配"这种情况会输出
+**「未复现 + 置信度 1.0」**——读起来像"确定没复现"，实际是两个判据打架。
+现在两判据结论相反时：
+
+- 在 `validation.verdict_sources` 如实记下 `{llm, local}` 各自的结论；
+- `differences` 追一条"判据分歧"说明；
+- 置信度按**最弱一环**取 `min(模型置信度, 本地置信度)`。
+
+`_local_compare` 原先在一次 `run()` 里被调用两遍（兜底分支一次、取交集
+一次），现降为一次。
+
+**测试**：`tests/test_reproduction_core.py` 新增两族 10 例 ——
+`TestValidatorKeyNormalization`（大小写/分隔符变体、真实 E2E 那一跑的
+形状、`rmse`/`mse` 不得混同）与 `TestValidatorVerdictHonesty`（分歧须
+上报且降置信度、一致时不改动模型置信度）。
+
+### 修复续（判定标准未写进 prompt，导致 LLM 判定随机横跳）
+
+上一条修完后重跑真实模式：本地数值判 **匹配**（2.6% < 5%），但 LLM 判
+**不匹配**，两者取交集仍报未复现。翻账本发现真正的问题：
+
+| 运行时刻 | 输入（完全相同） | LLM 判定 |
+|---|---|---|
+| 12:58:56 | 声明 0.0892 / 实际 0.0869 | `false` |
+| 13:00:34 | 同上 | `true` |
+| 13:01:16 | 同上 | `true` |
+| 13:02:34 | 同上 | `false` |
+
+**同样的数字，LLM 在 true/false 之间反复横跳。** 根因是比对 prompt
+**只给了输出格式、没给判定标准**——没有阈值、没说键名大小写不算差异、
+没说声明值出现在输出里时不能当运行结果，模型只能凭感觉判。而最终判定
+是「LLM ∧ 本地」的交集，一次随机的 false 就能否决掉正确的结论。
+
+**改法**（`result_validator.py`）：把判据显式写进 prompt，与本地规则同源：
+
+1. 以"提取到的实际指标"为准；输出里若同时出现论文声明值（复现脚本自己
+   打印了一行对照），不得当成运行结果；
+2. 指标名大小写/分隔符差异不构成不同指标；
+3. 逐项算相对差异，`≤ 5%` 视为一致（阈值直接取 `_TOLERANCE` 插值，
+   不写死数字，改阈值时 prompt 跟着走）；`> 5%` 不一致；声明了但确实
+   没跑出来视为不一致；
+4. `match=true` 当且仅当**所有**声明指标都一致；
+5. 分析里必须给出每个指标的相对差异百分比，不许只说"接近"。
+
+**实测验证**：固定输入（声明 0.0892 / 实际 0.0869）重复调真实 API 5 次，
+改 prompt 前是 `false/true/true/false` 横跳，改后 **5/5 稳定判为复现成功**，
+且模型开始显式列出 `相对差异 = |0.0869-0.0892|/0.0892 = 2.6%` 并引用规则条款。
+
+---
+
+## [2026.09.20-4] - 2026-09-20
+
+### 修复（隔离依赖安装被站点级 pip 配置阻断 —— 真实模式实测发现）
+
+第二条由真实模式实测暴露的缺陷。上一个提交修好解码崩溃后，真实流水线
+第一次跑到了「装依赖」这一步，随即失败：
+
+```
+exit_code: -4
+依赖安装失败(exit=1): ERROR: Can not combine '--user' and '--target'
+```
+
+**根因**：本机 Python 安装带了一份 **site 级 `pip.ini`**，里面写死
+`install.user = yes`（`python -m pip config debug` 可见 `site: install.user: yes`）。
+隔离安装用的是 `pip install --target data/deps/<hash>/`，而站点配置又强制
+追加 `--user`，两者互斥，pip 直接报错退出。
+
+影响面比它看起来大：`--user` 是**配置**而非命令行传入，所以这份配置存在时，
+**本机真实模式的依赖安装 100% 失败**，进而所有真实模式的代码执行都跑不起来
+（表现为恒定的 `not_runnable`），且失败被缓存进 `_INSTALLED_DEPS`，
+看起来像"论文依赖有问题"。
+
+**改法**（`src/agents/code_executor.py`）：
+
+- 新增 `_pip_env()`：pip 子进程环境注入 `PIP_USER=0`（环境变量优先级
+  高于配置文件）并钉 `PYTHONIOENCODING=utf-8`；
+- `_ensure_local_deps` / `_heal_install_local` 两处 pip 命令行显式加
+  `--no-user`，与上面的环境变量形成双保险；
+- 两处调用点从"继承 `os.environ`"改为显式传 `env=self._pip_env()`。
+
+两种修法都已在本机实测：`--no-user` → exit=0；`PIP_USER=0` → exit=0。
+
+**测试**：`tests/test_code_executor_deps.py` 新增 3 例 —— 隔离安装命令行
+必须含 `--no-user`、pip 子进程环境必须 `PIP_USER=0`、自愈补装走同一套参数。
+
+---
+
 ## [2026.09.20-3] - 2026-09-20
 
 ### 修复（本地执行输出解码崩溃 —— 真实模式实测发现）

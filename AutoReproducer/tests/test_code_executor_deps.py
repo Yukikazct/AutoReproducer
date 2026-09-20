@@ -10,8 +10,11 @@
 
 运行: python -m pytest tests/test_code_executor_deps.py -v
 """
+import os
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -189,3 +192,106 @@ def test_real_execute_without_dep_install(tmp_path):
     assert result["success"] is True, result["stderr"]
     assert "PY=" in result["stdout"]
     assert result.get("deps_prepared") is True
+
+
+# ---------------- 5. --target 与 user 安装互斥（真实模式实测） ----------------
+
+def test_pip_cmd_opts_out_of_user_install(monkeypatch, tmp_path):
+    """隔离安装必须显式 --no-user，否则站点级 pip.ini 的 install.user=yes
+    会让 pip 追加 --user，与 --target 冲突：
+    `ERROR: Can not combine '--user' and '--target'`（实测本机必现）。"""
+    seen: list = []
+    real_run = subprocess.run
+
+    def fake_run(cmd, **kw):
+        if _is_pip_cmd(cmd):
+            seen.append((cmd, kw))
+            return subprocess.CompletedProcess(cmd, 0, stdout="ok", stderr="")
+        return real_run(cmd, **kw)
+
+    monkeypatch.setattr(ce_mod.subprocess, "run", fake_run)
+    monkeypatch.setattr(ce_mod, "DEPS_CACHE_ROOT", tmp_path / "deps")
+
+    executor = _executor({"requirements_txt": "numpy>=1.26,<3"})
+    wd = tmp_path / "ws"
+    wd.mkdir()
+    executor._execute_code("print('OK')", stage="smoke", workdir=str(wd))
+
+    assert seen, "未调用 pip install"
+    cmd = [str(c) for c in seen[0][0]]
+    assert "--target" in cmd
+    assert "--no-user" in cmd, "缺少 --no-user，站点级 install.user=yes 会致安装失败"
+
+
+def test_pip_env_forces_user_off(monkeypatch, tmp_path):
+    """pip 子进程环境必须带 PIP_USER=0（环境变量优先级高于配置文件），
+    与命令行的 --no-user 形成双保险。"""
+    seen: list = []
+    real_run = subprocess.run
+
+    def fake_run(cmd, **kw):
+        if _is_pip_cmd(cmd):
+            seen.append(kw)
+            return subprocess.CompletedProcess(cmd, 0, stdout="ok", stderr="")
+        return real_run(cmd, **kw)
+
+    monkeypatch.setattr(ce_mod.subprocess, "run", fake_run)
+    monkeypatch.setattr(ce_mod, "DEPS_CACHE_ROOT", tmp_path / "deps")
+
+    executor = _executor({"requirements_txt": "numpy>=1.26,<3"})
+    wd = tmp_path / "ws"
+    wd.mkdir()
+    executor._execute_code("print('OK')", stage="smoke", workdir=str(wd))
+
+    assert seen, "未调用 pip install"
+    env = seen[0].get("env")
+    assert env is not None, "pip 未显式传 env，无法覆盖站点配置"
+    assert env["PIP_USER"] == "0"
+    assert env["PYTHONIOENCODING"] == "utf-8"
+
+
+def test_relative_workdir_is_not_double_joined():
+    """相对 workdir 不得被拼两次（真实优化实测发现）。
+
+    脚本以 `[python, os.path.join(workdir, "run.py")]` 启动、同时 cwd=workdir。
+    workdir 是相对路径时，脚本参数会被 cwd 再解析一次，实际去找
+    `data/_e2e_ws/data/_e2e_ws/run.py`，报 No such file or directory
+    （exit_code=2、stdout 为空）——看起来像"生成的代码跑不起来"。
+
+    实测触发：Optimizer 真实执行传 `workspace_dir="data/_e2e_ws"`。
+    工作区必须建在仓库内（tmp_path 在 C:，与本仓库不同盘，构不出相对路径）。
+    """
+    workdir = tempfile.mkdtemp(prefix="_rel_ws_", dir=os.getcwd())
+    try:
+        rel = os.path.relpath(workdir, os.getcwd())
+        assert not os.path.isabs(rel)     # 前提：确实是相对路径
+
+        result = _executor({})._execute_code("print('REL_WORKDIR_OK')",
+                                             stage="smoke", workdir=rel)
+        assert result["success"] is True, result.get("stderr")
+        assert "REL_WORKDIR_OK" in result["stdout"]
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
+def test_heal_install_opts_out_of_user_install(monkeypatch, tmp_path):
+    """自愈补装走同一套 pip 参数，同样必须 --no-user + PIP_USER=0。"""
+    seen: list = []
+
+    def fake_run(cmd, **kw):
+        if _is_pip_cmd(cmd):
+            seen.append((cmd, kw))
+            return subprocess.CompletedProcess(cmd, 0, stdout="ok", stderr="")
+        raise AssertionError("自愈只应触发 pip")
+
+    monkeypatch.setattr(ce_mod.subprocess, "run", fake_run)
+    monkeypatch.setattr(ce_mod, "DEPS_CACHE_ROOT", tmp_path / "deps")
+
+    executor = _executor({})
+    executor._heal_install_local("requests")
+
+    assert seen, "未调用 pip install"
+    cmd = [str(c) for c in seen[0][0]]
+    assert "--target" in cmd
+    assert "--no-user" in cmd
+    assert seen[0][1].get("env", {}).get("PIP_USER") == "0"

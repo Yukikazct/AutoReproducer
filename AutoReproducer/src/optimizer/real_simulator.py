@@ -23,6 +23,7 @@ from typing import Dict, Optional, Tuple
 
 from src.agents.code_executor import CodeExecutorAgent
 from src.agents.result_validator import ResultValidatorAgent
+from src.metric_keys import norm_metric_key
 from src.safety.patch_policy import PatchPolicy
 from src.safety.workspace_snapshot import restore_snapshot, snapshot_workspace
 
@@ -70,13 +71,19 @@ class RealSimulator:
 
     def bind_paper(self, paper_info: Dict,
                    metric_key: Optional[str] = None) -> None:
-        """绑定论文信息与奖励指标键(Orchestrator 进入优化阶段前调用)。"""
+        """绑定论文信息与奖励指标键(Orchestrator 进入优化阶段前调用)。
+
+        键必须归一后再存：论文声明的是 `MSE`，而 `_extract_metrics` 从运行
+        输出里提取的键是小写 `mse`。不归一的话 `self._metric_key in metrics`
+        永远为假，奖励方向就悄悄退化成"取与基线绝对值最接近的指标"这个
+        启发式——方向可能因此判反（该 Keep 的 Reject、该 Reject 的 Keep）。
+        """
         self._paper_info = dict(paper_info or {})
         if metric_key is None:
             metrics = self._paper_info.get("metrics", {}) or {}
             if metrics:
                 metric_key = str(next(iter(metrics)))
-        self._metric_key = metric_key
+        self._metric_key = norm_metric_key(metric_key) if metric_key else metric_key
 
     # ---------------- 主入口 ----------------
 
@@ -140,6 +147,7 @@ class RealSimulator:
         # 4) 应用补丁并真实重跑
         target.write_text(code, encoding="utf-8")
         stdout, success = "", False
+        result: Dict = {}
         try:
             result = self.executor.execute_in_workspace(
                 code, str(self.workspace), stage="full")
@@ -149,8 +157,9 @@ class RealSimulator:
             detail["exec_error"] = str(e)[:200]
 
         # 5) 真实指标与奖励
-        reward, metric = self._compute_reward(baseline, stdout, success)
+        reward, metric, basis = self._compute_reward(baseline, stdout, success)
         detail["metric"] = metric
+        detail["reward_basis"] = basis
 
         # 6) 安全网：还原工作区(无论成败);Keep 的补丁落盘供导出
         restored, removed = restore_snapshot(self.workspace, snap)
@@ -161,6 +170,11 @@ class RealSimulator:
         detail.update({
             "status": "kept" if reward > 0 else "rejected",
             "stdout_tail": stdout[-200:],
+            # 补丁跑不起来时（stdout 为空、reward=0），失败原因只在 stderr 里。
+            # 不记下来的话 trial 只剩一个"rejected"，无从判断是补丁的问题
+            # 还是环境的问题。
+            "stderr_tail": (result.get("stderr") or "")[-400:],
+            "exit_code": result.get("exit_code"),
         })
         return reward, detail
 
@@ -169,23 +183,43 @@ class RealSimulator:
     def _patch_prompt(self, arm: str, current_code: str) -> str:
         return _PATCH_PROMPT.format(arm=arm, current_code=current_code[:3000])
 
+    @staticmethod
+    def _reward_basis(key: str, matched: bool) -> Dict:
+        """说明这次 reward 是拿哪个指标、按哪个方向算出来的。
+
+        退回"与基线绝对值最接近的指标"这条启发式时，选的指标与方向都可能
+        不对；不写清楚，读报告的人会把一个碰巧的数当成确定结论。
+        """
+        return {"metric_key": key,
+                "metric_source": "论文声明指标" if matched
+                else "启发式(与基线绝对值最接近)",
+                "direction": "越小越好" if key in _LOWER_IS_BETTER
+                else "越大越好"}
+
     def _compute_reward(self, baseline: float, stdout: str,
-                        success: bool) -> Tuple[float, Optional[Dict]]:
+                        success: bool) -> Tuple[float, Optional[Dict], Dict]:
         """从真实运行输出提取指标并计算相对改进率 reward。
 
         方向: loss/mse/rmse 越小越好;其余键越大越好。
         口径: 与 ResultValidator._local_compare 一致——一方小数(0~1)一方
         百分数(>=10)时归一到小数再对比。
+        返回 (reward, metric, basis)；执行失败或输出里没有可用指标（无法比对）
+        时后两项为 None / {}。
         """
         if not success:
-            return 0.0, None
+            return 0.0, None, {}
         metrics = self.validator._extract_metrics(stdout)
         if not metrics:
-            return 0.0, None
+            return 0.0, None, {}
 
-        key = self._metric_key if self._metric_key in metrics else None
+        # 按归一化键匹配：声明 `MSE`、输出 `mse` 是同一个指标（与判定层同源）
+        norm_metrics = {norm_metric_key(k): k for k in metrics}
+        key = norm_metrics.get(norm_metric_key(self._metric_key)) \
+            if self._metric_key else None
+        matched = key is not None
         if key is None:     # 退而求其次:取与基线绝对值最接近的指标
             key = min(metrics, key=lambda k: abs(float(metrics[k]) - baseline))
+
         new = float(metrics[key])
 
         b, n = float(baseline), new
@@ -197,7 +231,7 @@ class RealSimulator:
         direction = -1.0 if key in _LOWER_IS_BETTER else 1.0
         denom = abs(b) if abs(b) > 1e-9 else 1e-9
         reward = round((n - b) / denom * direction, 4)
-        return reward, {key: round(n, 6)}
+        return reward, {key: round(n, 6)}, self._reward_basis(key, matched)
 
     def _persist_patch(self, arm: str, code: str,
                        metric: Optional[Dict]) -> Path:
