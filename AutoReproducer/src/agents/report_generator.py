@@ -130,12 +130,29 @@ class ReportGeneratorAgent(BaseAgent):
                          f"（预期行为，未触碰代码）")
         stages = execution.get("stages", []) or []
         final = execution.get("final", {}) or {}
+        best_effort = bool(execution.get("best_effort"))
         if execution.get("not_runnable"):
+            # 只剩两道真门（语法错误 / 危险调用）会走到这里
             lines.append("- **执行状态**: ⚠️ 未运行（代码未通过执行前检查）")
             lines.append(f"- **未运行原因**: {execution.get('reason', 'N/A')}")
         else:
-            lines.append(f"- **执行状态**: "
-                         f"{'✅ 成功' if final.get('success') else '❌ 失败'}")
+            state = "✅ 成功" if final.get("success") else "❌ 失败"
+            if best_effort:
+                state += "（尽力而为：论文信息不足）"
+            lines.append(f"- **执行状态**: {state}")
+        if best_effort:
+            # 信息不足也必须跑——但跑出来的东西不能被读成论文结论。这两句是
+            # 报告里唯一防止"占位数字被当成复现结果"的拦网，措辞不能省。
+            lines += [
+                "- **⚠️ 信息不足**: "
+                + _txt(execution.get("best_effort_reason"), "论文信息不足"),
+                "- **生成方式**: "
+                + ("系统本地兜底脚本（模型未给出可用代码）"
+                   if execution.get("fallback_used")
+                   else "模型按占位约定生成的最小可运行脚本"),
+            ]
+            for a in execution.get("assumptions") or []:
+                lines.append(f"  - 假设: {a}")
         for st in stages:
             st_ok = st.get("success")
             lines.append(
@@ -151,9 +168,15 @@ class ReportGeneratorAgent(BaseAgent):
         lines.append("")
 
         # 5. 验证结果 + 指标对比
-        # 三态：复现成功 / 复现失败 / 无法验证（代码没跑起来，不能算复现失败）
+        # 四态：复现成功 / 复现失败 / 无法验证（代码没跑起来，不能算复现失败）/
+        # 无法核对（跑了，但论文信息不足、代码是占位实现——既不判成功也不判失败）
         if validation.get("status") == "not_runnable":
             state_text = "⚠️ 无法验证（代码未运行）"
+        elif validation.get("status") == "best_effort":
+            # 必须排在 is_reproduced 之前：best_effort 的 is_reproduced 是 None，
+            # 落到下面会被判成 ❌ 失败——那等于把"我们没拿到论文信息"说成
+            # "论文复现失败"。
+            state_text = "⚠️ 无法核对（论文信息不足，代码为占位实现，非论文结论）"
         elif validation.get("is_reproduced"):
             state_text = "✅ 成功"
         else:
@@ -163,6 +186,12 @@ class ReportGeneratorAgent(BaseAgent):
                   f"- **置信度**: {_fmt(validation.get('confidence', 0.0))}",
                   f"- **分析**: "
                   f"{(validation.get('validation') or {}).get('analysis', '无')}"]
+        # 判定原因与上面的"分析"往往是同一句话（analysis 由 reason 拼成），
+        # 重复印一遍只是噪音——已包含在分析里就不再单列。
+        reason = _txt(validation.get("reason")).strip()
+        if reason and reason not in _txt(
+                (validation.get("validation") or {}).get("analysis")):
+            lines.append(f"- **判定原因**: {reason}")
         inner = validation.get("validation") or {}
         # 逐项数值差异（"声明 X vs 实际 Y，相对差异 Z%"）——判定结论的依据，
         # 只给"成功/失败"而不给差异，用户无法判断判定是否合理。

@@ -17,8 +17,10 @@
 - 执行前语法门：清洗后的代码必须能 compile，不通过则针对"截断/语法
   错误"再生成（限次），仍不可编译则诚实短路为"未运行"，绝不把残码
   送进沙箱——避免把"代码被截断"掩盖成沙箱里的 IndentationError；
-- 信息不足时不生成针对性代码，短路为"无法运行"，交由 ResultValidator
-  判定为"无法验证"而非"复现失败"。
+- 信息不足时**不再预先拒绝**：改成尽力而为生成一份最小可运行脚本并照常
+  进沙箱（模型两次都不给代码时落本地兜底脚本 `_BEST_EFFORT_SCRIPT`），
+  结果带 `best_effort` 标注一路传到报告，由 ResultValidator 判为"无法核对"
+  而非"复现成功/失败"——既不交白卷，也不让占位结果冒充论文结论。
 """
 import ast
 import os
@@ -177,9 +179,15 @@ MAX_CODE_REGEN = 2
 # 从头重写，若截断源于撞 max_tokens 上限，重写只会再撞一次；续写是把已写
 # 部分的尾部交给模型接着写完，总长度 = 各段之和，才能真正突破单次上限。
 MAX_CODE_CONTINUE = 3
+# 模型"拒答"（只回占位标记/空输出）时的定向重试上限。比续写(3)/重生成(2)
+# 更严：那两条针对"写得不够"，这条针对"没写"——同一条 prompt 重放只会再撞
+# 一次，值得的只有换指令问一次。
+MAX_MARK_RETRY = 1
 # 续写 prompt 里回灌的"已写内容"末尾行数（够模型接上下文即可，不必全给）
 _CONTINUE_TAIL_LINES = 40
-# 信息不足时 LLM 应按约定返回的标记行（整份"代码"只有这一行注释）
+# 模型仍可能回的占位标记（整份"代码"只有这一行注释）。命中即走
+# `_recover_from_placeholder`：定向重试 MAX_MARK_RETRY 次，仍拿不到代码就
+# 落本地兜底脚本 `_BEST_EFFORT_SCRIPT`——绝不让"模型拒答"变成"没代码可跑"。
 _INSUFFICIENT_INFO_MARK = "# INSUFFICIENT_INFO"
 # 语法错误信息中提示"输出被截断"的特征词
 _TRUNCATION_HINTS = (
@@ -196,7 +204,8 @@ _DANGLING_TAIL_CHARS = "=*+-([{,|\\"
 # 判定"未知/占位"论文信息用的空值模式（与 PaperReader._UNKNOWN_RE 判据一致）
 _UNKNOWN_RE = re.compile(
     r"^\s*(|未知.*|未找到|无|n/?a|none|null)\s*$", re.IGNORECASE)
-# Exit code：代码在进入沙箱前就被拦下（信息不足/语法错误）
+# Exit code：代码在进入沙箱前就被拦下（仅剩两道真门：语法错误 / 危险调用。
+# 论文信息不足已不再是拦截理由——见模块 docstring 与 best_effort 标注）
 EXIT_NOT_RUNNABLE = -5
 # Exit code：本地执行被危险代码静态门拦下（命令执行/动态执行/网络/递归删除）
 EXIT_DANGER_BLOCKED = -6
@@ -225,6 +234,60 @@ _DANGEROUS_PATTERNS = (
     (re.compile(r"\baiohttp\b"), "aiohttp 网络外联"),
     (re.compile(r"\bshutil\.rmtree\b"), "shutil.rmtree 递归删除"),
 )
+
+# 论文信息不足时的结果说明（报告与日志共用同一句话，避免两处措辞漂移）
+_BEST_EFFORT_REASON = (
+    "论文未提供可用的方法/数据集/声明指标；本轮代码为尽力而为的占位实现，"
+    "其输出不是论文结论")
+
+# 信息不足且模型两次都不给代码时使用的**本地兜底脚本**：保证"一定有代码、
+# 一定能执行、一定有输出"。三条硬约束（每条都有测试兜）：
+# 1. 纯标准库、确定性，且不含 `_DANGEROUS_PATTERNS` 的任何词——那是全文正则，
+#    连注释里出现 subprocess/eval/socket 之类都会让本地执行被拒；
+# 2. 打印内容避开 `_METRIC_PATTERNS` 的键名，且没有任何 `键 = 数值` 形式的行：
+#    占位数字一旦被下游 `_extract_metrics` 抓成"实测指标"，就会喂出假的复现
+#    结论（这也是本脚本刻意不打印 metrics 的原因）；
+# 3. `_structurally_complete` 为真（末尾有顶层调用），否则会被当成"没写完"
+#    再触发一轮续写。
+_BEST_EFFORT_SCRIPT = '''# 占位复现脚本（论文信息不足时由系统自动生成）
+# 说明: 论文未提供可用的方法/数据集/声明指标，本脚本只演示一条最小可运行
+# 流程；其输出不是论文结论，不能用于评价论文的可复现性。
+# 假设: 自变量在 [-1, 1] 上均匀取值
+# 假设: 真实关系为 y = 2x + 1（合成数据，非论文数据）
+# 假设: 以最小二乘解析解代替论文未给出的方法
+import math
+
+
+def build_data(n=101):
+    xs = [(-1.0 + 2.0 * i / (n - 1)) for i in range(n)]
+    return xs, [2.0 * x + 1.0 for x in xs]
+
+
+def fit(xs, ys):
+    n = len(xs)
+    mx = sum(xs) / n
+    my = sum(ys) / n
+    num = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
+    den = sum((x - mx) ** 2 for x in xs) or 1e-12
+    return num / den, my - (num / den) * mx
+
+
+def main():
+    xs, ys = build_data()
+    slope, intercept = fit(xs, ys)
+    resid = [y - (slope * x + intercept) for x, y in zip(xs, ys)]
+    rms = math.sqrt(sum(r * r for r in resid) / len(resid))
+    print("------------------------------------------")
+    print("占位复现脚本: 论文信息不足, 以下输出不是论文结论")
+    print("------------------------------------------")
+    print("合成样本数:", len(xs))
+    print("拟合斜率:", round(slope, 4), "拟合截距:", round(intercept, 4))
+    print("拟合残差平方根均值:", round(rms, 4))
+    print("论文未声明指标, 本脚本不产出可与论文比对的数值")
+
+
+main()
+'''
 
 # markdown 代码块围栏（可能带 python 语言标注）
 _CODE_FENCE = re.compile(r"```(?:python|py)?\s*\n(.*?)```", re.DOTALL)
@@ -288,18 +351,34 @@ class CodeExecutorAgent(BaseAgent):
         env_config = input_data.get("env_config", {}) or {}
         code = input_data.get("code", "") or ""
         self.env_config = env_config  # 供执行阶段选择镜像/依赖
+        # "尽力而为"标注位：外部代码路径没有生成这一步，保持默认值
+        insufficient, fallback_used = False, False
 
         if code:
             # 外部提供的真实复现代码：只做清洗，不走生成/再生成
             code, sanitize_stats = self._sanitize_code_ex(code)
             self._record_sanitize("外部代码清洗", code, sanitize_stats)
         else:
-            # 信息不足时不生成针对性代码，诚实短路（下游判"无法验证"）
-            if self._info_insufficient(paper_info):
-                return self._not_runnable(
-                    "论文信息不足（缺少方法/数据集/指标），无法生成"
-                    "针对性复现代码；请提供完整 PDF 或更完整的摘要", code="")
-            code, sanitize_stats = self._produce_code(paper_info)
+            # 论文信息不足**不再预先拒绝**：降级为"尽力而为"标注，照样生成、
+            # 照样进沙箱。用户实测过一次「代码长度 0 字符 + 未运行」的空报告，
+            # 那条路是"论文信息不足就交白卷"；现在改成：跑出来的东西带
+            # best_effort 标注一路传到报告，不参与复现判定——既不交白卷，
+            # 也不让占位结果被读成论文结论。
+            insufficient = self._info_insufficient(paper_info)
+            if insufficient:
+                self.log("generate_code", "WARNING",
+                         "论文信息不足（缺少方法/数据集/声明指标）——改为尽力"
+                         "而为生成最小可运行脚本，其结果不得当作论文结论")
+            code, sanitize_stats, fallback_used = self._produce_code(
+                paper_info, insufficient=insufficient)
+
+        # 带进报告与验证层的"尽力而为"标注（外部代码路径全部为默认值）
+        best_effort_fields = {
+            "best_effort": insufficient,
+            "best_effort_reason": _BEST_EFFORT_REASON if insufficient else "",
+            "fallback_used": fallback_used,
+            "assumptions": self._extract_assumptions(code),
+        }
 
         # 语法门：不可编译的代码绝不进沙箱——残码在沙箱里会被报成
         # IndentationError 之类，掩盖"输出被截断"这个真实原因。
@@ -307,7 +386,7 @@ class CodeExecutorAgent(BaseAgent):
         if syntax_error:
             return self._not_runnable(
                 f"代码存在语法错误，未执行: {syntax_error}", code=code,
-                sanitize_stats=sanitize_stats)
+                sanitize_stats=sanitize_stats, extra=best_effort_fields)
 
         # 危险代码静态门：本地执行无沙箱，拒绝明显危险的调用（命令执行/
         # 动态执行/网络外联/递归删除）。Docker 已是隔离沙箱，不必拦。
@@ -316,14 +395,15 @@ class CodeExecutorAgent(BaseAgent):
             if danger:
                 return self._not_runnable(
                     f"代码含危险调用，已拒绝执行: {danger}", code=code,
-                    sanitize_stats=sanitize_stats)
+                    sanitize_stats=sanitize_stats, extra=best_effort_fields)
 
         smoke = self._execute_code(code, stage="smoke")
         if not smoke["success"]:
             # smoke 失败：不浪费预算跑 full，返回诊断信息
             result = {"stages": [{"stage": "smoke", **smoke}],
                       "success": False, "final": smoke,
-                      "code": code, "sanitize_stats": sanitize_stats}
+                      "code": code, "sanitize_stats": sanitize_stats,
+                      **best_effort_fields}
             self.log_experiment(
                 "EXECUTE_CODE", "smoke test 失败,终止 full run",
                 inputs={"code": code}, outputs=smoke,
@@ -337,7 +417,8 @@ class CodeExecutorAgent(BaseAgent):
         stages = [{"stage": "smoke", **smoke}, {"stage": "full", **full}]
         result = {"stages": stages, "success": full["success"],
                   "final": full, "code": code,
-                  "sanitize_stats": sanitize_stats}
+                  "sanitize_stats": sanitize_stats,
+                  **best_effort_fields}
 
         self.log_experiment(
             "EXECUTE_CODE", "完成 smoke + full 两阶段执行",
@@ -357,7 +438,8 @@ class CodeExecutorAgent(BaseAgent):
 
     # ---------------- 代码生成 ----------------
 
-    def _produce_code(self, paper_info: Dict) -> tuple:
+    def _produce_code(self, paper_info: Dict,
+                      insufficient: bool = False) -> tuple:
         """生成复现代码：截断则**续写拼接**，仍不完整才从头再生成。
 
         修复「代码生成不完整」的主路径：单次调用的输出上限（默认 8192）
@@ -365,27 +447,44 @@ class CodeExecutorAgent(BaseAgent):
         续写"把总长度累加上去（最多 MAX_CODE_CONTINUE 轮），每轮都过语法门。
         续写仍不完整时，才回落到"从头再生成"作为最后手段。
 
-        返回 `(代码, 清洗统计)`；代码仍可能是不可编译的——由调用方 run()
-        的语法门统一判定并短路为"未运行"，此处不负责掩盖失败。
+        另一条路是模型"拒答"（只回占位标记或空输出）：定向重试
+        MAX_MARK_RETRY 次，仍拿不到代码就落本地兜底脚本，保证"一定有代码可跑"
+        ——见 `_recover_from_placeholder`。
+
+        `insufficient=True` 时 prompt 会要求"信息不足也必须给出最小可运行
+        脚本"（见 `_generate_code_prompt`）。
+
+        返回 `(代码, 清洗统计, 是否用了本地兜底脚本)`；代码仍可能是不可编译
+        的——由调用方 run() 的语法门统一判定并短路为"未运行"，此处不负责
+        掩盖失败。
         """
-        code, stats = self._sanitize_code_ex(self._generate_code(paper_info))
+        code, stats = self._sanitize_code_ex(
+            self._generate_code(paper_info, insufficient))
         self._record_sanitize("初次生成", code, stats)
+
+        fallback_used = False
+        if self._is_placeholder_code(code):
+            code, stats, fallback_used = self._recover_from_placeholder(
+                paper_info, insufficient, stats)
+            if fallback_used:
+                return code, stats, True   # 兜底脚本本身完整，无需再续写
 
         # ---- 阶段 1：续写拼接（针对"输出被截断"/代码被洗残） ----
         prev_err = self._syntax_error(code)
         for round_no in range(1, MAX_CODE_CONTINUE + 1):
             if not self._needs_continuation(code, stats):
-                return code, stats
+                return code, stats, fallback_used
             finish = getattr(self.llm, "last_finish_reason", "")
             self.log("generate_code", "WARNING",
                      f"生成代码疑似未写完，触发续写（第 {round_no} 轮）: "
                      f"{prev_err or self._incomplete_reason(code, stats)}"
                      + (f" [finish_reason={finish}]" if finish else ""))
-            raw = self._continue_code(paper_info, code)
+            raw = self._continue_code(paper_info, code, insufficient)
             more, stats = self._sanitize_code_ex(raw)
             self._record_sanitize(f"续写第 {round_no} 轮", more, stats)
-            if not more.strip():
-                break           # 模型没给新内容，别再空转（保留已有 code）
+            if not more.strip() or self._is_placeholder_code(more):
+                # 没给新内容（或只回了占位标记），别再空转（保留已有 code）
+                break
             if more.strip() in code:
                 # 续写返回的内容已原样存在于现有代码里 = 模型在复述而非续写。
                 # 继续追问只会把重复内容越拼越长，还白烧 LLM 预算。
@@ -401,13 +500,13 @@ class CodeExecutorAgent(BaseAgent):
                 break
             code, prev_err = new_code, new_err
         if not self._needs_continuation(code, stats):
-            return code, stats
+            return code, stats, fallback_used
 
         # ---- 阶段 2：续写仍不完整 -> 从头再生成（最后手段） ----
         for attempt in range(1, MAX_CODE_REGEN + 1):
             err = self._syntax_error(code)
             if err is None and not self._needs_continuation(code, stats):
-                return code, stats
+                return code, stats, fallback_used
             reason = ("疑似输出被截断" if err and self._looks_truncated(code, err)
                       else (err or self._incomplete_reason(code, stats)))
             finish = getattr(self.llm, "last_finish_reason", "")
@@ -415,10 +514,18 @@ class CodeExecutorAgent(BaseAgent):
                      f"续写后仍不完整（{reason}，重生成第 {attempt} 次）"
                      + (f" [finish_reason={finish}]" if finish else ""))
             new_code, stats = self._sanitize_code_ex(
-                self._regenerate_code(paper_info, err or reason, attempt))
+                self._regenerate_code(paper_info, err or reason, attempt,
+                                      insufficient))
             self._record_sanitize(f"重生成第 {attempt} 次", new_code, stats)
+            if self._is_placeholder_code(new_code):
+                # 重生成直接拒答：换指令定向重试，仍不成则落兜底脚本收工
+                code, stats, fallback_used = self._recover_from_placeholder(
+                    paper_info, insufficient, stats)
+                if fallback_used:
+                    return code, stats, True
+                continue
             code = new_code
-        return code, stats
+        return code, stats, fallback_used
 
     def _needs_continuation(self, code: str, stats: Optional[Dict] = None) -> bool:
         """判断代码是否"还没写完"，应该续写而不是从头重写。
@@ -452,7 +559,8 @@ class CodeExecutorAgent(BaseAgent):
             return f"清洗丢弃了 {dropped} 行疑似代码行"
         return "结构不完整（无顶层执行语句）"
 
-    def _continue_code(self, paper_info: Dict, partial: str) -> str:
+    def _continue_code(self, paper_info: Dict, partial: str,
+                       insufficient: bool = False) -> str:
         """续写：把已写部分的尾部交给模型，让它从断点接着写完。
 
         与 `_regenerate_code` 的关键区别：不重复整份需求、不从头重写，
@@ -478,6 +586,10 @@ class CodeExecutorAgent(BaseAgent):
    任何解释说明、不要输出 markdown 围栏；
 3. 每一行都必须是合法 Python 代码，缩进与前文保持一致；
 4. 一直写到脚本真正结束为止：训练与评估完成，并打印出上面列出的指标。
+"""
+        if insufficient:
+            prompt += """5. 论文信息不足也要给出可运行代码：不得回占位标记、不得
+   留空；未给出的量用合成数据与默认值，并以 `# 假设: <内容>` 注释写明。
 """
         return self.llm.chat(prompt, task="code_executor")
 
@@ -574,7 +686,13 @@ class CodeExecutorAgent(BaseAgent):
                      f"{stage}：剥离了 {prose} 行叙述文字（预期行为）",
                      {"prose_dropped": prose, "stage": stage})
 
-    def _generate_code_prompt(self, paper_info: Dict) -> str:
+    def _generate_code_prompt(self, paper_info: Dict,
+                              insufficient: bool = False) -> str:
+        """生成 prompt；`insufficient=True` 时第 5 条换成"必须交出最小脚本"。
+
+        信息充足（默认）时输出与历史版本逐字一致——`TestPrompts` 锁死了其中
+        的「完整」「围栏」「字符串字面量」与四段流程等串。
+        """
         return f"""根据论文信息生成一份**完整**的复现脚本。
 论文方法: {paper_info.get('method', '未知')}
 指标: {paper_info.get('metrics', {})}
@@ -594,24 +712,115 @@ class CodeExecutorAgent(BaseAgent):
    围栏外的叙述段落；
 4. 若内容较长一次写不完，请在**一个完整语句的边界**停下（不要停在半个
    表达式中间），我会让你继续写完剩余部分；
-5. 若上面的论文方法/数据集确实是未知的占位值，无法据此写出针对性代码，
-   则只输出一行 `{_INSUFFICIENT_INFO_MARK}` 并停止，严禁用无关数据集
-   (如 CIFAR-10/IMDB)编造一个与本论文无关的模型来充数。
+5. {self._rule5(insufficient)}
 """
 
-    def _generate_code(self, paper_info: Dict) -> str:
-        return self.llm.chat(self._generate_code_prompt(paper_info),
-                             task="code_executor")
+    @staticmethod
+    def _rule5(insufficient: bool) -> str:
+        """输出格式第 5 条，按信息是否充足分两种口径。
 
-    def _regenerate_code(self, paper_info: Dict, err: str, attempt: int) -> str:
+        信息不足时**不再提供"交白卷"的出口**：旧文案让模型"只输出一行占位
+        标记并停止"，而那行标记当年没有任何代码识别它——结果是空烧预算、再把
+        空脚本送进执行。禁令仍在，但宾语从"生成代码"改成"冒充结论"：可以写
+        通用实现、可以用合成数据，但不许把无关数据集或编造的数值写成论文声明值。
+        """
+        if not insufficient:
+            return ("若上面的论文方法/数据集确实是未知的占位值，无法据此写出"
+                    "针对性代码，则只输出一行 "
+                    f"`{_INSUFFICIENT_INFO_MARK}` 并停止，严禁用无关数据集"
+                    "(如 CIFAR-10/IMDB)编造一个与本论文无关的模型来充数。")
+        return """上面的论文方法/数据集/指标**缺失或为未知占位值**。即便如此也**必须**
+   交出一份能直接运行的最小复现脚本——不允许以"信息不足"为由拒答、
+   不允许只输出一行占位标记、不允许留空：
+   - 用**纯标准库或最基础的依赖**实现一条最小但完整可跑的流程
+     （数据构造 → 模型与方法定义 → 训练/拟合 → 评估 → 打印结果）；
+   - 论文未给出的量（数据集、超参数、指标数值）一律用**合成数据与默认值**，
+     并在代码里以 `# 假设: <内容>` 注释逐条写明来源；
+   - 脚本开头必须打印一行明确声明：本脚本是信息不足下的占位实现，其输出
+     **不是**论文结论、不能用于评价论文的可复现性；
+   - 仍然**严禁**把 CIFAR-10/IMDB 这类与论文无关的数据集、或凭空编造的
+     数值，写成"论文声明值"来冒充论文结论。"""
+
+    def _generate_code(self, paper_info: Dict,
+                       insufficient: bool = False) -> str:
+        return self.llm.chat(
+            self._generate_code_prompt(paper_info, insufficient),
+            task="code_executor")
+
+    def _regenerate_code(self, paper_info: Dict, err: str, attempt: int,
+                         insufficient: bool = False) -> str:
         """再生成：把上一次的失败原因回灌给 LLM，要求输出完整脚本。"""
-        prompt = self._generate_code_prompt(paper_info) + f"""
+        prompt = self._generate_code_prompt(paper_info, insufficient) + f"""
 【上一次输出不可用 - 第 {attempt} 次重试】
 上一次生成的代码无法通过编译，原因: {err}
 这通常意味着输出被截断了。请重新输出一份**完整**的 Python 脚本：
 每个函数体/循环体都要有正确的缩进，最后一行必须是完整语句。
 """
         return self.llm.chat(prompt, task="code_executor")
+
+    # ---------------- "拒答"的处置 ----------------
+
+    @staticmethod
+    def _is_placeholder_code(code: str) -> bool:
+        """模型是否"根本没给代码"：去掉空行与 `#` 注释后没有任何内容。
+
+        覆盖两种拒答：只回一行 `_INSUFFICIENT_INFO_MARK`，或返回空。
+        刻意不看 `_structurally_complete`——那只说明"只有 def/import、还没
+        写完"，属于要续写的场景，与"拒答"不是一回事。
+        """
+        body = [ln for ln in (code or "").splitlines()
+                if ln.strip() and not ln.strip().startswith("#")]
+        return not body
+
+    def _recover_from_placeholder(self, paper_info: Dict, insufficient: bool,
+                                  stats: Dict) -> tuple:
+        """模型"拒答"时的处置：定向重试 → 仍拒答则落本地兜底脚本。
+
+        为什么不直接同 prompt 重放：`_regenerate_code` 那条路已经证明重复同
+        一条指令只会再撞一次；这里换的是**指令本身**（"上一次只回复了占位
+        标记，必须给出可运行脚本"），且只问 MAX_MARK_RETRY 次。兜底脚本保证
+        "一定有代码、一定能执行、一定有输出"——这正是用户要的
+        「一定要尝试生成代码并允许」的底线。
+
+        返回 `(代码, 清洗统计, 是否用了兜底脚本)`。
+        """
+        self.log("generate_code", "WARNING",
+                 "模型未给出代码（占位标记/空输出），发起定向重试"
+                 f"（上限 {MAX_MARK_RETRY} 次）",
+                 {"mark": _INSUFFICIENT_INFO_MARK})
+        for _ in range(MAX_MARK_RETRY):
+            raw = self.llm.chat(self._mark_retry_prompt(paper_info,
+                                                        insufficient),
+                                task="code_executor")
+            code, stats = self._sanitize_code_ex(raw)
+            self._record_sanitize("定向重试", code, stats)
+            if not self._is_placeholder_code(code):
+                return code, stats, False
+        self.log("generate_code", "WARNING",
+                 "定向重试仍未拿到代码，回落到本地兜底脚本"
+                 f"（{len(_BEST_EFFORT_SCRIPT.splitlines())} 行）")
+        return _BEST_EFFORT_SCRIPT, stats, True
+
+    def _mark_retry_prompt(self, paper_info: Dict,
+                           insufficient: bool) -> str:
+        """定向重试 prompt：说明上一次只回了占位标记，明确要求可运行脚本。
+
+        末尾那句是**覆盖式**的：即便上面第 5 条按信息充足的口径写了"无法写出
+        针对性代码就回占位标记"，这里也要求必须给出脚本——否则两次拒答直接
+        落到兜底脚本，用户就看不到任何"尝试生成"的结果。
+        """
+        return (self._generate_code_prompt(paper_info, insufficient) + f"""
+【上一次只回复了占位标记】
+上一次的输出是 `{_INSUFFICIENT_INFO_MARK}`，没有给出任何可运行的代码。
+现在**必须**交出一份能直接运行的最小 Python 脚本（哪怕只是通用实现、用合成
+数据、加 `# 假设:` 注释说明），不要再回占位标记、不要留空、不要解释。
+""")
+
+    @staticmethod
+    def _extract_assumptions(code: str) -> List[str]:
+        """收集脚本自述的假设（`# 假设: ...`），供报告如实展示生成依据。"""
+        return [m.strip() for m in re.findall(
+            r"^\s*#\s*假设\s*[:：]\s*(.+?)\s*$", code or "", re.MULTILINE)][:10]
 
     def _sanitize_code(self, raw: str) -> str:
         """将 LLM 原始输出清洗为可执行的纯净 Python 代码（兼容旧签名）。"""
@@ -781,8 +990,9 @@ class CodeExecutorAgent(BaseAgent):
                     and not metrics)
 
     def _not_runnable(self, reason: str, code: str,
-                      sanitize_stats: Optional[Dict] = None) -> dict:
-        """代码未进入执行阶段（信息不足/语法错误）时的统一返回。
+                      sanitize_stats: Optional[Dict] = None,
+                      extra: Optional[Dict] = None) -> dict:
+        """代码未进入执行阶段（语法错误/危险调用）时的统一返回。
 
         与"跑了但失败"区分：exit_code=EXIT_NOT_RUNNABLE 且带 not_runnable
         标记，供 ResultValidator 判为"无法验证"而非"复现失败"。
@@ -799,6 +1009,7 @@ class CodeExecutorAgent(BaseAgent):
                 "code": code, "not_runnable": True, "reason": reason,
                 "sanitize_stats": sanitize_stats or
                 {"prose_dropped": 0, "code_dropped": 0},
+                **(extra or {}),
                 "llm_calls": self._delta_llm_calls()}
 
     # ---------------- 执行 ----------------

@@ -34,6 +34,17 @@ def orch(tmp_path):
 
 # ---------------- 1. paper_id 生成 ----------------
 
+def test_optimization_skip_reason_distinguishes_best_effort(orch):
+    """信息不足的占位代码不能当优化基线，理由要说清楚（别混进"复现未成功"）。"""
+    orch.data["validation"] = {"status": "best_effort"}
+    reason = orch._optimization_skip_reason()
+    assert "信息不足" in reason
+    orch.data["validation"] = {"status": "not_runnable", "reason": "语法错误"}
+    assert "未能运行" in orch._optimization_skip_reason()
+    orch.data["validation"] = {"status": "not_reproduced"}
+    assert orch._optimization_skip_reason() == "复现未成功,跳过优化"
+
+
 def test_paper_id_from_corpus_key(orch):
     result = orch.run({"paper_title": "ResNet: Deep Residual Learning",
                        "corpus_paper": "corpus_resnet50"})

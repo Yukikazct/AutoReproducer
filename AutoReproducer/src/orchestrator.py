@@ -246,10 +246,12 @@ class Orchestrator:
             self.data["validation"] = result
 
     def _optimization_skip_reason(self) -> str:
-        """优化未触发的原因（区分"复现失败"与"压根没跑起来"）。"""
+        """优化未触发的原因（区分"复现失败"/"压根没跑起来"/"跑了但信息不足"）。"""
         validation = self.data.get("validation", {}) or {}
         if validation.get("status") == "not_runnable":
             return f"代码未能运行，无法优化（{validation.get('reason', '未运行')}）"
+        if validation.get("status") == "best_effort":
+            return "代码为尽力而为的占位实现（论文信息不足），无法作为优化基线"
         return "复现未成功,跳过优化"
 
     # ---------------- 三层存储：懒加载与 manifest ----------------

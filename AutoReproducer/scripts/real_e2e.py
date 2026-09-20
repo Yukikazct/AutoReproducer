@@ -66,6 +66,8 @@ code = ex.get("code", "") or ""
 print("  代码:", len(code), "字符 /", len(code.splitlines()), "行")
 print("  sanitize_stats:", ex.get("sanitize_stats"))
 print("  not_runnable:", ex.get("not_runnable"))
+print("  best_effort:", ex.get("best_effort"),
+      "| fallback_used:", ex.get("fallback_used"))
 print("  末行:", repr(code.rstrip().splitlines()[-1] if code.strip() else ""))
 final = ex.get("final") or {}
 print("  exit_code:", final.get("exit_code"))

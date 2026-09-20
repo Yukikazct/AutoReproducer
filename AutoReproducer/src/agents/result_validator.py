@@ -64,7 +64,7 @@ class ResultValidatorAgent(BaseAgent):
             if score is not None:
                 paper_metrics = {"reproduction_score": round(float(score), 4)}
 
-        # 代码根本没跑起来（信息不足/语法错误被前置拦截，或沙箱启动即失败）
+        # 代码根本没跑起来（语法错误/危险调用被前置拦截，或沙箱启动即失败）
         # -> "无法验证"，不能报成"复现失败"——后者会误导用户以为方法不对。
         not_runnable = self._detect_not_runnable(execution, stdout)
         if not_runnable:
@@ -82,6 +82,41 @@ class ResultValidatorAgent(BaseAgent):
                 "is_reproduced": None,
                 "status": "not_runnable",
                 "reason": not_runnable,
+                "confidence": 0.0,
+                "llm_calls": self._delta_llm_calls(),
+            }
+
+        # 信息不足下的"尽力而为"执行：代码确实跑了，但它是占位实现，不能拿去
+        # 与论文声明比对 -> 第四态 best_effort（既不判成功也不判失败）。
+        # 顺序即优先级：真没跑（not_runnable）> 跑了但不可核对（best_effort）>
+        # 正常比对——"没跑起来"永远比"跑了个占位"更该优先告知用户。
+        #
+        # 为什么要这一态：不拦的话，占位脚本一旦打印出任何可提取的数值，
+        # `_local_compare` 对"无论文声明指标"是乐观判定（跑出数值即 match=True）
+        # -> 报告显示假的 ✅ 复现成功、还会真去触发优化；一个数值都抽不到时又
+        # 显示假的 ❌ 失败。两种都是把"信息不足"翻译成了错误结论。
+        if execution.get("best_effort") or paper_info.get("insufficient_info"):
+            actual_metrics = self._extract_metrics(stdout)   # 证据照留
+            reason = ("论文信息不足，代码为尽力而为的占位实现，其输出不能与"
+                      "论文声明比对（不判定为复现成功或失败）")
+            self.log_experiment(
+                "VALIDATE", "信息不足,跳过结论判定",
+                inputs={"stdout_tail": stdout[-300:]},
+                outputs={"status": "best_effort",
+                         "actual_metrics": actual_metrics},
+                result={"is_reproduced": None, "reason": reason})
+            self.log("validate", "WARNING", reason)
+            return {
+                # differences 是"逐项数值差异"，占位实现没有可比对的项；
+                # 理由已经在 analysis/reason 里，塞进 differences 只会让报告
+                # 把同一句话印三遍。
+                "validation": {"match": None, "differences": [],
+                               "confidence": 0.0, "analysis": reason},
+                "metrics_comparison": {"paper": paper_metrics,
+                                       "actual": actual_metrics},
+                "is_reproduced": None,
+                "status": "best_effort",
+                "reason": reason,
                 "confidence": 0.0,
                 "llm_calls": self._delta_llm_calls(),
             }
@@ -172,8 +207,11 @@ class ResultValidatorAgent(BaseAgent):
         """判断执行是否"压根没跑起来"；是则返回原因文本，否则返回 ""。
 
         与"跑起来了但结果不符"区分：只有前者才应报"无法验证"。判据：
-        1. CodeExecutor 前置检查拦下（not_runnable 标记 / exit_code=-5）；
+        1. CodeExecutor 前置门拦下（not_runnable 标记 / exit_code=-5）；
         2. 最终阶段失败且没有任何 stdout（依赖装不上、语法错误、超时等）。
+
+        注意"跑了但信息不足"（best_effort）**不**属于这里：那是另一态，由
+        `run()` 里的 best_effort 分支处理，本方法不该把它报成"没跑起来"。
         """
         if execution.get("not_runnable"):
             return (execution.get("reason") or "代码未进入执行阶段").strip()

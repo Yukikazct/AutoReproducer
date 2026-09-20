@@ -5,7 +5,8 @@
    IndentationError"的根因）；
 2. 语法门 + 再生成：截断的代码被拦下、触发重试、仍不可编译时诚实
    短路为"未运行"，绝不把残码送进沙箱；
-3. 信息不足时不生成占位代码，短路为"无法运行"；
+3. 信息不足时改为**尽力而为生成并执行**（`best_effort` 标注）：报告里不再
+   出现"未运行"、也不判为复现成功；模型两次都不给代码时落本地兜底脚本；
 4. PaperReader 标题-only 不再编造占位摘要，透传 insufficient_info；
 5. ResultValidator 三态：无法运行 / 复现失败 / 复现成功，且 mse 与
    rmse 不再混键、缺失指标不再静默跳过。
@@ -211,36 +212,111 @@ class TestSyntaxGateAndRegeneration:
 
 
 # ============================================================
-# 3. 信息不足：不生成占位代码
+# 3. 信息不足：尽力而为生成并执行（best_effort）
 # ============================================================
 
-class TestInsufficientInfoShortCircuit:
+class TestInsufficientInfoBestEffort:
+    """用户要求「一定要尝试生成代码并允许运行」——这条线不许再交白卷。
 
-    def test_missing_method_and_dataset_short_circuits(self):
+    此前的行为是"信息不足 → 不生成 → 未运行"（报告里 0 字符 + exit_code=-5）。
+    """
+
+    def test_missing_method_and_dataset_still_generates_and_runs(self):
         llm = _ScriptedLLM([COMPLETE_CODE])
         agent = CodeExecutorAgent(llm)
         result = agent.run({"paper_info": {"method": "",
                                            "dataset": "未知",
                                            "metrics": {}}})
-        assert result["not_runnable"] is True
-        assert "信息不足" in result["reason"]
-        assert llm.call_count == 0      # 连代码都没生成
 
-    def test_insufficient_flag_from_paper_reader_is_honored(self):
+        assert not result.get("not_runnable")     # 不再短路"未运行"
+        assert result["best_effort"] is True
+        assert result["success"] is True
+        assert len(result["code"]) > 0
+        assert llm.call_count == 1                # 真的让模型生成了一次
+        # 真进了沙箱：阶段是 smoke+full，而不是被拦在 precheck（旧行为只有一个
+        # precheck 阶段 + exit_code=-5）
+        assert [st["stage"] for st in result["stages"]] == ["smoke", "full"]
+
+    def test_insufficient_flag_from_paper_reader_still_generates(self):
         llm = _ScriptedLLM([COMPLETE_CODE])
         agent = CodeExecutorAgent(llm)
         result = agent.run({"paper_info": {"insufficient_info": True,
                                            "method": "某种方法",
                                            "dataset": "某数据集"}})
-        assert result["not_runnable"] is True
-        assert llm.call_count == 0
+        assert not result.get("not_runnable")
+        assert result["best_effort"] is True
+        assert result["success"] is True
+        assert llm.call_count == 1
 
-    def test_sufficient_info_does_not_short_circuit(self):
+    def test_sufficient_info_is_not_best_effort(self):
         llm = _ScriptedLLM([COMPLETE_CODE])
         agent = CodeExecutorAgent(llm)
         result = agent.run({"paper_info": {"method": "梯度下降",
                                            "dataset": "二维二分类"}})
         assert result["success"] is True
+        assert result["best_effort"] is False
+        assert result["best_effort_reason"] == ""
+        assert result["fallback_used"] is False
+
+    def test_external_code_is_never_best_effort(self):
+        """调用方给的真实代码不因论文信息不足被改判——它不是我们的占位实现。"""
+        agent = CodeExecutorAgent(_ScriptedLLM([COMPLETE_CODE]))
+        result = agent.run({"code": COMPLETE_CODE,
+                            "paper_info": {"insufficient_info": True}})
+        assert result["best_effort"] is False
+        assert result["success"] is True
+
+
+class TestPlaceholderRecovery:
+    """模型"拒答"（只回占位标记/空）时的定向重试与本地兜底。"""
+
+    def test_marker_triggers_one_targeted_retry_then_real_code(self):
+        llm = _ScriptedLLM([ce_mod._INSUFFICIENT_INFO_MARK, COMPLETE_CODE])
+        result = CodeExecutorAgent(llm).run(
+            {"paper_info": {"method": "", "dataset": "", "metrics": {}}})
+
+        # 1 次初生成 + MAX_MARK_RETRY 次定向重试；旧实现这条路径会走到
+        # 1+3+2 次空烧（占位标记被当成"没写完"反复追问）
+        assert llm.call_count == 1 + ce_mod.MAX_MARK_RETRY
+        assert result["fallback_used"] is False
+        assert result["success"] is True
+        assert "上一次只回复了占位标记" in llm.prompts[-1]
+
+    def test_marker_twice_falls_back_to_local_script(self):
+        llm = _ScriptedLLM([ce_mod._INSUFFICIENT_INFO_MARK])
+        result = CodeExecutorAgent(llm).run(
+            {"paper_info": {"method": "", "dataset": "", "metrics": {}}})
+
+        assert llm.call_count == 1 + ce_mod.MAX_MARK_RETRY   # 严格锁预算
+        assert result["fallback_used"] is True
+        assert result["code"] == ce_mod._BEST_EFFORT_SCRIPT
+        assert result["success"] is True                     # 兜底脚本真的跑通
+        assert "不是论文结论" in result["final"]["stdout"]
+        assert len(result["assumptions"]) >= 3
+
+    def test_empty_response_falls_back(self):
+        llm = _ScriptedLLM([""])
+        result = CodeExecutorAgent(llm).run({"paper_info": {}})
+        assert result["fallback_used"] is True
+        assert result["success"] is True
+
+    def test_fallback_script_passes_all_gates(self):
+        """兜底脚本本身必须过语法门/危险门/结构完整性，否则它自己就被拦了。"""
+        agent = CodeExecutorAgent(_ScriptedLLM([COMPLETE_CODE]))
+        bs = ce_mod._BEST_EFFORT_SCRIPT
+        assert agent._syntax_error(bs) is None
+        assert agent._dangerous_constructs(bs) is None
+        assert CodeExecutorAgent._structurally_complete(bs) is True
+        assert CodeExecutorAgent._is_placeholder_code(bs) is False
+
+    def test_fallback_output_has_no_extractable_metrics(self):
+        """兜底脚本的输出不能被抽成"实测指标"——否则会喂出假的复现结论。"""
+        llm = _ScriptedLLM([ce_mod._INSUFFICIENT_INFO_MARK])
+        result = CodeExecutorAgent(llm).run({"paper_info": {}})
+        stdout = result["final"]["stdout"]
+        assert "占位复现脚本" in stdout
+        validator = ResultValidatorAgent(LLMClient(mock_mode=True))
+        assert validator._extract_metrics(stdout) == {}
 
 
 # ============================================================
@@ -361,6 +437,48 @@ class TestValidatorThreeStates:
                             "execution": self._ran("Test accuracy: 85.2%")})
         assert result["is_reproduced"] is True
         assert result["status"] == "reproduced"
+
+
+class TestValidatorBestEffort:
+    """第四态：代码确实跑了，但论文信息不足、代码是占位实现——既不判成功也不判失败。"""
+
+    def test_best_effort_is_not_reported_as_reproduced(self):
+        """占位脚本即便打印出可抽取的数值，也不能被读成"复现成功"。
+
+        不拦的话 `_local_compare` 对"无论文声明指标"是乐观判定（跑出数值即
+        match=True）——报告会显示假的 ✅ 成功，而且会真去触发优化。
+        """
+        agent = _validator()
+        execution = {**_ran_execution("accuracy: 0.85"),
+                     "best_effort": True,
+                     "best_effort_reason": "论文未提供可用的方法/数据集/声明指标"}
+        result = agent.run({"paper_info": {"insufficient_info": True,
+                                           "metrics": {}},
+                            "execution": execution})
+
+        assert result["status"] == "best_effort"
+        assert result["is_reproduced"] is None
+        assert result["llm_calls"] == 0            # 跳过 LLM 比对，省预算
+        assert "占位" in result["reason"]
+        # 证据仍留：报告要显示"确实跑出了什么"，只是标注为不可核对
+        assert result["metrics_comparison"]["actual"] == {"accuracy": 0.85}
+
+    def test_insufficient_paper_info_alone_marks_best_effort(self):
+        """execution 没带标注（旧数据/旁路调用）时，论文侧的信息不足也足以判定。"""
+        agent = _validator()
+        result = agent.run({"paper_info": {"insufficient_info": True},
+                            "execution": _ran_execution("loss: 0.1")})
+        assert result["status"] == "best_effort"
+
+    def test_not_runnable_takes_precedence_over_best_effort(self):
+        """真没跑 > 跑了但不可核对：两者同时为真时报"未运行"。"""
+        agent = _validator()
+        execution = {"not_runnable": True, "reason": "语法错误",
+                     "best_effort": True, "success": False,
+                     "stages": [], "final": {}}
+        result = agent.run({"paper_info": {"insufficient_info": True},
+                            "execution": execution})
+        assert result["status"] == "not_runnable"
 
 
 class TestValidatorMetricDetails:

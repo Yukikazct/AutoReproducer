@@ -244,6 +244,9 @@ def run_pipeline_core(progress_path: str,
             if validation.get("status") == "not_runnable":
                 reason = ("代码未能运行，无法优化（"
                           f"{validation.get('reason', '未运行')}）")
+            elif validation.get("status") == "best_effort":
+                reason = ("代码为尽力而为的占位实现（论文信息不足），"
+                          "无法作为优化基线")
             else:
                 reason = "复现未成功,跳过优化"
             data["optimization"] = {"optimized": False, "reason": reason}

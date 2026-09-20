@@ -434,6 +434,78 @@ class TestReportSurfacesVerdictBasis:
         assert "| f1_score | 0.8 | N/A |" in report
 
 
+class TestReportSurfacesBestEffort:
+    """信息不足下的"尽力而为"必须在报告里说清楚。
+
+    两条都要挡住：既不能写成"未运行"（用户实测过一次「代码长度 0 字符 +
+    未运行」的空报告），也不能让它看起来像复现成功。
+    """
+
+    @staticmethod
+    def _report(execution: dict, validation: dict) -> str:
+        from src.agents.report_generator import ReportGeneratorAgent
+        return ReportGeneratorAgent().run(
+            {"execution": execution, "validation": validation,
+             "paper_info": {}})["report"]
+
+    @staticmethod
+    def _best_effort_execution() -> dict:
+        return {
+            "code": "print('占位复现脚本')\n",
+            "stages": [{"stage": "smoke", "success": True, "exit_code": 0},
+                       {"stage": "full", "success": True, "exit_code": 0}],
+            "final": {"success": True, "exit_code": 0,
+                      "stdout": "占位复现脚本: 论文信息不足, 以下输出不是论文结论"},
+            "best_effort": True,
+            "fallback_used": True,
+            "best_effort_reason": "论文未提供可用的方法/数据集/声明指标；"
+                                  "本轮代码为尽力而为的占位实现，其输出不是论文结论",
+            "assumptions": ["自变量在 [-1, 1] 上均匀取值"],
+        }
+
+    @staticmethod
+    def _best_effort_validation() -> dict:
+        reason = ("论文信息不足，代码为尽力而为的占位实现，其输出不能与"
+                  "论文声明比对（不判定为复现成功或失败）")
+        return {"status": "best_effort", "is_reproduced": None,
+                "confidence": 0.0, "reason": reason,
+                "validation": {"analysis": reason, "differences": []},
+                "metrics_comparison": {"paper": {}, "actual": {}}}
+
+    def test_best_effort_is_labelled_and_never_says_unrun(self):
+        report = self._report(
+            self._best_effort_execution(),
+            self._best_effort_validation())
+
+        assert "✅ 成功（尽力而为：论文信息不足）" in report
+        assert "不是论文结论" in report              # 防误读的关键句
+        assert "系统本地兜底脚本" in report
+        assert "假设: 自变量在 [-1, 1] 上均匀取值" in report
+        assert "⚠️ 无法核对" in report
+        assert "指标差异" not in report               # 无可比对项，不重复印理由
+        assert report.count("不判定为复现成功或失败") == 1   # 同一句理由只出现一次
+        assert "⚠️ 未运行" not in report              # 旧行为的关键词
+        assert "复现状态**: ❌" not in report
+        assert "复现状态**: ✅" not in report          # 不许冒充复现成功
+
+    def test_syntax_gate_still_reports_unrun(self):
+        """语法门/危险门是真门：报告里仍要显示"未运行"（防回归）。"""
+        report = self._report(
+            {"code": "def f(:\n",
+             "reason": "代码存在语法错误，未执行: invalid syntax",
+             "not_runnable": True, "best_effort": False,
+             "stages": [{"stage": "precheck", "success": False,
+                         "exit_code": -5}],
+             "final": {"success": False, "exit_code": -5,
+                       "stderr": "代码存在语法错误，未执行: invalid syntax"}},
+            {"status": "not_runnable", "is_reproduced": None,
+             "reason": "invalid syntax", "confidence": 0.0,
+             "validation": {"analysis": "代码未能运行，无法与论文声明比对"}})
+
+        assert "⚠️ 未运行" in report
+        assert "无法验证（代码未运行）" in report
+
+
 # ============================================================
 # 4. 结构完整性门
 # ============================================================
@@ -511,3 +583,33 @@ class TestPrompts:
         assert "从断点继续往下写" in prompt
         assert "把上面最后一行完整地重写一遍" in prompt
         assert "不要重写开头" in prompt
+
+    # ---- 信息不足路径（insufficient=True）----
+
+    def _insufficient_prompt(self, paper_info=None):
+        return CodeExecutorAgent(LLMClient(mock_mode=True)) \
+            ._generate_code_prompt(paper_info if paper_info is not None else {},
+                                   True)
+
+    def test_insufficient_prompt_demands_runnable_script(self):
+        """信息不足也必须交出最小可运行脚本——旧文案给的是"交白卷"的出口。"""
+        prompt = self._insufficient_prompt()
+        for token in ("必须", "最小", "合成数据", "# 假设:", "不允许留空"):
+            assert token in prompt, token
+        # "交白卷"的出口必须消失：那行标记当年没有任何代码识别它
+        assert ce_mod._INSUFFICIENT_INFO_MARK not in prompt
+
+    def test_insufficient_prompt_keeps_no_fabrication_ban(self):
+        """禁令的宾语变了（不许冒充结论），但要禁的东西一个都没少。"""
+        prompt = self._insufficient_prompt()
+        assert "严禁" in prompt
+        assert "CIFAR-10" in prompt
+        assert "冒充论文结论" in prompt
+
+    def test_sufficient_prompt_is_unchanged(self):
+        """信息充足时 prompt 逐字保持原样（其余提示词用例全靠这条护栏）。"""
+        prompt = self._prompt()
+        assert ce_mod._INSUFFICIENT_INFO_MARK in prompt
+        for token in ("完整", "围栏", "```python", "字符串字面量",
+                      "不要为了简短而省略"):
+            assert token in prompt, token
