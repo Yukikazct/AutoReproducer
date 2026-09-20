@@ -20,6 +20,7 @@
 - 信息不足时不生成针对性代码，短路为"无法运行"，交由 ResultValidator
   判定为"无法验证"而非"复现失败"。
 """
+import ast
 import os
 import re
 import shutil
@@ -88,6 +89,12 @@ _DEPS_READY_MARK = ".ready"
 
 # 代码不可编译时的再生成次数上限（LLM 输出被截断是常见故障）
 MAX_CODE_REGEN = 2
+# 截断时"续写拼接"的次数上限。与再生成的区别：再生成是拿同一个 prompt
+# 从头重写，若截断源于撞 max_tokens 上限，重写只会再撞一次；续写是把已写
+# 部分的尾部交给模型接着写完，总长度 = 各段之和，才能真正突破单次上限。
+MAX_CODE_CONTINUE = 3
+# 续写 prompt 里回灌的"已写内容"末尾行数（够模型接上下文即可，不必全给）
+_CONTINUE_TAIL_LINES = 40
 # 信息不足时 LLM 应按约定返回的标记行（整份"代码"只有这一行注释）
 _INSUFFICIENT_INFO_MARK = "# INSUFFICIENT_INFO"
 # 语法错误信息中提示"输出被截断"的特征词
@@ -151,6 +158,15 @@ _CODE_LINE_START = re.compile(
     r"[A-Za-z_][A-Za-z0-9_.]*\s*\."                    # 属性访问 self.net.forward
     r"|[A-Za-z_\[\(\"']|[\d+\-.]"                      # 兜底：字母/括号/引号/数字开头
     r")")
+# 判定"中文叙述行"用的代码特征字符。含中文的行里只要有这些字符之一，
+# 就更可能是**代码**（含中文字符串字面量，如 print(f"准确率: {acc}")），
+# 而不是叙述段落——旧实现只按"含中文"就丢，会把合法的中文 print 一起删掉，
+# 而删掉后代码往往仍能编译，于是"残缺"被静默放过。
+_CODEISH_CHARS = set("=(){}[]\"'#:+-*/%<>@,.")
+_CJK_RE = re.compile(r"[一-鿿]")
+# 不产生任何行为的顶层节点：脚本若只有这些，编译通过但运行后什么也不做
+_INERT_NODES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef,
+                ast.Import, ast.ImportFrom)
 
 
 class CodeExecutorAgent(BaseAgent):
@@ -247,12 +263,52 @@ class CodeExecutorAgent(BaseAgent):
     # ---------------- 代码生成 ----------------
 
     def _produce_code(self, paper_info: Dict) -> str:
-        """生成复现代码；语法不通过时针对"截断/语法错误"再生成（限次）。
+        """生成复现代码：截断则**续写拼接**，仍不完整才从头再生成。
+
+        修复「代码生成不完整」的主路径：单次调用的输出上限（默认 8192）
+        是硬天花板，用同一个 prompt 从头重写只会再撞一次；因此先按"断点
+        续写"把总长度累加上去（最多 MAX_CODE_CONTINUE 轮），每轮都过语法门。
+        续写仍不完整时，才回落到"从头再生成"作为最后手段。
 
         返回仍可能是不可编译的代码——由调用方 run() 的语法门统一判定并
-        短路为"未运行"，此处只负责"多试几次"，不负责掩盖失败。
+        短路为"未运行"，此处不负责掩盖失败。
         """
-        code = self._sanitize_code(self._generate_code(paper_info))
+        code, dropped = self._sanitize_code_ex(self._generate_code(paper_info))
+        self._record_sanitize("初次生成", code, dropped)
+
+        # ---- 阶段 1：续写拼接（针对"输出被截断"） ----
+        prev_err = self._syntax_error(code)
+        for round_no in range(1, MAX_CODE_CONTINUE + 1):
+            if not self._needs_continuation(code):
+                return code
+            finish = getattr(self.llm, "last_finish_reason", "")
+            self.log("generate_code", "WARNING",
+                     f"生成代码疑似未写完，触发续写（第 {round_no} 轮）: "
+                     f"{prev_err or '结构不完整'}"
+                     + (f" [finish_reason={finish}]" if finish else ""))
+            raw = self._continue_code(paper_info, code)
+            more, dropped = self._sanitize_code_ex(raw)
+            self._record_sanitize(f"续写第 {round_no} 轮", more, dropped)
+            if not more.strip():
+                break           # 模型没给新内容，别再空转（保留已有 code）
+            if more.strip() in code:
+                # 续写返回的内容已原样存在于现有代码里 = 模型在复述而非续写。
+                # 继续追问只会把重复内容越拼越长，还白烧 LLM 预算。
+                self.log("generate_code", "WARNING",
+                         "续写返回的是已有内容（模型复述），停止续写")
+                break
+            new_code = self._stitch(code, more)
+            new_err = self._syntax_error(new_code)
+            if new_err is not None and new_err == prev_err:
+                # 症状一字未变 = 模型在复述而不是续写，继续问下去只是白烧预算
+                self.log("generate_code", "WARNING",
+                         f"续写未改善语法错误（仍是 {new_err}），停止续写")
+                break
+            code, prev_err = new_code, new_err
+        if not self._needs_continuation(code):
+            return code
+
+        # ---- 阶段 2：续写仍不完整 -> 从头再生成（最后手段） ----
         for attempt in range(1, MAX_CODE_REGEN + 1):
             err = self._syntax_error(code)
             if err is None:
@@ -261,28 +317,139 @@ class CodeExecutorAgent(BaseAgent):
                       else "语法错误")
             finish = getattr(self.llm, "last_finish_reason", "")
             self.log("generate_code", "WARNING",
-                     f"生成代码不可编译（{reason}，第 {attempt} 次）: {err}"
+                     f"续写后仍不可编译（{reason}，重生成第 {attempt} 次）: {err}"
                      + (f" [finish_reason={finish}]" if finish else ""))
-            code = self._sanitize_code(
+            new_code, dropped = self._sanitize_code_ex(
                 self._regenerate_code(paper_info, err, attempt))
+            self._record_sanitize(f"重生成第 {attempt} 次", new_code, dropped)
+            code = new_code
         return code
 
+    def _needs_continuation(self, code: str) -> bool:
+        """判断代码是否"还没写完"，应该续写而不是从头重写。
+
+        判据（任一命中即续写）：
+        1. API 明确说这次撞了 max_tokens（`finish_reason == "length"`）——
+           比"末尾字符像断句"这类启发式可靠得多；
+        2. 语法错误且形态像"话没说完"（尾部悬挂运算符/未闭合括号等）；
+        3. 能编译但结构上不做任何事（只有 def/class/import，无顶层调用）——
+           语法门查不出的"残缺"，同样属于没写完。
+        """
+        is_truncated = getattr(self.llm, "is_truncated", None)
+        if callable(is_truncated) and is_truncated():
+            return True
+        err = self._syntax_error(code)
+        if err is not None:
+            return self._looks_truncated(code, err)
+        return not self._structurally_complete(code)
+
+    def _continue_code(self, paper_info: Dict, partial: str) -> str:
+        """续写：把已写部分的尾部交给模型，让它从断点接着写完。
+
+        与 `_regenerate_code` 的关键区别：不重复整份需求、不从头重写，
+        因此输出可以稳定接在前文之后，总长度突破单次调用上限。
+        """
+        tail = "\n".join(partial.rstrip("\n").splitlines()[-_CONTINUE_TAIL_LINES:])
+        prompt = f"""你在帮我写一份论文复现的 Python 脚本，上一次输出因为长度
+限制在中间被截断了。请**从断点继续往下写**，把剩余部分补完。
+
+论文方法: {paper_info.get('method', '未知')}
+数据集: {paper_info.get('dataset', '未知')}
+指标: {paper_info.get('metrics', {})}
+
+【已经写完的部分（结尾 {_CONTINUE_TAIL_LINES} 行）】
+```python
+{tail}
+```
+
+【续写要求 - 必须严格遵守】
+1. **先把上面最后一行完整地重写一遍**（如果你认为它已经写完整了，就原样
+   重复一次），然后再往下写——这样拼接时才不会出现半行相接；
+2. 之后只输出**后续的新内容**：不要重写开头、不要重复更早的行、不要加
+   任何解释说明、不要输出 markdown 围栏；
+3. 每一行都必须是合法 Python 代码，缩进与前文保持一致；
+4. 一直写到脚本真正结束为止：训练与评估完成，并打印出上面列出的指标。
+"""
+        return self.llm.chat(prompt, task="code_executor")
+
+    @staticmethod
+    def _stitch(head: str, tail: str) -> str:
+        """拼接续写片段，消除接缝处的半行与重复行。
+
+        约定见 `_continue_code`：tail 的第一行是对 head 末行的重写，故先丢掉
+        head 的末行再拼接；随后再做一次重复行去重，容忍模型多复述上文。
+        """
+        head_lines = head.rstrip("\n").splitlines()
+        tail_lines = tail.strip("\n").splitlines()
+        if not head_lines:
+            return "\n".join(tail_lines)
+        if not tail_lines:
+            return "\n".join(head_lines)
+        head_lines = head_lines[:-1]        # 末行由 tail 首行重写
+
+        # 去重：head 尾部与 tail 头部若有若干行相同（忽略缩进差异），去掉重复
+        for k in range(min(len(head_lines), len(tail_lines)), 0, -1):
+            if not any(ln.strip() for ln in tail_lines[:k]):
+                continue
+            if ([ln.strip() for ln in head_lines[-k:]]
+                    == [ln.strip() for ln in tail_lines[:k]]):
+                tail_lines = tail_lines[k:]
+                break
+        return "\n".join(head_lines + tail_lines)
+
+    @staticmethod
+    def _structurally_complete(code: str) -> bool:
+        """编译之外的**结构**完整性：脚本必须真的会"做点什么"。
+
+        全是 def/class/import、既无顶层调用也无 `__main__` 守卫的片段，
+        能通过 `compile()` 却不会产出任何结果——这是纯语法门查不出的残缺。
+        """
+        if not code or not code.strip():
+            return False
+        try:
+            tree = ast.parse(code)
+        except (SyntaxError, ValueError):
+            return False
+        for node in tree.body:
+            if isinstance(node, _INERT_NODES):
+                continue
+            # 裸字面量/文档字符串不产生行为，不算"做了事"
+            if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant):
+                continue
+            return True
+        return False
+
+    def _record_sanitize(self, stage: str, code: str, dropped: int) -> None:
+        """记录清洗结果；有丢弃就告警——丢弃行是"可能不完整"的信号。"""
+        if dropped:
+            self.log("sanitize_code", "WARNING",
+                     f"{stage}：清洗丢弃了 {dropped} 行非代码行"
+                     f"（剩余 {len(code.splitlines())} 行）——"
+                     f"若结果异常，这可能是代码不完整的原因",
+                     {"dropped_lines": dropped, "stage": stage})
+
     def _generate_code_prompt(self, paper_info: Dict) -> str:
-        return f"""根据论文信息生成一段简短的训练代码用于复现实验。
+        return f"""根据论文信息生成一份**完整**的复现脚本。
 论文方法: {paper_info.get('method', '未知')}
 指标: {paper_info.get('metrics', {})}
 数据集: {paper_info.get('dataset', '未知')}
 
-【关键输出约束 - 必须严格遵守】
-1. 只输出一份可直接运行的 Python 脚本（完整训练+评估流程,最后打印关键指标）；
-2. 输出的每一行都必须是合法 Python 代码,严禁出现任何解释性文字、中文叙述、
-   说明语句或自然语言段落；
-3. 不要使用 markdown 代码块围栏(``` 或 ```python)包裹输出,不要输出围栏标记；
-4. 如需注释仅使用以 # 开头的 Python 注释；
-5. 第一行直接开始写代码,不要有开场白；
-6. 必须输出完整脚本,不要在函数/循环中途停止,每一行都要写完整；
-7. 若上面的论文方法/数据集确实是未知的占位值,无法据此写出针对性代码,
-   则只输出一行 `{_INSUFFICIENT_INFO_MARK}` 并停止,严禁用无关数据集
+【脚本必须覆盖的完整流程】
+数据加载/构造 → 模型与方法定义 → 训练循环 → 评估 → **打印论文声明的各项指标**。
+这是要能直接跑出复现结果的完整脚本，不是演示片段；不要为了简短而省略
+训练循环、评估步骤或指标输出。
+
+【输出格式 - 必须严格遵守】
+1. 用**单个** ```python 围栏把整份脚本包起来，围栏内只有代码；
+2. 围栏内每一行都必须是合法 Python 代码；不要写围栏外的解释文字、
+   中文叙述段落或开场白；
+3. 中文字符**允许**出现在字符串字面量与 # 注释里
+   （例如 print(f"准确率: {{acc:.4f}}") 是合法的），只是不允许写成
+   围栏外的叙述段落；
+4. 若内容较长一次写不完，请在**一个完整语句的边界**停下（不要停在半个
+   表达式中间），我会让你继续写完剩余部分；
+5. 若上面的论文方法/数据集确实是未知的占位值，无法据此写出针对性代码，
+   则只输出一行 `{_INSUFFICIENT_INFO_MARK}` 并停止，严禁用无关数据集
    (如 CIFAR-10/IMDB)编造一个与本论文无关的模型来充数。
 """
 
@@ -301,47 +468,37 @@ class CodeExecutorAgent(BaseAgent):
         return self.llm.chat(prompt, task="code_executor")
 
     def _sanitize_code(self, raw: str) -> str:
-        """将 LLM 原始输出清洗为可执行的纯净 Python 代码。
+        """将 LLM 原始输出清洗为可执行的纯净 Python 代码（兼容旧签名）。"""
+        return self._sanitize_code_ex(raw)[0]
 
-        兜底处理两类常见污染：
-        1. markdown 代码块围栏包裹(```python ... ```)；
-        2. 代码块外/代码中的中文叙述行("为了...""假设我们使用..."等自然语言)。
-        清洗后产物为纯代码文本;仍含语法错误时如实保留,由执行阶段判定。
+    def _sanitize_code_ex(self, raw: str) -> tuple:
+        """清洗代码，返回 (代码, 被丢弃的非空行数)。
+
+        保真优先：**有围栏就整块原样取用**（只做 compile 校验，不改一个
+        字符），因为围栏内按约定就是纯代码；只有当没有围栏、或围栏内仍不可
+        编译时，才降级到有损的逐行过滤。丢弃行数一并返回——上层据此判断
+        这次清洗是否可能把代码洗残了，不再让"丢行"这件事静默发生。
         """
         if not raw or not raw.strip():
-            return raw or ""
-        text = raw.strip()
+            return (raw or ""), 0
+        # 只去首尾空行与行尾空白，**绝不 strip 首行缩进**——续写片段的第一行
+        # 本来就可能是缩进行（如 `    print(...)`），一旦被 strip 掉就会变成
+        # 顶格，拼起来直接 IndentationError。与 Batch 1 修的"缩进丢失"同源。
+        text = raw.strip("\n").rstrip()
 
-        # 1) 提取最长的 markdown 代码块（若被围栏包裹）
+        # 1) 提取最长的 markdown 代码块（若被围栏包裹）——保真路径，优先走这条
         fenced = _CODE_FENCE.findall(text)
         if fenced:
-            text = max(fenced, key=len).strip()
-            # 直接尝试编译——代码块内应只有纯代码，保持缩进
-            try:
-                compile(text, "<generated>", "exec")
-                return text
-            except SyntaxError:
-                pass  # 可能混入了叙述行，继续向下清理
+            candidate = max(fenced, key=len).strip("\n").rstrip()
+            if self._syntax_error(candidate) is None:
+                return candidate, 0        # 原样返回，一个字符都不改
+            text = candidate
 
-        # 2) 逐行剥离叙述行,只保留代码行与代码内空行
-        cleaned = []
-        for ln in text.splitlines():
-            stripped = ln.strip()
-            if not stripped:
-                if cleaned and cleaned[-1].strip():
-                    cleaned.append(ln)
-                continue
-            # 中文叙述行一律丢弃（含中文且非 # 注释）
-            if re.search(r"[\u4e00-\u9fff]", stripped) and not stripped.startswith("#"):
-                continue
-            if _CODE_LINE_START.match(stripped):
-                cleaned.append(ln)
-        code = "\n".join(cleaned).strip("\n")
+        # 2) 无围栏 / 围栏内不可编译：逐行剥离叙述行，并统计丢弃行数
+        code, dropped = self._filter_lines(text)
 
         # 3) 语法兜底: 若整体不可编译,再去掉围栏残片/行首行号后重新过滤
-        try:
-            compile(code, "<generated>", "exec")
-        except SyntaxError:
+        if self._syntax_error(code) is not None:
             code = _FENCE_LEFT.sub("", code)
             lines = []
             for ln in code.splitlines():
@@ -356,12 +513,45 @@ class CodeExecutorAgent(BaseAgent):
                 ln = fixed
                 if not ln.strip():
                     continue
-                if (_CODE_LINE_START.match(ln)
-                        and not (re.search(r"[\u4e00-\u9fff]", ln)
-                                 and not ln.startswith("#"))):
+                if _CODE_LINE_START.match(ln) and not self._looks_like_prose(ln):
                     lines.append(ln)
             code = "\n".join(lines)
-        return code
+        return code, dropped
+
+    @staticmethod
+    def _looks_like_prose(line: str) -> bool:
+        """这一行是否像"中文叙述"（应丢弃），而非含中文的合法代码。
+
+        判据：含中文、非 # 注释、且**没有任何代码特征字符**。这样
+        print(f"准确率: {acc:.4f}")（有括号/引号/冒号）会被保留，而
+        "为了复现该论文，我们使用以下配置。" 这种纯叙述会被丢弃。
+        旧实现只按"含中文"就丢，会把合法的中文 print 一并删掉，且删完
+        代码往往仍能编译，导致"残缺"被静默放过——这正是"代码不完整"
+        却查不出来的路径之一。
+        """
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            return False
+        if not _CJK_RE.search(stripped):
+            return False
+        return not (set(stripped) & _CODEISH_CHARS)
+
+    @classmethod
+    def _filter_lines(cls, text: str) -> tuple:
+        """逐行保留代码行与代码内空行，返回 (代码, 丢弃的非空行数)。"""
+        cleaned, dropped = [], 0
+        for ln in text.splitlines():
+            stripped = ln.strip()
+            if not stripped:
+                if cleaned and cleaned[-1].strip():
+                    cleaned.append(ln)
+                continue
+            if cls._looks_like_prose(stripped) \
+                    or not _CODE_LINE_START.match(stripped):
+                dropped += 1
+                continue
+            cleaned.append(ln)
+        return "\n".join(cleaned).strip("\n"), dropped
 
     # ---------------- 执行前检查 ----------------
 

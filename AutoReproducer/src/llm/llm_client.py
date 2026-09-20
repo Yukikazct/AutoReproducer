@@ -23,6 +23,13 @@ import urllib.error
 import time
 from typing import Optional
 
+# 单次真实调用的输出 token 上限默认值。
+# 注意：这是"每次调用"的上限，不是"整份代码"的上限——默认模型
+# deepseek-chat 的最大输出就是 8192，盲目调大反而会被 API 拒绝。
+# 要拿到更长代码，正确做法是分段续写（见 CodeExecutor._produce_code），
+# 而不是把这个值调大；支持更长输出的模型可通过 LLM_MAX_TOKENS 放开。
+DEFAULT_MAX_TOKENS = 8192
+
 # 任务标识 -> Mock 响应（确定性、可复现，用于演示完整流水线）
 _MOCK_TASKS = {
     "paper_reader": {
@@ -118,11 +125,15 @@ class LLMClient:
     def __init__(self, base_url: str = "", model: str = "",
                  api_key: str = "", timeout: Optional[int] = None,
                  mock_mode: bool = False,
-                 usage_hook=None):
+                 usage_hook=None,
+                 max_tokens: Optional[int] = None):
         self.base_url = (base_url or _env_or("LLM_BASE_URL")).rstrip("/")
         self.model = model or _env_or("LLM_MODEL")
         self.api_key = api_key or _env_or("LLM_API_KEY")
         self.timeout = timeout or _env_int("LLM_TIMEOUT", 120)
+        # 单次调用输出上限：构造参数 > LLM_MAX_TOKENS > DEFAULT_MAX_TOKENS
+        self.max_tokens = (int(max_tokens) if max_tokens
+                           else _env_int("LLM_MAX_TOKENS", DEFAULT_MAX_TOKENS))
         self.mock_mode = mock_mode
         self.call_count = 0
         # 用量计量钩子（可选）：真实调用成功且响应含 usage 时回调
@@ -184,8 +195,9 @@ class LLMClient:
             "messages": messages,
             "temperature": temperature,
             "stream": False,
-            # 给足 token 防止长代码被截断（8192 ≈ 6K 中文字或 2K 行 Python）
-            "max_tokens": 8192,
+            # 单次调用上限（默认 8192，见 DEFAULT_MAX_TOKENS 注释：
+            # 这是"每次"上限，超长代码靠续写拼接而非调大此值）
+            "max_tokens": self.max_tokens,
         }
         headers = {"Content-Type": "application/json"}
         if self.api_key:
@@ -243,6 +255,15 @@ class LLMClient:
                 except Exception:
                     # 计量钩子失败不影响正常调用返回
                     pass
+
+    def is_truncated(self) -> bool:
+        """最近一次真实调用是否因撞到 max_tokens 而截断。
+
+        `finish_reason == "length"` 是 API 侧给出的**确定性**截断信号——
+        比"末尾字符看起来像断句"这类启发式判据可靠得多。上层据此决定
+        是否触发续写（见 CodeExecutor._produce_code）。
+        """
+        return self.last_finish_reason == "length"
 
     @staticmethod
     def extract_token_usage(result: Optional[dict]) -> tuple:

@@ -80,6 +80,21 @@ COMPLETE_CODE = (
     "    return best\n"
     "train()\n"
 )
+# 续写场景的两段：PART1 停在半个表达式上（不可编译），PART2 按续写约定
+# **先重写 PART1 的最后一行**再往下写——拼接后应得到一份完整可编译的脚本。
+_CONT_PART1 = (
+    "import math\n"
+    "def train(epochs=3):\n"
+    "    best = 0.0\n"
+    "    for _ in range(epochs):\n"
+    "        best = best + 0.1\n"
+    "    print('accuracy=%.2f' % best\n"
+)
+_CONT_PART2 = (
+    "    print('accuracy=%.2f' % best)\n"
+    "    return best\n"
+    "train()\n"
+)
 
 
 # ============================================================
@@ -129,25 +144,35 @@ class TestSyntaxGateAndRegeneration:
     def _agent(self, llm):
         return CodeExecutorAgent(llm)
 
-    def test_regenerates_on_truncated_output(self):
-        llm = _ScriptedLLM([TRUNCATED_CODE, COMPLETE_CODE])
+    def test_continuation_completes_truncated_output(self):
+        """截断 -> 续写拼接 -> 拼出完整脚本并成功执行。
+
+        这是「代码生成不完整」的主修复路径：模型第一段没写完，不从头重写，
+        而是让它从断点续写，拼接后得到完整代码。
+        """
+        llm = _ScriptedLLM([_CONT_PART1, _CONT_PART2])
         agent = self._agent(llm)
         result = agent.run({"paper_info": {"method": "线性回归",
                                            "dataset": "合成数据"}})
-        # 第二次生成可用 -> 正常执行
-        assert result["success"] is True
+        assert result["success"] is True, result.get("reason")
         assert "accuracy=0.30" in result["final"]["stdout"]
-        assert llm.call_count == 2
+        assert llm.call_count == 2          # 初次生成 + 1 轮续写
+        # 拼接后是完整脚本，不是两段的堆叠
+        assert result["code"].count("def train(epochs=3):") == 1
 
-    def test_regeneration_prompt_mentions_failure(self):
-        llm = _ScriptedLLM([TRUNCATED_CODE, COMPLETE_CODE])
+    def test_continuation_prompt_asks_to_resume(self):
+        """续写 prompt 必须要求"接着写"并重写末行，而不是重写整份。"""
+        llm = _ScriptedLLM([_CONT_PART1, _CONT_PART2])
         self._agent(llm).run({"paper_info": {"method": "线性回归",
                                              "dataset": "合成数据"}})
-        assert "无法通过编译" in llm.prompts[1]
+        cont_prompt = llm.prompts[1]
+        assert "继续" in cont_prompt
+        assert "把上面最后一行完整地重写一遍" in cont_prompt
+        assert "不要重写开头" in cont_prompt
 
     def test_persistent_syntax_error_short_circuits_without_running(self,
                                                                    monkeypatch):
-        """再生成仍不可编译 -> 诚实短路为"未运行"，不进沙箱。"""
+        """续写+重生成都拿不到可用代码 -> 诚实短路为"未运行"，不进沙箱。"""
         def _boom(*a, **kw):
             raise AssertionError("语法错误的代码不得进入沙箱执行")
 
@@ -162,9 +187,9 @@ class TestSyntaxGateAndRegeneration:
         assert result["not_runnable"] is True
         assert result["final"]["exit_code"] == EXIT_NOT_RUNNABLE
         assert result["final"]["stage"] == "precheck"
-        assert "无法通过编译" not in result["reason"] or True   # 原因可读
-        # 初次 + MAX_CODE_REGEN 次重试
-        assert llm.call_count == 1 + MAX_CODE_REGEN
+        # 初次 + 1 轮续写（发现模型在复述即刻停止，不空烧预算）
+        #      + MAX_CODE_REGEN 次从头重生成
+        assert llm.call_count == 1 + 1 + MAX_CODE_REGEN
 
     def test_external_code_is_not_regenerated(self):
         """调用方传入的真实复现代码只清洗，不触发再生成。"""

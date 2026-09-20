@@ -8,6 +8,10 @@ import re
 from typing import Dict
 from src.base_agent import BaseAgent
 
+# 待验证输出送进 LLM 的字符上限。旧值 2000 对代码类输出太小：
+# 一份 3600 字符的复现脚本会被从中截断，验证器据此误报"代码被截断"。
+VERIFY_INPUT_LIMIT = 8000
+
 
 class VerifierAgent(BaseAgent):
     """复用目标 Agent 的 system_prompt 作为判据进行质量验证（Prompt-Free）。"""
@@ -34,7 +38,7 @@ class VerifierAgent(BaseAgent):
 {standard}
 
 待验证输出:
-{str(output)[:2000]}
+{self._render_output(output)}
 """
         llm_result = self.llm.chat(prompt, task="verifier")
         parsed = self._parse_json(llm_result)
@@ -54,6 +58,24 @@ class VerifierAgent(BaseAgent):
         return {**parsed, "llm_calls": self._delta_llm_calls()}
 
     # ---------------- 内部工具 ----------------
+
+    @staticmethod
+    def _render_output(output) -> str:
+        """渲染待验证输出；超长时**标注**截断，避免验证器误判。
+
+        旧实现直接 `str(output)[:2000]`：验证器只能看到前 2000 字符，
+        既看不到后面的真实缺陷，又会把自己看到的那半截**当成被测方的
+        缺陷**报上来（例如对 3616 字符的代码报「code 字段被截断」——
+        截断其实发生在验证器自己的入参上）。这里放大窗口，并在确实截断
+        时明确告知"是入参被截断，不代表内容缺失"。
+        """
+        text = str(output)
+        if len(text) <= VERIFY_INPUT_LIMIT:
+            return text
+        return (f"{text[:VERIFY_INPUT_LIMIT]}\n"
+                f"[⚠️ 以上为待验证输出的前 {VERIFY_INPUT_LIMIT} / {len(text)} "
+                f"字符，因长度限制被截断——未展示的部分**不代表缺失**，"
+                f"请勿仅因内容在此处结束就判定不完整]")
 
     def _delta_llm_calls(self) -> int:
         """本 Agent 本次 run() 期间新增的 LLM 调用次数（用于预算统计）。"""
