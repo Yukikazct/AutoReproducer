@@ -28,6 +28,7 @@ if str(Path(__file__).parent.parent) not in sys.path:
 import src.agents.code_executor as ce_mod  # noqa: E402
 from src.agents.code_executor import CodeExecutorAgent  # noqa: E402
 from src.audit.audit_logger import AuditLogger  # noqa: E402
+from src.base_agent import BaseAgent  # noqa: E402
 from src.llm.llm_client import LLMClient  # noqa: E402
 from src.orchestrator import Orchestrator  # noqa: E402
 
@@ -281,6 +282,18 @@ class TestAuditPlanMetering:
 # ---------------- 4. CodeExecutor 容器耗时计量 ----------------
 
 class TestSandboxMetering:
+    @pytest.fixture(autouse=True)
+    def _engine_up(self, monkeypatch):
+        """引擎存活探测打桩。
+
+        两个原因必须打：① 真实探测依赖本机 Docker Desktop 在不在跑，
+        用例结果不该随机器状态漂移；② 探测本身走 `subprocess.run`，而
+        本类用例用 `calls` 列表断言调用次数（`len(calls) == 1`），真实
+        探测会多出一条记录把断言带偏。
+        """
+        monkeypatch.setattr(BaseAgent, "docker_engine_available",
+                            staticmethod(lambda *a, **k: (True, None)))
+
     @staticmethod
     def _executor(logger):
         executor = CodeExecutorAgent(LLMClient(mock_mode=True),

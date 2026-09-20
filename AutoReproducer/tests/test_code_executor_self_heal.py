@@ -26,6 +26,7 @@ if str(Path(__file__).parent.parent) not in sys.path:
 
 import src.agents.code_executor as ce_mod  # noqa: E402
 from src.agents.code_executor import CodeExecutorAgent  # noqa: E402
+from src.base_agent import BaseAgent  # noqa: E402
 from src.llm.llm_client import LLMClient  # noqa: E402
 
 
@@ -34,6 +35,9 @@ def _isolate_cache(tmp_path, monkeypatch):
     """隔离 L0 依赖缓存：进程内缓存与磁盘 heal 目录不跨用例污染。"""
     ce_mod._INSTALLED_DEPS.clear()
     monkeypatch.setattr(ce_mod, "DEPS_CACHE_ROOT", tmp_path / "deps")
+    # 引擎探测不依赖本机 Docker Desktop 状态（详见 test_sandbox_hardening）
+    monkeypatch.setattr(BaseAgent, "docker_engine_available",
+                        staticmethod(lambda *a, **k: (True, None)))
     yield
     ce_mod._INSTALLED_DEPS.clear()
     executor = CodeExecutorAgent(LLMClient(mock_mode=False),

@@ -28,6 +28,9 @@ streamlit run app.py
 > docker CLI 自动探测：优先 `DOCKER_PATH` 环境变量 → 系统 PATH → Docker Desktop
 > 常见安装目录（`C:\Program Files\Docker\Docker\resources\bin\docker.exe`），
 > Windows 上即使 docker 不在 PATH 中也能正常构建/执行。
+> 侧边栏会进一步探测**引擎（daemon）是否在跑**——只装 CLI 没启动 Docker Desktop
+> 时不会谎报「已就绪」，而是提示原因并自动改用本地隔离执行（启动后点
+> 「🔄 重新检测 Docker」即可，无需刷新页面）。
 
 ## 运行测试
 

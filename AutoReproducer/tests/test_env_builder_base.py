@@ -26,7 +26,19 @@ if str(Path(__file__).parent.parent) not in sys.path:
 from src.agents.env_builder import (  # noqa: E402
     BASE_IMAGE_FROM, BASE_IMAGE_TAG, EnvBuilderAgent, PIP_FIND_LINKS,
     PIP_INDEX_URL)
+from src.base_agent import BaseAgent  # noqa: E402
 from src.llm.llm_client import LLMClient  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _engine_up(monkeypatch):
+    """引擎存活探测打桩：用例要的是「引擎可用」这一前提。
+
+    真实探测问的是本机 Docker Desktop 在不在跑，结果会随机器状态漂移
+    （本机恰好就是「装了没启动」）；引擎不可用的分支由下方专门用例覆盖。
+    """
+    monkeypatch.setattr(BaseAgent, "docker_engine_available",
+                        staticmethod(lambda *a, **k: (True, None)))
 
 
 def _agent():
@@ -229,3 +241,56 @@ def test_docker_not_required_for_mock():
     # doctype: 无 Docker 时同样诚实报错
     assert agent.build_image(
         {"dockerfile": "FROM python:3.11-slim\n"})["success"] is False
+
+
+# ---------------- 6. 引擎存活守卫 ----------------
+
+def _engine_down(monkeypatch,
+                 reason="Docker 引擎未启动或不可用（daemon 连接失败）"):
+    monkeypatch.setattr(BaseAgent, "docker_engine_available",
+                        staticmethod(lambda *a, **k: (False, reason)))
+
+
+def test_build_image_engine_down_honest_error(monkeypatch):
+    """引擎未启动：build_image 直接诚实报错，且不发起任何 docker 调用。
+
+    原先会先跑一次底座探测（必然失败）、打一条误导性的「降级为 python
+    slim」日志，最后把 npipe 原始报错写进构建结果。
+    """
+    agent = _agent()
+    monkeypatch.setattr(agent, "_resolve_docker_cmd", lambda: "docker")
+    _engine_down(monkeypatch)
+    calls: list = []
+
+    def fake_run(cmd, **kw):
+        calls.append(cmd)
+        return _proc()
+
+    monkeypatch.setattr("src.agents.env_builder.subprocess.run", fake_run)
+    res = agent.build_image({
+        "dockerfile": "FROM python:3.11-slim\nRUN echo hi\n",
+        "requirements_txt": ""})
+
+    assert res["success"] is False
+    assert "引擎不可用" in res["error"]
+    assert "Docker Desktop" in res["error"]
+    assert not calls, "引擎不可用时不该发起 docker 调用"
+
+
+def test_build_base_image_engine_down(monkeypatch):
+    """底座构建同样守卫（_build_dockerfile 是三条构建路径的收口点）。"""
+    agent = _agent()
+    monkeypatch.setattr(agent, "_resolve_docker_cmd", lambda: "docker")
+    _engine_down(monkeypatch)
+    calls: list = []
+
+    def fake_run(cmd, **kw):
+        calls.append(cmd)
+        return _proc()
+
+    monkeypatch.setattr("src.agents.env_builder.subprocess.run", fake_run)
+    res = agent.build_base_image()
+
+    assert res["success"] is False
+    assert "引擎不可用" in res["error"]
+    assert not calls

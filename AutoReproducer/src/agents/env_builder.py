@@ -308,6 +308,16 @@ class EnvBuilderAgent(BaseAgent):
         if docker_cmd is None:
             return {"success": False, "error": "本机未安装 Docker 或不在 PATH 中"}
 
+        # 引擎存活守卫：CLI 在 PATH 上不代表 daemon 在跑（Docker Desktop
+        # 装了没启动就是这种情况）。不先探测的话，构建失败原因会是
+        # npipe 原始报错，且底座探测会先失败一次、多打一条误导性的
+        # 「降级为 python slim」日志。
+        engine_ok, engine_reason = BaseAgent.docker_engine_available([docker_cmd])
+        if not engine_ok:
+            return {"success": False,
+                    "error": f"Docker 引擎不可用：{engine_reason}"
+                             "（请启动 Docker Desktop 后重试）"}
+
         degraded = None
         if use_base_image:
             base = self.ensure_base_image(docker_cmd)
@@ -366,6 +376,13 @@ class EnvBuilderAgent(BaseAgent):
         docker_cmd = self._resolve_docker_cmd()
         if docker_cmd is None:
             return {"success": False, "error": "本机未安装 Docker 或不在 PATH 中"}
+        # 引擎守卫（所有构建路径的收口点：build_image / build_base_image /
+        # ensure_base_image 最终都走这里）
+        engine_ok, engine_reason = BaseAgent.docker_engine_available([docker_cmd])
+        if not engine_ok:
+            return {"success": False,
+                    "error": f"Docker 引擎不可用：{engine_reason}"
+                             "（请启动 Docker Desktop 后重试）"}
         build_dir = tempfile.mkdtemp(prefix="autorepro_env_")
         try:
             with open(os.path.join(build_dir, "Dockerfile"), "w",

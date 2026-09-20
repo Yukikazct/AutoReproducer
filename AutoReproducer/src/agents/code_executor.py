@@ -196,6 +196,8 @@ _UNKNOWN_RE = re.compile(
 EXIT_NOT_RUNNABLE = -5
 # Exit code：本地执行被危险代码静态门拦下（命令执行/动态执行/网络/递归删除）
 EXIT_DANGER_BLOCKED = -6
+# Exit code：Docker 引擎（daemon）不可用，未进入沙箱
+EXIT_DOCKER_DAEMON_DOWN = -4
 
 # 本地无沙箱执行前的危险代码静态门：命中即拒绝执行。高信号、对「复现
 # 训练脚本」低误报；是正则兜底而非正式沙箱，生产复现不可信代码请用 Docker。
@@ -1200,6 +1202,8 @@ class CodeExecutorAgent(BaseAgent):
         并把 env_config 中的 requirements 注入容器临时安装后执行。
 
         P1-⑪ 沙箱加固：
+        - 引擎守卫：进入沙箱前探测 daemon 存活，不可用直接返回可操作提示
+          （exit_code EXIT_DOCKER_DAEMON_DOWN），不产生无意义的 docker run；
         - 镜像白名单：非官方/自建镜像前缀直接拒绝执行（exit_code -5）；
         - 加固参数：cap-drop ALL / no-new-privileges / 只读 rootfs + tmpfs /
           非 root（nobody）/ CPU·mem·pids 限额，随 Docker 可用性自动降级；
@@ -1224,6 +1228,24 @@ class CodeExecutorAgent(BaseAgent):
                 "exit_code": -5,
                 "sandbox": {"image_allowed": False, "image": image},
             }
+
+        # 引擎存活守卫：CLI 存在 != daemon 在跑。Docker Desktop 装了没启动时
+        # 直接 `docker run` 只会拿到 npipe 原始报错（还会在加固降级链里白跑
+        # 三级）。先探测一次（实测失败仅 188ms），把原始报错换成人话——
+        # 报告里的「错误输出」段是用户真正会读的地方。
+        # 位置在白名单之后：镜像否决是关于镜像本身的安全判定，不该被
+        # 「引擎没起」掩盖（daemon 不在时把非白名单镜像放行更不行）。
+        engine_ok, engine_reason = BaseAgent.docker_engine_available([docker_cmd])
+        if not engine_ok:
+            return {
+                "success": False, "stdout": "",
+                "stderr": (f"Docker 引擎不可用：{engine_reason}。"
+                           "请启动 Docker Desktop 后重试；或在侧边栏关闭"
+                           "「Docker 沙箱执行」改用本地隔离执行。"),
+                "exit_code": EXIT_DOCKER_DAEMON_DOWN,
+                "sandbox": {"engine_available": False},
+            }
+
         reqs = (env_config.get("requirements_txt") or "").strip()
         if not reqs:
             pkgs = env_config.get("required_packages") or []

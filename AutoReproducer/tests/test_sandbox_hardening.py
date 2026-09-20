@@ -28,6 +28,7 @@ if str(Path(__file__).parent.parent) not in sys.path:
 
 import src.agents.code_executor as ce_mod  # noqa: E402
 from src.agents.code_executor import CodeExecutorAgent  # noqa: E402
+from src.base_agent import BaseAgent  # noqa: E402
 from src.llm.llm_client import LLMClient  # noqa: E402
 
 
@@ -38,6 +39,11 @@ def _restore_hardening(monkeypatch):
     monkeypatch.setattr(
         ce_mod, "DOCKER_IMAGE_ALLOWLIST",
         ["python:", "pytorch/", "autorepro", "nvidia/"])
+    # 引擎存活探测会去问本机 Docker Desktop 在不在跑——真实结果随机器状态
+    # 漂移（本机就恰好是「装了没启动」）。用例要的是「引擎可用」这一前提，
+    # 显式打桩；引擎不可用的分支由下方专门用例覆盖。
+    monkeypatch.setattr(BaseAgent, "docker_engine_available",
+                        staticmethod(lambda *a, **k: (True, None)))
     yield
 
 
@@ -395,3 +401,73 @@ class TestLimitsConfigurable:
         assert "--memory" in joined and "4g" in joined
         assert "--pids-limit" in joined and "512" in joined
         assert "--user" in joined and "1000:1000" in joined
+
+
+# ---------------- 8. 引擎存活守卫（CLI 存在 != daemon 在跑） ----------------
+
+class TestEngineGuard:
+    def _patch_engine(self, monkeypatch, ok: bool, reason=None):
+        monkeypatch.setattr(
+            BaseAgent, "docker_engine_available",
+            staticmethod(lambda *a, **k: (ok, reason)))
+
+    def test_daemon_down_exit_code_does_not_collide(self):
+        """新 exit code 取 -4：-1/-2/-3/-5/-6 已被既有语义占用。"""
+        assert ce_mod.EXIT_DOCKER_DAEMON_DOWN == -4
+        used = {ce_mod.EXIT_NOT_RUNNABLE, ce_mod.EXIT_DANGER_BLOCKED,
+                -1, -2, -3}
+        assert ce_mod.EXIT_DOCKER_DAEMON_DOWN not in used
+
+    def test_engine_down_gives_actionable_error_without_running(
+            self, monkeypatch, tmp_path):
+        """引擎未启动：不发起任何 docker run，报错是带解决办法的人话。
+
+        用户实测场景：Docker Desktop 装了没启动，侧边栏曾谎报「✅ 已就绪」，
+        于是报告里出现一坨 npipe 原始报错（`failed to connect to the docker
+        API at npipe:////./pipe/dockerDesktopLinuxEngine`）。
+        """
+        calls: list = []
+
+        def fake_run(cmd, **kw):
+            calls.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0, stdout="ok", stderr="")
+
+        monkeypatch.setattr(ce_mod.subprocess, "run", fake_run)
+        self._patch_engine(monkeypatch, False,
+                           "Docker 引擎未启动或不可用（daemon 连接失败）")
+        executor = _executor()
+        monkeypatch.setattr(executor, "_resolve_docker_cmd", lambda: "docker")
+        executor.env_config = {"image_tag": "python:3.11-slim",
+                               "requirements_txt": ""}
+        result = executor._execute_code_docker("print(1)\n", "smoke",
+                                               workdir=str(tmp_path))
+
+        assert result["success"] is False
+        assert result["exit_code"] == ce_mod.EXIT_DOCKER_DAEMON_DOWN
+        assert "Docker 引擎不可用" in result["stderr"]
+        assert "请启动 Docker Desktop" in result["stderr"]
+        assert result["sandbox"]["engine_available"] is False
+        assert not calls, "引擎不可用时不该产生任何 docker 调用"
+
+    def test_engine_down_does_not_mask_image_rejection(self, monkeypatch,
+                                                       tmp_path):
+        """非白名单镜像仍报「拒绝执行」：安全判定不被引擎状态掩盖。
+
+        daemon 不在时把非白名单镜像判成「引擎不可用」会丢安全信息，
+        反过来放行更不行——所以镜像白名单先于引擎探测。
+        """
+        calls: list = []
+        monkeypatch.setattr(ce_mod.subprocess, "run",
+                            lambda cmd, **kw: calls.append(cmd))
+        self._patch_engine(monkeypatch, False,
+                           "Docker 引擎未启动或不可用（daemon 连接失败）")
+        executor = _executor()
+        monkeypatch.setattr(executor, "_resolve_docker_cmd", lambda: "docker")
+        executor.env_config = {"image_tag": "evil/backdoor:latest",
+                               "requirements_txt": ""}
+        result = executor._execute_code_docker("print(1)\n", "smoke",
+                                               workdir=str(tmp_path))
+
+        assert result["exit_code"] == -5
+        assert result["sandbox"]["image_allowed"] is False
+        assert not calls

@@ -8,7 +8,6 @@
   （OpenAI 兼容端点 / Key / 模型真实生效）。
 """
 import os
-import shutil
 import sys
 import tempfile
 import time
@@ -21,6 +20,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from src.orchestrator import Orchestrator
 from src.llm.llm_client import LLMClient
 from src.audit.audit_logger import AuditLogger
+from src.base_agent import BaseAgent
 from src.corpus import list_papers
 from frontend.llm_config import (
     resolve_llm_config,
@@ -192,7 +192,26 @@ with st.sidebar:
     # Docker 沙箱执行开关（真实模式生效）
     if "use_docker" not in st.session_state:
         st.session_state.use_docker = True
-    docker_available = shutil.which("docker") is not None
+    if "docker_probe" not in st.session_state:
+        st.session_state.docker_probe = None       # None = 尚未探测
+
+    # 引擎存活探测：CLI 二进制在 PATH 上 ≠ Docker Desktop 的引擎在跑。
+    # 只看 `shutil.which("docker")` 会把「装了没启动」报成「✅ 已就绪」，
+    # 随后 `docker run` 甩出 npipe 原始报错（用户实测踩到）。
+    # 只在真实模式探测：Mock 模式不执行代码、用不上 Docker，也不必让
+    # Mock 用例背上真实探测。结果缓存进 session_state —— 每轮 rerun 都
+    # 跑一次探测不划算，而引擎可能被用户中途启动，所以留「重新检测」按钮
+    # 作为显式刷新路径。
+    if st.session_state.mock_mode:
+        docker_available, docker_reason = False, ""
+    else:
+        if st.session_state.docker_probe is None:
+            st.session_state.docker_probe = BaseAgent.docker_engine_available()
+        docker_available, docker_reason = st.session_state.docker_probe
+        if not docker_available:
+            # 引擎不在就把开关拉回关闭：显示开着却跑不了是最坏的组合
+            st.session_state.use_docker = False
+
     st.session_state.use_docker = st.toggle(
         "🐳 Docker 沙箱执行（真实模式）",
         value=st.session_state.use_docker,
@@ -202,7 +221,12 @@ with st.sidebar:
     if st.session_state.mock_mode:
         st.caption("🧪 Mock 模式不执行真实代码，无需 Docker")
     elif not docker_available:
-        st.caption("⚠️ 未检测到 Docker，将使用本地隔离执行（依赖安装在隔离目录）")
+        st.caption(f"⚠️ {docker_reason}，将使用本地隔离执行（依赖安装在隔离目录）")
+        if st.button("🔄 重新检测 Docker", key="docker_recheck",
+                     use_container_width=True,
+                     help="启动 Docker Desktop 后点此重新探测，无需刷新页面"):
+            st.session_state.docker_probe = None
+            st.rerun()
     else:
         st.caption(f"✅ Docker 已就绪 ({'将使用' if st.session_state.use_docker else '未启用，将使用本地隔离执行'})")
 

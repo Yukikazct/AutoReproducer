@@ -465,5 +465,75 @@ def test_resolve_docker_cmd_env_ignored_when_missing(monkeypatch):
     assert resolved is None or Path(resolved).is_file()
 
 
+# ============================================================
+# Docker 引擎存活探测（CLI 在 PATH 上 != daemon 在跑）
+# ============================================================
+# 背景（本机实测，Docker Desktop 已装但未启动）：
+#   docker version --format "{{.Server.Version}}"  -> 188ms 失败返回
+#   docker info                                    -> 20.7s 才失败返回
+# 所以探测必须走 version：走 info 会让 Streamlit 每轮重跑冻住 20 秒。
+
+def _fake_docker(tmp_path, body: str):
+    """写一个假 docker 脚本，返回 ([解释器, 脚本], 参数记录文件)。"""
+    script = tmp_path / "docker_fake.py"
+    argfile = tmp_path / "argv.txt"
+    script.write_text(
+        "import pathlib, sys\n"
+        f"pathlib.Path(r'{argfile}').write_text(' '.join(sys.argv[1:]))\n"
+        + body, encoding="utf-8")
+    return [sys.executable, str(script)], argfile
+
+
+def test_docker_engine_available_probes_version_not_info(tmp_path):
+    """探测命令锁定为 `version --format {{.Server.Version}}`（不是 info）。"""
+    from src.base_agent import BaseAgent
+    probe, argfile = _fake_docker(tmp_path, "print('29.7.2')\n")
+    ok, reason = BaseAgent.docker_engine_available(probe, timeout=30)
+    assert ok is True and reason is None
+    assert argfile.read_text(encoding="utf-8") == \
+        "version --format {{.Server.Version}}"
+
+
+def test_docker_engine_available_detects_down_daemon(tmp_path):
+    """CLI 能跑但引擎没起来 -> 判不可用，且原因是人话（可直接展示给用户）。"""
+    from src.base_agent import BaseAgent
+    probe, _ = _fake_docker(
+        tmp_path,
+        "import sys\n"
+        "sys.stderr.write('failed to connect to the docker API at "
+        "npipe:////./pipe/dockerDesktopLinuxEngine')\n"
+        "sys.exit(1)\n")
+    ok, reason = BaseAgent.docker_engine_available(probe, timeout=30)
+    assert ok is False
+    assert "未启动" in reason
+
+
+def test_docker_engine_available_requires_server_version_output(tmp_path):
+    """exit 0 但没有 server 版本号（假 CLI / 包装脚本）同样判不可用。"""
+    from src.base_agent import BaseAgent
+    probe, _ = _fake_docker(tmp_path, "print('')\n")
+    ok, _ = BaseAgent.docker_engine_available(probe, timeout=30)
+    assert ok is False
+
+
+def test_docker_engine_available_timeout_is_honest(tmp_path):
+    """CLI 卡死（daemon 无响应）时按超时判定并说明，不无限等待。"""
+    from src.base_agent import BaseAgent
+    probe, _ = _fake_docker(tmp_path, "import time\ntime.sleep(30)\n")
+    ok, reason = BaseAgent.docker_engine_available(probe, timeout=0.5)
+    assert ok is False
+    assert "超时" in reason
+
+
+def test_docker_engine_available_without_cli(monkeypatch):
+    """连 CLI 都没有时，原因指向「未安装」——与「装了没启动」区分开。"""
+    from src.base_agent import BaseAgent
+    monkeypatch.setattr(BaseAgent, "_resolve_docker_cmd",
+                        staticmethod(lambda: None))
+    ok, reason = BaseAgent.docker_engine_available()
+    assert ok is False
+    assert "未安装" in reason
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))

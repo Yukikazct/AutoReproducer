@@ -5,6 +5,66 @@
 
 ---
 
+## [2026.09.20-11] - 2026-09-20
+
+### 修复（Docker「已就绪」是假的：CLI 在 PATH ≠ 引擎在跑）
+
+用户反馈真实模式跑复现时报
+`failed to connect to the docker API at npipe:////./pipe/dockerDesktopLinuxEngine`。
+
+**根因**：`app.py` 的就绪判定是 `shutil.which("docker") is not None`——
+只证明 **CLI 二进制在 PATH 上**，不证明 **Docker Desktop 的引擎在跑**。
+本机实测正是这个组合（CLI 29.7.2 在 PATH、引擎未启动），于是侧边栏显示
+「✅ Docker 已就绪」，`use_docker=True` 传进流水线，`docker run` 秒失败，
+最终用户读到的是一坨 npipe 原始报错（报告已改为全文内嵌，这条错误整段
+糊在脸上）。执行层也没有任何兜底：`_execute_code_docker` 返回
+`success=False` 就结束，不存在「引擎不可用时降级」的路径。
+
+**探测（`src/base_agent.py::BaseAgent.docker_engine_available`）**：
+
+- 跑 `docker version --format {{.Server.Version}}`，只有引擎在线才有输出；
+- **为什么不用 `docker info`**：本机实测引擎未启动时 `docker version`
+  **188ms** 即失败返回，而 `docker info` 要 **20.7s** 才返回——后者会让
+  Streamlit 每轮重跑冻住 20 秒。探测命令的选择本身是性能决策，已用
+  测试钉死（断言实际执行的 argv 就是 `version --format ...`）；
+- 复用既有 `_resolve_docker_cmd` 探测链（`DOCKER_PATH` → PATH → 常见
+  安装目录），顺带修掉一处旧不一致：README 承诺的「Docker Desktop 常见
+  安装目录自动探测」此前在 UI 层从未生效（UI 只看 PATH）；
+- 失败原因分三类人话：「未安装」/「探测超时」/「引擎未启动」，
+  可直接展示给用户。
+
+**UI（`app.py` 侧边栏）**：真实模式才探测（Mock 不执行代码、用不上
+Docker）；结果缓存进 `docker_probe`，引擎不可用时**把开关拉回关闭**并
+禁用（显示开着却跑不了是最坏的组合），文案改为「⚠️ {原因}，将使用本地
+隔离执行」；新增「🔄 重新检测 Docker」按钮（启动 Docker Desktop 后一键
+刷新，无需刷新页面）。
+
+**执行层守卫**（漏网时给人话而非 npipe 报错）：
+
+- `code_executor._execute_code_docker`：进沙箱前探测，不可用直接返回
+  `exit_code=EXIT_DOCKER_DAEMON_DOWN(-4)` + 「请启动 Docker Desktop 后
+  重试；或在侧边栏关闭「Docker 沙箱执行」改用本地隔离执行」。位置在
+  **镜像白名单之后**——镜像否决是关于镜像本身的安全判定，不该被「引擎
+  没起」掩盖；`-4` 经测试确认不与既有 `-1/-2/-3/-5/-6` 语义冲突；
+- `env_builder.build_image` 与收口点 `_build_dockerfile`：引擎不可用即
+  诚实报错，不再先跑一次必然失败的底座探测、打一条误导性的「降级为
+  python slim」日志、最后把 npipe 报错写进构建结果。
+
+**不做**：daemon 中途挂掉时静默改走本地执行。用户显式勾了沙箱，降级必须
+由用户拍板（沙箱语义不能让基础设施故障悄悄改掉）。
+
+**测试（644 → 659）**：新增 `tests/test_app_docker_gate.py`（5 例，AppTest
+驱动真实 app.py：不谎报就绪 / 开关禁用并强制关闭 / 可用时报就绪 /
+重新检测真的重新探测 / Mock 不探测）；`test_architecture.py` +5 例覆盖探测
+函数本身（命令锁定、daemon 未起、exit 0 但无版本号、超时、无 CLI）；
+`test_sandbox_hardening.py` +3 例（exit code 不冲突、引擎不可用零调用且
+报错可操作、镜像否决不被引擎状态掩盖）；`test_env_builder_base.py` +2 例。
+另给 4 个既有测试文件加引擎打桩夹具——真实探测会让用例结果随本机
+Docker 状态漂移，`test_usage_metering` 还会因多出一条 `subprocess` 调用
+记录撞坏 `len(calls) == 1` 断言。
+
+---
+
 ## [2026.09.20-10] - 2026-09-20
 
 ### 新增 / 修复（报告代码块：深色 IDE 面板 + 全文不再截断）

@@ -16,7 +16,13 @@ _APP_PATH = str(__import__("pathlib").Path(__file__).parent.parent / "app.py")
 
 
 def _app() -> AppTest:
-    return AppTest.from_file(_APP_PATH, default_timeout=120)
+    at = AppTest.from_file(_APP_PATH, default_timeout=120)
+    # 预置 Docker 探测结果（(可用, 原因)）：本文件测的是 LLM 配置区渲染，
+    # 不该随本机 Docker Desktop 是否在跑而变（真实模式下 app.py 会探测，
+    # 引擎没起时侧边栏文案与按钮都会变）。探测本身由
+    # tests/test_app_docker_gate.py 与 tests/test_architecture.py 覆盖。
+    at.session_state["docker_probe"] = (True, None)
+    return at
 
 
 def test_mock_mode_panel_renders():
