@@ -16,6 +16,7 @@ from frontend.history_manager import (
     get_storage_stats,
     list_sessions,
     delete_session,
+    delete_sessions,
     clear_sessions,
     _is_finished_progress,
     _session_id_from_progress,
@@ -284,6 +285,93 @@ def test_delete_session_skip_other_sessions_progress(fake_data: Path):
     assert removed == 2  # ledger + mine progress
     assert mine.exists() is False
     assert theirs.exists()  # 其他会话的 progress 保留
+
+
+# ---------- delete_sessions（批量删除） ----------
+
+def _mk_report(data_dir: Path, sid: str, title: str) -> Path:
+    reports = data_dir / "reports"
+    reports.mkdir(parents=True, exist_ok=True)
+    path = reports / f"{title}_{sid}.md"
+    path.write_text("# 报告", encoding="utf-8")
+    return path
+
+
+def test_delete_sessions_removes_multiple(fake_data: Path):
+    """一次删多个会话：各自的账本/日志/报告全部清理。"""
+    sids = ["20260910_100000", "20260911_000000"]
+    reports = [_mk_report(fake_data, sid, f"论文{i}")
+               for i, sid in enumerate(sids)]
+    for i, sid in enumerate(sids):
+        _mk_ledger(fake_data, sid, f"论文{i}")
+        _write_jsonl(fake_data / "logs" / f"session_{sid}.jsonl",
+                     [{"type": "log"}])
+
+    removed, freed = delete_sessions(sids)
+
+    assert removed == 6      # 2 账本 + 2 日志 + 2 报告
+    assert freed > 0
+    for i, sid in enumerate(sids):
+        assert not (fake_data / "experiment_ledger"
+                    / f"ledger_{sid}.jsonl").exists()
+        assert not (fake_data / "logs" / f"session_{sid}.jsonl").exists()
+        assert not reports[i].exists()
+
+
+def test_delete_sessions_skips_unrelated(fake_data: Path):
+    """未传入的会话必须原样保留（批量删除不得误伤）。"""
+    keep = "20260912_000000"
+    for sid in ("20260910_100000", "20260911_000000"):
+        _mk_ledger(fake_data, sid)
+    _mk_ledger(fake_data, keep, "保留论文")
+    _write_jsonl(fake_data / "logs" / f"session_{keep}.jsonl", [{"k": 1}])
+    kept_report = _mk_report(fake_data, keep, "保留论文")
+
+    delete_sessions(["20260910_100000", "20260911_000000"])
+
+    assert (fake_data / "experiment_ledger" / f"ledger_{keep}.jsonl").exists()
+    assert (fake_data / "logs" / f"session_{keep}.jsonl").exists()
+    assert kept_report.exists()
+
+
+def test_delete_sessions_empty_and_unknown(fake_data: Path):
+    """空列表与未知会话 id 都返回 (0, 0)，不抛异常。"""
+    assert delete_sessions([]) == (0, 0)
+    assert delete_sessions(["20260101_000000"]) == (0, 0)
+    assert delete_sessions(["20260101_000000", "20260102_000000"]) == (0, 0)
+
+
+def test_delete_sessions_dedupes_input_ids(fake_data: Path):
+    """重复的会话 id 只删一份，removed 不翻倍。"""
+    sid = "20260910_100000"
+    _mk_ledger(fake_data, sid)
+    _write_jsonl(fake_data / "logs" / f"session_{sid}.jsonl", [{"a": 1}])
+
+    removed, _ = delete_sessions([sid, sid])
+
+    assert removed == 2      # ledger + log，而不是 4
+    assert not (fake_data / "experiment_ledger" / f"ledger_{sid}.jsonl").exists()
+
+
+def test_delete_sessions_matches_progress_by_content(fake_data: Path):
+    """批量删除同样按内容时间戳关联 progress，不误删其他会话的。"""
+    sid, other_sid = "20260910_100000", "20260911_000000"
+    _mk_ledger(fake_data, sid)
+    _mk_ledger(fake_data, other_sid)
+    runtime = fake_data / "runtime"
+    runtime.mkdir(parents=True, exist_ok=True)
+    mine = runtime / "progress_mine.jsonl"
+    theirs = runtime / "progress_theirs.jsonl"
+    mine.write_text(json.dumps({"type": "log", "log": {
+        "timestamp": "2026-09-10T10:00:00"}}) + "\n", encoding="utf-8")
+    theirs.write_text(json.dumps({"type": "log", "log": {
+        "timestamp": "2026-09-11T00:00:00"}}) + "\n", encoding="utf-8")
+
+    removed, _ = delete_sessions([sid])
+
+    assert removed == 2      # ledger + mine progress
+    assert mine.exists() is False
+    assert theirs.exists()
 
 
 def test_clear_sessions_removes_everything(fake_data: Path):

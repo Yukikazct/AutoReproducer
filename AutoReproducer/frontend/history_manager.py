@@ -3,6 +3,7 @@
 
 无 Streamlit 依赖，纯 Python 工具函数，便于单元测试。
 """
+import functools
 import json
 import os
 import shutil
@@ -224,12 +225,35 @@ def cleanup_runtime(keep_days: int = 7) -> Tuple[int, int]:
     return removed, freed
 
 
+@functools.lru_cache(maxsize=4096)
+def _cached_progress_sid(path_str: str, _mtime_ns: int,
+                         _size: int) -> Optional[str]:
+    """按「路径 + mtime + 大小」缓存 progress 文件的归属解析结果。
+
+    后两个参数**只作缓存键**、不参与解析：progress 是追加写的，内容一变
+    mtime/大小必变，所以旧键自然失效，不会返回过期结果。
+
+    需要缓存是因为 _related_files 每处理一个会话都要重扫一遍全部
+    progress 文件，批量删除 332 条会话时是约 10 万次开文件。
+    """
+    return _scan_progress_sid(Path(path_str))
+
+
 def _session_id_from_progress(path: Path) -> Optional[str]:
     """从 progress 文件内容的 log 时间戳提取 session_id（严格版，无 mtime 回退）。
 
     仅当文件中存在可解析的 log.timestamp 时才返回，避免把不同会话的
     progress 误归到目标会话（删除操作宁可少删、不可误删）。
     """
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return _cached_progress_sid(str(path), st.st_mtime_ns, st.st_size)
+
+
+def _scan_progress_sid(path: Path) -> Optional[str]:
+    """真正读取并解析 progress 文件（_session_id_from_progress 的缓存后端）。"""
     try:
         with open(path, "r", encoding="utf-8") as fh:
             for line in fh:
@@ -311,6 +335,27 @@ def delete_session(session_id: str) -> Tuple[int, int]:
     返回 (删除文件数, 释放字节数)。文件全部不存在时返回 (0, 0)。
     """
     return _unlink_files(_related_files(session_id))
+
+
+def delete_sessions(session_ids: List[str]) -> Tuple[int, int]:
+    """批量删除多个会话的全部关联文件，返回 (删除文件数, 释放字节数)。
+
+    与逐条调用 delete_session 等价，但只做一次删除动作：先按
+    _related_files 取并集（输入会话 id 去重、跨会话文件路径去重），
+    最后统一 _unlink_files。空列表或全部为未知会话时返回 (0, 0)。
+
+    单个文件删不掉（如仍被运行中的进程占用）只跳过、不中断整批，
+    与 _unlink_files 的既有行为一致。
+    """
+    files: List[Path] = []
+    seen = set()
+    for sid in dict.fromkeys(session_ids or []):     # 保序去重
+        for f in _related_files(sid):
+            key = str(f)
+            if key not in seen:
+                seen.add(key)
+                files.append(f)
+    return _unlink_files(files)
 
 
 def clear_sessions() -> Tuple[int, int]:

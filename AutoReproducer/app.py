@@ -39,6 +39,7 @@ from frontend.history_manager import (
     format_size,
     get_session_detail,
     delete_session,
+    delete_sessions,
     clear_sessions,
 )
 
@@ -448,6 +449,12 @@ stateDiagram-v2
 with tab5:
     st.markdown("### 📂 复现历史与存储管理")
 
+    # 删除类操作的反馈：必须跨 rerun 传递。删除后紧跟 st.rerun()，
+    # 当次运行的 st.success 会被新一次运行整棵树丢弃，用户看不到任何提示。
+    _hist_flash = st.session_state.pop("_hist_flash", "")
+    if _hist_flash:
+        st.success(_hist_flash)
+
     # -- 当前会话报告下载（如果本次复现已完成） --
     if st.session_state.result and st.session_state.result.get("report_path"):
         rp = st.session_state.result["report_path"]
@@ -494,7 +501,8 @@ with tab5:
         if st.button("清理过期/终态 runtime 文件", use_container_width=True,
                      help="删除已结束复现（done/error）遗留的进度文件，以及超过保留天数的旧进度文件"):
             removed, freed = cleanup_runtime(keep_days=keep_days)
-            st.success(f"已删除 {removed} 个文件，释放 {format_size(freed)}")
+            st.session_state["_hist_flash"] = (
+                f"已删除 {removed} 个文件，释放 {format_size(freed)}")
             st.rerun()
 
         st.markdown("---")
@@ -506,8 +514,9 @@ with tab5:
                      type="secondary",
                      disabled=not confirm_clear):
             removed, freed = clear_sessions()
-            st.success(f"已清空全部历史：删除 {removed} 个文件，"
-                       f"释放 {format_size(freed)}")
+            st.session_state["_hist_flash"] = (
+                f"已清空全部历史：删除 {removed} 个文件，"
+                f"释放 {format_size(freed)}")
             st.rerun()
 
     # -- 历史会话列表 --
@@ -517,59 +526,143 @@ with tab5:
         if not sessions:
             st.info("暂无历史复现记录。完成一次复现后将在此展示。")
         else:
-            for sess in sessions:
-                sid = sess["session_id"]
-                title = sess.get("paper_title", "未知论文")
-                state = sess.get("state", "未知")
-                state_icon = {"COMPLETED": "✅", "ERROR": "❌"}.get(state, "⏳")
-                duration = sess.get("duration_sec", 0)
-                llm_calls = sess.get("llm_calls", 0)
-                log_entries = sess.get("log_entries", 0)
-                report_path = sess.get("report_path", "")
+            # --- 筛选 ---
+            # 「其他」兜住状态机中间态（INIT / GENERATE_CODE 等），
+            # 「未知」是 list_sessions 在 ledger 为空时的字面量兜底值。
+            known_states = ("COMPLETED", "ERROR", "RUNNING", "未知")
+            f1, f2 = st.columns([1, 3])
+            state_q = f1.selectbox("状态筛选", ["全部"] + list(known_states)
+                                   + ["其他"], key="hist_state_filter")
+            title_q = f2.text_input(
+                "按标题筛选（不区分大小写，子串匹配）",
+                key="hist_title_filter").strip().lower()
 
-                with st.expander(f"{state_icon} [{sid}] {title[:40] or '无标题'}..."):
-                    c1, c2, c3 = st.columns(3)
-                    c1.metric("状态", state)
-                    c2.metric("耗时", f"{duration:.1f}s")
-                    c3.metric("LLM调用", llm_calls)
-                    st.caption(f"日志条目: {log_entries}")
+            def _match(sess: dict) -> bool:
+                st_ = sess.get("state", "未知")
+                if state_q == "其他":
+                    if st_ in known_states:
+                        return False
+                elif state_q != "全部" and st_ != state_q:
+                    return False
+                return title_q in (sess.get("paper_title") or "").lower()
 
-                    # 报告下载
-                    if report_path and os.path.exists(report_path):
-                        with open(report_path, "r", encoding="utf-8") as fh:
-                            report_data = fh.read()
-                        st.download_button(
-                            "⬇️ 下载报告",
-                            data=report_data,
-                            file_name=os.path.basename(report_path),
-                            mime="text/markdown",
-                            key=f"dl_{sid}",
-                        )
-                    else:
-                        st.caption("无报告文件")
+            visible = [s for s in sessions if _match(s)]
 
-# 详情按钮
-                    if st.button("查看详情", key=f"detail_{sid}"):
-                        detail = get_session_detail(sid)
-                        if detail:
-                            st.markdown("**审计日志片段（最近5条）:**")
-                            for entry in detail.get("logs", [])[-5:]:
-                                st.json(entry)
+            # --- 选择操作 ---
+            # 必须在下方 checkbox 实例化「之前」写 session_state：Streamlit
+            # 不允许在 widget 创建后修改它的状态（会抛 StreamlitAPIException）。
+            b1, b2, _pad = st.columns([1, 1, 3])
+            if b1.button("☑️ 全选可见", key="hist_select_all",
+                         use_container_width=True, disabled=not visible):
+                for s in visible:
+                    st.session_state[f"hist_chk_{s['session_id']}"] = True
+                st.rerun()
+            if b2.button("▫️ 清除选择", key="hist_clear_sel",
+                         use_container_width=True):
+                for s in sessions:   # 含被筛选隐藏的，不留幽灵勾选
+                    st.session_state[f"hist_chk_{s['session_id']}"] = False
+                st.rerun()
+
+            st.caption(f"共 {len(sessions)} 条 · 可见 {len(visible)} 条"
+                       f"（勾选左侧方框即可，无需展开）")
+            if any(s.get("state") == "RUNNING" for s in visible):
+                st.caption("⚠️ 可见列表含 RUNNING 会话：多为异常中断的残留；"
+                           "若该复现仍在运行，删除会丢失它的记录"
+                           "（被占用的文件自动跳过）。")
+
+            if not visible:
+                st.info("没有符合筛选条件的会话。")
+            else:
+                for sess in visible:
+                    sid = sess["session_id"]
+                    title = sess.get("paper_title", "未知论文")
+                    state = sess.get("state", "未知")
+                    state_icon = {"COMPLETED": "✅", "ERROR": "❌"}.get(state, "⏳")
+                    duration = sess.get("duration_sec", 0)
+                    llm_calls = sess.get("llm_calls", 0)
+                    log_entries = sess.get("log_entries", 0)
+                    report_path = sess.get("report_path", "")
+
+                    c_chk, c_body = st.columns([0.04, 0.96])
+                    # 勾选框放在 expander 外：批量删除时不必逐条展开
+                    c_chk.checkbox(f"选择 {sid}", key=f"hist_chk_{sid}",
+                                   label_visibility="collapsed")
+                    with c_body.expander(
+                            f"{state_icon} [{sid}] {title[:40] or '无标题'}..."):
+                        m1, m2, m3 = st.columns(3)
+                        m1.metric("状态", state)
+                        m2.metric("耗时", f"{duration:.1f}s")
+                        m3.metric("LLM调用", llm_calls)
+                        st.caption(f"日志条目: {log_entries}")
+
+                        # 报告下载
+                        if report_path and os.path.exists(report_path):
+                            with open(report_path, "r", encoding="utf-8") as fh:
+                                report_data = fh.read()
+                            st.download_button(
+                                "⬇️ 下载报告",
+                                data=report_data,
+                                file_name=os.path.basename(report_path),
+                                mime="text/markdown",
+                                key=f"dl_{sid}",
+                            )
                         else:
-                            st.warning("未找到详情")
+                            st.caption("无报告文件")
 
-                    # 删除本会话（危险操作：需勾选确认）
-                    st.markdown("---")
-                    confirm_del = st.checkbox(
-                        "确认删除本会话（账本/日志/报告/progress 一并删除）",
-                        key=f"confirm_del_{sid}")
-                    if st.button("🗑️ 删除本会话", key=f"del_btn_{sid}",
-                                 type="secondary",
-                                 disabled=not confirm_del):
-                        removed, freed = delete_session(sid)
-                        st.success(f"已删除该会话 {removed} 个文件，"
-                                   f"释放 {format_size(freed)}")
-                        st.rerun()
+                        # 详情按钮
+                        if st.button("查看详情", key=f"detail_{sid}"):
+                            detail = get_session_detail(sid)
+                            if detail:
+                                st.markdown("**审计日志片段（最近5条）:**")
+                                for entry in detail.get("logs", [])[-5:]:
+                                    st.json(entry)
+                            else:
+                                st.warning("未找到详情")
+
+                        # 删除本会话（危险操作：需勾选确认）
+                        st.markdown("---")
+                        confirm_del = st.checkbox(
+                            "确认删除本会话（账本/日志/报告/progress 一并删除）",
+                            key=f"confirm_del_{sid}")
+                        if st.button("🗑️ 删除本会话", key=f"del_btn_{sid}",
+                                     type="secondary",
+                                     disabled=not confirm_del):
+                            removed, freed = delete_session(sid)
+                            st.session_state["_hist_flash"] = (
+                                f"已删除该会话 {removed} 个文件，"
+                                f"释放 {format_size(freed)}")
+                            st.rerun()
+
+                # --- 批量删除 ---
+                # 已选必须在循环「之后」统计：checkbox 的勾选值在 widget
+                # 实例化时才写入 session_state，循环前算会滞后一次交互。
+                st.markdown("---")
+                st.markdown("**🗑️ 批量删除所选会话**（危险操作，请谨慎）")
+                selected = [
+                    s for s in visible
+                    if st.session_state.get(f"hist_chk_{s['session_id']}", False)
+                ]
+                st.caption(f"已选 {len(selected)} 条（仅统计上方可见列表；"
+                           f"被筛选隐藏的已勾选会话不会被删除）")
+
+                # 上一轮刚删完 -> 在此复位确认框。必须在 checkbox 实例化前
+                # 执行，否则触发 "cannot be modified after ... instantiated"。
+                if st.session_state.pop("_reset_batch_confirm", False):
+                    st.session_state["confirm_batch_del"] = False
+                confirm_batch = st.checkbox(
+                    "我确认批量删除以上所选会话（账本/日志/报告/progress 一并删除）",
+                    key="confirm_batch_del")
+                if st.button(f"🗑️ 删除所选 {len(selected)} 条",
+                             key="batch_del_btn", type="secondary",
+                             disabled=not selected or not confirm_batch):
+                    with st.spinner("正在删除..."):
+                        removed, freed = delete_sessions(
+                            [s["session_id"] for s in selected])
+                    st.session_state["_reset_batch_confirm"] = True
+                    st.session_state["_hist_flash"] = (
+                        f"已批量删除 {len(selected)} 个会话，共 {removed} 个文件，"
+                        f"释放 {format_size(freed)}")
+                    st.rerun()
     except Exception as e:
         st.error(f"加载历史记录失败: {e}")
 
