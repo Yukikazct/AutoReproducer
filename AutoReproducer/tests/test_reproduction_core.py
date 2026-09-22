@@ -203,6 +203,55 @@ class TestSyntaxGateAndRegeneration:
         assert result["success"] is True
         assert llm.call_count == 0
 
+
+class TestExecutionRepair:
+
+    def _agent(self, llm):
+        return CodeExecutorAgent(llm)
+
+    def test_runtime_error_is_repaired_and_rerun(self):
+        broken = "print(missing_value)\n"
+        fixed = "print('repaired')\n"
+        llm = _ScriptedLLM([fixed])
+        result = CodeExecutorAgent(llm).run({
+            "code": broken,
+            "paper_info": {"method": "演示方法", "dataset": "合成数据"},
+        })
+
+        assert result["success"] is True, result
+        assert result["code"] == fixed.strip()
+        assert result["final"]["stdout"].strip() == "repaired"
+        assert len(result["repair_attempts"]) == 1
+        assert result["repair_attempts"][0]["diagnosis"]["line"] == 1
+        assert "NameError" in result["repair_attempts"][0]["diagnosis"]["message"]
+        assert "失败位置" in llm.prompts[0]
+
+    def test_unrepairable_timeout_does_not_call_llm(self, monkeypatch):
+        agent = CodeExecutorAgent(_ScriptedLLM(["print('must not use')"]))
+
+        monkeypatch.setattr(
+            agent, "_execute_code",
+            lambda code, stage: {
+                "success": False, "stdout": "", "stderr": "执行超时(10s, smoke)",
+                "exit_code": -1,
+            },
+        )
+        result = agent.run({"code": "print('x')", "paper_info": {}})
+
+        assert result["success"] is False
+        assert result["repair_attempts"][0]["status"] == "stopped"
+        assert agent.llm.call_count == 0
+
+    def test_repair_result_is_checked_for_dangerous_code(self):
+        llm = _ScriptedLLM(["import os\nos.system('echo unsafe')\n"])
+        result = CodeExecutorAgent(llm).run({
+            "code": "print(missing_value)\n", "paper_info": {},
+        })
+
+        assert result["success"] is False
+        assert result["repair_attempts"][0]["status"] == "stopped"
+        assert "危险调用" in result["repair_attempts"][0]["diagnosis"]["repair_error"]
+
     def test_external_broken_code_reports_syntax_error(self):
         llm = _ScriptedLLM([COMPLETE_CODE])
         agent = self._agent(llm)

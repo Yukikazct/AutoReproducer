@@ -39,6 +39,8 @@ from frontend.history_manager import (
     list_deps_cache,
     delete_deps_cache,
     cleanup_deps_cache,
+    list_resource_events,
+    list_resource_inventory,
     format_size,
     get_session_detail,
     delete_session,
@@ -513,6 +515,43 @@ with tab5:
             )
 
 # -- 存储仪表板 --
+    # -- 资源下载/安装监控 --
+    with st.expander("📡 资源下载与安装监控", expanded=True):
+        if st.button("🔄 刷新资源状态", key="resource_refresh",
+                     use_container_width=True):
+            st.rerun()
+        events = list_resource_events(limit=100)
+        inventory = list_resource_inventory()
+        running = [e for e in events if e.get("state") == "running"]
+        if running:
+            st.warning(f"当前有 {len(running)} 个资源操作进行中")
+        else:
+            st.caption("当前没有正在记录的下载或依赖安装操作")
+        if inventory:
+            st.dataframe(
+                [{"类型": row["type"], "资源": row["id"],
+                  "论文": row["paper_id"] or "共享缓存",
+                  "状态": row["state"],
+                  "占用": format_size(row["bytes"]),
+                  "最后使用": (row["last_used"] or "")[:19].replace("T", " "),
+                  "来源/内容": row["detail"] or "—"}
+                 for row in inventory],
+                use_container_width=True, hide_index=True)
+        else:
+            st.info("暂无资源清单。运行一次复现后，依赖和数据集会显示在这里。")
+        if events:
+            st.markdown("**最近资源事件**")
+            st.dataframe(
+                [{"时间": (e.get("timestamp") or "")[:19].replace("T", " "),
+                  "类型": e.get("resource_type", ""),
+                  "资源": e.get("resource_id", ""),
+                  "操作": e.get("operation", ""),
+                  "状态": e.get("state", ""),
+                  "详情": e.get("detail", "") or e.get("error", "")}
+                 for e in events[:30]],
+                use_container_width=True, hide_index=True)
+
+    # -- 存储仪表板 --
     st.markdown("#### 💾 存储占用")
     try:
         storage = get_storage_stats()

@@ -40,6 +40,8 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 from src.resource_manager import (  # noqa: E402
     ResourceManager, _fmt_bytes)
+from frontend.history_manager import (  # noqa: E402
+    list_resource_events, list_resource_inventory)
 
 
 def _manager(args) -> ResourceManager:
@@ -192,6 +194,34 @@ def cmd_quota_check(args) -> int:
     return 2
 
 
+def cmd_resources(args) -> int:
+    rows = list_resource_inventory()
+    if args.json:
+        import json
+        print(json.dumps(rows, ensure_ascii=False, indent=2))
+        return 0
+    for row in rows:
+        print(f"{row['type']:<12} {row['id']:<35} "
+              f"{row['state']:<10} {_fmt_bytes(row['bytes']):>10} "
+              f"{row.get('detail', '')[:80]}")
+    return 0
+
+
+def cmd_events(args) -> int:
+    events = list_resource_events(limit=args.limit)
+    if args.json:
+        import json
+        print(json.dumps(events, ensure_ascii=False, indent=2))
+        return 0
+    for event in events:
+        print(f"{event.get('timestamp', '')[:19]} "
+              f"{event.get('resource_type', ''):<12} "
+              f"{event.get('state', ''):<10} "
+              f"{event.get('resource_id', '')} "
+              f"{event.get('detail', '')}")
+    return 0
+
+
 # ---------------- 主入口 ----------------
 
 def build_parser() -> argparse.ArgumentParser:
@@ -206,6 +236,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("status", help="查看 L0 配额占用与论文统计")
     sub.add_parser("list", help="列出已登记论文及资源状态")
+    p_resources = sub.add_parser("resources", help="查看本地资源清单")
+    p_resources.add_argument("--json", action="store_true")
+    p_events = sub.add_parser("events", help="查看最近资源下载/安装事件")
+    p_events.add_argument("--limit", type=int, default=100)
+    p_events.add_argument("--json", action="store_true")
 
     p_manifest = sub.add_parser("manifest", help="查看单篇论文 manifest")
     p_manifest.add_argument("paper_id")
@@ -237,6 +272,8 @@ def main(argv=None) -> int:
         "manifest": cmd_manifest, "archive": cmd_archive,
         "restore": cmd_restore, "prune": cmd_prune,
         "quota-check": cmd_quota_check,
+        "resources": cmd_resources,
+        "events": cmd_events,
     }
     return handlers[args.command](args)
 

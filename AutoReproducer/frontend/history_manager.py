@@ -497,6 +497,64 @@ def cleanup_deps_cache(keep_days: int = 30) -> Tuple[int, int]:
     return delete_deps_cache(stale)
 
 
+def list_resource_events(limit: int = 500) -> List[Dict[str, Any]]:
+    """读取下载/安装事件，供前端和 CLI 展示最近资源活动。"""
+    path = get_project_data_dir() / "resource_events.jsonl"
+    if not path.is_file():
+        return []
+    events: List[Dict[str, Any]] = []
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return events
+    for line in lines[-max(1, limit):]:
+        try:
+            item = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(item, dict):
+            events.append(item)
+    return list(reversed(events))
+
+
+def list_resource_inventory() -> List[Dict[str, Any]]:
+    """从磁盘和 manifest 汇总依赖、数据集、代码和权重资源。"""
+    base = get_project_data_dir()
+    rows: List[Dict[str, Any]] = []
+    for item in list_deps_cache():
+        rows.append({
+            "type": "dependency", "id": item["name"], "paper_id": "",
+            "state": "ready" if (Path(item["path"]) / ".ready").is_file()
+            else "partial", "bytes": item["bytes"],
+            "last_used": item["last_used"],
+            "detail": ", ".join(item["packages"]) or item["requirements"],
+        })
+    manifests = base / "manifests"
+    if manifests.is_dir():
+        for path in manifests.glob("*.json"):
+            try:
+                manifest = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            pid = manifest.get("paper_id", path.stem)
+            resources = manifest.get("resources", {})
+            for kind, resource_path in resources.items():
+                if not resource_path:
+                    continue
+                p = Path(resource_path)
+                rows.append({
+                    "type": kind, "id": f"{pid}:{kind}", "paper_id": pid,
+                    "state": "present" if p.exists() else "missing",
+                    "bytes": _dir_size(p)[1] if p.is_dir()
+                    else (p.stat().st_size if p.is_file() else 0),
+                    "last_used": manifest.get("created_at", ""),
+                    "detail": manifest.get(
+                        "dataset_name" if kind == "dataset" else
+                        f"{kind}_url", ""),
+                })
+    return rows
+
+
 def get_session_detail(session_id: str) -> Optional[Dict[str, Any]]:
     """获取单次会话的详细记录（ledger + logs）。"""
     base = get_project_data_dir()

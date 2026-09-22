@@ -41,6 +41,7 @@ from src.agents.env_builder import PIP_INDEX_URL, PIP_FIND_LINKS
 from src.agents.dependency_resolver import (
     find_missing_module, python_package_for,
 )
+from src.resource_events import ResourceEventLogger
 
 LOCAL_TIMEOUT_SMOKE = 10
 LOCAL_TIMEOUT_FULL = 60
@@ -183,6 +184,8 @@ MAX_CODE_CONTINUE = 3
 # 更严：那两条针对"写得不够"，这条针对"没写"——同一条 prompt 重放只会再撞
 # 一次，值得的只有换指令问一次。
 MAX_MARK_RETRY = 1
+# 执行阶段代码修复上限：每轮都必须重新通过语法/安全门并重跑。
+MAX_EXECUTION_REPAIRS = 3
 # 续写 prompt 里回灌的"已写内容"末尾行数（够模型接上下文即可，不必全给）
 _CONTINUE_TAIL_LINES = 40
 # 模型仍可能回的占位标记（整份"代码"只有这一行注释）。命中即走
@@ -200,6 +203,8 @@ _TRUNCATION_TAIL_CHARS = "=*+-([{,:\\"
 # 与 _TRUNCATION_TAIL_CHARS 的区别：**不含 `:`**——`for i in range(3):`
 # 是语法完整的行，正等着后续代码块，丢掉它反而会毁掉循环。
 _DANGLING_TAIL_CHARS = "=*+-([{,|\\"
+_TRACEBACK_RE = re.compile(
+    r'File "([^"]+)", line (\d+)(?:, in ([^\n]+))?\s*\n\s*(.*)')
 # 续写契约要求模型先重写 head 末行；该约定只在末行确实悬挂时生效
 # 判定"未知/占位"论文信息用的空值模式（与 PaperReader._UNKNOWN_RE 判据一致）
 _UNKNOWN_RE = re.compile(
@@ -211,6 +216,7 @@ EXIT_NOT_RUNNABLE = -5
 EXIT_DANGER_BLOCKED = -6
 # Exit code：Docker 引擎（daemon）不可用，未进入沙箱
 EXIT_DOCKER_DAEMON_DOWN = -4
+_NON_CODE_REPAIR_EXIT_CODES = {-1, -3, -4, EXIT_DANGER_BLOCKED}
 
 # 本地无沙箱执行前的危险代码静态门：命中即拒绝执行。高信号、对「复现
 # 训练脚本」低误报；是正则兜底而非正式沙箱，生产复现不可信代码请用 Docker。
@@ -339,6 +345,142 @@ class CodeExecutorAgent(BaseAgent):
         # 运行时自愈补装的隔离目录集合（data/deps/heal-<module>/），
         # 全部注入 PYTHONPATH，与依赖清单目录不互相污染。
         self._heal_dirs: set = set()
+        self.resource_events = ResourceEventLogger()
+
+    @staticmethod
+    def _diagnose_execution_error(result: Dict) -> Dict:
+        """从执行结果提取可供修复模型使用的结构化诊断。"""
+        stderr = str(result.get("stderr") or "")
+        stdout = str(result.get("stdout") or "")
+        combined = stderr or stdout
+        match = None
+        for match in _TRACEBACK_RE.finditer(combined):
+            pass
+        diagnosis = {
+            "error_type": "execution_error",
+            "message": combined[-2000:],
+            "file": "",
+            "line": None,
+            "function": "",
+            "source_line": "",
+            "repairable": True,
+        }
+        if match:
+            diagnosis.update({
+                "file": match.group(1),
+                "line": int(match.group(2)),
+                "function": (match.group(3) or "").strip(),
+                "source_line": (match.group(4) or "").strip(),
+            })
+            tail = combined[match.start():]
+            error_lines = [line.strip() for line in tail.splitlines()
+                           if line.strip()]
+            if error_lines:
+                diagnosis["error_type"] = error_lines[-1].split(":", 1)[0]
+                diagnosis["message"] = "\n".join(error_lines[-4:])[-2000:]
+        lower = combined.lower()
+        if "modulenotfounderror" in lower or "no module named" in lower:
+            diagnosis["error_type"] = "missing_dependency"
+            diagnosis["repairable"] = False
+        if "timed out" in lower or "执行超时" in lower:
+            diagnosis["error_type"] = "timeout"
+            diagnosis["repairable"] = False
+        if result.get("danger_blocked") or result.get("exit_code") in (
+                _NON_CODE_REPAIR_EXIT_CODES):
+            diagnosis["repairable"] = False
+        return diagnosis
+
+    @staticmethod
+    def _repair_prompt(paper_info: Dict, code: str, stage: str,
+                       diagnosis: Dict) -> str:
+        """生成定点修复请求，避免模型只解释错误而不返回代码。"""
+        location = "未知位置"
+        if diagnosis.get("line") is not None:
+            location = f"{diagnosis.get('file', 'run.py')}:{diagnosis['line']}"
+        return f"""你正在修复一份论文复现 Python 脚本。脚本在 {stage} 阶段执行失败。
+请根据 traceback 对代码做最小、定点的修复，保持论文方法、数据处理、指标打印
+和已有工作区接口不变。只输出修复后的完整 Python 源码，不要 Markdown 围栏、
+解释文字或占位标记。
+
+论文方法: {paper_info.get('method', '未知')}
+论文数据集: {paper_info.get('dataset', '未知')}
+失败位置: {location}
+异常类型: {diagnosis.get('error_type', 'execution_error')}
+错误上下文:
+{diagnosis.get('message', '')}
+
+当前代码:
+```python
+{code}
+```
+"""
+
+    def _repair_after_execution(self, paper_info: Dict, code: str,
+                                stage: str, result: Dict) -> tuple:
+        """请求一次代码修复，并在返回后立即执行语法/安全门。"""
+        diagnosis = self._diagnose_execution_error(result)
+        if not diagnosis["repairable"]:
+            return code, diagnosis, None
+        raw = self.llm.chat(
+            self._repair_prompt(paper_info, code, stage, diagnosis),
+            task="code_executor_repair")
+        candidate, stats = self._sanitize_code_ex(raw)
+        diagnosis["sanitize_stats"] = stats
+        if self._is_placeholder_code(candidate):
+            diagnosis["repair_error"] = "修复结果为空或仅包含占位标记"
+            return code, diagnosis, None
+        syntax_error = self._syntax_error(candidate)
+        if syntax_error:
+            diagnosis["repair_error"] = f"修复结果语法错误: {syntax_error}"
+            return code, diagnosis, None
+        if not self.use_docker:
+            danger = self._dangerous_constructs(candidate)
+            if danger:
+                diagnosis["repair_error"] = f"修复结果含危险调用: {danger}"
+                return code, diagnosis, None
+        return candidate, diagnosis, candidate
+
+    def _execute_with_repair(self, code: str, paper_info: Dict) -> tuple:
+        """执行 smoke/full；运行时错误按预算定点修复后从 smoke 重跑。"""
+        stages = []
+        attempts = []
+        current = code
+        for repair_round in range(MAX_EXECUTION_REPAIRS + 1):
+            smoke = self._execute_code(current, stage="smoke")
+            stages.append({"stage": "smoke", "repair_round": repair_round,
+                           **smoke})
+            if not smoke["success"]:
+                failed_stage, failed = "smoke", smoke
+            else:
+                full = self._execute_code(current, stage="full")
+                stages.append({"stage": "full", "repair_round": repair_round,
+                               **full})
+                if full["success"]:
+                    return current, stages, attempts, full
+                failed_stage, failed = "full", full
+            if repair_round >= MAX_EXECUTION_REPAIRS:
+                break
+            fixed, diagnosis, candidate = self._repair_after_execution(
+                paper_info, current, failed_stage, failed)
+            attempt = {
+                "round": repair_round + 1,
+                "stage": failed_stage,
+                "diagnosis": diagnosis,
+                "code_before_sha1": hashlib.sha1(
+                    current.encode("utf-8")).hexdigest(),
+            }
+            if candidate is None:
+                attempt["status"] = "stopped"
+                attempts.append(attempt)
+                break
+            attempt.update({
+                "status": "retry",
+                "code_after_sha1": hashlib.sha1(
+                    fixed.encode("utf-8")).hexdigest(),
+            })
+            attempts.append(attempt)
+            current = fixed
+        return current, stages, attempts, stages[-1]
 
     def run(self, input_data: dict) -> dict:
         """执行论文代码（smoke test + full run）。
@@ -397,42 +539,36 @@ class CodeExecutorAgent(BaseAgent):
                     f"代码含危险调用，已拒绝执行: {danger}", code=code,
                     sanitize_stats=sanitize_stats, extra=best_effort_fields)
 
-        smoke = self._execute_code(code, stage="smoke")
-        if not smoke["success"]:
-            # smoke 失败：不浪费预算跑 full，返回诊断信息
-            result = {"stages": [{"stage": "smoke", **smoke}],
-                      "success": False, "final": smoke,
-                      "code": code, "sanitize_stats": sanitize_stats,
-                      **best_effort_fields}
-            self.log_experiment(
-                "EXECUTE_CODE", "smoke test 失败,终止 full run",
-                inputs={"code": code}, outputs=smoke,
-                result={"success": False})
-            self.log("execute_code", "ERROR",
-                     f"smoke test 失败: {(smoke.get('stderr') or '')[:120]}",
-                     {"stage": "smoke", "exit_code": smoke.get("exit_code")})
-            return {**result, "llm_calls": self._delta_llm_calls()}
-
-        full = self._execute_code(code, stage="full")
-        stages = [{"stage": "smoke", **smoke}, {"stage": "full", **full}]
-        result = {"stages": stages, "success": full["success"],
-                  "final": full, "code": code,
+        code, stages, repair_attempts, final = self._execute_with_repair(
+            code, paper_info)
+        result = {"stages": stages, "success": final["success"],
+                  "final": final, "code": code,
+                  "repair_attempts": repair_attempts,
                   "sanitize_stats": sanitize_stats,
                   **best_effort_fields}
+        if not final["success"]:
+            self.log_experiment(
+                "EXECUTE_CODE", "执行失败，代码修复重试结束",
+                inputs={"code": code}, outputs={"stages": stages,
+                                                "repair_attempts": repair_attempts},
+                result={"success": False})
+            self.log("execute_code", "ERROR",
+                     f"代码执行失败（已尝试 {len(repair_attempts)} 轮修复）",
+                     {"exit_code": final.get("exit_code"),
+                      "repair_attempts": len(repair_attempts)})
+            return {**result, "llm_calls": self._delta_llm_calls()}
 
         self.log_experiment(
             "EXECUTE_CODE", "完成 smoke + full 两阶段执行",
             inputs={"code": code},
-            outputs={"smoke": smoke, "full": full},
-            result={"success": full["success"]},
+            outputs={"stages": stages, "repair_attempts": repair_attempts},
+            result={"success": True},
         )
-        self.log("execute_code",
-                 "SUCCESS" if full["success"] else "ERROR",
-                 f"代码执行{'成功' if full['success'] else '失败'} "
-                 f"(smoke 通过, full {'通过' if full['success'] else '失败'})",
-                 {"smoke_exit": smoke.get("exit_code"),
-                  "full_exit": full.get("exit_code"),
-                  "stdout_tail": (full.get("stdout") or "")[-300:]})
+        self.log("execute_code", "SUCCESS",
+                 f"代码执行成功（修复 {len(repair_attempts)} 轮）",
+                 {"exit_code": final.get("exit_code"),
+                  "repair_attempts": len(repair_attempts),
+                  "stdout_tail": (final.get("stdout") or "")[-300:]})
 
         return {**result, "llm_calls": self._delta_llm_calls()}
 
@@ -1226,7 +1362,14 @@ class CodeExecutorAgent(BaseAgent):
             return None
 
         key = reqs
+        resource_id = reqs_digest(reqs)
+        self.resource_events.emit(
+            "dependency", resource_id, "install", "running",
+            requirements=normalize_requirements(reqs))
         if key in _INSTALLED_DEPS:
+            self.resource_events.emit(
+                "dependency", resource_id, "install", "cached",
+                detail="进程内依赖状态缓存命中")
             return _INSTALLED_DEPS[key] or None
 
         req_file = os.path.join(workdir, "requirements.txt")
@@ -1245,6 +1388,9 @@ class CodeExecutorAgent(BaseAgent):
             # mock 演示：不触网、不装大包，直接视为就绪
             self._deps_dir = None
             _INSTALLED_DEPS[key] = ""
+            self.resource_events.emit(
+                "dependency", resource_id, "install", "skipped",
+                detail="mock_mode 跳过真实依赖安装")
             self.log("install_deps", "SUCCESS",
                      "mock_mode 跳过真实依赖安装")
             return None
@@ -1256,6 +1402,9 @@ class CodeExecutorAgent(BaseAgent):
             touch_deps_meta(deps_dir)       # 刷新 last_used，供冷热清理判断
             self.log("install_deps", "SUCCESS",
                      f"复用隔离依赖目录: {deps_dir.name}")
+            self.resource_events.emit(
+                "dependency", resource_id, "install", "cached",
+                path=str(deps_dir), bytes=self._path_bytes(deps_dir))
             return None
 
         try:
@@ -1279,6 +1428,9 @@ class CodeExecutorAgent(BaseAgent):
                 _write_deps_meta(deps_dir, "reqs", requirements=reqs)
                 self.log("install_deps", "SUCCESS",
                          f"隔离依赖安装完成: {deps_dir.name}")
+                self.resource_events.emit(
+                    "dependency", resource_id, "install", "succeeded",
+                    path=str(deps_dir), bytes=self._path_bytes(deps_dir))
                 return None
             detail = (res.stderr or res.stdout or "").strip()[-800:]
             _INSTALLED_DEPS[key] = (
@@ -1291,7 +1443,19 @@ class CodeExecutorAgent(BaseAgent):
         except Exception as e:      # 连失败原因都拿不到（如 pip 自身异常）
             _INSTALLED_DEPS[key] = f"依赖安装异常: {e}"
         self.log("install_deps", "ERROR", _INSTALLED_DEPS[key][:200])
+        self.resource_events.emit(
+            "dependency", resource_id, "install", "failed",
+            detail=_INSTALLED_DEPS[key][:500])
         return _INSTALLED_DEPS[key]
+
+    @staticmethod
+    def _path_bytes(path: Path) -> int:
+        if not path.exists():
+            return 0
+        if path.is_file():
+            return path.stat().st_size
+        return sum(item.stat().st_size for item in path.rglob("*")
+                   if item.is_file())
 
     def _exec_env(self) -> Dict:
         """构造子进程执行环境：依赖隔离目录存在时注入 PYTHONPATH。

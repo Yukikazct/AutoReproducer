@@ -27,6 +27,7 @@ import subprocess
 import zipfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from src.resource_events import ResourceEventLogger
 
 # src/resource_manager.py -> parents[1] 为仓库内 AutoReproducer 包根
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -112,6 +113,8 @@ class ResourceManager:
             dataset_registry = DatasetRegistry()
         self.dataset_registry = dataset_registry
         self.logger = logger
+        self.resource_events = ResourceEventLogger(
+            str(self.data_root / "resource_events.jsonl"))
         for d in (self.repos_root, self.datasets_root,
                   self.manifests_root, self.archive_root):
             os.makedirs(d, exist_ok=True)
@@ -124,6 +127,11 @@ class ResourceManager:
                 self.logger.log(event, status, detail)
             except Exception:
                 pass
+
+    def _resource_event(self, resource_type: str, resource_id: str,
+                        operation: str, state: str, **details: Any) -> None:
+        self.resource_events.emit(resource_type, resource_id, operation,
+                                  state, **details)
 
     @staticmethod
     def paper_id_for(paper_title: str, corpus_key: str = "") -> str:
@@ -270,10 +278,16 @@ class ResourceManager:
         if not name:
             info["detail"] = "无数据集名称"
             return info
+        self._resource_event("dataset", f"{paper_id}:{name}", "download",
+                             "running", paper_id=paper_id, level=level,
+                             source=name)
         if smoke_dir.exists() and any(smoke_dir.iterdir()):
             info.update(path=str(smoke_dir), state="cached",
                         level="smoke", detail="冒烟集缓存命中",
                         rows=_SMOKE_ROWS)
+            self._resource_event("dataset", f"{paper_id}:{name}", "download",
+                                 "cached", path=str(smoke_dir),
+                                 bytes=self._path_bytes(smoke_dir))
             return info
 
         meta = self._registry_lookup(name)
@@ -301,6 +315,10 @@ class ResourceManager:
                 if result["state"] == "downloaded":
                     info.update(result)
                     info["path"] = str(ds_dir)
+                    self._resource_event(
+                        "dataset", f"{paper_id}:{name}", "download",
+                        "succeeded", path=str(ds_dir),
+                        bytes=self._path_bytes(ds_dir), detail=info["detail"])
                     return info
 
         # 降级：合成最小冒烟集（离线验证流程）
@@ -316,7 +334,30 @@ class ResourceManager:
                         rows=_SMOKE_ROWS)
         except Exception as exc:
             info.update(state="unavailable", detail=str(exc)[-300:])
+        self._resource_event(
+            "dataset", f"{paper_id}:{name}", "download",
+            "succeeded" if info["state"] == "smoke-synth" else "failed",
+            path=info.get("path"), bytes=self._path_bytes(ds_dir),
+            detail=info.get("detail"))
         return info
+
+    @staticmethod
+    def _path_bytes(path: Path) -> int:
+        if path.is_file():
+            try:
+                return path.stat().st_size
+            except OSError:
+                return 0
+        if not path.is_dir():
+            return 0
+        total = 0
+        for item in path.rglob("*"):
+            try:
+                if item.is_file():
+                    total += item.stat().st_size
+            except OSError:
+                continue
+        return total
 
     def _registry_lookup(self, name: str) -> Optional[Dict]:
         if self.dataset_registry is None:
