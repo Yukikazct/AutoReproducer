@@ -346,12 +346,13 @@ with st.sidebar:
         value=st.session_state.mock_mode,
         help="启用Mock模式可直接演示，无需连接任何LLM服务")
 
-    # Docker 沙箱执行开关（真实模式生效）。
-    # 默认**关闭**：容器沙箱的代价是每次运行都要在容器里现装依赖（tmpfs 随
-    # `--rm` 清空，numpy 级别约 20 秒、torch 级别几分钟），默认开着会让用户
-    # 的第一次真实运行无声地落在容器里、慢且难解释；本地隔离执行（依赖装进
-    # data/deps/<hash>/，多论文共享）才是开箱即跑的那条路。
-    # 要用容器随时手动打开——今天它已在真实容器里实测跑通。
+    # Docker 沙箱执行开关（真实模式生效）。**默认关闭，但关闭 ≠ 可以跑**：
+    # 真实模式下代码执行与容器沙箱是绑定的（官方仓库代码更是不可信第三方
+    # 代码），关掉开关等于"真实模式代码暂不执行"，执行层会以
+    # EXIT_ISOLATION_REQUIRED 拒绝，**不会**回退到宿主机上跑。
+    # 默认关只是为了让首次真实运行别无声地落进容器（容器内现装依赖：tmpfs
+    # 随 `--rm` 清空，numpy 级别约 20 秒、torch 级别几分钟，慢且难解释）；
+    # 下面的文案与帮助都按"必须显式打开"来讲，不留含糊。
     if "use_docker" not in st.session_state:
         st.session_state.use_docker = False
     if "docker_probe" not in st.session_state:
@@ -396,6 +397,11 @@ with st.sidebar:
                       if st.session_state.use_docker
                       else "尚未启用容器沙箱，真实模式代码暂不执行")
                    + ")")
+        # 首次运行要拉 python:3.11-slim；受限网络下拉 docker.io 会直接失败
+        # （实测 context deadline exceeded，随后被误当成"代码跑不起来"）。
+        # 这里提前把出路说清楚：加镜像源环境变量即可。
+        st.caption("首次运行需拉取基础镜像；网络不通时设置环境变量 "
+                   "`AUTOREPRO_DOCKER_IMAGE_MIRROR`（如 docker.m.daocloud.io）")
 
     # LLM API 配置（真实模式；OpenAI 兼容接口，不依赖本地部署）
     with st.expander("LLM API 配置", expanded=not st.session_state.mock_mode):
@@ -513,7 +519,8 @@ with tab1:
         "PaperReader": ("论文解析", "从 PDF/标题中提取结构化信息"),
         "ResourceFinder": ("资源查找", "定位代码仓库和数据集"),
         "EnvBuilder": ("环境构建", "自动搭建环境 + 依赖诊断"),
-        "CodeExecutor": ("代码执行", "smoke + full 双阶段执行"),
+        "ExecutionPlanner": ("执行规划", "多代码单元整体调用计划(安装->数据->训练->解析)"),
+        "CodeExecutor": ("代码执行", "官方入口脚本优先 + smoke/full 双阶段执行"),
         "ResultValidator": ("结果验证", "比对论文声明值与运行结果"),
         "Verifier": ("质量验证", "Prompt-Free 检查质量 + 修正闭环"),
         "Optimizer": ("智能优化", "UCB 预算调度, Keep/Reject"),
@@ -713,7 +720,8 @@ stateDiagram-v2
         {"状态": "READ_PAPER", "说明": "解析论文PDF/标题,提取结构化信息", "Agent": "PaperReader"},
         {"状态": "FIND_RESOURCES", "说明": "查找代码仓库和数据集", "Agent": "ResourceFinder"},
         {"状态": "BUILD_ENV", "说明": "构建环境 + 5轮依赖诊断", "Agent": "EnvBuilder"},
-        {"状态": "EXECUTE_CODE", "说明": "smoke+full 双阶段执行", "Agent": "CodeExecutor"},
+        {"状态": "PLAN_EXECUTION", "说明": "多代码单元整体调用计划(安装→数据→训练→解析)", "Agent": "ExecutionPlanner"},
+        {"状态": "EXECUTE_CODE", "说明": "官方入口脚本优先执行,失败回退生成脚本", "Agent": "CodeExecutor"},
         {"状态": "VALIDATE", "说明": "验证结果与论文一致性", "Agent": "ResultValidator"},
         {"状态": "OPTIMIZING", "说明": "复现成功后,UCB 预算调度优化", "Agent": "Optimizer"},
         {"状态": "OPTIMIZED", "说明": "优化完成,产出最优方案", "Agent": "Optimizer"},

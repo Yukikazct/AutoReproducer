@@ -14,10 +14,16 @@ run_pipeline_core()，把每个阶段的进度事件实时追加写入进度文�
 
 read_snapshot() 聚合以上事件为前端可直接渲染的视图：
   {state, agent_status, logs, result, done, error, running, updated_at}
+
+架构说明（驱动器统一，修复 UI 路径漏拉资源的缺陷）：
+run_pipeline_core 是 Orchestrator（唯一 FSM 驱动器）的薄封装——通过
+progress_cb 回调把阶段状态实时转写为进度事件。此前这里自持一份
+流水线循环，直接驱动各 Agent，漏掉了 Orchestrator 的资源懒加载
+（git clone 官方仓库）、Docker 镜像构建与验证修正闭环，导致
+「发现了官方仓库却从未下载、复现跑的是 LLM 占位脚本」。
 """
 import json
 import os
-import shutil
 import threading
 import time
 from datetime import datetime
@@ -34,12 +40,13 @@ AGENTS = [
     ("READ_PAPER", "PaperReader", "reader"),
     ("FIND_RESOURCES", "ResourceFinder", "finder"),
     ("BUILD_ENV", "EnvBuilder", "builder"),
+    ("PLAN_EXECUTION", "ExecutionPlanner", "planner"),
     ("EXECUTE_CODE", "CodeExecutor", "executor"),
     ("VALIDATE", "ResultValidator", "validator"),
 ]
 
-OPTIMIZER_NAME = "Optimizer"
-REPORTER_NAME = "ReportGenerator"
+# 展示名映射已收敛到 Orchestrator.STAGE_DISPLAY（单一事实来源），
+# 此处仅保留进度事件需要独立使用的常量。
 VERIFIER_NAME = "Verifier"
 
 
@@ -131,26 +138,12 @@ def run_pipeline_core(progress_path: str,
                       workspace_dir: Optional[str] = None) -> Dict[str, Any]:
     """后台执行完整复现流水线（复现 -> 验证 -> 优化 -> 报告）。
 
-    与前端解耦：不触碰 st.session_state，进度实时写入 progress_path；
-    返回最终 result（与 app.py 旧 run_pipeline 结构一致，供 done 事件与
-    前端结果摘要复用）。临时 PDF 由调用方负责清理。
+    Orchestrator（唯一 FSM 驱动器）的薄封装：通过 progress_cb 把阶段
+    状态实时转写为进度事件。与前端解耦：不触碰 st.session_state，
+    进度实时写入 progress_path；返回最终 result（供 done 事件与前端
+    结果摘要复用）。临时 PDF 由调用方负责清理。
     """
     store = ProgressStore(progress_path)
-    state: Dict[str, Any] = {"current": "INIT"}
-    running: Dict[str, Any] = {"value": True}
-    pdf_path = pdf_path or ""
-
-    def _current() -> str:
-        return state["current"]
-
-    def _set_current(s: str) -> None:
-        state["current"] = s
-
-    def _mark_result(result: Dict[str, Any]) -> Dict[str, Any]:
-        running["value"] = False
-        store.emit({"type": "done", "result": result})
-        return result
-
     logger = AuditLogger()
     error_msg: Optional[str] = None
     emitted = 0
@@ -163,6 +156,11 @@ def run_pipeline_core(progress_path: str,
             store.emit({"type": "log", "log": entry})
         emitted = len(entries)
 
+    def _cb(state_name: str, display_name: str, status: str) -> None:
+        _emit_state(store, state_name, display_name, status)
+        # 阶段状态变化时同步增量推送审计日志，保持 UI 实时可见
+        _emit_new_logs()
+
     llm = LLMClient(
         mock_mode=mock_mode,
         model="" if mock_mode else model_name,
@@ -172,111 +170,35 @@ def run_pipeline_core(progress_path: str,
     orchestrator = Orchestrator(llm_client=llm, mock_mode=mock_mode,
                                 logger=logger, max_trials=max_trials,
                                 use_docker=use_docker,
-                                workspace_dir=workspace_dir)
+                                workspace_dir=workspace_dir,
+                                progress_cb=_cb)
 
-    data = {
-        "paper_title": paper_title,
-        "pdf_path": pdf_path,
-        "corpus_paper": corpus_paper,
-    }
+    try:
+        orch_result = orchestrator.run({
+            "paper_title": paper_title,
+            "pdf_path": pdf_path,
+            "corpus_paper": corpus_paper,
+        })
+    except Exception as e:
+        error_msg = f"流水线异常: {e}"
+        logger.log("Orchestrator", "run", "ERROR", f"异常: {e}")
+        store.emit({"type": "error", "error": error_msg})
+        orch_result = {
+            "state": "ERROR", "error": error_msg, "data": {},
+            "audit_logs": logger.get_summary(),
+            "audit_stats": logger.get_stats(),
+        }
+    else:
+        error_msg = orch_result.get("error")
 
-    for stage_name, display_name, agent_key in AGENTS:
-        _set_current(stage_name)
-        _emit_state(store, stage_name, display_name, "running")
-        agent = orchestrator.agents[agent_key]
-        try:
-            result = agent.run(data)
+    data = orch_result.get("data", {}) or {}
+    state = orch_result.get("state", "ERROR")
+    # Verifier 卡片状态（与旧事件序列保持一致）
+    _emit_state(store, "VALIDATE" if state != "ERROR" else state,
+                VERIFIER_NAME, "success")
+    _emit_new_logs()
 
-            if stage_name == "READ_PAPER":
-                data["paper_info"] = result.get("paper_info", {})
-                data["raw_text"] = result.get("raw_text", "")
-            elif stage_name == "FIND_RESOURCES":
-                data["resources"] = result.get("resources", {})
-            elif stage_name == "BUILD_ENV":
-                data["env_config"] = result.get("env_config", {})
-            elif stage_name == "EXECUTE_CODE":
-                data["execution"] = result
-            elif stage_name == "VALIDATE":
-                data["validation"] = result
-
-            # Prompt-Free 验证（与前端旧逻辑一致）
-            verif = orchestrator.agents["verifier"].run({
-                "agent_name": agent.name,
-                "system_prompt": getattr(agent, "system_prompt", "") or agent.name,
-                "output": result,
-            })
-            data.setdefault("verifications", []).append(
-                {"state": stage_name, "agent": agent.name, **verif})
-
-            data["total_llm_calls"] = data.get("total_llm_calls", 0) + \
-                int(result.get("llm_calls", 0) or 0) + \
-                int(verif.get("llm_calls", 0) or 0)
-            logger.add_llm_calls(int(result.get("llm_calls", 0) or 0) + int(verif.get("llm_calls", 0) or 0))
-
-            _emit_state(store, stage_name, display_name, "success")
-            _emit_new_logs()
-        except Exception as e:
-            error_msg = f"{stage_name} 阶段异常: {e}"
-            logger.log(stage_name, "run", "ERROR", f"异常: {e}")
-            _emit_state(store, stage_name, display_name, "error")
-            _set_current("ERROR")
-            _emit_new_logs()
-            break
-
-    _emit_state(store, _current(), VERIFIER_NAME, "success")
-
-    # 优化阶段：仅在复现成功后触发
-    if _current() != "ERROR":
-        if data.get("validation", {}).get("is_reproduced"):
-            _set_current("OPTIMIZING")
-            _emit_state(store, "OPTIMIZING", OPTIMIZER_NAME, "running")
-            try:
-                data["optimization"] = orchestrator.agents["optimizer"].run(data)
-                _set_current("OPTIMIZED")
-                _emit_state(store, "OPTIMIZED", OPTIMIZER_NAME, "success")
-            except Exception as e:
-                error_msg = f"优化阶段异常: {e}"
-                logger.log(OPTIMIZER_NAME, "optimize", "ERROR", f"异常: {e}")
-                _set_current("ERROR")
-                _emit_state(store, "ERROR", OPTIMIZER_NAME, "error")
-        else:
-            validation = data.get("validation", {}) or {}
-            if validation.get("status") == "not_runnable":
-                reason = ("代码未能运行，无法优化（"
-                          f"{validation.get('reason', '未运行')}）")
-            elif validation.get("status") == "best_effort":
-                reason = ("代码为尽力而为的占位实现（论文信息不足），"
-                          "无法作为优化基线")
-            else:
-                reason = "复现未成功,跳过优化"
-            data["optimization"] = {"optimized": False, "reason": reason}
-            _emit_state(store, _current(), OPTIMIZER_NAME, "waiting")
-        _emit_new_logs()
-
-    # 报告生成（合并复现 + 优化）
-    if _current() != "ERROR":
-        _set_current("GENERATE_REPORT")
-        _emit_state(store, "GENERATE_REPORT", REPORTER_NAME, "running")
-        # 在报告生成前注入审计统计，确保报告能展示
-        data["audit_stats"] = logger.get_stats()
-        try:
-            data["report"] = orchestrator.agents["reporter"].run(data) \
-                .get("report", "")
-            _emit_state(store, "GENERATE_REPORT", REPORTER_NAME, "success")
-        except Exception as e:
-            error_msg = f"报告生成阶段异常: {e}"
-            logger.log(REPORTER_NAME, "generate_report", "ERROR", f"异常: {e}")
-            _set_current("ERROR")
-            _emit_state(store, "ERROR", REPORTER_NAME, "error")
-        _emit_new_logs()
-
-    if _current() != "ERROR":
-        _set_current("COMPLETED")
-        data["audit_stats"] = logger.get_stats()
-        logger.log("Orchestrator", "finish_pipeline", "SUCCESS",
-                   "流水线完成", data.get("audit_stats"))
-
-# 报告落盘（供历史记录与下载）
+    # 报告落盘（供历史记录与下载）
     report_path = ""
     report_text = data.get("report", "")
     if report_text:
@@ -320,12 +242,12 @@ def run_pipeline_core(progress_path: str,
         "FINISH", "流水线终止",
         inputs={"paper_title": paper_title},
         outputs={},
-        result={"state": _current(),
+        result={"state": state,
                 "duration_sec": stats["duration_sec"],
                 "llm_calls": stats["llm_calls"]})
 
     result = {
-        "state": _current(),
+        "state": state,
         "error": error_msg,
         "data": data,
         "audit_logs": logger.get_summary(),
@@ -333,8 +255,10 @@ def run_pipeline_core(progress_path: str,
         "report_path": report_path,
         "session_id": logger.session_id,
     }
-    _emit_state(store, _current(), "", "success")
-    return _mark_result(result)
+    _emit_state(store, state, "", "success")
+    _emit_new_logs()
+    store.emit({"type": "done", "result": result})
+    return result
 
 
 def run_pipeline_background(progress_path: str, *,

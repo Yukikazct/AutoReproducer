@@ -8,13 +8,14 @@
    触发一次修正重试（预算内），形成「生成->验证->修正->再验证」；
 3. 预算统计：汇总 LLM 调用次数，纳入审计统计与报告。
 """
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 from pathlib import Path
 from src.audit.audit_logger import AuditLogger
 from src.llm.llm_client import LLMClient
 from src.agents.paper_reader import PaperReaderAgent
 from src.agents.resource_finder import ResourceFinderAgent
 from src.agents.env_builder import EnvBuilderAgent
+from src.agents.execution_planner import ExecutionPlannerAgent
 from src.agents.code_executor import CodeExecutorAgent
 from src.agents.result_validator import ResultValidatorAgent
 from src.agents.report_generator import ReportGeneratorAgent
@@ -30,6 +31,21 @@ MAX_FIX_RETRIES = 1
 # 透传给 CodeExecutor，让复现代码在本镜像内运行（含论文依赖）
 DEFAULT_IMAGE_TAG = "autorepro-env"
 
+# FSM 状态 -> UI 展示名（progress_cb 通知用；空串表示不归属某个 Agent 卡片）
+STAGE_DISPLAY = {
+    "READ_PAPER": "PaperReader",
+    "FIND_RESOURCES": "ResourceFinder",
+    "BUILD_ENV": "EnvBuilder",
+    "PLAN_EXECUTION": "ExecutionPlanner",
+    "EXECUTE_CODE": "CodeExecutor",
+    "VALIDATE": "ResultValidator",
+    "OPTIMIZING": "Optimizer",
+    "OPTIMIZED": "Optimizer",
+    "GENERATE_REPORT": "ReportGenerator",
+    "COMPLETED": "",
+    "ERROR": "",
+}
+
 
 class Orchestrator:
     """编排器 - 管理复现->验证->优化->报告 流水线的状态机流转。"""
@@ -37,17 +53,23 @@ class Orchestrator:
     # 状态定义
     STATES = [
         "INIT", "READ_PAPER", "FIND_RESOURCES", "BUILD_ENV",
-        "EXECUTE_CODE", "VALIDATE", "OPTIMIZING", "OPTIMIZED",
-        "GENERATE_REPORT", "COMPLETED", "ERROR",
+        "PLAN_EXECUTION", "EXECUTE_CODE", "VALIDATE", "OPTIMIZING",
+        "OPTIMIZED", "GENERATE_REPORT", "COMPLETED", "ERROR",
     ]
 
     def __init__(self, llm_client: Optional[LLMClient] = None,
                  mock_mode: bool = True, logger: Optional[AuditLogger] = None,
                  max_trials: int = 10, use_docker: bool = False,
                  workspace_dir: Optional[str] = None,
-                 resource_manager: Optional[ResourceManager] = None):
+                 resource_manager: Optional[ResourceManager] = None,
+                 progress_cb: Optional[Callable[[str, str, str], None]] = None):
         self.state = "INIT"
         self.logger = logger or AuditLogger()
+        # UI 进度回调 (state_name, display_name, status)；None 时静默跳过。
+        # 使 UI 路径与程序化路径共用同一 FSM 驱动器，消除双驱动器漂移
+        # （此前 backend_pipeline 自持一份流水线循环，漏掉了资源拉取、
+        # 镜像构建与验证修正闭环）。
+        self.progress_cb = progress_cb
         self.llm = llm_client or LLMClient(mock_mode=mock_mode)
         # P1-⑫ 用量计量：把 LLM 调用的 token/耗时通过 hook 归入当前 plan
         # （AuditLogger 按流水线阶段的 begin_plan/end_plan 界定 plan 边界）
@@ -70,6 +92,7 @@ class Orchestrator:
             "finder": ResourceFinderAgent(self.llm, self.logger,
                                           offline=mock_mode),
             "builder": EnvBuilderAgent(self.llm, self.logger),
+            "planner": ExecutionPlannerAgent(self.llm, self.logger),
             "executor": CodeExecutorAgent(self.llm, self.logger,
                                           use_docker=use_docker,
                                           mock_mode=mock_mode),
@@ -106,6 +129,9 @@ class Orchestrator:
             "pdf_path": input_data.get("pdf_path", "") or "",
             "code": input_data.get("code", "") or "",
             "corpus_paper": input_data.get("corpus_paper"),
+            # 用户显式指定仓库 URL：FIND_RESOURCES 里最高优先（发现链第一层）
+            "preferred_repo_url": input_data.get("preferred_repo_url", "") or "",
+            "repro_mode": input_data.get("repro_mode", "") or "",
             "verifications": [],
             "fix_records": [],
         }
@@ -124,6 +150,7 @@ class Orchestrator:
             ("READ_PAPER", self.agents["reader"]),
             ("FIND_RESOURCES", self.agents["finder"]),
             ("BUILD_ENV", self.agents["builder"]),
+            ("PLAN_EXECUTION", self.agents["planner"]),
             ("EXECUTE_CODE", self.agents["executor"]),
             ("VALIDATE", self.agents["validator"]),
         ]
@@ -134,6 +161,7 @@ class Orchestrator:
             self.logger.begin_plan(state_name)
             self.logger.log("Orchestrator", f"enter_{state_name}", "RUNNING",
                             f"进入阶段: {state_name}")
+            self._notify(state_name, "running")
             try:
                 result = agent.run(self.data)
                 self._merge_result(state_name, result)
@@ -161,12 +189,24 @@ class Orchestrator:
                             {"error": build_res.get("error") or
                                       (build_res.get("stderr") or "")[-300:]})
 
+                # 多代码单元管理：执行计划落盘 data/plans/<paper_id>.json，
+                # 供历史审计、归档恢复与后续复用（失败仅告警，不阻断）
+                if state_name == "PLAN_EXECUTION":
+                    self._save_plan(result)
+
                 # 真实优化工作区：把复现代码物化到磁盘，
                 # 供 Optimizer 真实执行器快照/补丁/重跑
                 if state_name == "EXECUTE_CODE" and self.workspace_dir:
                     code = (result or {}).get("code", "") or \
                         self.data.get("execution", {}).get("code", "")
-                    self._materialize_workspace(code)
+                    # 计划模式的 code 是入口脚本原文（多为 .sh），物化成
+                    # workspace/run.py 没有意义（见 _optimization_plan_mode_reason）
+                    if (result or {}).get("execution_mode") == "plan":
+                        self.logger.log(
+                            "Orchestrator", "materialize_workspace", "WARNING",
+                            "官方代码计划模式：入口脚本不物化为优化工作区")
+                    else:
+                        self._materialize_workspace(code)
 
                 # Prompt-Free 验证 + 修正闭环
                 self._verify_step(state_name, agent, result)
@@ -174,18 +214,28 @@ class Orchestrator:
                 self.logger.log("Orchestrator", f"exit_{state_name}", "SUCCESS",
                                 f"完成阶段: {state_name}")
                 self.logger.end_plan(state_name)
+                self._notify(state_name, "success")
             except Exception as e:
                 self.logger.end_plan(state_name)
+                self._notify(state_name, "error")
                 self._fail(state_name, str(e))
                 break
 
         # 优化阶段：仅在复现成功后触发
+        plan_mode_reason = self._optimization_plan_mode_reason()
         if self.state != "ERROR":
-            if self.data.get("validation", {}).get("is_reproduced"):
+            if plan_mode_reason:
+                # 官方代码计划模式：优化闭环不适用（见原因说明），
+                # 不物化入口脚本原文、不产出误导性的失败 trial。
+                self.data["optimization"] = {"optimized": False,
+                                             "reason": plan_mode_reason}
+                self._notify("OPTIMIZING", "waiting")
+            elif self.data.get("validation", {}).get("is_reproduced"):
                 self.state = "OPTIMIZING"
                 self.logger.begin_plan("OPTIMIZING")
                 self.logger.log("Orchestrator", "enter_OPTIMIZING", "RUNNING",
                                 "进入优化阶段")
+                self._notify("OPTIMIZING", "running")
                 try:
                     # 真实优化:把论文指标键绑定到执行器(奖励方向与对齐依据)
                     sim = getattr(self.agents["optimizer"], "simulator", None)
@@ -198,25 +248,31 @@ class Orchestrator:
                     self.logger.log("Orchestrator", "exit_OPTIMIZING", "SUCCESS",
                                     "优化阶段完成")
                     self.logger.end_plan("OPTIMIZING")
+                    self._notify("OPTIMIZED", "success")
                 except Exception as e:
                     self.logger.end_plan("OPTIMIZING")
+                    self._notify("OPTIMIZING", "error")
                     self._fail("OPTIMIZING", str(e))
             else:
                 self.data["optimization"] = {
                     "optimized": False,
                     "reason": self._optimization_skip_reason()}
+                self._notify("OPTIMIZING", "waiting")
 
         # 报告生成（合并复现 + 优化）
         if self.state != "ERROR":
             self.state = "GENERATE_REPORT"
             self.logger.begin_plan("GENERATE_REPORT")
             self.data["audit_stats"] = self.logger.get_stats()
+            self._notify("GENERATE_REPORT", "running")
             try:
                 self.data["report"] = self.agents["reporter"].run(self.data) \
                     .get("report", "")
                 self.logger.end_plan("GENERATE_REPORT")
+                self._notify("GENERATE_REPORT", "success")
             except Exception as e:
                 self.logger.end_plan("GENERATE_REPORT")
+                self._notify("GENERATE_REPORT", "error")
                 self._fail("GENERATE_REPORT", str(e))
 
         if self.state != "ERROR":
@@ -226,10 +282,24 @@ class Orchestrator:
             self.data["audit_stats"] = self.logger.get_stats()
             self.logger.log("Orchestrator", "finish_pipeline", "SUCCESS",
                             "流水线完成", self.data.get("audit_stats"))
+        self._notify(self.state, "success")
 
         return self.get_result()
 
     # ---------------- 内部流程 ----------------
+
+    def _notify(self, state_name: str, status: str) -> None:
+        """向 UI 进度回调发送 (state, display_name, status) 事件。
+
+        未注入 progress_cb（程序化调用/测试）时静默跳过。
+        """
+        if self.progress_cb is None:
+            return
+        display = STAGE_DISPLAY.get(state_name, state_name)
+        try:
+            self.progress_cb(state_name, display, status)
+        except Exception:
+            pass  # UI 进度事件失败不得影响流水线本身
 
     def _merge_result(self, state_name: str, result: dict) -> None:
         """将 Agent 输出合并进数据上下文。"""
@@ -240,6 +310,8 @@ class Orchestrator:
             self.data["resources"] = result.get("resources", {})
         elif state_name == "BUILD_ENV":
             self.data["env_config"] = result.get("env_config", {})
+        elif state_name == "PLAN_EXECUTION":
+            self.data["execution_plan"] = result.get("execution_plan", {})
         elif state_name == "EXECUTE_CODE":
             self.data["execution"] = result
         elif state_name == "VALIDATE":
@@ -253,6 +325,24 @@ class Orchestrator:
         if validation.get("status") == "best_effort":
             return "代码为尽力而为的占位实现（论文信息不足），无法作为优化基线"
         return "复现未成功,跳过优化"
+
+    def _optimization_plan_mode_reason(self) -> str:
+        """官方代码计划模式下不跑真实优化时给出的原因（无则返回 ""）。
+
+        优化器的真实闭环是「把单个文件当补丁对象，改写后 `python run.py`
+        重跑」。官方代码不满足这个前提：`execution.code` 是入口脚本**原文**
+        （多为 .sh，也可能是依赖 --root_path 的 run.py），把它单独物化成
+        workspace/run.py 会丢掉整个仓库与数据准备步骤，每次 trial 都必然
+        ImportError / FileNotFoundError——跑出来的只有一堆失败记录，
+        还容易被读成"优化试过但没效果"。因此显式跳过并说明原因，
+        而不是产出一串看似真实的失败 trial。
+        """
+        execution = self.data.get("execution", {}) or {}
+        if execution.get("execution_mode") != "plan":
+            return ""
+        return ("官方代码按执行计划运行（execution_mode=plan）：优化闭环的"
+                "「单文件补丁 + 重跑」不适用于含数据准备与多段调用的官方"
+                "入口脚本，已跳过真实优化（复现结论不受影响）")
 
     # ---------------- 三层存储：懒加载与 manifest ----------------
 
@@ -281,19 +371,62 @@ class Orchestrator:
                  or (self.data.get("storage") or {}).get(
                      "repro_level", "smoke")) or "smoke"
         try:
-            fetched = {
-                "code": rm.fetch_code(paper_id, code_url,
-                                      revision=pinned_revision),
-                "dataset": rm.fetch_dataset(paper_id, dataset_name,
-                                            level=level),
-                "weights": rm.fetch_weights(paper_id, weights_ref),
-            }
-            self.data.setdefault("storage", {})["fetched"] = {
+            # 多代码单元拉取：code_units 存在时逐单元 clone 到
+            # data/repos/<paper_id>/<unit_id>/；否则退回单仓库 fetch_code
+            # （向后兼容）。main 单元的路径透传给 EnvBuilder 的静态依赖
+            # 分析（env_builder 已支持 input_data["repo_path"]），
+            # 让复现环境吃上真实仓库的 import 清单。
+            units = resources.get("code_units") or []
+            if units:
+                unit_infos = rm.fetch_units(paper_id, units)
+                main_info = next(
+                    (u for u in unit_infos
+                     if u.get("unit_id") == "main" and u.get("path")),
+                    unit_infos[0] if unit_infos else {})
+                fetched = {
+                    "code": main_info,
+                    "units": unit_infos,
+                    "dataset": rm.fetch_dataset(paper_id, dataset_name,
+                                                level=level),
+                    "weights": rm.fetch_weights(paper_id, weights_ref),
+                }
+                repo_path = main_info.get("path", "")
+                if repo_path:
+                    self.data["repo_path"] = repo_path
+            else:
+                fetched = {
+                    "code": rm.fetch_code(paper_id, code_url,
+                                          revision=pinned_revision),
+                    "dataset": rm.fetch_dataset(paper_id, dataset_name,
+                                                level=level),
+                    "weights": rm.fetch_weights(paper_id, weights_ref),
+                }
+            storage = self.data.setdefault("storage", {})
+            storage["fetched"] = {
                 k: {"path": v.get("path", ""), "state": v.get("state", "")}
+                if isinstance(v, dict) and "path" in v
+                else v
                 for k, v in fetched.items()}
         except Exception as exc:
             self.logger.log("Orchestrator", "fetch_resources", "WARNING",
                             f"资源拉取失败，不阻断流水线: {str(exc)[-200:]}")
+
+    def _save_plan(self, result: dict) -> None:
+        """执行计划落盘 data/plans/<paper_id>.json（失败仅告警）。"""
+        plan = (result or {}).get("execution_plan") or {}
+        paper_id = self.data.get("paper_id", "")
+        if not plan or not paper_id:
+            return
+        plan = dict(plan)
+        plan.setdefault("paper_id", paper_id)
+        try:
+            path = self.resource_manager.save_plan(plan)
+            self.data.setdefault("storage", {})["plan_path"] = path
+            self.logger.log("Orchestrator", "save_plan", "SUCCESS",
+                            f"执行计划已落盘: {path}")
+        except Exception as exc:
+            self.logger.log("Orchestrator", "save_plan", "WARNING",
+                            f"执行计划落盘失败: {str(exc)[-200:]}")
 
     def _finalize_storage(self) -> None:
         """COMPLETED 前落盘资源 manifest 与存储统计。
@@ -432,7 +565,8 @@ class Orchestrator:
             "INIT": ["READ_PAPER"],
             "READ_PAPER": ["FIND_RESOURCES", "ERROR"],
             "FIND_RESOURCES": ["BUILD_ENV", "ERROR"],
-            "BUILD_ENV": ["EXECUTE_CODE", "ERROR"],
+            "BUILD_ENV": ["PLAN_EXECUTION", "ERROR"],
+            "PLAN_EXECUTION": ["EXECUTE_CODE", "ERROR"],
             "EXECUTE_CODE": ["VALIDATE", "ERROR"],
             "VALIDATE": ["OPTIMIZING", "GENERATE_REPORT", "ERROR"],
             "OPTIMIZING": ["OPTIMIZED", "ERROR"],

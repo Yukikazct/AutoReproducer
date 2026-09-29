@@ -146,7 +146,7 @@ class TestSanitizeKeepsIndentation:
 class TestSyntaxGateAndRegeneration:
 
     def _agent(self, llm):
-        return CodeExecutorAgent(llm)
+        return CodeExecutorAgent(llm, mock_mode=True)
 
     def test_continuation_completes_truncated_output(self):
         """截断 -> 续写拼接 -> 拼出完整脚本并成功执行。
@@ -207,13 +207,13 @@ class TestSyntaxGateAndRegeneration:
 class TestExecutionRepair:
 
     def _agent(self, llm):
-        return CodeExecutorAgent(llm)
+        return CodeExecutorAgent(llm, mock_mode=True)
 
     def test_runtime_error_is_repaired_and_rerun(self):
         broken = "print(missing_value)\n"
         fixed = "print('repaired')\n"
         llm = _ScriptedLLM([fixed])
-        result = CodeExecutorAgent(llm).run({
+        result = CodeExecutorAgent(llm, mock_mode=True).run({
             "code": broken,
             "paper_info": {"method": "演示方法", "dataset": "合成数据"},
         })
@@ -226,8 +226,14 @@ class TestExecutionRepair:
         assert "NameError" in result["repair_attempts"][0]["diagnosis"]["message"]
         assert "失败位置" in llm.prompts[0]
 
-    def test_unrepairable_timeout_does_not_call_llm(self, monkeypatch):
-        agent = CodeExecutorAgent(_ScriptedLLM(["print('must not use')"]))
+    def test_timeout_repairable_calls_llm(self, monkeypatch):
+        """超时可修复（此前硬编码不可修复导致 iTransformer 1 轮即放弃）：
+
+        应触发修复循环（最多 MAX_EXECUTION_REPAIRS 轮），修复提示带上
+        缩参规则。执行始终超时的模拟下，每轮修复都应记录为 retry。
+        """
+        fixed = "print('shrunk')\n"
+        agent = CodeExecutorAgent(_ScriptedLLM([fixed]), mock_mode=True)
 
         monkeypatch.setattr(
             agent, "_execute_code",
@@ -239,12 +245,17 @@ class TestExecutionRepair:
         result = agent.run({"code": "print('x')", "paper_info": {}})
 
         assert result["success"] is False
-        assert result["repair_attempts"][0]["status"] == "stopped"
-        assert agent.llm.call_count == 0
+        assert result["repair_attempts"], "超时应触发修复重试"
+        assert all(a["status"] == "retry"
+                   for a in result["repair_attempts"])
+        assert agent.llm.call_count == ce_mod.MAX_EXECUTION_REPAIRS
+        assert (result["repair_attempts"][0]["diagnosis"]["error_type"]
+                == "timeout")
+        assert "修复规则（超时）" in agent.llm.prompts[0]
 
     def test_repair_result_is_checked_for_dangerous_code(self):
         llm = _ScriptedLLM(["import os\nos.system('echo unsafe')\n"])
-        result = CodeExecutorAgent(llm).run({
+        result = CodeExecutorAgent(llm, mock_mode=True).run({
             "code": "print(missing_value)\n", "paper_info": {},
         })
 
@@ -272,7 +283,7 @@ class TestInsufficientInfoBestEffort:
 
     def test_missing_method_and_dataset_still_generates_and_runs(self):
         llm = _ScriptedLLM([COMPLETE_CODE])
-        agent = CodeExecutorAgent(llm)
+        agent = CodeExecutorAgent(llm, mock_mode=True)
         result = agent.run({"paper_info": {"method": "",
                                            "dataset": "未知",
                                            "metrics": {}}})
@@ -288,7 +299,7 @@ class TestInsufficientInfoBestEffort:
 
     def test_insufficient_flag_from_paper_reader_still_generates(self):
         llm = _ScriptedLLM([COMPLETE_CODE])
-        agent = CodeExecutorAgent(llm)
+        agent = CodeExecutorAgent(llm, mock_mode=True)
         result = agent.run({"paper_info": {"insufficient_info": True,
                                            "method": "某种方法",
                                            "dataset": "某数据集"}})
@@ -299,7 +310,7 @@ class TestInsufficientInfoBestEffort:
 
     def test_sufficient_info_is_not_best_effort(self):
         llm = _ScriptedLLM([COMPLETE_CODE])
-        agent = CodeExecutorAgent(llm)
+        agent = CodeExecutorAgent(llm, mock_mode=True)
         result = agent.run({"paper_info": {"method": "梯度下降",
                                            "dataset": "二维二分类"}})
         assert result["success"] is True
@@ -309,7 +320,8 @@ class TestInsufficientInfoBestEffort:
 
     def test_external_code_is_never_best_effort(self):
         """调用方给的真实代码不因论文信息不足被改判——它不是我们的占位实现。"""
-        agent = CodeExecutorAgent(_ScriptedLLM([COMPLETE_CODE]))
+        agent = CodeExecutorAgent(_ScriptedLLM([COMPLETE_CODE]),
+                              mock_mode=True)
         result = agent.run({"code": COMPLETE_CODE,
                             "paper_info": {"insufficient_info": True}})
         assert result["best_effort"] is False
@@ -321,7 +333,7 @@ class TestPlaceholderRecovery:
 
     def test_marker_triggers_one_targeted_retry_then_real_code(self):
         llm = _ScriptedLLM([ce_mod._INSUFFICIENT_INFO_MARK, COMPLETE_CODE])
-        result = CodeExecutorAgent(llm).run(
+        result = CodeExecutorAgent(llm, mock_mode=True).run(
             {"paper_info": {"method": "", "dataset": "", "metrics": {}}})
 
         # 1 次初生成 + MAX_MARK_RETRY 次定向重试；旧实现这条路径会走到
@@ -333,7 +345,7 @@ class TestPlaceholderRecovery:
 
     def test_marker_twice_falls_back_to_local_script(self):
         llm = _ScriptedLLM([ce_mod._INSUFFICIENT_INFO_MARK])
-        result = CodeExecutorAgent(llm).run(
+        result = CodeExecutorAgent(llm, mock_mode=True).run(
             {"paper_info": {"method": "", "dataset": "", "metrics": {}}})
 
         assert llm.call_count == 1 + ce_mod.MAX_MARK_RETRY   # 严格锁预算
@@ -345,13 +357,14 @@ class TestPlaceholderRecovery:
 
     def test_empty_response_falls_back(self):
         llm = _ScriptedLLM([""])
-        result = CodeExecutorAgent(llm).run({"paper_info": {}})
+        result = CodeExecutorAgent(llm, mock_mode=True).run({"paper_info": {}})
         assert result["fallback_used"] is True
         assert result["success"] is True
 
     def test_fallback_script_passes_all_gates(self):
         """兜底脚本本身必须过语法门/危险门/结构完整性，否则它自己就被拦了。"""
-        agent = CodeExecutorAgent(_ScriptedLLM([COMPLETE_CODE]))
+        agent = CodeExecutorAgent(_ScriptedLLM([COMPLETE_CODE]),
+                              mock_mode=True)
         bs = ce_mod._BEST_EFFORT_SCRIPT
         assert agent._syntax_error(bs) is None
         assert agent._dangerous_constructs(bs) is None
@@ -361,7 +374,7 @@ class TestPlaceholderRecovery:
     def test_fallback_output_has_no_extractable_metrics(self):
         """兜底脚本的输出不能被抽成"实测指标"——否则会喂出假的复现结论。"""
         llm = _ScriptedLLM([ce_mod._INSUFFICIENT_INFO_MARK])
-        result = CodeExecutorAgent(llm).run({"paper_info": {}})
+        result = CodeExecutorAgent(llm, mock_mode=True).run({"paper_info": {}})
         stdout = result["final"]["stdout"]
         assert "占位复现脚本" in stdout
         validator = ResultValidatorAgent(LLMClient(mock_mode=True))

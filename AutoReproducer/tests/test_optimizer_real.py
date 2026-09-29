@@ -7,6 +7,15 @@
 4. 执行失败 Reject：奖励为 0 且工作区回滚；
 5. Mock LLM 全流水线端到端：复现 -> 验证 -> 真实优化 -> 报告（COMPLETED）。
 
+**本文件里的 `CodeExecutorAgent` 一律显式带 `mock_mode=True`**：这些用例
+测的是"补丁应用 / 快照回滚 / 奖励方向"这套**模拟器逻辑**，执行器只是它的
+一个被调用方；它们执行的是本文件自带的 `_BASELINE_CODE`（可信夹具代码），
+不需要沙箱。不写这个参数会落到真实模式，而真实模式无 Docker 时执行层会
+按隔离要求直接拒绝（EXIT_ISOLATION_REQUIRED）——于是"执行失败被 Reject"
+这类断言会**因为错误的原因**通过（隔离门拦的，不是补丁跑挂了），
+"Keep 改进"这类断言则直接失败。隔离门本身由
+`tests/test_sandbox_hardening.py` / `test_code_executor_plan.py` 覆盖。
+
 运行: python -m pytest tests/test_optimizer_real.py -v
 """
 import sys
@@ -82,7 +91,7 @@ def test_orchestrator_injects_real_simulator_only_with_workspace(tmp_path):
 # ---------------- 2. 补丁白名单拦截 ----------------
 
 def test_real_simulator_rejects_policy_violation(workspace, mock_llm):
-    sim = RealSimulator(llm=mock_llm, executor=CodeExecutorAgent(mock_llm),
+    sim = RealSimulator(llm=mock_llm, executor=CodeExecutorAgent(mock_llm, mock_mode=True),
                         workspace_dir=str(workspace),
                         policy=PatchPolicy(editable=["other.py"]))
     reward, detail = sim("超参数调优(学习率)", 0.852)
@@ -97,7 +106,7 @@ def test_real_simulator_rejects_policy_violation(workspace, mock_llm):
 # ---------------- 3. 真实执行 Keep + 回滚 + 落盘 ----------------
 
 def test_real_simulator_keeps_improvement_and_rolls_back(workspace, mock_llm):
-    sim = RealSimulator(llm=mock_llm, executor=CodeExecutorAgent(mock_llm),
+    sim = RealSimulator(llm=mock_llm, executor=CodeExecutorAgent(mock_llm, mock_mode=True),
                         workspace_dir=str(workspace))
     sim.bind_paper({"metrics": {"accuracy": 0.852}})
     reward, detail = sim("超参数调优(学习率)", 0.852)
@@ -115,7 +124,7 @@ def test_real_simulator_keeps_improvement_and_rolls_back(workspace, mock_llm):
 
 def test_real_simulator_rolls_back_after_execution_failure(workspace):
     llm = _BadPatchLLM("raise RuntimeError('boom')\n")
-    sim = RealSimulator(llm=llm, executor=CodeExecutorAgent(llm),
+    sim = RealSimulator(llm=llm, executor=CodeExecutorAgent(llm, mock_mode=True),
                         workspace_dir=str(workspace))
     sim.bind_paper({"metrics": {"accuracy": 0.852}})
     reward, detail = sim("超参数调优(学习率)", 0.852)
@@ -129,7 +138,7 @@ def test_real_simulator_rolls_back_after_execution_failure(workspace):
 def test_patch_syntax_gate_rejects_before_touching_workspace(workspace):
     """不可编译的补丁必须被语法门拦下：不写盘、不执行。"""
     llm = _BadPatchLLM("def broken(: 语法错误\n")
-    sim = RealSimulator(llm=llm, executor=CodeExecutorAgent(llm),
+    sim = RealSimulator(llm=llm, executor=CodeExecutorAgent(llm, mock_mode=True),
                         workspace_dir=str(workspace))
     sim.bind_paper({"metrics": {"accuracy": 0.852}})
     reward, detail = sim("超参数调优(学习率)", 0.852)
@@ -147,7 +156,7 @@ def test_patch_syntax_gate_rejects_before_touching_workspace(workspace):
 def test_execute_in_workspace_runs_in_given_dir(tmp_path, mock_llm):
     workdir = tmp_path / "ws"
     workdir.mkdir()
-    executor = CodeExecutorAgent(mock_llm)
+    executor = CodeExecutorAgent(mock_llm, mock_mode=True)
     code = "import os\nprint('PWD=' + os.getcwd())\nprint('OK')\n"
     result = executor.execute_in_workspace(code, str(workdir), stage="smoke")
     assert result["success"] is True
@@ -207,7 +216,7 @@ class TestRewardMetricResolution:
     @staticmethod
     def _sim(tmp_path: Path) -> RealSimulator:
         llm = LLMClient(mock_mode=True)
-        sim = RealSimulator(llm=llm, executor=CodeExecutorAgent(llm),
+        sim = RealSimulator(llm=llm, executor=CodeExecutorAgent(llm, mock_mode=True),
                             workspace_dir=str(tmp_path / "ws"))
         sim.bind_paper({"metrics": {"MSE": 0.0892}})
         return sim
@@ -241,7 +250,7 @@ class TestRewardMetricResolution:
 
     def test_higher_is_better_metric_keeps_positive_direction(self, tmp_path):
         llm = LLMClient(mock_mode=True)
-        sim = RealSimulator(llm=llm, executor=CodeExecutorAgent(llm),
+        sim = RealSimulator(llm=llm, executor=CodeExecutorAgent(llm, mock_mode=True),
                             workspace_dir=str(tmp_path / "ws"))
         sim.bind_paper({"metrics": {"Accuracy": 0.85}})
         reward, _, basis = sim._compute_reward(
@@ -251,7 +260,7 @@ class TestRewardMetricResolution:
 
     def test_basis_is_recorded_in_trial_detail(self, workspace, mock_llm):
         """trial 结果里要带上依据，供报告展示"按哪个指标、哪个方向"。"""
-        sim = RealSimulator(llm=mock_llm, executor=CodeExecutorAgent(mock_llm),
+        sim = RealSimulator(llm=mock_llm, executor=CodeExecutorAgent(mock_llm, mock_mode=True),
                             workspace_dir=str(workspace))
         sim.bind_paper({"metrics": {"MSE": 0.852}})
         _, detail = sim("超参数调优(学习率)", 0.852)

@@ -5,6 +5,203 @@
 
 ---
 
+## [2026.09.29-1] - 2026-09-29
+
+### 新增（多代码单元执行架构 + 官方入口优先）
+
+用户复现 iTransformer 真实模式失败，追问「一篇论文的代码由多个代码块组成、
+最终一起调用时应当如何管理」。这次的答案不是再修一个 bug，而是补上缺失的
+那一层：**CodeUnit（代码单元）+ ExecutionPlan（执行计划）+ PLAN_EXECUTION
+阶段**——发现官方代码后**优先执行官方入口脚本**，跑不通才回退 LLM 生成脚本。
+
+**真实链路查明的根因链**（`ledger_20260929_144316.jsonl`）：
+
+1. **UI 路径从不拉取代码**：`frontend/backend_pipeline.py::run_pipeline_core`
+   直接驱动各 agent，从不调用 `Orchestrator._fetch_resources` 与 `build_image`
+   ——官方仓库 `thuml/iTransformer` 被发现但**从未 clone**，最终跑的是 LLM
+   生成的占位脚本，报告里自然什么都对不上；
+2. **依赖安装吃掉脚本超时**：slim 镜像把 `pip install torch` 前置在脚本前，
+   30s smoke 预算全被安装消耗 → 「执行超时(30s, smoke)」；
+3. **超时被硬编码为不可修复**：`_diagnose_execution_error` 判死，修复循环
+   1 轮即放弃；
+4. **指标正则缺 mae**：`_METRIC_PATTERNS` 无 `mae`，而 iTransformer 输出的
+   正是 `mse:…, mae:…`。
+
+**为什么不能靠"生成单文件复现脚本"绕过**：iTransformer 是典型的多代码块
+结构——`scripts/<task>/<dataset>/<model>.sh`（48 个脚本）调根目录 `run.py`，
+模型实现并入 `thuml/Time-Series-Library` 统一库，数据集要从 README 的网盘
+链接单独下载。要真正复现，必须能"整体调用"这样一组代码，而不是猜一个脚本。
+
+**改法**：
+
+- **`src/code_units.py`（新）**：`CodeUnit{unit_id, role: main|library|
+  benchmark|scripts|dataset|alternative, url, local_path, revision,
+  fetch_state, provenance}`；`sanitize_unit_id` 防路径穿越。
+- **`src/execution_plan.py`（新）**：`ExecutionPlan`/`PlanStep`（`kind:
+  install|download|prepare|run|parse`、`depends_on`、`expects`、
+  `install_budget_s` 与 `timeout_s` 分离、`smoke_args`/`smoke_cmd` 缩参）+
+  确定性助手 `repo_snapshot`（有界扫描）/ `detect_entry`（入口定位）/
+  `suggest_smoke_args` / `validate_plan`（**命令必须引用快照中真实存在的
+  文件**，否则整份计划作废——防 LLM 幻觉路径）。
+- **`src/agents/execution_planner.py`（新）**：LLM 出计划 → `validate_plan`
+  硬校验 → 失败降级确定性启发式（`pip install -r requirements.txt` +
+  `bash <入口>` + 缩参）；无可用单元时 `source="none"`，执行层原样走生成
+  脚本路径（**mock e2e 零行为变化**）。
+- **`src/orchestrator.py`**：新增 `PLAN_EXECUTION` 状态；`Orchestrator`
+  成为唯一 FSM 驱动器（`progress_cb` 回调），`run_pipeline_core` 收敛为薄
+  封装——UI 路径从此自动获得 clone / build_image / 计划执行（修 bug 1）。
+- **`src/resource_manager.py`**：`fetch_units` 逐单元 clone 到
+  `data/repos/<论文>/<单元>/`，各留 `.autorepro-repo-source.json` 溯源；
+  计划持久化到 `data/plans/<论文>.json`，archive/restore 兼容。
+- **`src/agents/code_executor.py`**：`_execute_plan` / `_run_plan_step` /
+  `_repair_plan_step`。官方代码在工作区 copytree 后逐步执行，**安装与脚本
+  两次独立 `docker run`**（各带自己的预算，修 bug 2）；超时改为可修复
+  （缩参重试，修 bug 3）；缺模块追加安装重试；GPU-only 特征判不可修复并
+  回退生成脚本（`execution_mode="generated_fallback"` + 回退原因）；数据集
+  缺失单列为 `missing_dataset` 诊断，**不再谎报成"脚本跑挂了"**。
+- **`src/agents/result_validator.py`**：`_METRIC_PATTERNS` 补 `mae` /
+  `smape`（修 bug 4）；指标来源优先取执行层的汇总输出 `final.stdout`——
+  计划模式下 `stages[-1]` 常是被跳过的 parse 步或依赖步，只看最后一条会把
+  「跑出了 mse/mae」判成「执行未产出任何输出」（生成路径下 `final` 恒等于
+  `stages[-1]`，零行为变化）。
+- **`src/agents/report_generator.py`**：第 4 节按 `execution_mode` 分支。
+  计划模式渲染代码单元表 / 执行步骤表（含 `⏭️ 跳过（前置步骤失败）`、
+  缩参后的真实命令、修复记录）/ 实际指标 / 官方入口脚本（按语言选
+  `bash`/`python` 代码块，不再把 shell 脚本当 Python 展示）；回退时两条
+  路径与回退原因都保留。
+- **`src/agents/repo_discovery.py`**：精选表加入 iTransformer →
+  `thuml/iTransformer` + `thuml/Time-Series-Library`，关键词匹配改按长度
+  降序（否则 `itransformer` 会被通用 `transformer` 抢先命中
+  annotated-transformer）。
+- **`scripts/real_e2e.py`**：支持 `--paper-title` / `--repo-url` /
+  `--use-docker`，并打印执行计划（单元 / 入口 / 逐步状态 / 修复 / 实际指标）
+  与回退原因——真实模式跑完能一眼看出"官方代码到底跑没跑、跑出什么"。
+
+**实测推翻的三个想当然**（都补了回归测试）：
+
+- `detect_entry` 原先"优先根目录 `run.py`"是错的：iTransformer 根 `run.py`
+  的 argparse 默认值指向 `./data/electricity/`（仓库里根本没有这个目录），
+  选中它必然 FileNotFoundError；现在**数据集命中官方脚本时越过根 run.py**。
+- 缩参不能动**数据形状参数**（`enc_in`/`dec_in`/`c_out`）：ETTh1 是 7 通道，
+  缩成 4 会在模型里直接崩；只缩 `seq_len`/`pred_len`/`epochs`/`batch_size`
+  这类训练开销参数。
+- 官方 `.sh` **不转发 `"$@"`**，把缩参追加到 `bash x.sh` 后面是空操作（白等
+  一个完整超时）。新增 `derive_smoke_cmd`：从脚本文本里取出真实的
+  `python …` 调用行、替换 shell 变量、再追加缩参，超时修复才真的生效。
+  官方脚本里 `--pred_len` 出现 4 次（96/192/336/720），`extract_cli_args`
+  改为**首次出现优先**，否则报告会写着 720 却实际按 96 缩参重试。
+
+**沙箱与安全**：官方代码属**不可信第三方代码**——真实模式下计划执行强制
+Docker 加固沙箱（复用既有 `--cap-drop ALL` / `--read-only` / nobody 用户 /
+镜像白名单），无沙箱时直接 `EXIT_ISOLATION_REQUIRED` 拒绝并回退生成脚本；
+mock 模式的本地执行仅用于演示与测试夹具（仓库来自可信 `file://`）。
+另修两处沙箱内实际跑不通的问题：`pip --target` 的目录从容器 tmpfs
+（`/tmp`，`--rm` 后即销毁，而安装与运行是两次 `docker run`）改到挂载卷内
+`/app/.autorepro_site`，并把 `PYTHONPATH`/`PATH`（`--target` 的 console
+scripts 落在 `bin/`，不在 PATH 上）注入运行阶段；`_chmod_tree_writable`
+原先只加 `o+w`（0700 → 0702，nobody 连目录都进不去），改为目录加 `o+x`、
+文件加 `o+r`。
+
+**测试（666 → 748，全绿）**：新增 `test_code_units.py`、`test_execution_plan.py`、
+`test_execution_planner.py`、`test_code_executor_plan.py`、
+`test_backend_pipeline_unified.py`（UI 路径 `storage.fetched` 非空——bug 1
+的回归）、`test_metric_patterns.py`、`test_report_plan_mode.py`、
+`test_validator_plan_stdout.py`、`test_real_e2e_script.py`。
+
+顺带修掉三处**测试自身**的问题：
+
+- `test_optimizer_real.py` 有 3 项失败，一度以为是本次改动引入——在 HEAD
+  用 `git worktree` 复现后确认是**既存问题**：文件里的
+  `CodeExecutorAgent(llm)` 没带 `mock_mode=True`，落到真实模式后被执行层的
+  隔离门拒绝（[2026.09.20-11] 起的加固）。危害不只是红：另外两项
+  "执行失败被 Reject"其实是**被隔离门拦下的**、不是补丁跑挂了，等于断言
+  因为错误的原因通过。现全部显式 `mock_mode=True`（被测对象是模拟器逻辑，
+  跑的是文件自带的夹具代码）。
+- `test_run_pipeline_background_error_is_reported` 用 `Path("C:/")/...` 造
+  "不可写路径"，在 POSIX 下那是**相对路径**——代码老老实实在仓库根建出了
+  `C:/no_such_dir_xyz/p.jsonl`，测试前提静默反转。改用"父路径是普通文件"
+  构造，并清掉残留目录。
+
+**已知未决**：真实 iTransformer 端到端验证当时被卡在 Docker 镜像拉取上
+（当时误判为"daemon 未启动"，实为 docker.io 不可达——见下一节
+[2026.09.29-2]，该阻塞已修）。
+
+---
+
+## [2026.09.29-2] - 2026-09-29
+
+### 修复（Docker 镜像拉取加固：基础设施故障不再被当成"代码跑不起来"）
+
+用户重跑真实模式，这次 daemon 正常，但流水线依旧全链失败——`install_main`
+步骤 ❌ 退出码 125，stderr 是
+`failed to resolve reference "docker.io/library/python:3.11-slim":
+context deadline exceeded`，后续步骤全部 ⏭️ 跳过；回退生成的占位脚本后
+又以同一个镜像失败 4 次。本地实测确认：**本机直连 docker.io 不通**
+（curl 返回 000），国内镜像源 `docker.m.daocloud.io` 可正常拉取。
+
+**根因（4 路并行侦察 workflow + 本地实测确认）**：
+
+1. **镜像解析只有一条路**：`env_config.image_tag or "python:3.11-slim"`
+   （code_executor.py 两处），而 `image_tag` 只在 BUILD_ENV 真实构建成功时
+   写入——构建失败（FROM 同样拉不到）后两条执行路径都落到裸
+   `python:3.11-slim`，没有任何回退；
+2. **无预拉、无本地存在性检查**：唯一一处 `docker images -q` 在 EnvBuilder
+   里服务底座构建，执行路径从没检查过镜像在不在本地；
+3. **exit 125 被当成"可修复"**：125 不在 `_NON_CODE_REPAIR_EXIT_CODES` 里，
+   生成路径把它判成代码问题——**3 轮 LLM 修复全烧在改论文代码上**（报告里
+   那 4 次 exit 125 就是"改一次、跑一次"）；计划路径则整链跳过；
+4. **报告把基础设施故障写成 `execution_error`**，且计划路径**正常失败时
+   结果字典没有 `plan_fail_reason` 键**（只有"不可修复"路径写），报告
+   「回退原因」永远是空的。
+
+**改法**：
+
+- **`src/base_agent.py`**：新增 `AUTOREPRO_DOCKER_IMAGE_MIRROR`（逗号分隔
+  镜像源，默认空 = 只试原名）与三个静态工具——`is_canonical_image`（按
+  Docker 自己的规则判定首段是否 registry）、`resolve_image_with_mirror`
+  （候选序列：原名 → 各镜像源）、`ensure_image_pulled`（本地已有即返回；
+  缺失则逐个 `docker pull`，成功后 **`docker tag` 回原名**）。
+  tag 回原名是关键：镜像白名单按 canonical 名 startswith 判定、执行路径有
+  `image == "python:3.11-slim"` 的分支、报告展示也用原名——tag 回来之后
+  **镜像源对下游完全透明**；反之直接把镜像名换成带 registry 前缀的形式
+  会被白名单拒掉（-5）。
+- **`src/agents/code_executor.py`**：`_execute_plan_step_docker` 与
+  `_execute_code_docker` 在 docker run 前预拉（本地命中时近零开销，实测
+  0.04s）；预拉失败以专属退出码 `EXIT_DOCKER_IMAGE_UNAVAILABLE = -8` 短路，
+  **不进入修复循环**。`_diagnose_execution_error` 与 `_repair_plan_step`
+  新增 `docker_pull_failed` 分类（`repairable=False`），判定同时认退出码与
+  stderr 特征——**不按 125 判定**：加固降级链的 unknown-flag 场景同样用
+  125，按码划分会误伤"降级后可跑"的真实路径（有回归测试兜）。
+- **`src/agents/env_builder.py`**：`docker build` 前解析首个 `FROM` 并预拉
+  基础镜像（`autorepro-*` 自建镜像跳过——它们只存在于本地）；失败即短路，
+  不再白等 1800s 构建超时。
+- **`_plan_fail_reason`（新）**：正常失败路径也生成人话回退原因（镜像 /
+  GPU / 缺数据集 / 缺依赖 / 超时各有文案），报告「回退原因」不再恒空。
+- **`src/agents/report_generator.py`**：命中 `docker_pull_failed` 时显式
+  渲染「🐳 镜像拉取失败（**运行环境问题，不是论文代码问题**）」+ 可操作
+  建议——不点破的话，读者从"退出码 125 + 一串 docker 报错"里只会得出
+  "这份论文的官方代码跑不起来"的结论，归因错人。
+- **`app.py` / `README.md`**：侧边栏补"首次运行需拉取基础镜像，网络不通时
+  设置 `AUTOREPRO_DOCKER_IMAGE_MIRROR`"；README 补全 `AUTOREPRO_DOCKER_*`
+  系列环境变量表（含此前未文档化的加固系列）。
+
+**测试（748 → 771，全绿）**：新增 `test_docker_image_mirror.py`（23 例）：
+候选解析 / 本地命中不拉 / 拉取后 tag 回原名 / 首个源失败顺延 / 全败仍给出
+人话与可操作提示 / 拉取超时不断链 / 诊断分类与"不烧 LLM" / unknown-flag
+回归 / 计划步记录与报告渲染 / EnvBuilder 预拉短路与自建镜像跳过。
+
+另修正 4 个测试文件对"docker run 次数"的断言前提：新增的镜像存在性探测
+（`docker images -q`）会让每次执行多一次 subprocess 调用，而这些用例的
+fake_run 把未知命令一律当成脚本执行返回——一次 `images` 探测就能顶替掉
+"首次脚本执行失败"，让自愈链路整条走偏。统一在这些文件的 autouse fixture
+里打桩 `ensure_image_pulled` 为"镜像已就绪"（镜像可用性由新测试文件专门
+覆盖）。
+
+**已知未决**：真实 iTransformer 端到端验证待重跑（基础镜像已在本地，
+`AUTOREPRO_DOCKER_IMAGE_MIRROR` 未设置时也走通；设置后可从零拉取）。
+
+---
+
 ## [2026.09.20-14] - 2026-09-20
 
 ### 变更（信息不足不再预先拒绝：尽力生成 + 允许执行，新增 best_effort 第四态）

@@ -42,17 +42,35 @@ from src.agents.env_builder import PIP_INDEX_URL, PIP_FIND_LINKS
 from src.agents.dependency_resolver import (
     find_missing_module, python_package_for,
 )
+from src.code_units import sanitize_unit_id
+from src.execution_plan import PlanStep
 from src.resource_events import ResourceEventLogger
 
 LOCAL_TIMEOUT_SMOKE = 10
 LOCAL_TIMEOUT_FULL = 60
 DOCKER_TIMEOUT_SMOKE = 30
 DOCKER_TIMEOUT_FULL = 300
+# Docker 容器内依赖安装的独立预算（秒）：修复「pip install torch 吃掉整个
+# smoke 超时」的缺陷——安装阶段与脚本运行阶段分两次 docker run、分开计时，
+# 脚本超时预算不再被依赖安装消耗。
+DOCKER_INSTALL_TIMEOUT = 900
 # 本地依赖安装超时（numpy/matplotlib/torch 等大包需要更长时间）
 LOCAL_PIP_TIMEOUT = 300
 # 运行时缺模块自我修复上限：缺包 -> 隔离安装 -> 重跑，最多 3 轮
 # （对齐 ScholarAgent coder.py 的 MAX_SELF_CORRECTIONS=3）
 MAX_PIP_SELF_HEAL = 3
+# 执行计划单步修复上限：超时缩参 / 缺包补装最多重试 3 轮
+MAX_PLAN_STEP_REPAIRS = 3
+# GPU-only 脚本特征（stderr 命中则标记不可修复，回退生成脚本路径）
+_GPU_ONLY_HINTS = ("cuda", "nccl", "no gpu", "out of memory on device",
+                   "torch.cuda", "cudnn")
+# 数据集缺失特征：官方脚本读 ./dataset/<name>/<name>.csv，而数据集在 README
+# 的网盘链接里、不在仓库内（iTransformer 全系列仓库都是这个形态）。
+# 这不是代码缺陷，重试无意义——单独归类，报告里才不会把它读成
+# "官方代码跑不起来"。
+_DATASET_MISSING_FILE_HINTS = ("filenotfounderror", "no such file or directory",
+                               "errno 2", "cannot find the file")
+_DATASET_MISSING_PATH_HINTS = (".csv", ".txt", "dataset", "/data/")
 # 进程内依赖安装结果缓存：依赖清单文本 -> ""(已就绪) 或 失败诊断文本。
 # smoke/full/多次优化重跑共用一个进程，只对同一清单安装一次；
 # 失败也缓存，避免反复重装浪费时间。
@@ -72,8 +90,15 @@ DOCKER_DEFAULT_MEM = os.environ.get("AUTOREPRO_DOCKER_MEM", "2g")
 DOCKER_DEFAULT_PIDS = int(os.environ.get("AUTOREPRO_DOCKER_PIDS", "256"))
 # 容器内非 root 用户（默认 nobody，可覆盖 AUTOREPRO_DOCKER_USER）
 DOCKER_DEFAULT_USER = os.environ.get("AUTOREPRO_DOCKER_USER", "65534:65534")
-# 加固开启时 pip 安装目标：tmpfs 可写目录（--read-only + 非 root 兼容）
-DOCKER_PIP_SITE = "/tmp/site-packages"
+# 容器内 pip 安装目标：**挂载卷内**的目录，不是 /tmp。
+#
+# 不能用 /tmp/site-packages：`--tmpfs /tmp` 是**每容器独立**的，容器一退出
+# 就销毁。而安装步与脚本步是两次 `docker run`（预算分离的本意），于是第二次
+# 容器里 PYTHONPATH 指向的是一个刚建出来的空目录——torch/numpy 全部
+# ModuleNotFoundError，自愈循环再装一次也仍然丢掉，3 轮后判失败。
+# 挂载卷（-v 宿主目录:/app）在两次容器之间保留，且 `--read-only` 只读的是
+# 容器 rootfs，不影响卷，所以装到 /app 下才真的能带到脚本步。
+DOCKER_PIP_SITE = "/app/.autorepro_site"
 # 加固参数与容器环境不兼容的错误特征（命中则按可用性降级重跑）
 _HARDEN_INCOMPATIBLE_HINTS = (
     "unknown flag", "unknown shorthand flag", "not supported",
@@ -218,9 +243,23 @@ EXIT_DANGER_BLOCKED = -6
 # Exit code：Docker 引擎（daemon）不可用，未进入沙箱
 EXIT_DOCKER_DAEMON_DOWN = -4
 EXIT_ISOLATION_REQUIRED = -7
+# Exit code：Docker 镜像本地不存在且拉取失败（运行环境问题，与代码无关）
+EXIT_DOCKER_IMAGE_UNAVAILABLE = -8
 _NON_CODE_REPAIR_EXIT_CODES = {
     -1, -3, -4, EXIT_DANGER_BLOCKED, EXIT_ISOLATION_REQUIRED,
+    EXIT_DOCKER_IMAGE_UNAVAILABLE,
 }
+
+# 镜像拉取失败的特征串（stderr/stdout 命中即归为运行环境问题，不修代码）。
+# 不按退出码 125 判定：125 是 docker CLI 的通用"自身错误"码，加固降级链里
+# unknown-flag 场景同样会拿到 125，把它整体划成不可修复会误伤真实的
+# 「加固参数不兼容，降级后可跑」路径（那条路径靠 stderr 特征区分）。
+_PULL_FAILED_HINTS = (
+    "failed to resolve reference", "context deadline exceeded",
+    "unable to find image", "pull access denied", "no such host",
+    "connection refused", "i/o timeout", "manifest unknown",
+    "dial tcp", "tls handshake timeout", "lookup ",
+)
 
 # 本地无沙箱执行前的危险代码静态门：命中即拒绝执行。高信号、对「复现
 # 训练脚本」低误报；是正则兜底而非正式沙箱，生产复现不可信代码请用 Docker。
@@ -386,11 +425,25 @@ class CodeExecutorAgent(BaseAgent):
         if "modulenotfounderror" in lower or "no module named" in lower:
             diagnosis["error_type"] = "missing_dependency"
             diagnosis["repairable"] = False
-        if "timed out" in lower or "执行超时" in lower:
-            diagnosis["error_type"] = "timeout"
-            diagnosis["repairable"] = False
         if result.get("danger_blocked") or result.get("exit_code") in (
                 _NON_CODE_REPAIR_EXIT_CODES):
+            diagnosis["repairable"] = False
+        if "timed out" in lower or "执行超时" in lower:
+            # 超时可修复：此前硬编码 repairable=False 导致修复循环 1 轮即放弃
+            # （iTransformer 实测：smoke 超时后直接停摆）。必须放在退出码门
+            # **之后**判定——超时正是退出码 -1，会被 _NON_CODE_REPAIR_EXIT_CODES
+            # 重新盖回不可修复。修复策略由 _repair_prompt 的超时分支给出
+            # （缩参/缩短训练循环）。
+            diagnosis["error_type"] = "timeout"
+            diagnosis["repairable"] = True
+        if (result.get("exit_code") == EXIT_DOCKER_IMAGE_UNAVAILABLE
+                or any(hint in lower for hint in _PULL_FAILED_HINTS)):
+            # 放最后判定：镜像拉不到是**运行环境**问题，改代码不可能修好。
+            # 此前没有这个分类，exit 125 + 一段 docker 原始报错被判成
+            # 可修复，3 轮 LLM 修复全烧在「改论文代码」上（实测 4 次 exit 125）。
+            # 退出码与 stderr 特征两条路都认：预拉失败是我们自己返回的人话
+            # 文本（对不上 docker 原始特征串），隐式拉取失败才是原始报错。
+            diagnosis["error_type"] = "docker_pull_failed"
             diagnosis["repairable"] = False
         return diagnosis
 
@@ -401,6 +454,12 @@ class CodeExecutorAgent(BaseAgent):
         location = "未知位置"
         if diagnosis.get("line") is not None:
             location = f"{diagnosis.get('file', 'run.py')}:{diagnosis['line']}"
+        extra_rule = ""
+        if diagnosis.get("error_type") == "timeout":
+            extra_rule = ("修复规则（超时）：大幅缩短运行时间以满足沙箱时限——"
+                          "减小 seq_len/batch_size、把训练 epoch 减到 1~3、"
+                          "缩小数据集规模；保持指标打印语句完整，"
+                          "其余论文逻辑不变。\n")
         return f"""你正在修复一份论文复现 Python 脚本。脚本在 {stage} 阶段执行失败。
 请根据 traceback 对代码做最小、定点的修复，保持论文方法、数据处理、指标打印
 和已有工作区接口不变。只输出修复后的完整 Python 源码，不要 Markdown 围栏、
@@ -410,7 +469,7 @@ class CodeExecutorAgent(BaseAgent):
 论文数据集: {paper_info.get('dataset', '未知')}
 失败位置: {location}
 异常类型: {diagnosis.get('error_type', 'execution_error')}
-错误上下文:
+{extra_rule}错误上下文:
 {diagnosis.get('message', '')}
 
 当前代码:
@@ -486,6 +545,490 @@ class CodeExecutorAgent(BaseAgent):
             current = fixed
         return current, stages, attempts, stages[-1]
 
+    # ---------------- 执行计划模式（多代码单元整体调用） ----------------
+
+    def _execute_plan(self, plan: Dict, paper_info: Dict) -> Dict:
+        """按 ExecutionPlan 逐步执行官方代码（安装 -> 下载 -> 运行 -> 解析）。
+
+        安全姿态与生成脚本路径一致：真实模式强制 Docker 加固沙箱；
+        mock 模式允许本地子进程（演示/测试夹具，仓库为可信 file:// 来源）。
+
+        返回结果含 stages（逐步记录）/ final（拼接 run 输出，供
+        ResultValidator 照常提取指标）/ actual_metrics /
+        plan_failed_irreparably（官方路径彻底失败 -> run() 回退生成脚本）。
+        """
+        steps = plan.get("steps") or []
+        units = plan.get("units") or []
+        if not self.mock_mode and not self.use_docker:
+            # 官方代码不可信：真实模式必须 Docker 隔离（复用既有门）
+            return self._plan_irreparable(
+                "真实模式执行官方代码必须启用 Docker 隔离",
+                exit_code=EXIT_ISOLATION_REQUIRED)
+
+        # 工作区：各单元 copytree 到临时目录（去 .git/__pycache__），
+        # 整体挂载到容器 /app；chmod o+w 供容器内非 root 用户写入。
+        workspace = tempfile.mkdtemp(prefix="autorepro_plan_")
+        unit_dirs: Dict[str, str] = {}
+        try:
+            for unit in units or []:
+                src = (unit or {}).get("local_path") or ""
+                uid = sanitize_unit_id((unit or {}).get("unit_id") or "")
+                if not src or not uid or not Path(src).is_dir():
+                    continue
+                dst = Path(workspace) / uid
+                shutil.copytree(src, dst, ignore=shutil.ignore_patterns(
+                    ".git", "__pycache__", ".ipynb_checkpoints"))
+                unit_dirs[uid] = uid
+            # 工作区根也要放开：mkdtemp 默认 0700，而挂载的是**根目录**，
+            # 容器里的 nobody 要 traverse /app 才能进 /app/<unit>。
+            self._chmod_tree_writable(Path(workspace))
+            (Path(workspace) / ".plan.json").write_text(
+                json.dumps(plan, ensure_ascii=False), encoding="utf-8")
+
+            stage_records: List[Dict] = []
+            step_outcomes: Dict[str, object] = {}
+            run_outputs: List[str] = []
+            for step_dict in steps or []:
+                step = PlanStep.from_dict(step_dict)
+                deps = step.depends_on or []
+                if deps and not all(
+                        step_outcomes.get(d) is True for d in deps):
+                    record = {"step_id": step.step_id, "kind": step.kind,
+                              "cmd": step.cmd, "unit_id": step.unit_id,
+                              "success": False, "stdout": "", "stderr": "",
+                              "exit_code": 0, "skipped_deps": True,
+                              "repairs": []}
+                    stage_records.append(record)
+                    step_outcomes[step.step_id] = "skipped"
+                    continue
+                if step.kind == "parse":
+                    record = self._parse_plan_step(step, run_outputs)
+                else:
+                    record = self._execute_plan_step_with_repair(
+                        step, workspace, unit_dirs)
+                stage_records.append(record)
+                step_outcomes[step.step_id] = bool(record.get("success"))
+                if record.get("success") and step.kind == "run":
+                    run_outputs.append(record.get("stdout", "") or "")
+
+            run_succeeded = any(r.get("success") and r.get("kind") == "run"
+                                for r in stage_records)
+            real_failures = [r for r in stage_records
+                             if not r.get("success")
+                             and not r.get("skipped_deps")
+                             and r.get("kind") != "parse"]
+            plan_failed = bool(real_failures) and not run_succeeded
+            final_stdout = "\n".join(run_outputs)[-20000:]
+            final_stderr = "\n".join(
+                (r.get("stderr") or "") for r in stage_records
+                if r.get("stderr"))[-4000:]
+            actual_metrics = self._parse_plan_metrics(final_stdout, steps)
+            final = {
+                "success": not real_failures and bool(stage_records),
+                "stdout": final_stdout,
+                "stderr": final_stderr,
+                "exit_code": 0 if not real_failures
+                else (real_failures[0].get("exit_code") or 1),
+            }
+            result = {
+                "success": final["success"],
+                "stages": stage_records,
+                "final": final,
+                "code": self._entry_script_text(plan),
+                "execution_mode": "plan",
+                "plan": plan,
+                "actual_metrics": actual_metrics,
+                "best_effort": False,
+                "fallback_used": False,
+                "plan_failed_irreparably": plan_failed,
+                # 键恒存在（失败时才有内容）：报告生成器读它渲染「回退原因」，
+                # 先前这条正常失败路径漏了该键，报告里永远是空的。
+                "plan_fail_reason": (self._plan_fail_reason(real_failures)
+                                     if plan_failed else ""),
+            }
+            if plan_failed:
+                self.log("execute_plan", "ERROR",
+                         f"官方代码执行计划失败（{len(real_failures)} 步未通过），"
+                         "回退生成脚本路径",
+                         {"failures": [r.get("step_id") for r in real_failures]})
+            else:
+                self.log_experiment(
+                    "EXECUTE_CODE", "官方代码执行计划完成",
+                    inputs={"plan": plan.get("source")},
+                    outputs={"stages": stage_records,
+                             "actual_metrics": actual_metrics},
+                    result={"success": final["success"]})
+                self.log("execute_plan", "SUCCESS",
+                         f"计划执行完成: {len(stage_records)} 步, "
+                         f"指标 {list(actual_metrics.keys())}")
+            return result
+        finally:
+            shutil.rmtree(workspace, ignore_errors=True)
+
+    @staticmethod
+    def _prepare_pip_target(workdir: str) -> str:
+        """在宿主工作区里建好容器内 pip --target 目录，返回容器内路径。
+
+        目录建在挂载卷里（`/app/.autorepro_site`），才能从安装步活到脚本步；
+        宿主侧预先建好并放开到 0777，免得容器里的 nobody（65534）写不进去。
+        建不出来时返回 ""——调用方退化为不带 --target 的安装（容器层内安装，
+        两次 run 之间不保留），而不是让 pip 在容器里报权限错误。
+        """
+        try:
+            path = Path(workdir) / ".autorepro_site"
+            path.mkdir(parents=True, exist_ok=True)
+            path.chmod(0o777)
+        except OSError:
+            return ""
+        return DOCKER_PIP_SITE
+
+    @staticmethod
+    def _plan_irreparable(reason: str, exit_code: int = 1) -> Dict:
+        """官方路径不可修复失败（安全门/GPU-only 等）统一返回。"""
+        final = {"success": False, "stdout": "", "stderr": reason,
+                 "exit_code": exit_code}
+        return {"success": False, "stages": [], "final": final,
+                "code": "", "execution_mode": "plan", "plan": {},
+                "actual_metrics": {}, "best_effort": False,
+                "plan_failed_irreparably": True,
+                "plan_fail_reason": reason}
+
+    @staticmethod
+    def _plan_fail_reason(real_failures: List[Dict]) -> str:
+        """计划失败（跑挂了/依赖装不上，但不属于"不可修复"）时的人话回退原因。
+
+        此前只有 _plan_irreparable 路径写 plan_fail_reason，正常失败路径的结果
+        字典**根本没有这个键**——报告生成器读到的恒为空串，用户只看到
+        "已回退到生成脚本"，不知道为什么要回退。这里把最后一次修复诊断
+        翻成人话补上。
+        """
+        first = real_failures[0] if real_failures else {}
+        step_id = first.get("step_id") or "?"
+        repairs = first.get("repairs") or []
+        # 镜像拉取失败优先级最高：它是运行环境问题，正是用户最需要一眼看到
+        # 的那类原因，不该被"最后一次尝试"的更琐碎诊断盖掉。
+        diag = next((r for r in repairs
+                     if (r or {}).get("error_type") == "docker_pull_failed"),
+                    None) or (repairs[-1] if repairs else {})
+        etype = (diag.get("error_type") or "").strip()
+        detail = (diag.get("detail") or "").strip()
+        lead = f"步骤 {step_id} 失败"
+        if etype == "docker_pull_failed":
+            return (f"{lead}：Docker 镜像本地不存在且拉取失败"
+                    f"（运行环境问题，非论文代码问题）。"
+                    f"{detail or '请检查网络或设置 AUTOREPRO_DOCKER_IMAGE_MIRROR'}")
+        if etype == "gpu_only":
+            return f"{lead}：{detail or '官方脚本需要 GPU，本环境不具备'}"
+        if etype == "missing_dataset":
+            return f"{lead}：{detail or '缺少数据集文件'}"
+        if etype == "missing_dependency":
+            return f"{lead}：依赖无法安装（{detail or '未知包'}）"
+        if etype == "timeout":
+            return f"{lead}：执行超时，缩参重试后仍未通过"
+        stderr = (first.get("stderr") or "").strip()
+        tail = stderr.splitlines()[-1][:200] if stderr else ""
+        return f"{lead}：{tail or '执行未通过，且无可用的确定性修复策略'}"
+
+    @staticmethod
+    def _chmod_tree_writable(root: Path) -> None:
+        """递归放开 other 权限：容器内非 root 用户（65534）需要 rwx。
+
+        目录必须给 **o+x**，不能只给 o+w：`tempfile.mkdtemp` 建出来的是
+        0700，只加 o+w 得到 0702——nobody 连 /app 都 traverse 不进去，
+        脚本直接 "Permission denied"（真正的失败点比"写不了"更早，
+        只在写权限上找原因会一直找不到）。
+        文件不需要 o+x，给到 o+rw 即可（脚本还要能自写产出）。
+        """
+        try:
+            paths = [root, *root.rglob("*")]
+        except OSError:
+            paths = [root]
+        for path in paths:
+            try:
+                is_dir = path.is_dir()
+                mode = path.stat().st_mode
+                path.chmod(mode | (0o007 if is_dir else 0o006))
+            except OSError:
+                continue
+
+    @staticmethod
+    def _entry_script_text(plan: Dict) -> str:
+        """读取入口脚本内容作为 execution.code（报告/优化工作区复用）。"""
+        entry = plan.get("entry") or {}
+        script = entry.get("script") or ""
+        unit_id = entry.get("unit_id") or "main"
+        units = plan.get("units") or []
+        unit = next((u for u in units
+                     if (u or {}).get("unit_id") == unit_id), None)
+        local = (unit or {}).get("local_path") or ""
+        if not script or not local:
+            return ""
+        path = Path(local) / script
+        try:
+            return path.read_text(encoding="utf-8", errors="replace")[:20000]
+        except OSError:
+            return ""
+
+    def _execute_plan_step_with_repair(self, step: PlanStep,
+                                       workspace: str,
+                                       unit_dirs: Dict[str, str]) -> Dict:
+        """单步执行 + 修复循环（超时缩参 / 缺包补装，≤MAX_PLAN_STEP_REPAIRS 轮）。"""
+        current = step
+        repairs: List[Dict] = []
+        record = self._execute_plan_step(current, workspace, unit_dirs)
+        for _ in range(MAX_PLAN_STEP_REPAIRS):
+            if record.get("success"):
+                break
+            fixed, diagnosis = self._repair_plan_step(current, record)
+            repairs.append(diagnosis)
+            if fixed is None:
+                break
+            current = fixed
+            record = self._execute_plan_step(current, workspace, unit_dirs)
+        record["repairs"] = repairs
+        record["repair_attempts"] = len(repairs)
+        record["final_cmd"] = current.cmd
+        return record
+
+    def _repair_plan_step(self, step: PlanStep,
+                          record: Dict) -> tuple:
+        """单步失败诊断与修复（确定性优先，无 LLM）。
+
+        返回 (新步骤 | None, 诊断)。修复策略：
+        - GPU-only 特征 -> None（不可修复，回退生成脚本）；
+        - 超时且带 smoke_args -> 追加缩参重试一次；
+        - 缺模块 -> 把对应包追加进 install_pkgs 重试；
+        - 其余 -> None。
+        """
+        stderr = f"{(record.get('stderr') or '')} {(record.get('stdout') or '')}"
+        lower = stderr.lower()
+        diagnosis: Dict = {"error_type": "execution_error",
+                           "strategy": "non_repairable", "detail": ""}
+        if (record.get("exit_code") == EXIT_DOCKER_IMAGE_UNAVAILABLE
+                or any(hint in lower for hint in _PULL_FAILED_HINTS)):
+            # 基础设施故障，优先级高于所有代码类诊断：放在最前，避免被
+            # GPU/超时/缺数据集任一条更"具体"的规则抢先归类。
+            diagnosis.update(
+                error_type="docker_pull_failed", strategy="non_repairable",
+                detail="Docker 镜像本地不存在且拉取失败（运行环境问题，"
+                       "非论文代码问题）；请检查网络或设置 "
+                       "AUTOREPRO_DOCKER_IMAGE_MIRROR 指向可用镜像源")
+            return None, diagnosis
+        if any(hint in lower for hint in _GPU_ONLY_HINTS):
+            diagnosis.update(error_type="gpu_only",
+                             strategy="non_repairable",
+                             detail="官方脚本需要 GPU，本环境不可修复")
+            return None, diagnosis
+        if record.get("timed_out"):
+            # bash 入口优先用 smoke_cmd：官方 .sh 不转发 "$@"，把缩参追加到
+            # `bash x.sh` 后面会被忽略，等于原样重跑一遍、再烧一个超时预算。
+            if step.smoke_cmd:
+                new = PlanStep.from_dict(step.to_dict())
+                new.cmd = step.smoke_cmd
+                new.smoke_cmd = ""       # 缩参只做一次
+                new.smoke_args = {}
+                new.retries += 1
+                diagnosis.update(error_type="timeout", strategy="smoke_cmd",
+                                 detail=f"缩参单次调用重试: {step.smoke_cmd[:200]}")
+                return new, diagnosis
+            if step.smoke_args:
+                new = PlanStep.from_dict(step.to_dict())
+                new.cmd = (new.cmd.strip() + " " + " ".join(
+                    f"{k} {v}" for k, v in new.smoke_args.items())).strip()
+                new.smoke_args = {}      # 缩参只做一次
+                new.retries += 1
+                diagnosis.update(error_type="timeout", strategy="smoke_args",
+                                 detail=f"缩参重试: {dict(step.smoke_args)}")
+                return new, diagnosis
+            diagnosis.update(error_type="timeout", strategy="non_repairable",
+                             detail="超时且无 smoke_args 可缩参")
+            return None, diagnosis
+        if (any(h in lower for h in _DATASET_MISSING_FILE_HINTS)
+                and any(h in lower for h in _DATASET_MISSING_PATH_HINTS)):
+            diagnosis.update(
+                error_type="missing_dataset", strategy="non_repairable",
+                detail="缺少数据集文件（官方脚本从 README 的网盘链接下载，"
+                       "仓库内不含数据）；请先准备 dataset/ 目录再重试")
+            return None, diagnosis
+        module = find_missing_module(stderr)
+        if module:
+            pkg = python_package_for(module)
+            if pkg and pkg not in step.install_pkgs:
+                new = PlanStep.from_dict(step.to_dict())
+                new.install_pkgs = list(step.install_pkgs) + [pkg]
+                new.retries += 1
+                diagnosis.update(error_type="missing_dependency",
+                                 strategy="install_pkg", detail=pkg)
+                return new, diagnosis
+        diagnosis["detail"] = stderr[-300:]
+        return None, diagnosis
+
+    def _execute_plan_step(self, step: PlanStep, workspace: str,
+                           unit_dirs: Dict[str, str]) -> Dict:
+        """执行单条计划步骤（安装前缀与命令本体分开计时）。"""
+        if self.use_docker:
+            return self._execute_plan_step_docker(step, workspace)
+        return self._execute_plan_step_local(step, workspace, unit_dirs)
+
+    def _execute_plan_step_docker(self, step: PlanStep,
+                                  workspace: str) -> Dict:
+        """Docker 加固沙箱内执行单步：pip 前缀（独立预算）+ 命令本体。"""
+        docker_cmd = self._resolve_docker_cmd()
+        if docker_cmd is None:
+            return {"step_id": step.step_id, "kind": step.kind,
+                    "cmd": step.cmd, "unit_id": step.unit_id,
+                    "success": False, "stdout": "",
+                    "stderr": "本机未安装 Docker 或不在 PATH 中", "exit_code": -3}
+        env_config = getattr(self, "env_config", None) or {}
+        image = env_config.get("image_tag") or "python:3.11-slim"
+        if not self._image_allowed(image):
+            return {"step_id": step.step_id, "kind": step.kind,
+                    "cmd": step.cmd, "unit_id": step.unit_id,
+                    "success": False, "stdout": "",
+                    "stderr": f"镜像 {image} 不在允许白名单，已拒绝执行",
+                    "exit_code": -5}
+        engine_ok, engine_reason = BaseAgent.docker_engine_available(
+            [docker_cmd])
+        if not engine_ok:
+            return {"step_id": step.step_id, "kind": step.kind,
+                    "cmd": step.cmd, "unit_id": step.unit_id,
+                    "success": False, "stdout": "",
+                    "stderr": f"Docker 引擎不可用：{engine_reason}",
+                    "exit_code": EXIT_DOCKER_DAEMON_DOWN}
+
+        # 3) 镜像可用性：本地缺失时按镜像源预拉。放在引擎守卫之后（daemon
+        # 没起时拉取必然失败，先报 daemon 更准确）、构造 base_cmd 之前——
+        # 拉不到就带着人话直接返回，绝不让 docker run 拿一段原始报错去喂
+        # 修复循环（那条路会把"镜像拉取失败"当成"代码有 bug"来改）。
+        pull_err = BaseAgent.ensure_image_pulled(docker_cmd, image)
+        if pull_err:
+            return {"step_id": step.step_id, "kind": step.kind,
+                    "cmd": step.cmd, "unit_id": step.unit_id,
+                    "success": False, "stdout": "", "stderr": pull_err,
+                    "exit_code": EXIT_DOCKER_IMAGE_UNAVAILABLE,
+                    "image_unavailable": True}
+
+        mount = workspace.replace("\\", "/")
+        cwd = step.cwd or "/app"
+        base_cmd = [docker_cmd, "run", "--rm", "-v", f"{mount}:/app",
+                    "-w", cwd]
+        # 安装目标建在挂载卷里：这是安装步与脚本步（两次 docker run）之间
+        # 唯一的共享存储，tmpfs 与容器层都带不过去。
+        pip_target = self._prepare_pip_target(workspace)
+        install_phase: Dict = {"run": False}
+
+        # 1) 可选安装前缀：独立预算（安装大包不再吃掉脚本超时）
+        if step.install_pkgs:
+            pkgs = " ".join(step.install_pkgs)
+            target = f"--target {pip_target} --no-cache-dir " if pip_target else ""
+            install_cmd = (f"pip install -q -i {PIP_INDEX_URL} "
+                           f"--find-links {PIP_FIND_LINKS} {target}{pkgs}")
+            budget = step.install_budget_s or DOCKER_INSTALL_TIMEOUT
+            try:
+                res, _meta = self._run_docker_cmd_with_sandbox(
+                    base_cmd, image, ["sh", "-c", install_cmd], budget)
+            except subprocess.TimeoutExpired:
+                return {"step_id": step.step_id, "kind": step.kind,
+                        "cmd": step.cmd, "unit_id": step.unit_id,
+                        "success": False, "stdout": "",
+                        "stderr": f"依赖安装执行超时({budget}s)",
+                        "exit_code": -1, "timed_out": True,
+                        "install_phase": {"run": True, "timed_out": True}}
+            install_phase = {"run": True, "success": res.returncode == 0,
+                             "exit_code": res.returncode}
+            if res.returncode != 0:
+                return {"step_id": step.step_id, "kind": step.kind,
+                        "cmd": step.cmd, "unit_id": step.unit_id,
+                        "success": False, "stdout": res.stdout or "",
+                        "stderr": res.stderr or "", "exit_code": res.returncode,
+                        "install_phase": install_phase}
+
+        # 2) 命令本体：只计脚本运行预算
+        run_cmd = step.cmd
+        if pip_target:
+            # PATH 也要带上：`pip install --target` 把 console script 装到
+            # <target>/bin（gdown 这类下载工具只有命令没有可 import 的入口），
+            # 只注入 PYTHONPATH 的话 `gdown ...` 会 command not found。
+            run_cmd = (f"PYTHONPATH={pip_target} "
+                       f"PATH={pip_target}/bin:$PATH {run_cmd}")
+        timeout = step.timeout_s or DOCKER_TIMEOUT_SMOKE
+        try:
+            res, sandbox_meta = self._run_docker_cmd_with_sandbox(
+                base_cmd, image, ["sh", "-c", run_cmd], timeout)
+        except subprocess.TimeoutExpired:
+            return {"step_id": step.step_id, "kind": step.kind,
+                    "cmd": step.cmd, "unit_id": step.unit_id,
+                    "success": False, "stdout": "",
+                    "stderr": f"执行超时({timeout}s)", "exit_code": -1,
+                    "timed_out": True, "install_phase": install_phase,
+                    "sandbox": {"hardened": DOCKER_HARDEN}}
+        return {"step_id": step.step_id, "kind": step.kind,
+                "cmd": step.cmd, "unit_id": step.unit_id,
+                "success": res.returncode == 0,
+                "stdout": res.stdout or "", "stderr": res.stderr or "",
+                "exit_code": res.returncode, "timed_out": False,
+                "install_phase": install_phase, "sandbox": sandbox_meta}
+
+    def _execute_plan_step_local(self, step: PlanStep, workspace: str,
+                                 unit_dirs: Dict[str, str]) -> Dict:
+        """本地子进程执行单步（仅 mock 模式：演示/测试夹具）。"""
+        cwd = Path(workspace) / (unit_dirs.get(step.unit_id) or "")
+        if not cwd.is_dir():
+            cwd = Path(workspace)
+        install_phase: Dict = {"run": False}
+        if step.install_pkgs and not self.mock_mode:
+            # 真实模式无 Docker 已在上层拒绝；此处仅 mock 兜底说明
+            install_phase = {"run": False,
+                             "detail": "本地模式不安装第三方包（mock）"}
+        timeout = step.timeout_s or LOCAL_TIMEOUT_SMOKE
+        try:
+            proc = subprocess.run(
+                step.cmd, shell=True, cwd=str(cwd), capture_output=True,
+                text=True, timeout=timeout,
+                encoding="utf-8", errors="replace",
+                env=self._exec_env())
+            return {"step_id": step.step_id, "kind": step.kind,
+                    "cmd": step.cmd, "unit_id": step.unit_id,
+                    "success": proc.returncode == 0,
+                    "stdout": proc.stdout or "", "stderr": proc.stderr or "",
+                    "exit_code": proc.returncode, "timed_out": False,
+                    "install_phase": install_phase,
+                    "sandbox": {"hardened": False, "local": True}}
+        except subprocess.TimeoutExpired:
+            return {"step_id": step.step_id, "kind": step.kind,
+                    "cmd": step.cmd, "unit_id": step.unit_id,
+                    "success": False, "stdout": "",
+                    "stderr": f"执行超时({timeout}s)", "exit_code": -1,
+                    "timed_out": True, "install_phase": install_phase,
+                    "sandbox": {"hardened": False, "local": True}}
+
+    @staticmethod
+    def _parse_plan_step(step: PlanStep, run_outputs: List[str]) -> Dict:
+        """parse 步骤：从已收集的 run 输出中确定性提取指标（无命令执行）。"""
+        stdout = "\n".join(run_outputs)
+        metrics = {}
+        if stdout:
+            # _extract_metrics 为实例方法但不使用 self；借用其正则逻辑
+            from src.agents.result_validator import ResultValidatorAgent
+            metrics = ResultValidatorAgent._extract_metrics(None, stdout)
+        return {"step_id": step.step_id, "kind": "parse", "cmd": "",
+                "unit_id": step.unit_id, "success": bool(metrics),
+                "stdout": stdout[-2000:], "stderr": "", "exit_code": 0,
+                "metrics": metrics, "repairs": []}
+
+    @staticmethod
+    def _parse_plan_metrics(stdout: str, steps: List[Dict]) -> Dict:
+        """从 run 输出中提取计划期望的指标（复用 ResultValidator 正则）。"""
+        if not stdout:
+            return {}
+        from src.agents.result_validator import ResultValidatorAgent
+        extracted = ResultValidatorAgent._extract_metrics(None, stdout)
+        expected = set()
+        for step in steps or []:
+            expected.update((step or {}).get("expects", {}).get("metrics")
+                            or [])
+        return {k: v for k, v in extracted.items()}
+
     def run(self, input_data: dict) -> dict:
         """执行论文代码（smoke test + full run）。
 
@@ -505,6 +1048,19 @@ class CodeExecutorAgent(BaseAgent):
                 "真实模式必须启用可用的 Docker 隔离后才能执行模型生成代码",
                 code=code, exit_code=EXIT_ISOLATION_REQUIRED,
                 extra={"isolation_required": True})
+
+        # 执行计划模式（多代码单元整体调用）：官方代码优先执行。
+        # 计划不可修复失败（GPU-only / 依赖不可装等）时回退生成脚本路径，
+        # 计划执行记录合并进最终结果（execution_mode="generated_fallback"）。
+        plan = input_data.get("execution_plan") or {}
+        plan_result = None
+        if isinstance(plan, dict) and plan.get("steps"):
+            plan_result = self._execute_plan(plan, paper_info)
+            if not plan_result.get("plan_failed_irreparably"):
+                return {**plan_result, "llm_calls": self._delta_llm_calls()}
+            self.log("execute_plan", "WARNING",
+                     "官方代码计划不可修复失败，回退生成脚本路径",
+                     {"reason": plan_result.get("plan_fail_reason", "")})
 
         if code:
             # 外部提供的真实复现代码：只做清洗，不走生成/再生成
@@ -556,6 +1112,12 @@ class CodeExecutorAgent(BaseAgent):
                   "repair_attempts": repair_attempts,
                   "sanitize_stats": sanitize_stats,
                   **best_effort_fields}
+        # 官方路径失败后的生成脚本回退：合并计划执行记录与失败原因
+        if plan_result:
+            result["plan_execution"] = plan_result
+            result["execution_mode"] = "generated_fallback"
+            result["plan_fail_reason"] = plan_result.get(
+                "plan_fail_reason", "")
         if not final["success"]:
             self.log_experiment(
                 "EXECUTE_CODE", "执行失败，代码修复重试结束",
@@ -1657,6 +2219,16 @@ class CodeExecutorAgent(BaseAgent):
                 "sandbox": {"engine_available": False},
             }
 
+        # 镜像可用性：本地缺失时按镜像源预拉（与计划路径同一道加固）。
+        # 返回专属退出码，诊断层据此判定为运行环境问题，不再触发 LLM 改代码。
+        pull_err = BaseAgent.ensure_image_pulled(docker_cmd, image)
+        if pull_err:
+            return {"success": False, "stdout": "", "stderr": pull_err,
+                    "exit_code": EXIT_DOCKER_IMAGE_UNAVAILABLE,
+                    "image_unavailable": True,
+                    "sandbox": {"image_allowed": True, "image": image,
+                                "image_unavailable": True}}
+
         reqs = (env_config.get("requirements_txt") or "").strip()
         if not reqs:
             pkgs = env_config.get("required_packages") or []
@@ -1671,6 +2243,9 @@ class CodeExecutorAgent(BaseAgent):
             # 同本地路径：相对 workdir 会被 docker 的 -v 以错误形式解析
             workdir = os.path.abspath(workdir)
         script = os.path.join(workdir, "run.py")
+        # mkdtemp 是 0700：容器里的 nobody 需要 o+rx 才能 traverse /app 并读
+        # run.py，只给 o+w 会得到 0702，等于进不去。
+        self._chmod_tree_writable(Path(workdir))
         timeout = DOCKER_TIMEOUT_SMOKE if stage == "smoke" else DOCKER_TIMEOUT_FULL
         try:
             with open(script, "w", encoding="utf-8") as f:
@@ -1683,11 +2258,13 @@ class CodeExecutorAgent(BaseAgent):
             # 与自愈补装包都前置到 pip 安装（容器每次 --rm 不保留现场，
             # 缺包必须累积进命令重跑）；自定义 image_tag 镜像假定已含依赖，
             # 仅做脚本运行（缺包时同样改走 pip 前置自愈）。
-            # 加固开启时 pip 安装到 tmpfs（只读 rootfs + 非 root 均可写），
-            # 并以 PYTHONPATH 注入该目录，使 run.py 能导入新增依赖。
-            pip_target = DOCKER_PIP_SITE if DOCKER_HARDEN else ""
+            # 依赖装到**挂载卷内**的目录（默认 /app/.autorepro_site），并以
+            # PYTHONPATH 注入，使 run.py 能导入新增依赖。装到 /tmp 的 tmpfs
+            # 或容器层都不行：脚本步是另一个容器，那些内容已经没了。
+            pip_target = self._prepare_pip_target(workdir)
 
-            def _make_runner(heal_pkgs: list) -> list:
+            def _make_install_runner(heal_pkgs: list) -> list:
+                """只安装依赖、不跑脚本（独立预算，见 DOCKER_INSTALL_TIMEOUT）。"""
                 install_parts = [f"pip install -i {PIP_INDEX_URL} ",
                                  f"--find-links {PIP_FIND_LINKS} "]
                 if pip_target:
@@ -1697,12 +2274,17 @@ class CodeExecutorAgent(BaseAgent):
                     install_parts.append("-r /app/requirements.txt ")
                 if heal_pkgs:
                     install_parts.append(" ".join(heal_pkgs) + " ")
-                if pip_target:
-                    install_parts.append(
-                        f"-q && PYTHONPATH={pip_target} python run.py")
-                else:
-                    install_parts.append("-q && python run.py")
+                install_parts.append("-q")
                 return ["sh", "-c", "".join(install_parts)]
+
+            def _make_script_runner() -> list:
+                if pip_target:
+                    # PATH 带上 <target>/bin：console script（gdown 等）
+                    # 只装命令不装可 import 入口，缺了它就会 command not found。
+                    return ["sh", "-c",
+                            f"PYTHONPATH={pip_target} "
+                            f"PATH={pip_target}/bin:$PATH python run.py"]
+                return ["python", "run.py"]
 
             reqs_file = None
             if image == "python:3.11-slim" and reqs:
@@ -1718,12 +2300,38 @@ class CodeExecutorAgent(BaseAgent):
                                   "image_allowed": True}
             seen = set()
             for _ in range(MAX_PIP_SELF_HEAL + 1):
-                runner = (_make_runner(healed_pkgs := [h["package"]
-                           for h in healed])
-                          if (image == "python:3.11-slim" and reqs)
-                          or healed else ["python", "run.py"])
+                # 预算分离：依赖安装与脚本运行分两次 docker run、分开计时。
+                # 此前合并为一条 `pip install ... && python run.py`，安装
+                # torch 等大包直接吃掉整个 smoke 超时（iTransformer 实测）。
+                needs_install = bool(
+                    (image == "python:3.11-slim" and reqs) or healed)
+                if needs_install:
+                    heal_pkgs = [h["package"] for h in healed]
+                    try:
+                        install_result, _sandbox_install = \
+                            self._run_docker_cmd_with_sandbox(
+                                base_cmd, image,
+                                _make_install_runner(heal_pkgs),
+                                DOCKER_INSTALL_TIMEOUT)
+                    except subprocess.TimeoutExpired:
+                        # 措辞含「执行超时」以命中 _diagnose_execution_error
+                        # 的 timeout 分支（repairable=True，触发缩参修复）。
+                        return {"success": False, "stdout": "",
+                                "stderr": (f"依赖安装执行超时("
+                                           f"{DOCKER_INSTALL_TIMEOUT}s)"),
+                                "exit_code": -1,
+                                "sandbox": {"image_allowed": True,
+                                            "install_phase": True}}
+                    if install_result.returncode != 0:
+                        # 依赖装不上（找不到发行版/网络失败）：以安装结果
+                        # 直接返回，避免把 pip 报错误判为脚本运行时错误。
+                        result = install_result
+                        sandbox_meta = {"image_allowed": True,
+                                        "install_phase": True,
+                                        **_sandbox_install}
+                        break
                 result, _sandbox_run = self._run_docker_cmd_with_sandbox(
-                    base_cmd, image, runner, timeout)
+                    base_cmd, image, _make_script_runner(), timeout)
                 sandbox_meta = {"image_allowed": True, **_sandbox_run}
                 if result.returncode == 0:
                     break

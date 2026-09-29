@@ -67,7 +67,9 @@ def test_fetch_hook_populates_storage(orch):
     result = orch.run({"paper_title": "ResNet: Deep Residual Learning"})
     assert result["state"] == "COMPLETED", result.get("error")
     fetched = result["data"]["storage"]["fetched"]
-    assert set(fetched) == {"code", "dataset", "weights"}
+    # 多代码单元管理后新增 units 键（逐单元 fetch 结果列表）
+    assert {"code", "dataset", "weights", "units"} <= set(fetched)
+    assert isinstance(fetched["units"], list)
     # mock finder 输出占位 URL -> code 不下载；dataset 合成冒烟集
     assert fetched["code"]["state"] in ("placeholder-skip", "skipped")
     assert fetched["dataset"]["state"] in ("smoke-synth", "cached")

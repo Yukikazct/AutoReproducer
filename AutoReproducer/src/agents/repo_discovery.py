@@ -86,6 +86,7 @@ class RepoCandidate:
     score_hint: int = 0
     stars: int = 0
     paper_id: str = ""
+    role: str = ""            # main / library / benchmark / alternative（多代码单元管理用）
 
     def to_dict(self) -> Dict:
         payload = {
@@ -93,7 +94,8 @@ class RepoCandidate:
             "source": self.source,
             "score_hint": self.score_hint,
         }
-        for key in ("title", "repo_name", "description", "stars", "paper_id"):
+        for key in ("title", "repo_name", "description", "stars", "paper_id",
+                    "role"):
             value = getattr(self, key)
             if value:
                 payload[key] = value
@@ -174,31 +176,74 @@ def curated_repo_fallback_candidates(query: str) -> List[RepoCandidate]:
             "repo_name": "harvardnlp/annotated-transformer",
             "description": "Annotated PyTorch implementation of the Transformer paper.",
             "repo_url": "https://github.com/harvardnlp/annotated-transformer",
+            "role": "main",
         }],
         "transformer": [{
             "repo_name": "harvardnlp/annotated-transformer",
             "description": "Annotated PyTorch implementation of the Transformer paper.",
             "repo_url": "https://github.com/harvardnlp/annotated-transformer",
+            "role": "main",
         }],
         "pinn": [{
             "repo_name": "maziarraissi/PINNs",
             "description": "Physics-informed neural networks (PINNs).",
             "repo_url": "https://github.com/maziarraissi/PINNs",
+            "role": "main",
         }],
         "physics-informed": [{
             "repo_name": "maziarraissi/PINNs",
             "description": "Physics-informed neural networks (PINNs).",
             "repo_url": "https://github.com/maziarraissi/PINNs",
+            "role": "main",
         }],
         "u-net": [{
             "repo_name": "milesial/Pytorch-UNet",
             "description": "PyTorch implementation of the U-Net for image segmentation.",
             "repo_url": "https://github.com/milesial/Pytorch-UNet",
+            "role": "main",
         }],
         "unet": [{
             "repo_name": "milesial/Pytorch-UNet",
             "description": "PyTorch implementation of the U-Net for image segmentation.",
             "repo_url": "https://github.com/milesial/Pytorch-UNet",
+            "role": "main",
+        }],
+        # iTransformer（ICLR 2024）：官方仓库 thuml/iTransformer 为主实现，
+        # 模型同时并入 thuml/Time-Series-Library 统一库（论文实验脚本与
+        # 数据集下载链接都在其中）——多代码单元论文的典型结构。
+        "inverted transformer": [
+            {
+                "repo_name": "thuml/iTransformer",
+                "description": "Official implementation of iTransformer: Inverted Transformers Are Effective for Time Series Forecasting.",
+                "repo_url": "https://github.com/thuml/iTransformer",
+                "role": "main",
+            },
+            {
+                "repo_name": "thuml/Time-Series-Library",
+                "description": "A Library for Advanced Deep Time Series Models (iTransformer included).",
+                "repo_url": "https://github.com/thuml/Time-Series-Library",
+                "role": "library",
+            },
+        ],
+        "itransformer": [
+            {
+                "repo_name": "thuml/iTransformer",
+                "description": "Official implementation of iTransformer: Inverted Transformers Are Effective for Time Series Forecasting.",
+                "repo_url": "https://github.com/thuml/iTransformer",
+                "role": "main",
+            },
+            {
+                "repo_name": "thuml/Time-Series-Library",
+                "description": "A Library for Advanced Deep Time Series Models (iTransformer included).",
+                "repo_url": "https://github.com/thuml/Time-Series-Library",
+                "role": "library",
+            },
+        ],
+        "time series": [{
+            "repo_name": "thuml/Time-Series-Library",
+            "description": "A Library for Advanced Deep Time Series Models.",
+            "repo_url": "https://github.com/thuml/Time-Series-Library",
+            "role": "library",
         }],
     }
     extra_json = os.environ.get("AUTOREPRO_CURATED_REPOS", "").strip()
@@ -213,23 +258,31 @@ def curated_repo_fallback_candidates(query: str) -> List[RepoCandidate]:
 
     merged = dict(builtin)
     merged.update(extra)
-    for keyword, entries in merged.items():
+    # 关键词按长度降序遍历：更长的关键词更具体，应优先于通用片段。
+    # 此前按 dict 插入序遍历，查询 "iTransformer: Inverted Transformers…"
+    # 会先命中通用 "transformer"（annotated-transformer），把真正的
+    # 官方仓库 thuml/iTransformer 挤到后面。score_hint 随关键词长度
+    # 递增，使发现链的排序选择（score_hint 降序）自然偏向具体匹配。
+    seen_urls: set = set()
+    for keyword in sorted(merged.keys(), key=len, reverse=True):
         if keyword.lower() not in lower:
             continue
-        for entry in entries:
+        for entry in merged[keyword]:
             url = normalize_github_repo_url(entry.get("repo_url", ""))
             name = entry.get("repo_name") or ""
             if not name and url:
                 name = url.rstrip("/").split("github.com/")[-1]
-            if not url:
+            if not url or url in seen_urls:
                 continue
+            seen_urls.add(url)
             out.append(RepoCandidate(
                 title=clean_paper_title(query),
                 repo_name=name,
                 description=entry.get("description", ""),
                 repo_urls=[url],
                 source="curated_fallback",
-                score_hint=180,
+                score_hint=180 + len(keyword),
+                role=entry.get("role", ""),
             ))
     return out
 
@@ -438,7 +491,11 @@ def discover_repositories(query: str,
 def _discovery_result(query: str, candidates: List[RepoCandidate],
                       selected: str, chain: List[str],
                       fallback_used: bool, errors: str) -> Dict:
-    return {
+    # 多代码单元：selected -> main，其余带 URL 的可信候选按序收编为
+    # alternative/library 单元（最多 2 个），供 ResourceFinder 组装
+    # code_units 与 ResourceManager 多仓库拉取。
+    from src.code_units import units_from_discovery
+    result = {
         "query": query,
         "discovery_chain": chain,
         "candidates": [c.to_dict() for c in candidates][:8],
@@ -446,6 +503,9 @@ def _discovery_result(query: str, candidates: List[RepoCandidate],
         "fallback_used": fallback_used,
         "error": errors,
     }
+    result["code_units"] = [u.to_dict() for u in units_from_discovery(
+        result, max_extra=2)]
+    return result
 
 
 # ---------------- 复现模式决策 ----------------

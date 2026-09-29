@@ -53,6 +53,183 @@ class ReportGeneratorAgent(BaseAgent):
                  {"report_length": len(report)})
         return {"report": report, "report_length": len(report)}
 
+    def _generated_execution_lines(self, execution: dict) -> list:
+        """生成脚本路径的第 4 节渲染（原有行为，逐字保留）。"""
+        lines: list = [f"- **代码长度**: "
+                       f"{len(_txt(execution.get('code')))} 字符"]
+        # 清洗记录：清洗层碰过代码就必须让人看见——丢掉疑似代码行是"结果可能
+        # 已被洗残"的信号，静默吞掉正是此前"代码不完整却查不出来"的成因。
+        sstats = execution.get("sanitize_stats") or {}
+        prose_n = int(sstats.get("prose_dropped", 0) or 0)
+        code_n = int(sstats.get("code_dropped", 0) or 0)
+        if code_n:
+            lines.append(f"- **⚠️ 清洗丢弃**: {code_n} 行疑似代码行"
+                         f"（其余叙述行 {prose_n} 行）——"
+                         f"生成代码可能已被清洗截短，请对照审计日志核对")
+        elif prose_n:
+            lines.append(f"- **清洗丢弃**: 叙述行 {prose_n} 行"
+                         f"（预期行为，未触碰代码）")
+        stages = execution.get("stages", []) or []
+        final = execution.get("final", {}) or {}
+        best_effort = bool(execution.get("best_effort"))
+        if execution.get("not_runnable"):
+            # 只剩两道真门（语法错误 / 危险调用）会走到这里
+            lines.append("- **执行状态**: ⚠️ 未运行（代码未通过执行前检查）")
+            lines.append(f"- **未运行原因**: {execution.get('reason', 'N/A')}")
+        else:
+            state = "✅ 成功" if final.get("success") else "❌ 失败"
+            if best_effort:
+                state += "（尽力而为：论文信息不足）"
+            lines.append(f"- **执行状态**: {state}")
+        if best_effort:
+            # 信息不足也必须跑——但跑出来的东西不能被读成论文结论。这两句是
+            # 报告里唯一防止"占位数字被当成复现结果"的拦网，措辞不能省。
+            lines += [
+                "- **⚠️ 信息不足**: "
+                + _txt(execution.get("best_effort_reason"), "论文信息不足"),
+                "- **生成方式**: "
+                + ("系统本地兜底脚本（模型未给出可用代码）"
+                   if execution.get("fallback_used")
+                   else "模型按占位约定生成的最小可运行脚本"),
+            ]
+            for a in execution.get("assumptions") or []:
+                lines.append(f"  - 假设: {a}")
+        for st in stages:
+            st_ok = st.get("success")
+            lines.append(
+                f"  - {st.get('stage')}: {'✅ 通过' if st_ok else '❌ 失败'} "
+                f"(退出码 {st.get('exit_code')})")
+        if execution.get("code"):
+            lines += ["", "### 生成代码", "```python",
+                      _txt(execution["code"]), "```"]
+        lines += ["", "### 执行输出(full)", "```",
+                  _txt(final.get("stdout"), "无输出"), "```"]
+        if final.get("stderr"):
+            lines += ["### 错误输出", "```", _txt(final["stderr"]), "```"]
+        return lines
+
+    @staticmethod
+    def _plan_execution_lines(execution: dict, mode: str) -> list:
+        """官方代码执行计划分区的渲染（单元表 + 逐步记录 + 实际指标）。
+
+        为什么不能沿用生成路径的渲染：计划模式的 stages 记录键是
+        step_id/kind/cmd/skipped_deps/repairs/repair_attempts/final_cmd，
+        **没有 stage/exit_code 字段**，照生成路径打印会写成
+        "None: ❌ 失败 (退出码 None)"；execution.code 也是官方入口脚本原文
+        （.sh 居多），套 ```python 代码块等于把 shell 脚本当 Python 展示；
+        单元来源、实际指标、回退原因更是完全没有出口。
+        """
+        plan_result = execution
+        if mode == "generated_fallback":
+            plan_result = execution.get("plan_execution") or {}
+        plan = plan_result.get("plan") or {}
+        source_label = {"llm": "LLM 规划", "heuristic": "确定性启发式兜底",
+                        "none": "无可用代码单元"}.get(
+                            _txt(plan.get("source")), _txt(plan.get("source")))
+        steps = plan.get("steps") or []
+        units = plan.get("units") or []
+        lines: list = []
+        if mode == "generated_fallback":
+            lines.append("- **执行方式**: ⚠️ 官方代码执行计划失败，"
+                         "已回退到生成脚本路径（下方为回退前的官方执行记录）")
+            reason = _txt(execution.get("plan_fail_reason")) or \
+                _txt(plan_result.get("plan_fail_reason"))
+            if reason:
+                lines.append(f"- **回退原因**: {reason}")
+        else:
+            lines.append(
+                f"- **执行方式**: ✅ 官方代码执行计划"
+                f"（来源 {source_label}，{len(steps)} 步 / {len(units)} 个代码单元）")
+
+        # 代码单元：多代码块整体调用的可见性来源——只说"跑了官方代码"而
+        # 不列清单元，读者无从判断用的到底是哪几个仓库。
+        if units:
+            lines += ["", "### 代码单元",
+                      "| 单元 | 角色 | 来源 | 状态 |",
+                      "|------|------|------|------|"]
+            for unit in units:
+                status = _txt(unit.get("fetch_state")) or \
+                    _txt(unit.get("source"))
+                lines.append(f"| {_txt(unit.get('unit_id'))} "
+                             f"| {_txt(unit.get('role'))} "
+                             f"| {_txt(unit.get('url'))} | {status} |")
+        notes = plan.get("notes") or []
+        if notes:
+            lines.append("- **规划备注**:")
+            lines += [f"  - {n}" for n in notes]
+
+        # 逐步记录
+        stages = plan_result.get("stages") or []
+        if stages:
+            lines += ["", "### 执行步骤",
+                      "| 步骤 | 类型 | 命令 | 结果 |",
+                      "|------|------|------|------|"]
+            for st in stages:
+                if st.get("skipped_deps"):
+                    state = "⏭️ 跳过（前置步骤失败）"
+                elif st.get("success"):
+                    state = "✅ 通过"
+                else:
+                    state = f"❌ 失败（退出码 {st.get('exit_code')}）"
+                cmd = _txt(st.get("cmd"))
+                final_cmd = _txt(st.get("final_cmd"))
+                if final_cmd and final_cmd != cmd:
+                    # 缩参/补装修复后的真实命令必须可见，否则"修复了什么"
+                    # 只能靠猜。
+                    cmd = f"{cmd} → {final_cmd}" if cmd else final_cmd
+                lines.append(f"| {_txt(st.get('step_id'))} "
+                             f"| {_txt(st.get('kind'))} "
+                             f"| `{cmd}` | {state} |")
+            repairs = [(st, r) for st in stages
+                       for r in (st.get("repairs") or [])]
+            if repairs:
+                lines.append("- **修复记录**:")
+                for st, r in repairs:
+                    lines.append(
+                        f"  - {_txt(st.get('step_id'))} 第 "
+                        f"{_txt(st.get('repair_attempts'))} 次"
+                        f"[{_txt(r.get('error_type'))}] "
+                        f"{_txt(r.get('strategy'))}: {_txt(r.get('detail'))}")
+            # 镜像拉取失败必须单独点出来：它是**运行环境**问题，不点破的话
+            # 读者从"执行步骤 ❌ 退出码 125 + 一串 docker 原始报错"里只会
+            # 得出"这份论文的官方代码跑不起来"的结论——归因错人。
+            if any((r.get("error_type") or "") == "docker_pull_failed"
+                   for _st, r in repairs):
+                lines.append(
+                    "- **🐳 镜像拉取失败**: 这是**运行环境问题，不是论文代码"
+                    "问题**——目标镜像本地不存在且无法从网络拉取。请检查网络"
+                    "后重试，或设置环境变量 `AUTOREPRO_DOCKER_IMAGE_MIRROR` "
+                    "指向可用镜像源（如 `docker.m.daocloud.io`）。")
+
+        # 实际指标：计划模式的指标不进 metrics_comparison 之外的地方，
+        # 单独列出，避免"跑了但不知道跑出什么"。
+        actual = plan_result.get("actual_metrics") or {}
+        if actual:
+            lines.append("- **实际指标**: "
+                         + ", ".join(f"{k}={v}" for k, v in actual.items()))
+        elif mode == "plan":
+            lines.append("- **实际指标**: 未提取到"
+                         "（官方脚本输出中没有可识别的指标行）")
+
+        # 官方入口脚本（用 bash 代码块；生成路径的 ```python 不适用）
+        code = _txt(execution.get("code"))
+        if code and mode == "plan":
+            entry = plan.get("entry") or {}
+            script = _txt(entry.get("script")) or "入口脚本"
+            interp = _txt(entry.get("interp")).lower()
+            fence = "bash" if interp == "bash" or code.lstrip().startswith(
+                ("#!", "export ", "python ", "cd ")) else "python"
+            lines += ["", f"### 官方入口脚本 ({script})",
+                      f"```{fence}", code, "```"]
+
+        final = plan_result.get("final") or {}
+        lines += ["", "### 官方代码执行输出", "```",
+                  _txt(final.get("stdout"), "无输出"), "```"]
+        if final.get("stderr"):
+            lines += ["### 官方代码错误输出", "```",
+                      _txt(final["stderr"]), "```"]
+        return lines
+
     def _build_report(self, data: dict) -> str:
         paper_info = data.get("paper_info", {}) or {}
         resources = data.get("resources", {}) or {}
@@ -113,58 +290,13 @@ class ReportGeneratorAgent(BaseAgent):
         lines += ["", "### requirements.txt", "```",
                   _txt(env_config.get("requirements_txt"), "无"), "```", ""]
 
-        # 4. 代码执行（smoke + full）
-        lines += ["## 4. 代码执行",
-                  f"- **代码长度**: {len(_txt(execution.get('code')))} 字符"]
-        # 清洗记录：清洗层碰过代码就必须让人看见——丢掉疑似代码行是"结果可能
-        # 已被洗残"的信号，静默吞掉正是此前"代码不完整却查不出来"的成因。
-        sstats = execution.get("sanitize_stats") or {}
-        prose_n = int(sstats.get("prose_dropped", 0) or 0)
-        code_n = int(sstats.get("code_dropped", 0) or 0)
-        if code_n:
-            lines.append(f"- **⚠️ 清洗丢弃**: {code_n} 行疑似代码行"
-                         f"（其余叙述行 {prose_n} 行）——"
-                         f"生成代码可能已被清洗截短，请对照审计日志核对")
-        elif prose_n:
-            lines.append(f"- **清洗丢弃**: 叙述行 {prose_n} 行"
-                         f"（预期行为，未触碰代码）")
-        stages = execution.get("stages", []) or []
-        final = execution.get("final", {}) or {}
-        best_effort = bool(execution.get("best_effort"))
-        if execution.get("not_runnable"):
-            # 只剩两道真门（语法错误 / 危险调用）会走到这里
-            lines.append("- **执行状态**: ⚠️ 未运行（代码未通过执行前检查）")
-            lines.append(f"- **未运行原因**: {execution.get('reason', 'N/A')}")
-        else:
-            state = "✅ 成功" if final.get("success") else "❌ 失败"
-            if best_effort:
-                state += "（尽力而为：论文信息不足）"
-            lines.append(f"- **执行状态**: {state}")
-        if best_effort:
-            # 信息不足也必须跑——但跑出来的东西不能被读成论文结论。这两句是
-            # 报告里唯一防止"占位数字被当成复现结果"的拦网，措辞不能省。
-            lines += [
-                "- **⚠️ 信息不足**: "
-                + _txt(execution.get("best_effort_reason"), "论文信息不足"),
-                "- **生成方式**: "
-                + ("系统本地兜底脚本（模型未给出可用代码）"
-                   if execution.get("fallback_used")
-                   else "模型按占位约定生成的最小可运行脚本"),
-            ]
-            for a in execution.get("assumptions") or []:
-                lines.append(f"  - 假设: {a}")
-        for st in stages:
-            st_ok = st.get("success")
-            lines.append(
-                f"  - {st.get('stage')}: {'✅ 通过' if st_ok else '❌ 失败'} "
-                f"(退出码 {st.get('exit_code')})")
-        if execution.get("code"):
-            lines += ["", "### 生成代码", "```python",
-                      _txt(execution["code"]), "```"]
-        lines += ["", "### 执行输出(full)", "```",
-                  _txt(final.get("stdout"), "无输出"), "```"]
-        if final.get("stderr"):
-            lines += ["### 错误输出", "```", _txt(final["stderr"]), "```"]
+        # 4. 代码执行（两条路径：官方代码执行计划 / LLM 生成脚本）
+        mode = _txt(execution.get("execution_mode"))
+        lines += ["## 4. 代码执行"]
+        if mode in ("plan", "generated_fallback"):
+            lines += self._plan_execution_lines(execution, mode)
+        if mode != "plan":
+            lines += self._generated_execution_lines(execution)
         lines.append("")
 
         # 5. 验证结果 + 指标对比

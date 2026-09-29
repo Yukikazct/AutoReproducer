@@ -68,12 +68,25 @@ class TestExtractTokenUsage:
 # ---------------- 2. LLMClient 真实模式 hook ----------------
 
 class TestLLMClientUsageHook:
+    @pytest.fixture(autouse=True)
+    def _allow_local_http(self, monkeypatch):
+        """本类测的是用量 hook 而非地址校验：HTTP 请求经 urlopen 替身
+        短路，base_url 用 localhost + LLM_ALLOW_INSECURE_LOCAL=1 显式
+        放行（安全加固后非 HTTPS 地址默认被拒，见 llm_client.py
+        _validate_endpoint）。"""
+        monkeypatch.setenv("LLM_ALLOW_INSECURE_LOCAL", "1")
+
     @staticmethod
     def _client():
-        return LLMClient(base_url="http://fake.local/v1", model="gpt-fake")
+        return LLMClient(base_url="http://localhost/v1", model="gpt-fake")
 
     def _patch_urlopen(self, monkeypatch, payload):
-        """monkeypatch urlopen 返回给定 JSON payload（支持 context manager）。"""
+        """monkeypatch build_opener 返回给定 JSON payload（context manager）。
+
+        安全加固后 llm_client 经 build_opener(_NoRedirectHandler()).open()
+        发请求（不再直呼 urllib.request.urlopen），替身必须贴在
+        build_opener 上才能拦截。
+        """
         body = json.dumps(payload).encode("utf-8")
 
         class _FakeResp:
@@ -86,13 +99,15 @@ class TestLLMClientUsageHook:
             def __exit__(self, *exc):
                 return False
 
-        def fake_urlopen(req, timeout=None):
-            assert timeout > 0
-            return _FakeResp()
+        class _FakeOpener:
+            def open(self, req, timeout=None):
+                assert timeout > 0
+                return _FakeResp()
 
         import src.llm.llm_client as lc
-        monkeypatch.setattr(lc.urllib.request, "urlopen", fake_urlopen)
-        return fake_urlopen
+        monkeypatch.setattr(lc.urllib.request, "build_opener",
+                            lambda *a, **k: _FakeOpener())
+        return _FakeOpener
 
     def test_hook_fires_with_tokens_on_success(self, monkeypatch):
         client = self._client()
@@ -290,9 +305,17 @@ class TestSandboxMetering:
         用例结果不该随机器状态漂移；② 探测本身走 `subprocess.run`，而
         本类用例用 `calls` 列表断言调用次数（`len(calls) == 1`），真实
         探测会多出一条记录把断言带偏。
+
+        镜像可用性探测（`ensure_image_pulled` 里的 `docker images -q`）同理
+        要打：它同样走 subprocess，且本类用例的 fake_run 会把非 pip 命令
+        一律当成脚本执行返回——一次探测就会顶替掉"首次脚本执行失败"，
+        自愈链路整条走偏。计量的是**容器执行**次数，镜像探测不是容器执行，
+        由 tests/test_docker_image_mirror.py 专门覆盖。
         """
         monkeypatch.setattr(BaseAgent, "docker_engine_available",
                             staticmethod(lambda *a, **k: (True, None)))
+        monkeypatch.setattr(BaseAgent, "ensure_image_pulled",
+                            staticmethod(lambda *a, **k: None))
 
     @staticmethod
     def _executor(logger):
@@ -332,10 +355,15 @@ class TestSandboxMetering:
         assert snap["exec_seconds"] >= 0
 
     def test_docker_exec_charged_each_attempt(self, monkeypatch, tmp_path):
-        """缺模块自愈的多次容器执行分别计量（exec_calls 次数对应执行次数）。"""
+        """缺模块自愈的多次容器执行分别计量（exec_calls 次数对应执行次数）。
+
+        预算分离后自愈轮 = 安装 run + 脚本 run 两次容器调用：
+        首轮脚本缺模块 -> 自愈（安装 + 脚本）共 3 次执行，每次均计量。
+        """
         logger = AuditLogger(log_dir=str(tmp_path / "logs"),
                              ledger_dir=str(tmp_path / "ledger"))
         calls: list = []
+        script_calls: list = []
 
         def fake_run(cmd, **kw):
             calls.append(cmd)
@@ -343,9 +371,13 @@ class TestSandboxMetering:
             if "pip install" in joined:
                 return subprocess.CompletedProcess(
                     cmd, 0, stdout="ok", stderr="")
+            script_calls.append(1)
+            if len(script_calls) == 1:
+                return subprocess.CompletedProcess(
+                    cmd, 1, stdout="",
+                    stderr="ModuleNotFoundError: No module named 'cv2'")
             return subprocess.CompletedProcess(
-                cmd, 1, stdout="",
-                stderr="ModuleNotFoundError: No module named 'cv2'")
+                cmd, 0, stdout="ok", stderr="")
 
         monkeypatch.setattr(ce_mod.subprocess, "run", fake_run)
         executor = self._executor(logger)
@@ -358,9 +390,9 @@ class TestSandboxMetering:
                                                workdir=str(tmp_path))
         logger.end_plan()
         assert result["success"] is True
-        assert len(calls) == 2
+        assert len(calls) == 3
         snap = logger.plan_snapshot("EXECUTE_CODE")
-        assert snap["exec_calls"] == 2
+        assert snap["exec_calls"] == 3
         assert snap["exec_seconds"] >= 0
 
     def test_docker_exec_without_plan_goes_unattributed(self, monkeypatch,

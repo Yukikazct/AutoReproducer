@@ -33,6 +33,11 @@ def _isolate_cache(tmp_path, monkeypatch):
     # 引擎探测不依赖本机 Docker Desktop 状态（详见 test_sandbox_hardening）
     monkeypatch.setattr(BaseAgent, "docker_engine_available",
                         staticmethod(lambda *a, **k: (True, None)))
+    # 镜像可用性探测/预拉同理：本文件的 fake_run 会把未知命令当成脚本执行
+    # 来返回结果，一次 `docker images -q` 探测就能把自愈轮次的计数带偏。
+    # 镜像可用性由 tests/test_docker_image_mirror.py 专门覆盖。
+    monkeypatch.setattr(BaseAgent, "ensure_image_pulled",
+                        staticmethod(lambda *a, **k: None))
     yield
     ce_mod._INSTALLED_DEPS.clear()
     executor = CodeExecutorAgent(LLMClient(mock_mode=False),
@@ -150,22 +155,25 @@ def test_local_self_heal_mock_repeat_no_install(monkeypatch, tmp_path):
 # ---------------- Docker 自愈 ----------------
 
 def test_docker_self_heal_accumulates(monkeypatch, tmp_path):
-    """基础镜像+空 requirements：首轮纯脚本；缺包累积进 runner 重跑。"""
+    """基础镜像+空 requirements：首轮纯脚本；缺包累积进安装命令重跑。
+
+    预算分离后每轮 = 独立安装 run + 独立脚本 run：缺包只可能出现在
+    脚本阶段的 stderr 里（安装阶段成功，脚本阶段模拟依次缺 cv2/sklearn）。
+    """
     calls: list = []
+    script_calls: list = []
 
     def fake_docker(cmd, **kw):
         calls.append(cmd)
         cmd_str = " ".join(str(c) for c in cmd)
         if "pip install" in cmd_str:
-            has_cv2 = "opencv-python" in cmd_str
-            has_sk = "scikit-learn" in cmd_str
-            if has_cv2 and not has_sk:
-                return _script_fail(
-                    stderr="ModuleNotFoundError: No module named 'sklearn'")
-            return _ok()
-        # 首轮 python run.py（无 pip 前置）
-        return _script_fail(
-            stderr="ModuleNotFoundError: No module named 'cv2'")
+            return _ok()  # 安装阶段成功
+        script_calls.append(1)
+        missing = {1: "cv2", 2: "sklearn"}.get(len(script_calls))
+        if missing:
+            return _script_fail(
+                stderr=f"ModuleNotFoundError: No module named '{missing}'")
+        return _ok()
 
     monkeypatch.setattr(ce_mod.subprocess, "run", fake_docker)
     executor = _executor(mock_mode=False)
@@ -182,29 +190,31 @@ def test_docker_self_heal_accumulates(monkeypatch, tmp_path):
     assert healed and len(healed) == 2
     packages = [h["package"] for h in healed]
     assert packages == ["opencv-python", "scikit-learn"]
-    # 最后一次 docker 调用应同时累积两个包
-    last = " ".join(str(c) for c in calls[-1])
-    assert "opencv-python" in last and "scikit-learn" in last
+    # 最后一次安装调用应同时累积两个包
+    last_pip = next(" ".join(str(c) for c in cmd)
+                    for cmd in reversed(calls)
+                    if "pip install" in " ".join(str(c) for c in cmd))
+    assert "opencv-python" in last_pip and "scikit-learn" in last_pip
     # 首轮是纯 python run.py（无 pip 前置）
     first = " ".join(str(c) for c in calls[0])
     assert "pip install" not in first
 
 
 def test_docker_self_heal_with_reqs(monkeypatch, tmp_path):
-    """基础镜像+requirements：首轮 pip(rqs)；缺包再累积进同一命令。"""
+    """基础镜像+requirements：安装独立预算；缺包再累积进安装命令。"""
     calls: list = []
+    script_calls: list = []
 
     def fake_docker(cmd, **kw):
         calls.append(cmd)
         cmd_str = " ".join(str(c) for c in cmd)
         if "pip install" in cmd_str:
-            if ("-r /app/requirements.txt" in cmd_str
-                    and "opencv-python" not in cmd_str):
-                # 首轮含 requirements，仍缺 cv2
-                return _script_fail(
-                    stderr="ModuleNotFoundError: No module named 'cv2'")
-            return _ok()
-        return _script_fail()
+            return _ok()  # 安装阶段成功（含 -r requirements）
+        script_calls.append(1)
+        if len(script_calls) == 1:
+            return _script_fail(
+                stderr="ModuleNotFoundError: No module named 'cv2'")
+        return _ok()
 
     monkeypatch.setattr(ce_mod.subprocess, "run", fake_docker)
     executor = _executor(mock_mode=False)
@@ -219,7 +229,7 @@ def test_docker_self_heal_with_reqs(monkeypatch, tmp_path):
     assert result["success"] is True
     healed = result.get("healed")
     assert healed and healed[0]["package"] == "opencv-python"
-    # 自愈 runner 同时携带 requirements 文件与自愈包
+    # 自愈轮安装命令同时携带 requirements 文件与自愈包
     heal_runner = next(c for c in calls
                        if "opencv-python" in " ".join(str(x) for x in c))
     joined = " ".join(str(x) for x in heal_runner)
@@ -230,6 +240,7 @@ def test_docker_self_heal_with_reqs(monkeypatch, tmp_path):
 def test_docker_custom_image_pip_heal_after_missing(monkeypatch, tmp_path):
     """自定义镜像：首轮无 pip 前置（镜像假定含依赖）；缺包后经 pip 自愈。"""
     calls: list = []
+    script_calls: list = []
 
     def fake_docker(cmd, **kw):
         calls.append(cmd)
@@ -237,8 +248,11 @@ def test_docker_custom_image_pip_heal_after_missing(monkeypatch, tmp_path):
         if "pip install" in cmd_str:
             assert "opencv-python" in cmd_str
             return _ok()
-        return _script_fail(
-            stderr="ModuleNotFoundError: No module named 'cv2'")
+        script_calls.append(1)
+        if len(script_calls) == 1:
+            return _script_fail(
+                stderr="ModuleNotFoundError: No module named 'cv2'")
+        return _ok()
 
     monkeypatch.setattr(ce_mod.subprocess, "run", fake_docker)
     executor = _executor(mock_mode=False)

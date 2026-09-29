@@ -49,6 +49,12 @@ def _restore_hardening(monkeypatch):
     # 显式打桩；引擎不可用的分支由下方专门用例覆盖。
     monkeypatch.setattr(BaseAgent, "docker_engine_available",
                         staticmethod(lambda *a, **k: (True, None)))
+    # 镜像可用性探测（docker images -q，缺失时按镜像源拉取）每次 docker run
+    # 前都会走一次——本文件用 `calls` 断言 docker run 的次数与参数，多出的
+    # 探测记录会把计数带偏。这里打桩为"镜像已就绪"；探测与拉取本身由
+    # tests/test_docker_image_mirror.py 专门覆盖。
+    monkeypatch.setattr(BaseAgent, "ensure_image_pulled",
+                        staticmethod(lambda *a, **k: None))
     yield
 
 
@@ -222,8 +228,16 @@ class TestHardeningArgs:
                            "degraded": False,
                            "image_allowed": True}
 
-    def test_pip_install_targets_tmpfs(self, monkeypatch, tmp_path):
-        """加固开启：pip 安装走 tmpfs 目录 + PYTHONPATH 注入。"""
+    def test_pip_install_targets_mounted_volume(self, monkeypatch, tmp_path):
+        """加固开启：pip 安装到**挂载卷内**目录 + PYTHONPATH/PATH 注入。
+
+        预算分离后安装与脚本是两次独立 docker run：安装命令带
+        --target/-r，脚本命令带 PYTHONPATH 注入。
+
+        目标目录必须是卷内（/app/.autorepro_site），不能是 /tmp：
+        `--tmpfs /tmp` 是每容器独立的，容器一退出就销毁，第二次容器里
+        PYTHONPATH 指向空目录——依赖全部 ModuleNotFoundError。
+        """
         calls: list = []
 
         def fake_run(cmd, **kw):
@@ -239,10 +253,14 @@ class TestHardeningArgs:
         result = executor._execute_code_docker("import numpy\n", "smoke",
                                                workdir=str(tmp_path))
         assert result["success"] is True
-        joined = _cmd_str(calls)
-        assert "--target /tmp/site-packages" in joined
-        assert "PYTHONPATH=/tmp/site-packages" in joined
-        assert "-r /app/requirements.txt" in joined
+        assert len(calls) == 2  # 安装 run + 脚本 run
+        install_cmd = _cmd_str(calls, 0)
+        assert "--target /app/.autorepro_site" in install_cmd
+        assert "-r /app/requirements.txt" in install_cmd
+        script_cmd = _cmd_str(calls, -1)
+        assert "PYTHONPATH=/app/.autorepro_site" in script_cmd
+        # console script（gdown 等）装在 <target>/bin，PATH 也要带上
+        assert "PATH=/app/.autorepro_site/bin" in script_cmd
 
     def test_hardening_disabled_no_extra_args(self, monkeypatch, tmp_path):
         """AUTOREPRO_DOCKER_HARDEN=0：完全不加固，pip 走系统路径。"""
@@ -391,6 +409,7 @@ class TestHardeningDegrade:
     def test_no_degrade_on_code_error(self, monkeypatch, tmp_path):
         """ModuleNotFoundError 与加固无关：不降级，进入缺包自愈。"""
         calls: list = []
+        script_calls: list = []
 
         def fake_run(cmd, **kw):
             calls.append(cmd)
@@ -398,9 +417,13 @@ class TestHardeningDegrade:
             if "pip install" in joined:
                 return subprocess.CompletedProcess(
                     cmd, 0, stdout="ok", stderr="")
+            script_calls.append(1)
+            if len(script_calls) == 1:
+                return subprocess.CompletedProcess(
+                    cmd, 1, stdout="",
+                    stderr="ModuleNotFoundError: No module named 'cv2'")
             return subprocess.CompletedProcess(
-                cmd, 1, stdout="",
-                stderr="ModuleNotFoundError: No module named 'cv2'")
+                cmd, 0, stdout="ok", stderr="")
 
         monkeypatch.setattr(ce_mod.subprocess, "run", fake_run)
         executor = _executor()
@@ -411,17 +434,19 @@ class TestHardeningDegrade:
         result = executor._execute_code_docker("import cv2\n", "smoke",
                                                workdir=str(tmp_path))
         assert result["success"] is True
-        # 首轮缺模块（不降级，只降级加固不兼容）-> pip 自愈重跑
-        assert len(calls) == 2
+        # 首轮脚本缺模块（不降级，只降级加固不兼容）->
+        # 自愈轮 = 安装 run + 脚本 run，共 3 次调用
+        assert len(calls) == 3
         first = _cmd_str(calls, 0)
         assert "--pids-limit" in first          # 首轮是完整加固
         assert result["sandbox"]["level"] == 0
         assert result["sandbox"]["degraded"] is False
         assert result["healed"][0]["package"] == "opencv-python"
-        # 自愈轮 pip --target tmpfs（加固下 PYTHONPATH 注入）
+        # 自愈轮安装命令带自愈包；脚本命令带 PYTHONPATH 注入（挂载卷内）
         second = _cmd_str(calls, 1)
         assert "opencv-python" in second
-        assert "PYTHONPATH=/tmp/site-packages" in second
+        third = _cmd_str(calls, 2)
+        assert "PYTHONPATH=/app/.autorepro_site" in third
 
     def test_unresolvable_hardening_failure_returns_last(self, monkeypatch,
                                                          tmp_path):

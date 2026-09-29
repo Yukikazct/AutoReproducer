@@ -51,6 +51,7 @@ python -m pytest tests/ -v -k TestEndToEnd
 | 📖 PaperReader | 解析论文 PDF，提取结构化信息 |
 | 🔍 ResourceFinder | 查找代码仓库和数据集 |
 | 🔧 EnvBuilder | 生成运行环境配置 / 真实构建 Docker 镜像 |
+| 🧭 ExecutionPlanner | 多代码单元编排：定位官方入口脚本，产出并校验执行计划 |
 | ⚡ CodeExecutor | 在本地或 Docker 沙箱中运行代码 |
 | ✅ ResultValidator | 比对论文声明值与运行结果 |
 | 🛡️ Verifier | Prompt-Free 质量验证（复用各 Agent 系统提示词） |
@@ -60,10 +61,16 @@ python -m pytest tests/ -v -k TestEndToEnd
 **状态机流转：**
 
 ```
-INIT → READ_PAPER → FIND_RESOURCES → BUILD_ENV → EXECUTE_CODE → VALIDATE
+INIT → READ_PAPER → FIND_RESOURCES → BUILD_ENV → PLAN_EXECUTION
+  → EXECUTE_CODE → VALIDATE
   → (复现成功) OPTIMIZING → OPTIMIZED → GENERATE_REPORT → COMPLETED
   → (复现失败) GENERATE_REPORT → COMPLETED
 ```
+
+`PLAN_EXECUTION` 负责「论文代码由多个代码块组成、最终一起调用」的情形：先
+把发现到的仓库拆成**代码单元**（主库 / 依赖库 / 脚本集 / 数据集），再定位
+**官方入口脚本**并生成有序执行计划（安装 → 下载 → 运行 → 解析指标）。
+定位不到官方入口时该阶段输出空计划，执行层原样走 LLM 生成脚本路径。
 
 **每个阶段输出都会经过 Prompt-Free 验证**（Verifier 复用该 Agent 的
 `system_prompt` 作为质量标准）；验证未通过时按修正建议触发一次修正重试，
@@ -85,6 +92,9 @@ INIT → READ_PAPER → FIND_RESOURCES → BUILD_ENV → EXECUTE_CODE → VALIDA
 | 输入透传 | 支持论文标题 / 上传 PDF / 外部代码三种输入，正确进入数据上下文 |
 | 5 轮依赖诊断 | EnvBuilder 循环「探测 → 分类 → 定点修复 → 重验证」，输出逐轮修复报告 |
 | smoke + full 双阶段执行 | 先跑轻量 smoke 验证可运行性，再跑完整训练，避免浪费资源 |
+| 官方入口优先 | 发现官方仓库后优先执行**官方入口脚本**（如 `scripts/**/<模型>.sh`），失败才回退 LLM 生成脚本；真跑不通时报告写明回退原因 |
+| 多代码单元 | 主库 / 依赖库 / 脚本集分别 clone 到 `data/repos/<论文>/<单元>/` 并各留溯源标记；步骤带 `depends_on`，前置失败则后续步骤标记跳过而非静默继续 |
+| 计划防幻觉 | 计划里每条命令必须引用仓库快照中真实存在的文件，否则该计划被丢弃；官方代码属不可信第三方代码，真实模式下只在加固 Docker 沙箱内执行（无沙箱直接拒绝并回退）|
 | 指标口径统一 | 论文声明 0.85（小数）与运行输出 85.2%（百分数）自动归一化后再比对 |
 | 预算统计 | 全程 LLM 调用次数累计，纳入审计统计与报告（方案预算上限 100 次） |
 | 修正闭环 | 每步输出经 Prompt-Free 验证，失败按建议修正重试 1 次，全程留痕 |
@@ -118,6 +128,20 @@ INIT → READ_PAPER → FIND_RESOURCES → BUILD_ENV → EXECUTE_CODE → VALIDA
 - 底座镜像 `autorepro-base:latest`（`python:3.11-slim` + CPU torch/torchvision/numpy/tqdm + 国内源注入），**一次构建、多论文增量复用**——参考 SWE 领域 SWE-smith 实践（128 仓库共用统一底座镜像，存储/构建时间大幅下降）；
 - 论文 Dockerfile `FROM python:*` 自动替换为底座（`_swap_to_base_image`）；底座缺失时按需构建，构建失败自动降级原 Dockerfile 并带 `degraded` 标注，不阻断流水线；
 - `AUTOREPRO_PIP_INDEX` 可覆盖 pip 下载源（默认清华镜像，`PIP_FIND_LINKS` 指向阿里云 CPU wheels）。
+
+### Docker 镜像可用性（`src/base_agent.py`）
+
+容器执行与镜像构建前都会先确认镜像可用：`docker images -q` 探测本地 → 缺失时按候选顺序 `docker pull`（原名 → 各镜像源）→ 拉取成功后 `docker tag` **回原名**，因此镜像白名单、`python:3.11-slim` 特判与报告展示全部不受镜像源影响。拉取失败会以专属退出码 `-8` 短路，归类为 `docker_pull_failed`（**运行环境问题，非论文代码问题**），不触发 LLM 修复轮次。
+
+> 实测背景：直连 `docker.io` 不通时（`failed to resolve reference ... context deadline exceeded`），旧实现把 docker 原始报错判成"可修复"，3 轮 LLM 修复全烧在改论文代码上。
+
+| 环境变量 | 说明 | 默认 |
+|---|---|---|
+| `AUTOREPRO_DOCKER_IMAGE_MIRROR` | 镜像源前缀（逗号分隔，如 `docker.m.daocloud.io`） | 空（只试原名） |
+| `AUTOREPRO_DOCKER_PULL_TIMEOUT` | 单个镜像拉取预算（秒） | `600` |
+| `AUTOREPRO_DOCKER_HARDEN` | `0` 关闭沙箱加固参数 | `1` |
+| `AUTOREPRO_DOCKER_IMAGE_ALLOWLIST` | 镜像白名单前缀（逗号分隔） | `python:,pytorch/,autorepro,nvidia/` |
+| `AUTOREPRO_DOCKER_CPUS` / `_MEM` / `_PIDS` / `_USER` | 容器资源限额与非 root 用户 | `2.0` / `2g` / `256` / `65534:65534` |
 
 ### 数据集注册表与复现级别数据策略（P1-2，`src/dataset_registry.py`）
 

@@ -62,6 +62,7 @@ _MOCK_TASKS = {
     "resource_finder": {
         "code_repo_url": "https://github.com/example/repo",
         "alternative_repos": ["https://github.com/example/repo-alt"],
+        "benchmark_framework_url": "https://github.com/example/benchmark",
         "dataset_url": "https://example.com/dataset",
         "confidence": 0.7,
     },
@@ -84,6 +85,13 @@ _MOCK_TASKS = {
         "print('Training complete. Test accuracy: 85.2%')\n"
         "print('Final loss: 0.3120')\n"
     ),
+    # 执行规划器 mock：无步骤 -> CodeExecutor 走生成脚本回退路径，
+    # 保证 mock e2e 行为与旧流水线一致（COMPLETED + is_reproduced=True）。
+    "execution_planner": {
+        "steps": [],
+        "notes": ["mock: 无可用代码单元，走生成脚本回退路径"],
+        "entry": {},
+    },
     "result_validator": {
         "match": True,
         "differences": [],
@@ -358,6 +366,9 @@ class LLMClient:
             return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
 
         # ------- 回退：关键词匹配（兼容未传 task 的调用点）-------
+        if "有序执行计划" in prompt or "复现执行规划器" in prompt:
+            return json.dumps(_MOCK_TASKS["execution_planner"],
+                              ensure_ascii=False)
         if "质量验证器" in prompt or "待验证输出" in prompt:
             return json.dumps(_MOCK_TASKS["verifier"], ensure_ascii=False)
         if "比对论文声明" in prompt or "提取到的实际指标" in prompt:
