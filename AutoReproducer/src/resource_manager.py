@@ -25,7 +25,7 @@ import os
 import shutil
 import subprocess
 import zipfile
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any, Dict, List, Optional
 from src.resource_events import ResourceEventLogger
 
@@ -740,30 +740,75 @@ class ResourceManager:
         restored: List[str] = []
         manifest: Optional[Dict] = None
         with zipfile.ZipFile(archive) as zf:
-            for member in zf.namelist():
-                if member == "manifest.json":
-                    continue
-                parts = member.split("/", 1)
-                if len(parts) != 2 or not parts[0] or not parts[1]:
-                    continue
-                if parts[0] == "repos":
-                    target = self.repos_root / parts[1]
-                elif parts[0] == "datasets":
-                    target = self.datasets_root / parts[1]
-                else:
+            entries = []
+            try:
+                for info in zf.infolist():
+                    if info.filename == "manifest.json":
+                        continue
+                    target = self._restore_target(info.filename)
+                    if target is not None:
+                        entries.append((info, target))
+                if "manifest.json" in zf.namelist():
+                    manifest = json.loads(
+                        zf.read("manifest.json").decode("utf-8"))
+                    if manifest:
+                        self._validate_restore_manifest(manifest)
+            except ValueError as exc:
+                return {"ok": False,
+                        "detail": f"归档不安全或无效，未恢复任何文件: {exc}"}
+
+            for info, target in entries:
+                if info.is_dir():
+                    target.mkdir(parents=True, exist_ok=True)
                     continue
                 os.makedirs(target.parent, exist_ok=True)
-                with zf.open(member) as src, open(target, "wb") as dst:
+                with zf.open(info) as src, open(target, "wb") as dst:
                     shutil.copyfileobj(src, dst)
                 restored.append(str(target))
-            if "manifest.json" in zf.namelist():
-                manifest = json.loads(
-                    zf.read("manifest.json").decode("utf-8"))
         if manifest:
             self.save_manifest(manifest)
         return {"ok": True, "restored": restored,
                 "manifest": manifest or self.get_manifest(
                     paper_id or Path(archive).stem)}
+
+    def _restore_target(self, member: str) -> Optional[Path]:
+        """Resolve a resource member and reject traversal/platform path escapes."""
+        normalized = member.replace("\\", "/")
+        parts = normalized.rstrip("/").split("/")
+        if not parts or parts[0] not in ("repos", "datasets"):
+            return None
+        relative_parts = parts[1:]
+        if not relative_parts:
+            return None
+        if (any(part in ("", ".", "..") for part in relative_parts)
+                or any(len(part) >= 2 and part[1] == ":"
+                       for part in relative_parts)
+                or PureWindowsPath(normalized).is_absolute()
+                or PureWindowsPath(normalized).drive):
+            raise ValueError(f"非法归档成员路径: {member}")
+
+        root = self.repos_root if parts[0] == "repos" else self.datasets_root
+        resolved_root = root.resolve()
+        target = root.joinpath(*relative_parts).resolve()
+        try:
+            target.relative_to(resolved_root)
+        except ValueError as exc:
+            raise ValueError(f"归档成员路径越界: {member}") from exc
+        return target
+
+    def _validate_restore_manifest(self, manifest: Dict) -> None:
+        """Keep an archived paper ID from escaping the manifests directory."""
+        paper_id = manifest.get("paper_id")
+        if (not isinstance(paper_id, str) or not paper_id
+                or paper_id in (".", "..")
+                or "/" in paper_id or "\\" in paper_id
+                or PureWindowsPath(paper_id).drive):
+            raise ValueError("manifest 中的 paper_id 非法")
+        target = self._manifest_path(paper_id).resolve()
+        try:
+            target.relative_to(self.manifests_root.resolve())
+        except ValueError as exc:
+            raise ValueError("manifest 路径越界") from exc
 
     # ---------------- L0 配额守护 ----------------
 

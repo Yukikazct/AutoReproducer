@@ -1,17 +1,9 @@
-"""CodeExecutor 运行时缺模块 pip 自愈测试（P1-⑧）。
+"""CodeExecutor 运行时缺模块 pip 自愈与隔离门测试（P1-⑧）。
 
 覆盖：
-1. 本地自愈成功：脚本缺 cv2 -> 隔离安装 opencv-python -> 重跑成功，
-   result[\"healed\"] 记录模块/包名，安装命令正确（--target heal 目录 + 镜像）；
-2. 本地安装失败：自愈安装失败返回诊断，不继续重跑；
-3. 本地自愈上限：多次缺不同模块，最多 MAX_PIP_SELF_HEAL 轮；
-4. 非缺模块错误（如 ValueError）不触发自愈；
-5. mock_mode 不真实安装（不触网），自愈逻辑仍短路成功；
-6. 成功路径不产生 healed 记录；
-7. Docker 自愈：基础镜像+空 requirements 首轮纯脚本，缺包累积进 runner 重跑；
-8. Docker 自愈：基础镜像+requirements 首轮 pip(rqs)，缺包再累积；
-9. Docker 自愈：自定义镜像首轮无 pip 前置，缺包后改走 pip 自愈；
-10. Docker 自愈去重：同一缺失模块不重复累积。
+1. real-mode code is blocked from local execution when Docker is not selected;
+2. mock_mode local execution skips real installation;
+3. Docker self-heal retains its dependency recovery behavior.
 
 运行: python -m pytest tests/test_code_executor_self_heal.py -v
 """
@@ -25,7 +17,10 @@ if str(Path(__file__).parent.parent) not in sys.path:
     sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import src.agents.code_executor as ce_mod  # noqa: E402
-from src.agents.code_executor import CodeExecutorAgent  # noqa: E402
+from src.agents.code_executor import (  # noqa: E402
+    CodeExecutorAgent,
+    EXIT_ISOLATION_REQUIRED,
+)
 from src.base_agent import BaseAgent  # noqa: E402
 from src.llm.llm_client import LLMClient  # noqa: E402
 
@@ -71,154 +66,28 @@ def _is_script_cmd(cmd) -> bool:
     return any(c == "run.py" or c.endswith("run.py") for c in parts)
 
 
-# ---------------- 本地自愈 ----------------
+# ---------------- 本地执行隔离门 ----------------
 
-def test_local_self_heal_success(monkeypatch, tmp_path):
-    """缺 cv2 -> 隔离安装 opencv-python -> 重跑成功，healed 记录 1 次。"""
-    calls: list = []
-    script_runs = {"n": 0}
-
-    def fake_run(cmd, **kw):
-        calls.append(cmd)
-        if _is_pip_cmd(cmd):
-            return subprocess.CompletedProcess(cmd, 0, stdout="ok", stderr="")
-        if _is_script_cmd(cmd):
-            # 模拟真实脚本：第一次缺模块，重跑成功
-            script_runs["n"] += 1
-            if script_runs["n"] == 1:
-                return _script_fail(
-                    stderr="ModuleNotFoundError: No module named 'cv2'")
-            return _ok()
-        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-
-    monkeypatch.setattr(ce_mod.subprocess, "run", fake_run)
+@pytest.mark.parametrize("code", [
+    "print('would run on host')\n",
+    "import importlib\n"
+    "importlib.import_module('os').system('echo unsafe')\n",
+])
+def test_real_mode_local_execution_fails_closed(monkeypatch, code):
+    """Neither normal dispatch nor direct local execution may reach subprocess."""
     executor = _executor(mock_mode=False)
-    executor.env_config = {}  # 无预装依赖，直接触发运行时自愈
-    workdir = tmp_path / "ws"
-    workdir.mkdir()
-    result = executor._execute_code("import cv2\nprint('ok')",
-                                    stage="smoke", workdir=str(workdir))
 
-    assert result["success"] is True
-    healed = result.get("healed")
-    assert healed and len(healed) == 1
-    assert healed[0]["module"] == "cv2"
-    assert healed[0]["package"] == "opencv-python"
-    assert healed[0]["ok"] is True
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("host execution must not be attempted")
 
-    # 安装命令：隔离目录 + 国内镜像 + --target
-    pip_cmds = [c for c in calls if _is_pip_cmd(c)]
-    joined = " ".join(str(x) for x in pip_cmds[0])
-    assert "pip" in joined and "install" in joined
-    assert "--target" in joined
-    assert "opencv-python" in joined
-    # 自愈目录落盘 + ready 标记
-    heal_dir = ce_mod.DEPS_CACHE_ROOT / "heal-cv2"
-    assert (heal_dir / ce_mod._DEPS_READY_MARK).is_file()
-
-
-def test_local_self_heal_no_heal_on_success(monkeypatch, tmp_path):
-    """脚本直接成功：不产生 healed 记录，不调用 pip install。"""
-    calls: list = []
-
-    def fake_run(cmd, **kw):
-        calls.append(cmd)
-        if _is_script_cmd(cmd):
-            return _ok()
-        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-
-    monkeypatch.setattr(ce_mod.subprocess, "run", fake_run)
-    executor = _executor(mock_mode=False)
-    executor.env_config = {}
-    workdir = tmp_path / "ws"
-    workdir.mkdir()
-    result = executor._execute_code("print('hello')", stage="smoke",
-                                    workdir=str(workdir))
-    assert result["success"] is True
-    assert "healed" not in result
-    assert not [c for c in calls if _is_pip_cmd(c)]
-
-
-def test_local_self_heal_install_failure(monkeypatch, tmp_path):
-    """自愈安装失败：返回诊断，不重跑脚本。"""
-    calls: list = []
-
-    def fake_run(cmd, **kw):
-        calls.append(cmd)
-        if _is_pip_cmd(cmd):
-            return subprocess.CompletedProcess(
-                cmd, 1, stdout="", stderr="ERROR: No matching distribution")
-        if _is_script_cmd(cmd):
-            return _script_fail()
-        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-
-    monkeypatch.setattr(ce_mod.subprocess, "run", fake_run)
-    executor = _executor(mock_mode=False)
-    executor.env_config = {}
-    workdir = tmp_path / "ws"
-    workdir.mkdir()
-    result = executor._execute_code("import missing_pkg\n", stage="smoke",
-                                    workdir=str(workdir))
-    assert result["success"] is False
-    healed = result.get("healed")
-    assert healed and healed[0]["ok"] is False
-    assert "No matching distribution" in (healed[0]["error"] or "")
-    # 脚本只跑了一轮（安装失败后不再重跑）
-    script_cmds = [c for c in calls if _is_script_cmd(c)]
-    assert len(script_cmds) == 1
-
-
-def test_local_self_heal_max_rounds(monkeypatch, tmp_path):
-    """连续缺不同模块：最多自愈 MAX_PIP_SELF_HEAL 轮后失败。"""
-    missing = ["cv2", "sklearn", "pandas", "torch"]
-    counter = {"script": 0, "pip": 0}
-
-    def fake_run(cmd, **kw):
-        if _is_pip_cmd(cmd):
-            counter["pip"] += 1
-            return subprocess.CompletedProcess(cmd, 0, stdout="ok", stderr="")
-        if _is_script_cmd(cmd):
-            n = counter["script"]
-            counter["script"] += 1
-            module = missing[min(n, len(missing) - 1)]
-            return _script_fail(
-                stderr=f"ModuleNotFoundError: No module named '{module}'")
-        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-
-    monkeypatch.setattr(ce_mod.subprocess, "run", fake_run)
-    executor = _executor(mock_mode=False)
-    executor.env_config = {}
-    workdir = tmp_path / "ws"
-    workdir.mkdir()
-    result = executor._execute_code("import torch\n", stage="smoke",
-                                    workdir=str(workdir))
-    assert result["success"] is False
-    healed = result.get("healed") or []
-    # 安装次数 ≤ MAX_PIP_SELF_HEAL（即使脚本每次都缺新模块）
-    assert len(healed) == ce_mod.MAX_PIP_SELF_HEAL
-    assert counter["pip"] == ce_mod.MAX_PIP_SELF_HEAL
-
-
-def test_local_no_self_heal_on_non_module_error(monkeypatch, tmp_path):
-    """非缺模块错误（ValueError）不触发自愈安装。"""
-    calls: list = []
-
-    def fake_run(cmd, **kw):
-        calls.append(cmd)
-        if _is_script_cmd(cmd):
-            return _script_fail(stderr="ValueError: bad value")
-        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-
-    monkeypatch.setattr(ce_mod.subprocess, "run", fake_run)
-    executor = _executor(mock_mode=False)
-    executor.env_config = {}
-    workdir = tmp_path / "ws"
-    workdir.mkdir()
-    result = executor._execute_code("x = int('abc')\n", stage="smoke",
-                                    workdir=str(workdir))
-    assert result["success"] is False
-    assert "healed" not in result
-    assert not [c for c in calls if _is_pip_cmd(c)]
+    monkeypatch.setattr(ce_mod.subprocess, "run", fail_if_called)
+    for execute in (
+            lambda: executor._execute_code(code, stage="smoke"),
+            lambda: executor._execute_code_local(code, stage="smoke")):
+        result = execute()
+        assert result["success"] is False
+        assert result["isolation_required"] is True
+        assert result["exit_code"] == EXIT_ISOLATION_REQUIRED
 
 
 def test_local_self_heal_mock_skips_install(monkeypatch, tmp_path):

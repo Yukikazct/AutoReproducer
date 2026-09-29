@@ -14,18 +14,27 @@ import pytest
 from frontend.llm_config import (
     resolve_llm_config,
     config_missing,
-    test_llm_connection,
+    test_llm_connection as check_llm_connection,
     DEFAULT_BASE_URL,
     DEFAULT_MODEL,
 )
+from src.llm.llm_client import LLMClient
+import src.llm.llm_client as llm_client_module
 
 
 class _FakeHandler(http.server.BaseHTTPRequestHandler):
     """最小 OpenAI Chat Completions 假服务。"""
     captured = {}
     fail = None
+    redirect_target = ""
+    redirected_auth = ""
 
     def do_POST(self):
+        if type(self).redirect_target:
+            self.send_response(302)
+            self.send_header("Location", type(self).redirect_target)
+            self.end_headers()
+            return
         length = int(self.headers.get("Content-Length", 0))
         body = json.loads(self.rfile.read(length).decode("utf-8"))
         type(self).captured = {
@@ -54,6 +63,11 @@ class _FakeHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(payload)
 
+    def do_GET(self):
+        type(self).redirected_auth = self.headers.get("Authorization", "")
+        self.send_response(200)
+        self.end_headers()
+
     def log_message(self, *args):
         pass
 
@@ -62,6 +76,8 @@ class _FakeHandler(http.server.BaseHTTPRequestHandler):
 def fake_openai_server():
     _FakeHandler.fail = None
     _FakeHandler.captured = {}
+    _FakeHandler.redirect_target = ""
+    _FakeHandler.redirected_auth = ""
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _FakeHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -120,8 +136,13 @@ class TestConfigMissing:
 
 
 class TestConnection:
-    def test_success(self, fake_openai_server, clean_env):
-        ok, msg = test_llm_connection(
+    @staticmethod
+    def _allow_test_server(monkeypatch):
+        monkeypatch.setattr(LLMClient, "_validate_endpoint", lambda _self: None)
+
+    def test_success(self, fake_openai_server, clean_env, monkeypatch):
+        self._allow_test_server(monkeypatch)
+        ok, msg = check_llm_connection(
             base_url=fake_openai_server, api_key="sk-test-123", model="m1",
             timeout=10)
         assert ok is True
@@ -131,17 +152,64 @@ class TestConnection:
         assert cap["body"]["model"] == "m1"
         assert cap["auth"] == "Bearer sk-test-123"
 
-    def test_http_error(self, fake_openai_server, clean_env):
+    def test_http_error(self, fake_openai_server, clean_env, monkeypatch):
+        self._allow_test_server(monkeypatch)
         _FakeHandler.fail = 401
-        ok, msg = test_llm_connection(
+        ok, msg = check_llm_connection(
             base_url=fake_openai_server, api_key="sk-bad", model="m1",
             timeout=10)
         assert ok is False
         assert "HTTP 401" in msg
 
     def test_unreachable(self, clean_env):
-        ok, msg = test_llm_connection(
+        ok, msg = check_llm_connection(
             base_url="http://127.0.0.1:1",  # 端口 1 通常无服务监听，必然连接失败
             model="m1", timeout=5)
         assert ok is False
         assert "LLM API Error" in msg
+
+    def test_untrusted_endpoint_is_rejected_before_network(self, clean_env,
+                                                            monkeypatch):
+        opener_called = False
+
+        def fail_if_opened(*_args, **_kwargs):
+            nonlocal opener_called
+            opener_called = True
+            raise AssertionError("untrusted endpoint must not receive a request")
+
+        monkeypatch.setattr(llm_client_module.urllib.request, "build_opener",
+                            fail_if_opened)
+        ok, msg = check_llm_connection(
+            base_url="https://attacker.example/v1",
+            api_key="sk-secret", model="m1")
+        assert ok is False
+        assert "不在受信任列表" in msg
+        assert opener_called is False
+
+    def test_trusted_host_resolving_to_private_ip_is_rejected(self, clean_env,
+                                                               monkeypatch):
+        monkeypatch.setattr(
+            llm_client_module.socket, "getaddrinfo",
+            lambda *_args, **_kwargs: [
+                (llm_client_module.socket.AF_INET,
+                 llm_client_module.socket.SOCK_STREAM, 6, "",
+                 ("127.0.0.1", 443))])
+        monkeypatch.setattr(
+            llm_client_module.urllib.request, "build_opener",
+            lambda *_args: pytest.fail("private destinations must be rejected"))
+        ok, msg = check_llm_connection(
+            base_url="https://api.deepseek.com",
+            api_key="sk-secret", model="m1")
+        assert ok is False
+        assert "非公网地址" in msg
+
+    def test_redirect_does_not_forward_api_key(self, fake_openai_server,
+                                               clean_env, monkeypatch):
+        self._allow_test_server(monkeypatch)
+        _FakeHandler.redirect_target = fake_openai_server + "/capture"
+        ok, msg = check_llm_connection(
+            base_url=fake_openai_server, api_key="sk-secret", model="m1",
+            timeout=10)
+        assert ok is False
+        assert "HTTP 302" in msg
+        assert _FakeHandler.redirected_auth == ""

@@ -4,6 +4,7 @@
 - 两阶段执行：smoke test（短时冒烟，快速暴露环境问题）-> full run（完整运行）；
 - 捕获标准输出、错误日志、退出码；
 - 支持本地子进程（隔离临时目录 + 超时）与 Docker 容器两种沙箱；
+- 本地子进程只用于 Mock 演示；真实模式必须显式启用 Docker 隔离，否则拒绝执行；
 - 本地模式执行前按 env_config 依赖清单自动 pip 安装（幂等缓存 +
   独立超时 + 失败诊断），修复"EnvBuilder 给出依赖但本地执行器直接运行
   导致 ModuleNotFoundError"缺陷——复现环境与执行环境现在保持一致；
@@ -216,7 +217,10 @@ EXIT_NOT_RUNNABLE = -5
 EXIT_DANGER_BLOCKED = -6
 # Exit code：Docker 引擎（daemon）不可用，未进入沙箱
 EXIT_DOCKER_DAEMON_DOWN = -4
-_NON_CODE_REPAIR_EXIT_CODES = {-1, -3, -4, EXIT_DANGER_BLOCKED}
+EXIT_ISOLATION_REQUIRED = -7
+_NON_CODE_REPAIR_EXIT_CODES = {
+    -1, -3, -4, EXIT_DANGER_BLOCKED, EXIT_ISOLATION_REQUIRED,
+}
 
 # 本地无沙箱执行前的危险代码静态门：命中即拒绝执行。高信号、对「复现
 # 训练脚本」低误报；是正则兜底而非正式沙箱，生产复现不可信代码请用 Docker。
@@ -495,6 +499,12 @@ class CodeExecutorAgent(BaseAgent):
         self.env_config = env_config  # 供执行阶段选择镜像/依赖
         # "尽力而为"标注位：外部代码路径没有生成这一步，保持默认值
         insufficient, fallback_used = False, False
+
+        if not self.mock_mode and not self.use_docker:
+            return self._not_runnable(
+                "真实模式必须启用可用的 Docker 隔离后才能执行模型生成代码",
+                code=code, exit_code=EXIT_ISOLATION_REQUIRED,
+                extra={"isolation_required": True})
 
         if code:
             # 外部提供的真实复现代码：只做清洗，不走生成/再生成
@@ -1127,20 +1137,21 @@ class CodeExecutorAgent(BaseAgent):
 
     def _not_runnable(self, reason: str, code: str,
                       sanitize_stats: Optional[Dict] = None,
-                      extra: Optional[Dict] = None) -> dict:
+                      extra: Optional[Dict] = None,
+                      exit_code: int = EXIT_NOT_RUNNABLE) -> dict:
         """代码未进入执行阶段（语法错误/危险调用）时的统一返回。
 
         与"跑了但失败"区分：exit_code=EXIT_NOT_RUNNABLE 且带 not_runnable
         标记，供 ResultValidator 判为"无法验证"而非"复现失败"。
         """
         stage = {"stage": "precheck", "success": False, "stdout": "",
-                 "stderr": reason, "exit_code": EXIT_NOT_RUNNABLE,
+                 "stderr": reason, "exit_code": exit_code,
                  "not_runnable": True}
         self.log_experiment(
             "EXECUTE_CODE", "代码未通过执行前检查,未进入沙箱",
             inputs={"code": code}, outputs=stage, result={"success": False})
         self.log("execute_code", "ERROR", f"代码未运行: {reason}",
-                 {"exit_code": EXIT_NOT_RUNNABLE, "not_runnable": True})
+                 {"exit_code": exit_code, "not_runnable": True})
         return {"stages": [stage], "success": False, "final": stage,
                 "code": code, "not_runnable": True, "reason": reason,
                 "sanitize_stats": sanitize_stats or
@@ -1180,6 +1191,14 @@ class CodeExecutorAgent(BaseAgent):
         脚本运行失败且 stderr 命中缺失模块时，走运行时自愈：
         隔离安装 -> 重跑，最多 MAX_PIP_SELF_HEAL 轮（见 _self_heal_local）。
         """
+        if not self.mock_mode:
+            reason = ("真实模式必须启用可用的 Docker 隔离；"
+                      "拒绝在宿主机执行模型生成代码")
+            self.log("execute_local", "ERROR", reason)
+            return {"success": False, "stdout": "", "stderr": reason,
+                    "exit_code": EXIT_ISOLATION_REQUIRED,
+                    "isolation_required": True}
+
         # 危险代码静态门（兜底）：Optimizer 真实执行 execute_in_workspace
         # 绕过 run() 直接进这里，仍需拦截危险调用。
         danger = self._dangerous_constructs(code)

@@ -321,7 +321,8 @@ def fake_openai_server():
 class TestAPIMode:
     """真实(API)模式核心行为：请求格式 / 鉴权 / 解析 / 错误处理 / 环境变量。"""
 
-    def test_request_shape_and_auth(self, fake_openai_server):
+    def test_request_shape_and_auth(self, fake_openai_server, monkeypatch):
+        monkeypatch.setenv("LLM_ALLOW_INSECURE_LOCAL", "1")
         llm = LLMClient(base_url=fake_openai_server, model="deepseek-chat",
                         api_key="sk-test-123", mock_mode=False)
         text = llm.chat("你好", system_prompt="你是助手", temperature=0.2)
@@ -355,7 +356,9 @@ class TestAPIMode:
         assert "Test accuracy: 85.2%" in text
         assert "Error" not in text
 
-    def test_http_error_returns_clear_message(self, fake_openai_server):
+    def test_http_error_returns_clear_message(self, fake_openai_server,
+                                              monkeypatch):
+        monkeypatch.setenv("LLM_ALLOW_INSECURE_LOCAL", "1")
         _FakeOpenAIHandler.fail = 401
         llm = LLMClient(base_url=fake_openai_server, model="m",
                         mock_mode=False)

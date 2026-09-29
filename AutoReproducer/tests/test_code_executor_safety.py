@@ -18,6 +18,7 @@ import src.agents.code_executor as ce_mod  # noqa: E402
 from src.agents.code_executor import (  # noqa: E402
     CodeExecutorAgent,
     EXIT_DANGER_BLOCKED,
+    EXIT_ISOLATION_REQUIRED,
     EXIT_NOT_RUNNABLE,
 )
 from src.llm.llm_client import LLMClient  # noqa: E402
@@ -73,7 +74,7 @@ def test_dangerous_constructs_not_false_positive(snippet):
 
 def test_run_blocks_dangerous_code(monkeypatch):
     """语法合法但含 os.system 的代码在 run() 即被拦下，subprocess 不被调用。"""
-    agent = CodeExecutorAgent(LLMClient(mock_mode=True))
+    agent = CodeExecutorAgent(LLMClient(mock_mode=True), mock_mode=True)
     code = "import os\nos.system('echo pwned')\n"
 
     def _boom(*a, **kw):
@@ -91,7 +92,7 @@ def test_run_blocks_dangerous_code(monkeypatch):
 
 def test_execute_local_blocks_danger(monkeypatch):
     """Optimizer 真实执行绕过 run() 直入 _execute_code_local，仍需被拦。"""
-    agent = CodeExecutorAgent(LLMClient(mock_mode=True))
+    agent = CodeExecutorAgent(LLMClient(mock_mode=True), mock_mode=True)
     code = "import subprocess\nsubprocess.run(['echo', 'hi'])\n"
 
     def _boom(*a, **kw):
@@ -107,8 +108,35 @@ def test_execute_local_blocks_danger(monkeypatch):
 
 def test_execute_local_benign_code_still_runs(tmp_path):
     """良性代码不受静态门影响，正常执行（防止误伤 happy path）。"""
-    agent = CodeExecutorAgent(LLMClient(mock_mode=True))
+    agent = CodeExecutorAgent(LLMClient(mock_mode=True), mock_mode=True)
     result = agent._execute_code_local(
         "print('hello-from-sandbox')\n", stage="smoke")
     assert result["success"] is True
     assert "hello-from-sandbox" in result["stdout"]
+
+
+def test_real_mode_fails_closed_without_docker(monkeypatch):
+    """Even bypass-style model code never reaches host subprocess in real mode."""
+    agent = CodeExecutorAgent(LLMClient(mock_mode=False), mock_mode=False)
+
+    def _boom(*_args, **_kwargs):
+        raise AssertionError("host execution must never be attempted")
+
+    monkeypatch.setattr(ce_mod.subprocess, "run", _boom)
+    result = agent.run({
+        "code": "import importlib\n"
+                "importlib.import_module('os').system('echo unsafe')\n",
+        "paper_info": {},
+    })
+
+    assert result["success"] is False
+    assert result["isolation_required"] is True
+    assert result["final"]["exit_code"] == EXIT_ISOLATION_REQUIRED
+
+
+def test_mock_mode_still_runs_deterministic_code():
+    """The explicit Mock execution path remains available without Docker."""
+    agent = CodeExecutorAgent(LLMClient(mock_mode=True), mock_mode=True)
+    result = agent._execute_code("print('mock-output')\n", stage="smoke")
+    assert result["success"] is True
+    assert "mock-output" in result["stdout"]
