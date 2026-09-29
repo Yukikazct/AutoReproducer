@@ -92,12 +92,12 @@ def test_run_pipeline_core_writes_full_progress(tmp_path):
     assert view["running"] is False
     assert view["result"]["state"] == "COMPLETED"
     # 每个展示 Agent 都有状态记录（running/success/error/waiting 至少一个）
-    names = [a[1] for a in AGENTS] + ["🛡️ Verifier", "🧪 Optimizer",
-                                      "📝 ReportGenerator"]
+    names = [a[1] for a in AGENTS] + ["Verifier", "Optimizer",
+                                      "ReportGenerator"]
     for n in names:
         assert n in view["agent_status"], f"缺少 {n} 的状态事件"
     # 执行 Agent 最终应为 success（复现必成）
-    assert view["agent_status"]["⚡ CodeExecutor"] in ("success",)
+    assert view["agent_status"]["CodeExecutor"] in ("success",)
     # 审计日志已逐步写入进度
     assert view["logs"], "进度中缺少审计日志"
 

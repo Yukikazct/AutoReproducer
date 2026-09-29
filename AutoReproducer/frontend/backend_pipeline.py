@@ -31,16 +31,16 @@ from src.audit.audit_logger import AuditLogger
 # ---------------- 流水线 Agent 定义（与前端卡片一致） ----------------
 
 AGENTS = [
-    ("READ_PAPER", "📖 PaperReader", "reader"),
-    ("FIND_RESOURCES", "🔍 ResourceFinder", "finder"),
-    ("BUILD_ENV", "🔧 EnvBuilder", "builder"),
-    ("EXECUTE_CODE", "⚡ CodeExecutor", "executor"),
-    ("VALIDATE", "✅ ResultValidator", "validator"),
+    ("READ_PAPER", "PaperReader", "reader"),
+    ("FIND_RESOURCES", "ResourceFinder", "finder"),
+    ("BUILD_ENV", "EnvBuilder", "builder"),
+    ("EXECUTE_CODE", "CodeExecutor", "executor"),
+    ("VALIDATE", "ResultValidator", "validator"),
 ]
 
-OPTIMIZER_NAME = "🧪 Optimizer"
-REPORTER_NAME = "📝 ReportGenerator"
-VERIFIER_NAME = "🛡️ Verifier"
+OPTIMIZER_NAME = "Optimizer"
+REPORTER_NAME = "ReportGenerator"
+VERIFIER_NAME = "Verifier"
 
 
 # ---------------- 进度事件存储 ----------------
