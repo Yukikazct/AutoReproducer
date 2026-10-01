@@ -24,6 +24,77 @@ streamlit run app.py
 
 浏览器访问 http://localhost:8501
 
+## 论文名称驱动的真实 Demo
+
+当前先打通适合本机 CPU 的演示路径：**输入论文名称 → GitHub 检索官方仓库 →
+下载固定版本代码与真实 ETTh1 → Docker 内训练与评估 → MSE/MAE 与报告**。
+这几个已适配的样例无需 LLM API Key；其他论文继续使用原有 LLM 通用流水线，
+暂不保证自动适配其依赖、数据和训练入口。
+
+| 输入论文名称／简称 | 实际运行 | 答辩预设 |
+|---|---|---|
+| `Are Transformers Effective for Time Series Forecasting?` 或 `DLinear` | 官方 LTSF-Linear 中的 DLinear，推荐先测试 | `dlinear_etth1_cpu_smoke` |
+| `NLinear` | 同一篇论文的 NLinear 模型 | `nlinear_etth1_cpu_smoke` |
+| `iTransformer` 或完整论文标题 | 官方 iTransformer | `itransformer_etth1_cpu_smoke` |
+
+三种预设对应 **两篇论文、三个模型**。预设只填写论文与模型配置，运行时仍执行
+仓库发现、资源获取和训练，不使用预先保存的指标。在线检索失败时可以使用已登记
+的官方地址，报告会明确标记 `demo_registry_fallback`。
+
+### 先用命令行测试
+
+启动 Docker Desktop，确认 `docker info` 成功，再在项目根目录执行：
+
+```bash
+.venv/bin/python scripts/real_e2e.py --paper-title "DLinear"
+
+# 另外两个样例
+.venv/bin/python scripts/real_e2e.py --paper-title "iTransformer"
+.venv/bin/python scripts/real_e2e.py --paper-title "NLinear"
+```
+
+也可用 `--profile dlinear_etth1_cpu_smoke` 明确选择预设。已适配的标题自动启用
+Docker；Docker 未启动时直接提示，不在宿主机执行第三方代码。
+
+要测试 API 驱动的通用流水线，可使用 `--llm-pipeline` 强制跳过标题适配。
+先在当前终端设置 `LLM_API_KEY`，再执行：
+
+```bash
+.venv/bin/python scripts/real_e2e.py --paper-title "Are Transformers Effective for Time Series Forecasting?" --llm-pipeline --use-docker
+```
+
+该路径实际调用 LLM 解析论文、补充资源并规划执行；仅有标题时可能缺少正文与
+数据集信息，不保证完成官方复现。未运行或生成占位实现时 CLI 返回非零退出码。
+
+网页测试：运行 `streamlit run app.py`，关闭 Mock，输入论文名称并启用 Docker；
+也可选择侧栏“答辩示例”，自动填写标题。手动修改标题时，以修改后的标题为准。
+
+首次运行需要克隆仓库、拉取镜像和安装依赖。ETTh1 使用固定官方版本，校验
+完整 17,420 行时间序列与文件指纹；原始下载域名不可达时自动尝试 GitHub API。
+代码与数据会缓存；目前容器依赖安装仍按运行单独进行，不承诺第二次免安装。
+
+### 本轮验收标准
+
+- `execution_mode=plan`：实际运行官方仓库入口；失败不会换成生成脚本冒充结果。
+- `status=smoke_verified`：训练和评估成功，得到有限的 MSE、MAE。
+- `is_reproduced=None`：这是 CPU 缩参的真实流程验证，**不代表达到论文指标**。
+- 完整报告：`data/reports/_real_e2e_report.md`；原始逐步执行记录与输出：
+  `data/runs/<session_id>/execution.json`、`stdout.txt`、`stderr.txt`。
+- CLI 退出码：成功为 0，已适配样例验证失败为 1；可把报告和执行记录用于反馈。
+
+每次只运行 ETTh1 的 96 步预测、1 个 epoch，保留官方数据切分和 7 个通道。
+安装预算 1200 秒，训练预算 600 秒。iTransformer 保留官方随机种子 2023，
+DLinear/NLinear 保留官方种子 2021；后两者使用适配 Python 3.11 的 CPU 依赖
+（torch 2.0.0 替代原要求 1.9.0），报告中会标注，论文算法源码不修改。
+
+本轮先供真实运行测试；多文件优化、代码编辑工作台和更多论文适配留待反馈后推进。
+
+2026-10-01 本机 Docker 实测：DLinear 首次下载真实 ETTh1 后成功运行，
+MSE `0.4090158939`、MAE `0.4168139100`；缓存复用运行约 53 秒，指标一致。
+第二次在线 GitHub 检索命中官方仓库。本机报告（不纳入版本库）位于
+`data/reports/dlinear_cache_verified.md`，结论为 `smoke_verified`。
+iTransformer 和 NLinear 已提供预设，本次尚未进行真实训练验收。
+
 > 依赖 Python 3.11+。Docker 真实执行需本地已安装并启动 Docker Desktop（可选，仅真实模式需要）。
 > docker CLI 自动探测：优先 `DOCKER_PATH` 环境变量 → 系统 PATH → Docker Desktop
 > 常见安装目录（`C:\Program Files\Docker\Docker\resources\bin\docker.exe`），

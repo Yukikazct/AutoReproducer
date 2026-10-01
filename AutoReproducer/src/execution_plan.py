@@ -23,7 +23,7 @@ from src.code_units import CodeUnit
 STEP_KINDS = ("install", "download", "prepare", "run", "parse")
 
 # 计划来源：llm（LLM 生成）/ heuristic（确定性启发式兜底）/ none（无可用单元）
-PLAN_SOURCES = ("llm", "heuristic", "none")
+PLAN_SOURCES = ("llm", "heuristic", "none", "profile")
 
 # 数据集线索 URL 特征（README 中的网盘/下载链接）。
 # 前置字符类用 *（可空）：否则它会贪婪吞掉域名部分，导致永远无法匹配。
@@ -124,6 +124,9 @@ class ExecutionPlan:
     steps: List[PlanStep] = field(default_factory=list)
     entry: Dict = field(default_factory=dict)  # {script, unit_id, interp}
     notes: List[str] = field(default_factory=list)
+    datasets: List[Dict] = field(default_factory=list)
+    experiment_profile: str = ""
+    parameters: Dict = field(default_factory=dict)
 
     def to_dict(self) -> Dict:
         return {
@@ -134,6 +137,9 @@ class ExecutionPlan:
             "steps": [s.to_dict() for s in self.steps],
             "entry": dict(self.entry),
             "notes": list(self.notes),
+            "datasets": list(self.datasets),
+            "experiment_profile": self.experiment_profile,
+            "parameters": dict(self.parameters),
         }
 
     @classmethod
@@ -148,6 +154,9 @@ class ExecutionPlan:
                       if isinstance(s, dict)]
         plan.entry = dict(data.get("entry") or {})
         plan.notes = [str(n) for n in (data.get("notes") or [])]
+        plan.datasets = [dict(d) for d in (data.get("datasets") or [])]
+        plan.experiment_profile = str(data.get("experiment_profile") or "")
+        plan.parameters = dict(data.get("parameters") or {})
         return plan
 
     def has_steps(self) -> bool:

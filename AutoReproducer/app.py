@@ -21,6 +21,7 @@ from src.orchestrator import Orchestrator
 from src.llm.llm_client import LLMClient
 from src.audit.audit_logger import AuditLogger
 from src.base_agent import BaseAgent
+from src.experiment_profiles import PROFILES, resolve_profile
 from src.corpus import list_papers
 from frontend.llm_config import (
     resolve_llm_config,
@@ -345,6 +346,20 @@ with st.sidebar:
         "Mock 模式（无需 API）",
         value=st.session_state.mock_mode,
         help="启用Mock模式可直接演示，无需连接任何LLM服务")
+
+    selected_profile = st.selectbox(
+        "答辩示例（可选）", ["", *PROFILES], key="experiment_profile",
+        format_func=lambda value: PROFILES[value]["label"] if value else "自行输入论文名称",
+        disabled=st.session_state.mock_mode)
+    experiment_profile = selected_profile if not st.session_state.mock_mode else ""
+    if experiment_profile:
+        st.caption("使用固定官方代码与真实 ETTh1，CPU 训练 1 轮；无需 API Key。")
+        if st.session_state.get("_last_profile") != experiment_profile:
+            st.session_state.use_docker = True
+            st.session_state.paper_title = PROFILES[experiment_profile]["title"]
+            st.session_state.paper_title_input = PROFILES[experiment_profile]["title"]
+            st.session_state.input_mode = "论文标题"
+    st.session_state._last_profile = experiment_profile
 
     # Docker 沙箱执行开关（真实模式生效）。**默认关闭，但关闭 ≠ 可以跑**：
     # 真实模式下代码执行与容器沙箱是绑定的（官方仓库代码更是不可信第三方
@@ -1069,9 +1084,16 @@ def _new_progress_file() -> str:
 # 启动按钮处理：后台线程执行流水线，主线程立即返回并轮询进度
 if start_btn:
     pt = st.session_state.paper_title or ""
+    if not st.session_state.mock_mode and not uploaded_file:
+        explicit = experiment_profile if experiment_profile and pt == PROFILES[experiment_profile]["title"] else ""
+        experiment_profile = resolve_profile(pt, explicit)
+    elif uploaded_file:
+        experiment_profile = ""
     if not pt and not uploaded_file:
         st.error("请先输入论文标题或上传PDF文件")
-    elif not st.session_state.mock_mode and config_missing(base_url, model_name):
+    elif experiment_profile and (not docker_available or not st.session_state.use_docker):
+        st.error("真实实验需要 Docker：请启动 Docker Desktop，重新检测并启用容器沙箱。")
+    elif not st.session_state.mock_mode and not experiment_profile and config_missing(base_url, model_name):
         st.error("真实模式缺少 LLM 配置（"
                  + "、".join(config_missing(base_url, model_name))
                  + "）。请在侧边栏填写，或设置环境变量 "
@@ -1080,7 +1102,7 @@ if start_btn:
         # 真实模式且未填 API Key：多数云端端点（DeepSeek/OpenAI 等）会返回
         # 401，且流水线会把错误文本当 LLM 输出继续跑，表象类似「没反应」。
         # 此处不阻断（部分自建端点无需鉴权），但给出明确预警。
-        if (not st.session_state.mock_mode
+        if (not st.session_state.mock_mode and not experiment_profile
                 and not (api_key.strip()
                          or os.environ.get("LLM_API_KEY", "").strip())):
             st.warning("未填写 API Key：如果上游服务需要鉴权"
@@ -1103,6 +1125,7 @@ if start_btn:
             model_name=model_name, base_url=base_url,
             api_key=api_key,
             mock_mode=st.session_state.mock_mode,
+            experiment_profile=experiment_profile,
             max_trials=max_trials,
             use_docker=(not st.session_state.mock_mode
                         and docker_available

@@ -33,6 +33,7 @@ import tempfile
 import time
 import hashlib
 import json
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -579,6 +580,11 @@ class CodeExecutorAgent(BaseAgent):
                 shutil.copytree(src, dst, ignore=shutil.ignore_patterns(
                     ".git", "__pycache__", ".ipynb_checkpoints"))
                 unit_dirs[uid] = uid
+            try:
+                self._bind_plan_datasets(plan, Path(workspace))
+            except (OSError, ValueError) as exc:
+                return {**self._plan_irreparable(f"数据准备失败: {exc}"),
+                        "execution_mode": "plan", "plan": plan}
             # 工作区根也要放开：mkdtemp 默认 0700，而挂载的是**根目录**，
             # 容器里的 nobody 要 traverse /app 才能进 /app/<unit>。
             self._chmod_tree_writable(Path(workspace))
@@ -618,10 +624,10 @@ class CodeExecutorAgent(BaseAgent):
                              and not r.get("skipped_deps")
                              and r.get("kind") != "parse"]
             plan_failed = bool(real_failures) and not run_succeeded
-            final_stdout = "\n".join(run_outputs)[-20000:]
+            final_stdout = "\n".join(run_outputs)
             final_stderr = "\n".join(
                 (r.get("stderr") or "") for r in stage_records
-                if r.get("stderr"))[-4000:]
+                if r.get("stderr"))
             actual_metrics = self._parse_plan_metrics(final_stdout, steps)
             final = {
                 "success": not real_failures and bool(stage_records),
@@ -638,6 +644,9 @@ class CodeExecutorAgent(BaseAgent):
                 "execution_mode": "plan",
                 "plan": plan,
                 "actual_metrics": actual_metrics,
+                "experiment_profile": plan.get("experiment_profile", ""),
+                "parameters": plan.get("parameters", {}),
+                "datasets": plan.get("datasets", []),
                 "best_effort": False,
                 "fallback_used": False,
                 "plan_failed_irreparably": plan_failed,
@@ -649,7 +658,8 @@ class CodeExecutorAgent(BaseAgent):
             if plan_failed:
                 self.log("execute_plan", "ERROR",
                          f"官方代码执行计划失败（{len(real_failures)} 步未通过），"
-                         "回退生成脚本路径",
+                         + ("保留失败记录，不替换官方实验"
+                            if plan.get("experiment_profile") else "回退生成脚本路径"),
                          {"failures": [r.get("step_id") for r in real_failures]})
             else:
                 self.log_experiment(
@@ -664,6 +674,28 @@ class CodeExecutorAgent(BaseAgent):
             return result
         finally:
             shutil.rmtree(workspace, ignore_errors=True)
+
+    @staticmethod
+    def _bind_plan_datasets(plan: Dict, workspace: Path) -> None:
+        """Bind verified data into the copy, never modify the cached repository."""
+        known_units = {u.get("unit_id") for u in plan.get("units", [])}
+        for binding in plan.get("datasets") or []:
+            uid = binding.get("unit_id", "")
+            target = Path(binding.get("target") or "")
+            if (uid not in known_units or not uid or sanitize_unit_id(uid) != uid
+                    or target.is_absolute() or ".." in target.parts or not target.name):
+                raise ValueError("数据集目标路径非法")
+            dest = workspace / uid / target
+            if not dest.resolve().is_relative_to((workspace / uid).resolve()):
+                raise ValueError("数据集目标路径越界")
+            source = Path(binding.get("path") or "")
+            if source.is_symlink() or not source.is_file():
+                raise ValueError("数据集文件不存在或为符号链接")
+            payload = source.read_bytes()
+            if hashlib.sha256(payload).hexdigest() != binding.get("sha256"):
+                raise ValueError("数据集 SHA-256 校验失败")
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(payload)
 
     @staticmethod
     def _prepare_pip_target(workdir: str) -> str:
@@ -915,6 +947,25 @@ class CodeExecutorAgent(BaseAgent):
         # 安装目标建在挂载卷里：这是安装步与脚本步（两次 docker run）之间
         # 唯一的共享存储，tmpfs 与容器层都带不过去。
         pip_target = self._prepare_pip_target(workspace)
+        for key, value in step.env.items():
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", str(key)):
+                raise ValueError(f"非法环境变量名: {key}")
+            base_cmd += ["-e", f"{key}={value}"]
+        if getattr(self, "experiment_profile", ""):
+            for directory in (".tmp", ".home"):
+                path = Path(workspace) / directory
+                path.mkdir(exist_ok=True)
+                path.chmod(0o777)
+            base_cmd += ["-e", "TMPDIR=/app/.tmp", "-e", "HOME=/app/.home",
+                         "-e", f"PIP_INDEX_URL={PIP_INDEX_URL}",
+                         "-e", f"PIP_FIND_LINKS={PIP_FIND_LINKS}"]
+            if step.kind != "install":
+                base_cmd += ["--network", "none"]
+            if not getattr(self, "_profile_image_id", ""):
+                inspected = subprocess.run(
+                    [docker_cmd, "image", "inspect", "--format", "{{.Id}}", image],
+                    capture_output=True, text=True, timeout=15)
+                self._profile_image_id = inspected.stdout.strip() if inspected.returncode == 0 else ""
         install_phase: Dict = {"run": False}
 
         # 1) 可选安装前缀：独立预算（安装大包不再吃掉脚本超时）
@@ -967,6 +1018,7 @@ class CodeExecutorAgent(BaseAgent):
                 "success": res.returncode == 0,
                 "stdout": res.stdout or "", "stderr": res.stderr or "",
                 "exit_code": res.returncode, "timed_out": False,
+                "image": image, "image_id": getattr(self, "_profile_image_id", ""),
                 "install_phase": install_phase, "sandbox": sandbox_meta}
 
     def _execute_plan_step_local(self, step: PlanStep, workspace: str,
@@ -1040,6 +1092,7 @@ class CodeExecutorAgent(BaseAgent):
         env_config = input_data.get("env_config", {}) or {}
         code = input_data.get("code", "") or ""
         self.env_config = env_config  # 供执行阶段选择镜像/依赖
+        self.experiment_profile = input_data.get("experiment_profile", "") if not self.mock_mode else ""
         # "尽力而为"标注位：外部代码路径没有生成这一步，保持默认值
         insufficient, fallback_used = False, False
 
@@ -1053,9 +1106,20 @@ class CodeExecutorAgent(BaseAgent):
         # 计划不可修复失败（GPU-only / 依赖不可装等）时回退生成脚本路径，
         # 计划执行记录合并进最终结果（execution_mode="generated_fallback"）。
         plan = input_data.get("execution_plan") or {}
+        if self.experiment_profile and not plan.get("steps"):
+            return self._not_runnable(
+                "; ".join(plan.get("notes") or ["真实实验准备未完成"]), code="",
+                extra={"experiment_profile": self.experiment_profile, "plan": plan,
+                       "execution_mode": "plan", "fallback_used": False,
+                       "parameters": plan.get("parameters", {}),
+                       "datasets": plan.get("datasets", [])})
         plan_result = None
         if isinstance(plan, dict) and plan.get("steps"):
             plan_result = self._execute_plan(plan, paper_info)
+            if self.experiment_profile:
+                # The chosen experiment must never turn into generated fake
+                # reproduction code if its environment or data is unavailable.
+                return {**plan_result, "llm_calls": self._delta_llm_calls()}
             if not plan_result.get("plan_failed_irreparably"):
                 return {**plan_result, "llm_calls": self._delta_llm_calls()}
             self.log("execute_plan", "WARNING",
@@ -2113,11 +2177,25 @@ class CodeExecutorAgent(BaseAgent):
         下文时归入 unattributed 桶），支撑容器耗时的可审计核算。
         """
         t0 = time.monotonic()
+        container_name = ""
+        if getattr(self, "experiment_profile", ""):
+            container_name = "autorepro-demo-" + uuid.uuid4().hex
+            base_cmd = base_cmd + ["--name", container_name]
         try:
             return self._run_docker_cmd_with_sandbox_impl(
                 base_cmd, image, runner, timeout)
+        except subprocess.TimeoutExpired:
+            # Killing the Docker CLI alone leaves training running in the
+            # daemon. Remove only the container created for this bounded step.
+            if container_name:
+                try:
+                    subprocess.run([base_cmd[0], "rm", "--force", container_name],
+                                   capture_output=True, timeout=15)
+                except (OSError, subprocess.SubprocessError):
+                    pass
+            raise
         finally:
-            self.logger.record_sandbox_exec(round(time.time() - t0, 3))
+            self.logger.record_sandbox_exec(round(time.monotonic() - t0, 3))
 
     def _run_docker_cmd_with_sandbox_impl(
             self, base_cmd: List[str], image: str, runner: List[str],

@@ -32,6 +32,12 @@ from src.resource_manager import ResourceManager
 # ---------------- 纯函数 ----------------
 
 class TestNormalizeUrl:
+    def test_sentence_punctuation_after_repository(self):
+        assert normalize_github_repo_url("https://github.com/cure-lab/LTSF-Linear.") == \
+            "https://github.com/cure-lab/LTSF-Linear"
+        assert extract_plain_github_urls("Code: https://github.com/cure-lab/LTSF-Linear.") == \
+            ["https://github.com/cure-lab/LTSF-Linear"]
+
     def test_standard(self):
         assert (normalize_github_repo_url(
             "https://github.com/a/b.git") ==
@@ -106,6 +112,13 @@ class TestCuratedFallback:
 
 
 class TestTrustedCandidate:
+    def test_exact_paper_link_is_trusted_without_repo_name_overlap(self):
+        title = "Are Transformers Effective for Time Series Forecasting?"
+        candidate = RepoCandidate(title=title, source="papers_with_code",
+                                  repo_urls=["https://github.com/cure-lab/LTSF-Linear"])
+        assert is_trusted_repo_candidate(title, candidate)
+        assert not is_trusted_repo_candidate("iTransformer", candidate)
+
     def test_pinned_sources_always_trusted(self):
         assert is_trusted_repo_candidate(
             "anything", RepoCandidate(source="user_preference",
@@ -351,7 +364,7 @@ class TestResourceFinderFusion:
 
     def test_pinned_revision_from_paper_info_and_text(self):
         llm = _JsonLLM({"code_repo_url": "", "confidence": 0.0})
-        agent = ResourceFinderAgent(llm)
+        agent = ResourceFinderAgent(llm, offline=True)
         result = agent.run({
             "paper_info": {"title": "x",
                            "code_revision": "abcd1234"},

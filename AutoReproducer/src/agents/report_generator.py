@@ -245,6 +245,31 @@ class ReportGeneratorAgent(BaseAgent):
                  f"**工具**: AutoReproducer v0.2.0",
                  ""]
 
+        if data.get("mock_mode"):
+            lines += ["> Mock 演示：不代表真实论文复现。", ""]
+        if data.get("experiment_profile") and not data.get("mock_mode"):
+            plan = data.get("execution_plan") or {}
+            lines += [f"**实验预设**: `{data['experiment_profile']}`",
+                      "> 官方代码 + 真实数据的 CPU 冒烟验证，未核对论文数值。",
+                      f"- 实际参数: `{plan.get('parameters', {})}`"]
+            for unit in plan.get("units") or []:
+                lines.append(f"- 仓库 commit: `{unit.get('revision', '')}`")
+            for dataset in plan.get("datasets") or []:
+                lines += [f"- 数据来源: {dataset.get('source_url', '')}",
+                          f"- 数据 SHA-256: `{dataset.get('sha256', '')}`",
+                          f"- 数据行数: {dataset.get('rows', '')}（官方时间切分）"]
+            for stage in execution.get("stages") or []:
+                if stage.get("image_id"):
+                    lines.append(f"- Docker 镜像: `{stage.get('image')}` / `{stage['image_id']}`")
+                    break
+            if execution.get("evidence_dir"):
+                lines.append(f"- 完整执行记录: `{execution['evidence_dir']}`")
+            environment = next((s for s in execution.get("stages", [])
+                                if s.get("step_id") == "environment"), {})
+            if environment.get("stdout"):
+                lines += ["", "实际运行依赖：", "```", environment["stdout"], "```"]
+            lines.append("")
+
         # 1. 论文信息
         lines += ["## 1. 论文信息",
                   f"- **标题**: {paper_info.get('title', '未知')}",
@@ -259,6 +284,12 @@ class ReportGeneratorAgent(BaseAgent):
                   f"- **数据集**: {resources.get('dataset_url', '未找到')}",
                   f"- **置信度**: {_fmt(resources.get('confidence', 0.0))}"]
         urls = resources.get("extracted_urls", []) or []
+        discovery = resources.get("repo_discovery") or {}
+        if discovery:
+            lines += [f"- **检索词**: {discovery.get('query', '')}",
+                      "- **仓库发现路径**: " + " → ".join(discovery.get("discovery_chain") or [])]
+            if "demo_registry_fallback" in (discovery.get("discovery_chain") or []):
+                lines.append("- **发现说明**: 在线检索未命中适配的官方仓库，使用已登记的官方地址。")
         if urls:
             lines.append(f"- **从论文中提取URL**: {len(urls)} 个")
             for u in urls[:5]:
@@ -302,7 +333,11 @@ class ReportGeneratorAgent(BaseAgent):
         # 5. 验证结果 + 指标对比
         # 四态：复现成功 / 复现失败 / 无法验证（代码没跑起来，不能算复现失败）/
         # 无法核对（跑了，但论文信息不足、代码是占位实现——既不判成功也不判失败）
-        if validation.get("status") == "not_runnable":
+        if validation.get("status") == "smoke_verified":
+            state_text = "✅ 真实冒烟通过（流程已验证，尚未核对论文数值）"
+        elif validation.get("status") == "smoke_failed":
+            state_text = "❌ 真实冒烟未通过（不代表论文结论失败）"
+        elif validation.get("status") == "not_runnable":
             state_text = "⚠️ 无法验证（代码未运行）"
         elif validation.get("status") == "best_effort":
             # 必须排在 is_reproduced 之前：best_effort 的 is_reproduced 是 None，

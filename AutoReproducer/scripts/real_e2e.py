@@ -5,6 +5,9 @@
 模型实际生成质量、官方入口脚本能不能真的跑起来。本仓库最近几处真实模式
 缺陷都是靠这条链路发现的。
 
+已适配标题默认使用官方 CPU 冒烟配置，无需 LLM；添加 `--llm-pipeline`
+可强制测试真实 API 通用流水线。
+
 三种输入方式（任选其一）：
 
     # 1) 样例 / 本地 PDF
@@ -48,7 +51,7 @@ from src.llm.llm_client import LLMClient       # noqa: E402
 from src.orchestrator import Orchestrator      # noqa: E402
 
 DEFAULT_PDF = "samples/paper/minimal_linear_regression.pdf"
-WORKSPACE = "data/_e2e_ws"     # 传工作区 -> 走真实优化闭环（否则跑哈希模拟）
+WORKSPACE = "data/_e2e_ws"     # 通用生成代码的真实优化工作区
 REPORT_OUT = "data/reports/_real_e2e_report.md"
 
 
@@ -60,10 +63,15 @@ def _parse_args(argv=None):
                    help=f"论文 PDF 路径（默认 {DEFAULT_PDF}）")
     p.add_argument("--paper-title", default="",
                    help="只给论文标题（无 PDF 时由标题推断论文信息）")
+    from src.experiment_profiles import PROFILES
+    p.add_argument("--profile", choices=list(PROFILES), default="",
+                   help="固定官方 CPU 真实冒烟预设（自动启用 Docker，无需 LLM API Key）")
     p.add_argument("--repo-url", default="",
                    help="已知官方仓库 URL，跳过代码检索直接使用")
     p.add_argument("--use-docker", action="store_true",
                    help="启用加固 Docker 沙箱执行官方代码（需 Docker 已启动）")
+    p.add_argument("--llm-pipeline", action="store_true",
+                   help="强制走真实 LLM 通用流水线，跳过标题预设适配")
     p.add_argument("--workspace", default=WORKSPACE,
                    help=f"优化工作区（默认 {WORKSPACE}）")
     p.add_argument("--max-trials", type=int, default=2,
@@ -71,7 +79,7 @@ def _parse_args(argv=None):
     p.add_argument("--report-out", default=REPORT_OUT,
                    help=f"报告落盘路径（默认 {REPORT_OUT}）")
     args = p.parse_args(argv)
-    if not args.pdf and not args.paper_title:
+    if not args.pdf and not args.paper_title and not args.profile:
         args.pdf = DEFAULT_PDF          # 都没给 -> 退回内置样例
     return args
 
@@ -125,9 +133,10 @@ def _print_plan(data):
 
 def _print_generated(data):
     """生成脚本路径的可见性输出（含回退原因）。"""
-    print()
-    print("--- 3. 生成脚本执行 ---")
     ex = data.get("execution", {}) or {}
+    print()
+    print("--- 3. 官方脚本执行输出 ---" if ex.get("execution_mode") == "plan"
+          else "--- 3. 生成脚本执行 ---")
     if ex.get("execution_mode") == "generated_fallback":
         print("  ⚠ 官方计划失败后回退:", str(ex.get("plan_fail_reason"))[:200])
     code = ex.get("code", "") or ""
@@ -147,9 +156,20 @@ def _print_generated(data):
 def main(argv=None):
     args = _parse_args(argv)
 
+    from src.experiment_profiles import resolve_profile
+    if args.llm_pipeline and args.profile:
+        sys.exit("--llm-pipeline 与 --profile 不能同时使用")
+    args.profile = "" if args.llm_pipeline else resolve_profile(args.paper_title, args.profile)
+
     key = os.environ.get("LLM_API_KEY", "")
-    if not key:
+    if not key and not args.profile:
         sys.exit("未设置 LLM_API_KEY（本脚本不会从文件读取密钥）")
+    if args.profile:
+        from src.base_agent import BaseAgent
+        available, reason = BaseAgent.docker_engine_available()
+        if not available:
+            sys.exit(f"请启动 Docker Desktop 后重试：{reason}")
+        args.use_docker = True
 
     os.makedirs(args.workspace, exist_ok=True)
 
@@ -157,12 +177,25 @@ def main(argv=None):
                                             "https://api.deepseek.com"),
                     model=os.environ.get("LLM_MODEL", "deepseek-chat"),
                     api_key=key, mock_mode=False, timeout=300)
+    def progress(state, agent, status):
+        if status in ("running", "success", "error"):
+            print(f"[{state}] {agent} {status}", flush=True)
+        if state == "FIND_RESOURCES" and status == "success":
+            resources = orch.data.get("resources") or {}
+            discovery = resources.get("repo_discovery") or {}
+            print("  仓库:", resources.get("code_repo_url", "未找到"), flush=True)
+            print("  发现路径:", " → ".join(discovery.get("discovery_chain") or []), flush=True)
+
     orch = Orchestrator(llm_client=llm, mock_mode=False,
                         use_docker=args.use_docker,
                         max_trials=args.max_trials,
-                        workspace_dir=args.workspace)
+                        workspace_dir=args.workspace, progress_cb=progress)
 
     payload = {}
+    if args.llm_pipeline:
+        payload["use_llm_pipeline"] = True
+    if args.profile:
+        payload["experiment_profile"] = args.profile
     if args.paper_title:
         payload["paper_title"] = args.paper_title
     if args.pdf:
@@ -172,6 +205,8 @@ def main(argv=None):
 
     result = orch.run(payload)
     data = result["data"]
+    if args.profile and result.get("error"):
+        print("实验错误:", result["error"])
 
     print("=" * 60)
     print("输入:", payload)
@@ -234,6 +269,16 @@ def main(argv=None):
     out_path.write_text(report, encoding="utf-8")
     print()
     print(f"完整报告已写入 {out_path}")
+    if args.profile:
+        return 0 if va.get("status") == "smoke_verified" else 1
+    if args.llm_pipeline:
+        execution = data.get("execution") or {}
+        verified = (execution.get("success") is True
+                    and not execution.get("best_effort")
+                    and not execution.get("not_runnable")
+                    and (execution.get("execution_mode") == "plan"
+                         or va.get("is_reproduced") is True))
+        return 0 if result.get("state") == "COMPLETED" and verified else 1
     return 0
 
 

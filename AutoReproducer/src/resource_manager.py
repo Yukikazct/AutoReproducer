@@ -102,7 +102,8 @@ class ResourceManager:
     def __init__(self, data_root: Optional[str] = None,
                  quota_bytes: Optional[int] = None,
                  dataset_registry: Optional[Any] = None,
-                 logger: Optional[Any] = None):
+                 logger: Optional[Any] = None, mock_mode: bool = False):
+        self.mock_mode = mock_mode
         self.data_root = Path(data_root) if data_root else DATA_ROOT
         self.repos_root = self.data_root / "repos"
         self.datasets_root = self.data_root / "datasets"
@@ -201,12 +202,15 @@ class ResourceManager:
         info: Dict = {"path": "", "state": "skipped", "detail": "",
                       "commit": "", "revision": revision or ""}
         url = (code_url or "").strip()
+        if self.mock_mode:
+            return {**info, "state": "mock-skipped", "detail": "Mock 跳过官方仓库及缓存"}
         if not url:
             info["detail"] = "无代码仓库 URL"
             return info
         if repo_dir.exists() and any(repo_dir.iterdir()):
             info.update(path=str(repo_dir), state="cached",
-                        detail="缓存命中，复用已有仓库")
+                        detail="缓存命中，复用已有仓库",
+                        commit=self._git_head_commit(repo_dir) if (repo_dir / ".git").exists() else "")
             self._record_repo_source(repo_dir, url, info, "cached")
             return info
         if _is_placeholder_url(url):
@@ -335,13 +339,28 @@ class ResourceManager:
         info: Dict = {"path": "", "state": "skipped",
                       "detail": "", "level": level, "rows": 0}
         name = (dataset_name or "").strip()
+        if self.mock_mode:
+            return {**info, "state": "mock-skipped", "detail": "Mock 跳过数据下载"}
+        meta = self._registry_lookup(name)
+        if meta and meta.get("entry") == "builtin:etth1":
+            from src.etth1 import fetch_etth1
+            from src.experiment_profiles import DATA_REVISION
+            resource_id = f"{paper_id}:ETTh1"
+            self._resource_event("dataset", resource_id, "download", "running",
+                                 paper_id=paper_id)
+            result = fetch_etth1(ds_dir / "real" / f"ETTh1-{DATA_REVISION}")
+            self._resource_event("dataset", resource_id, "download",
+                                 "cached" if result["state"] == "cached" else
+                                 "succeeded" if result["state"] == "downloaded" else "failed",
+                                 paper_id=paper_id, **{k: v for k, v in result.items() if k != "state"})
+            return {**result, "level": level}
         if not name:
             info["detail"] = "无数据集名称"
             return info
         self._resource_event("dataset", f"{paper_id}:{name}", "download",
                              "running", paper_id=paper_id, level=level,
                              source=name)
-        if smoke_dir.exists() and any(smoke_dir.iterdir()):
+        if level != "full" and smoke_dir.exists() and any(smoke_dir.iterdir()):
             info.update(path=str(smoke_dir), state="cached",
                         level="smoke", detail="冒烟集缓存命中",
                         rows=_SMOKE_ROWS)
@@ -628,6 +647,8 @@ class ResourceManager:
         info: Dict = {"path": "", "state": "skipped",
                       "detail": "", "quantized": quantized}
         ref = (weights_ref or "").strip()
+        if self.mock_mode:
+            return {**info, "state": "mock-skipped", "detail": "Mock 跳过权重下载"}
         if not ref or ref.lower() in ("none", "无", "null"):
             info.update(state="none", detail="无权重引用，跳过")
             return info

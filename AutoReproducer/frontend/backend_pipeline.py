@@ -135,7 +135,8 @@ def run_pipeline_core(progress_path: str,
                       api_key: str = "", mock_mode: bool = True,
                       max_trials: int = 10,
                       use_docker: bool = False,
-                      workspace_dir: Optional[str] = None) -> Dict[str, Any]:
+                      workspace_dir: Optional[str] = None,
+                      experiment_profile: str = "") -> Dict[str, Any]:
     """后台执行完整复现流水线（复现 -> 验证 -> 优化 -> 报告）。
 
     Orchestrator（唯一 FSM 驱动器）的薄封装：通过 progress_cb 把阶段
@@ -178,6 +179,7 @@ def run_pipeline_core(progress_path: str,
             "paper_title": paper_title,
             "pdf_path": pdf_path,
             "corpus_paper": corpus_paper,
+            "experiment_profile": experiment_profile,
         })
     except Exception as e:
         error_msg = f"流水线异常: {e}"
@@ -269,6 +271,7 @@ def run_pipeline_background(progress_path: str, *,
                             max_trials: int = 10,
                             use_docker: bool = False,
                             workspace_dir: Optional[str] = None,
+                            experiment_profile: str = "",
                             cleanup_pdf: bool = True,
                             on_done=None) -> threading.Thread:
     """启动后台线程执行流水线；返回守护线程句柄。
@@ -284,7 +287,7 @@ def run_pipeline_background(progress_path: str, *,
                 corpus_paper=corpus_paper, model_name=model_name,
                 base_url=base_url, api_key=api_key, mock_mode=mock_mode,
                 max_trials=max_trials, use_docker=use_docker,
-                workspace_dir=workspace_dir)
+                workspace_dir=workspace_dir, experiment_profile=experiment_profile)
             if on_done:
                 try:
                     on_done(result)

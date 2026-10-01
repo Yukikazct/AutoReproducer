@@ -105,7 +105,8 @@ def units_from_discovery(discovery: Dict, max_extra: int = 2) -> List[CodeUnit]:
         role = cand.get("role") or (
             "alternative" if not selected else "alternative")
         units.append(CodeUnit(
-            unit_id=f"alt_{len(units) - 1}" if selected else "main",
+            unit_id=("main" if not units and not selected else
+                     next_unit_id(units, "alt")),
             role=role,
             url=url,
             source=cand.get("source") or "discovery",
