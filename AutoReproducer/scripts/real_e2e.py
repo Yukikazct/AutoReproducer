@@ -5,9 +5,6 @@
 模型实际生成质量、官方入口脚本能不能真的跑起来。本仓库最近几处真实模式
 缺陷都是靠这条链路发现的。
 
-已适配标题默认使用官方 CPU 冒烟配置，无需 LLM；添加 `--llm-pipeline`
-可强制测试 API 官方 CPU 流水线，当前支持 DLinear / ETTh1。
-
 三种输入方式（任选其一）：
 
     # 1) 样例 / 本地 PDF
@@ -29,14 +26,16 @@ API key **只从环境变量读取，不落盘**：
 可选环境变量：`LLM_BASE_URL`（默认 https://api.deepseek.com）、
 `LLM_MODEL`（默认 deepseek-chat）。
 
-**关于 `--use-docker`**：官方代码必须在加固 Docker 沙箱里跑。
-预设与 `--llm-pipeline` 都自动启用 Docker 并检查引擎，失败保留官方执行
-记录与报告。通用 PDF 路径需显式添加此选项。先启动 Docker：
+**关于 `--use-docker`**：发现官方仓库后，流水线会优先执行官方入口脚本
+（见 `PLAN_EXECUTION` 阶段）。官方代码属于不可信第三方代码，真实模式下
+必须在加固 Docker 沙箱里跑；不加 `--use-docker` 时执行层会拒绝执行官方
+代码（EXIT_ISOLATION_REQUIRED）并回退到 LLM 生成脚本——这是设计如此，
+不是 bug。要验证官方代码路径，请先启动 Docker：
 
     python scripts/real_e2e.py --paper-title "iTransformer" --use-docker
 
-跑完在终端打印各阶段关键结论。默认不保存报告；添加 `--save-report`
-保存到 `data/reports/_real_e2e_report.md`，或用 `--report-out` 指定保存路径。
+跑完在终端打印各阶段关键结论，并把完整报告写入
+`data/reports/_real_e2e_report.md`。
 """
 import argparse
 import os
@@ -49,7 +48,7 @@ from src.llm.llm_client import LLMClient       # noqa: E402
 from src.orchestrator import Orchestrator      # noqa: E402
 
 DEFAULT_PDF = "samples/paper/minimal_linear_regression.pdf"
-WORKSPACE = "data/_e2e_ws"     # 通用生成代码的真实优化工作区
+WORKSPACE = "data/_e2e_ws"     # 传工作区 -> 走真实优化闭环（否则跑哈希模拟）
 REPORT_OUT = "data/reports/_real_e2e_report.md"
 
 
@@ -61,24 +60,18 @@ def _parse_args(argv=None):
                    help=f"论文 PDF 路径（默认 {DEFAULT_PDF}）")
     p.add_argument("--paper-title", default="",
                    help="只给论文标题（无 PDF 时由标题推断论文信息）")
-    from src.experiment_profiles import PROFILES
-    p.add_argument("--profile", choices=list(PROFILES), default="",
-                   help="固定官方 CPU 真实冒烟预设（自动启用 Docker，无需 LLM API Key）")
     p.add_argument("--repo-url", default="",
                    help="已知官方仓库 URL，跳过代码检索直接使用")
     p.add_argument("--use-docker", action="store_true",
                    help="启用加固 Docker 沙箱执行官方代码（需 Docker 已启动）")
-    p.add_argument("--llm-pipeline", action="store_true",
-                   help="真实 API 读取官方仓库并规划 CPU 实验（当前 DLinear / ETTh1，自动启用 Docker）")
     p.add_argument("--workspace", default=WORKSPACE,
                    help=f"优化工作区（默认 {WORKSPACE}）")
     p.add_argument("--max-trials", type=int, default=2,
                    help="优化试验上限（默认 2）")
-    p.add_argument("--save-report", action="store_true", help=f"保存报告到 {REPORT_OUT}")
-    p.add_argument("--report-out", default="",
-                   help="明确选择保存报告并指定路径（默认不保存）")
+    p.add_argument("--report-out", default=REPORT_OUT,
+                   help=f"报告落盘路径（默认 {REPORT_OUT}）")
     args = p.parse_args(argv)
-    if not args.pdf and not args.paper_title and not args.profile:
+    if not args.pdf and not args.paper_title:
         args.pdf = DEFAULT_PDF          # 都没给 -> 退回内置样例
     return args
 
@@ -94,8 +87,7 @@ def _print_plan(data):
     src = ex.get("plan_execution") or ex
     plan = src.get("plan") or {}
     if not plan:
-        print("  (无计划：官方准备失败，已停止执行)" if ex.get("execution_mode") == "plan"
-              else "  (无计划：未发现可用官方代码，走了生成脚本路径)")
+        print("  (无计划：未发现可用官方代码，走了生成脚本路径)")
         return
 
     for u in plan.get("units", []) or []:
@@ -133,10 +125,9 @@ def _print_plan(data):
 
 def _print_generated(data):
     """生成脚本路径的可见性输出（含回退原因）。"""
-    ex = data.get("execution", {}) or {}
     print()
-    print("--- 3. 官方脚本执行输出 ---" if ex.get("execution_mode") == "plan"
-          else "--- 3. 生成脚本执行 ---")
+    print("--- 3. 生成脚本执行 ---")
+    ex = data.get("execution", {}) or {}
     if ex.get("execution_mode") == "generated_fallback":
         print("  ⚠ 官方计划失败后回退:", str(ex.get("plan_fail_reason"))[:200])
     code = ex.get("code", "") or ""
@@ -156,20 +147,9 @@ def _print_generated(data):
 def main(argv=None):
     args = _parse_args(argv)
 
-    from src.experiment_profiles import resolve_profile
-    if args.llm_pipeline and args.profile:
-        sys.exit("--llm-pipeline 与 --profile 不能同时使用")
-    args.profile = "" if args.llm_pipeline else resolve_profile(args.paper_title, args.profile)
-
     key = os.environ.get("LLM_API_KEY", "")
-    if not key and not args.profile:
+    if not key:
         sys.exit("未设置 LLM_API_KEY（本脚本不会从文件读取密钥）")
-    if args.profile or args.llm_pipeline:
-        from src.base_agent import BaseAgent
-        available, reason = BaseAgent.docker_engine_available()
-        if not available:
-            sys.exit(f"请启动 Docker Desktop 后重试：{reason}")
-        args.use_docker = True
 
     os.makedirs(args.workspace, exist_ok=True)
 
@@ -177,25 +157,12 @@ def main(argv=None):
                                             "https://api.deepseek.com"),
                     model=os.environ.get("LLM_MODEL", "deepseek-chat"),
                     api_key=key, mock_mode=False, timeout=300)
-    def progress(state, agent, status):
-        if status in ("running", "success", "error"):
-            print(f"[{state}] {agent} {status}", flush=True)
-        if state == "FIND_RESOURCES" and status == "success":
-            resources = orch.data.get("resources") or {}
-            discovery = resources.get("repo_discovery") or {}
-            print("  仓库:", resources.get("code_repo_url", "未找到"), flush=True)
-            print("  发现路径:", " → ".join(discovery.get("discovery_chain") or []), flush=True)
-
     orch = Orchestrator(llm_client=llm, mock_mode=False,
                         use_docker=args.use_docker,
                         max_trials=args.max_trials,
-                        workspace_dir=args.workspace, progress_cb=progress)
+                        workspace_dir=args.workspace)
 
     payload = {}
-    if args.llm_pipeline:
-        payload["use_llm_pipeline"] = True
-    if args.profile:
-        payload["experiment_profile"] = args.profile
     if args.paper_title:
         payload["paper_title"] = args.paper_title
     if args.pdf:
@@ -205,8 +172,6 @@ def main(argv=None):
 
     result = orch.run(payload)
     data = result["data"]
-    if result.get("error"):
-        print("实验错误:", result["error"])
 
     print("=" * 60)
     print("输入:", payload)
@@ -264,17 +229,11 @@ def main(argv=None):
             out.append(ln)
     print("\n".join(out or ["(未找到第 5 节)"]))
 
-    if args.report_out or args.save_report:
-        out_path = Path(args.report_out or REPORT_OUT)
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(report, encoding="utf-8")
-        print(f"\n完整报告已写入 {out_path}")
-    else:
-        print("\n报告未保存；需要保留时请使用 --save-report 或 --report-out。")
-    if args.profile:
-        return 0 if va.get("status") == "smoke_verified" else 1
-    if args.llm_pipeline:
-        return 0 if result.get("state") == "COMPLETED" and va.get("status") == "smoke_verified" else 1
+    out_path = Path(args.report_out)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(report, encoding="utf-8")
+    print()
+    print(f"完整报告已写入 {out_path}")
     return 0
 
 

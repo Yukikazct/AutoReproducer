@@ -70,10 +70,10 @@ def test_fetch_hook_populates_storage(orch):
     # 多代码单元管理后新增 units 键（逐单元 fetch 结果列表）
     assert {"code", "dataset", "weights", "units"} <= set(fetched)
     assert isinstance(fetched["units"], list)
-    # Mock skips all resource acquisition, including existing official caches.
-    assert fetched["code"]["state"] == "mock-skipped"
-    assert fetched["dataset"]["state"] == "mock-skipped"
-    assert fetched["weights"]["state"] == "mock-skipped"
+    # mock finder 输出占位 URL -> code 不下载；dataset 合成冒烟集
+    assert fetched["code"]["state"] in ("placeholder-skip", "skipped")
+    assert fetched["dataset"]["state"] in ("smoke-synth", "cached")
+    assert fetched["weights"]["state"] in ("none", "skipped")
 
 
 # ---------------- 3. manifest 落盘 ----------------
@@ -92,9 +92,9 @@ def test_finalize_writes_manifest(orch, tmp_path):
     assert storage["stats"]["manifest_count"] >= 1
     # manifest 可被 ResourceManager 独立读取（存量格式兼容）
     assert orch.resource_manager.get_manifest(pid) is not None
-    # Mock no longer materializes datasets or uses real caches.
-    assert not (tmp_path / "data" / "datasets" / pid /
-                "dataset_smoke" / "samples.csv").exists()
+    # 合成冒烟集确实落盘
+    assert (tmp_path / "data" / "datasets" / pid /
+            "dataset_smoke" / "samples.csv").is_file()
 
 
 def test_manifest_idempotent_rerun(orch, tmp_path):

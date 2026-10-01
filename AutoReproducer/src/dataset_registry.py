@@ -30,12 +30,6 @@ from typing import Dict, Optional
 # subset: lazy / full / percent:N / synthetic
 
 KNOWN_DATASETS: tuple = (
-    {
-        "name": "ETTh1", "aliases": ("etth1", "ett-h1", "ett_h1"),
-        "size_gb": 0.003, "kind": "url", "entry": "builtin:etth1",
-        "mirror": "官方 GitHub raw / API 双入口", "subset": "full",
-        "reason": "完整时间序列，保留官方时间切分；smoke 仅缩减训练预算",
-    },
     # ---- 视觉：torchvision 内建（训练时懒加载，不预下载） ----
     {
         "name": "MNIST",

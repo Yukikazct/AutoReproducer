@@ -126,8 +126,6 @@ def test_arg_parsing_defaults_and_overrides():
     args = real_e2e._parse_args([])
     assert args.pdf == real_e2e.DEFAULT_PDF      # 什么都不给 -> 内置样例
     assert args.use_docker is False
-    assert args.report_out == "" and args.save_report is False
-    assert real_e2e._parse_args(["--save-report"]).save_report is True
 
     args = real_e2e._parse_args(["--paper-title", "iTransformer",
                                  "--use-docker", "--repo-url", "https://x/y"])
@@ -138,19 +136,3 @@ def test_arg_parsing_defaults_and_overrides():
 
     args = real_e2e._parse_args(["p.pdf", "--max-trials", "5"])
     assert args.pdf == "p.pdf" and args.max_trials == 5
-
-
-def test_cli_report_is_written_only_after_save_selection(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr("src.base_agent.BaseAgent.docker_engine_available", lambda *a: (True, None))
-    class Pipeline:
-        def __init__(self, **kwargs):
-            pass
-        def run(self, payload):
-            return {"state": "COMPLETED", "data": {
-                "validation": {"status": "smoke_verified"}, "report": "# Explicit report"}}
-    monkeypatch.setattr(real_e2e, "Orchestrator", Pipeline)
-    assert real_e2e.main(["--paper-title", "DLinear"]) == 0
-    assert not Path(real_e2e.REPORT_OUT).exists()
-    assert real_e2e.main(["--paper-title", "DLinear", "--save-report"]) == 0
-    assert Path(real_e2e.REPORT_OUT).read_text() == "# Explicit report"

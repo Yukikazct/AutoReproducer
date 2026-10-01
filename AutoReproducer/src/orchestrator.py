@@ -23,8 +23,6 @@ from src.agents.verifier import VerifierAgent
 from src.agents.optimizer import OptimizerAgent
 from src.optimizer.real_simulator import RealSimulator
 from src.resource_manager import ResourceManager
-from src.experiment_profiles import resolve_profile, stage_result, PROFILES
-from src.official_smoke import INTENT, is_real_smoke, repository_context
 
 # 每步验证失败时最多触发的修正重试次数（预算约束）
 MAX_FIX_RETRIES = 1
@@ -79,16 +77,14 @@ class Orchestrator:
         if hasattr(self.llm, "usage_hook"):
             self.llm.usage_hook = self.logger.record_llm_usage
         self.max_trials = max_trials
-        self.mock_mode = mock_mode
-        self.use_docker = use_docker and not mock_mode
+        self.use_docker = use_docker
         # 优化工作区:提供时启用 Optimizer 真实执行闭环(补丁 -> 白名单 ->
-        # 快照 -> 重跑 -> 真实指标 -> Keep/Reject);缺省仅 Mock 使用模拟。
+        # 快照 -> 重跑 -> 真实指标 -> Keep/Reject);缺省保持哈希模拟。
         self.workspace_dir = workspace_dir
         # L0 热缓存资源管理（三层存储）：FIND_RESOURCES 后按需懒加载，
         # COMPLETED 前落盘 manifest 与统计；可注入以隔离数据根（测试）。
         self.resource_manager = resource_manager or ResourceManager(
-            logger=self.logger, mock_mode=mock_mode)
-        self.resource_manager.mock_mode = mock_mode
+            logger=self.logger)
 
         # 初始化所有 Agent
         self.agents: Dict[str, Any] = {
@@ -98,7 +94,7 @@ class Orchestrator:
             "builder": EnvBuilderAgent(self.llm, self.logger),
             "planner": ExecutionPlannerAgent(self.llm, self.logger),
             "executor": CodeExecutorAgent(self.llm, self.logger,
-                                          use_docker=self.use_docker,
+                                          use_docker=use_docker,
                                           mock_mode=mock_mode),
             "validator": ResultValidatorAgent(self.llm, self.logger),
             "verifier": VerifierAgent(self.llm, self.logger),
@@ -114,8 +110,6 @@ class Orchestrator:
 
         self.data: Dict[str, Any] = {}
         self.error: Optional[str] = None
-        counter = getattr(self.llm, "get_call_count", None)
-        self._counted_llm_calls = counter() if callable(counter) else None
 
     def run(self, input_data: dict) -> dict:
         """执行完整的复现流程（复现 -> 验证 -> 优化 -> 报告）。
@@ -126,16 +120,6 @@ class Orchestrator:
           - "code": 可选，外部提供的真实复现代码
           - "corpus_paper": 可选，PaperGuru-Benchmark 论文 id（语料对照层）
         """
-        # Explicit PDF/code inputs retain the generic pipeline. Only title-only
-        # input automatically selects a demo adapter.
-        auto_title = (input_data.get("paper_title") or "") if not (
-            input_data.get("pdf_path") or input_data.get("code")) else ""
-        profile = ("" if input_data.get("use_llm_pipeline") else
-                   resolve_profile(auto_title,
-                                   input_data.get("experiment_profile") or ""))
-        input_data = dict(input_data)
-        if profile:
-            input_data["paper_title"] = PROFILES[profile]["title"]
         self.logger.log("Orchestrator", "start_pipeline", "START",
                         "开始自动复现流水线", input_data)
 
@@ -148,9 +132,6 @@ class Orchestrator:
             # 用户显式指定仓库 URL：FIND_RESOURCES 里最高优先（发现链第一层）
             "preferred_repo_url": input_data.get("preferred_repo_url", "") or "",
             "repro_mode": input_data.get("repro_mode", "") or "",
-            "experiment_profile": profile,
-            "mock_mode": self.mock_mode,
-            "execution_intent": INTENT if input_data.get("use_llm_pipeline") and not self.mock_mode else "",
             "verifications": [],
             "fix_records": [],
         }
@@ -159,8 +140,6 @@ class Orchestrator:
         paper_id = self.resource_manager.paper_id_for(
             self.data.get("paper_title", ""),
             corpus_key=self.data.get("corpus_paper") or "")
-        if profile:
-            paper_id = profile
         self.data["paper_id"] = paper_id
         self.data["storage"] = {"paper_id": paper_id,
                                 "repro_level": input_data.get(
@@ -184,24 +163,18 @@ class Orchestrator:
                             f"进入阶段: {state_name}")
             self._notify(state_name, "running")
             try:
-                result = stage_result(state_name, self.data)
-                if result is None:
-                    result = agent.run(self.data)
+                result = agent.run(self.data)
                 self._merge_result(state_name, result)
                 self._accumulate_llm_calls(result)
 
                 # 三层存储：FIND_RESOURCES 后按需懒加载代码/数据集/权重
                 # 到 L0（失败不阻断流水线，仅告警）
                 if state_name == "FIND_RESOURCES":
-                    if self.data["execution_intent"] == INTENT:
-                        self._prepare_official_smoke()
-                    else:
-                        self._fetch_resources()
+                    self._fetch_resources()
 
                 # Docker 真实模式：BUILD_ENV 产出配置后即真实构建镜像，
                 # 成功把 image_tag 透传给 EXECUTE_CODE；失败不阻断（slim 降级）
-                if (state_name == "BUILD_ENV" and self.use_docker
-                        and self.data.get("env_config", {}).get("build_required", True)):
+                if state_name == "BUILD_ENV" and self.use_docker:
                     build_res = self.agents["builder"].build_image(
                         self.data.get("env_config", {}), tag=DEFAULT_IMAGE_TAG)
                     if build_res.get("success"):
@@ -235,9 +208,6 @@ class Orchestrator:
                     else:
                         self._materialize_workspace(code)
 
-                if state_name == "EXECUTE_CODE" and is_real_smoke(self.data):
-                    self._save_profile_evidence()
-
                 # Prompt-Free 验证 + 修正闭环
                 self._verify_step(state_name, agent, result)
 
@@ -246,30 +216,19 @@ class Orchestrator:
                 self.logger.end_plan(state_name)
                 self._notify(state_name, "success")
             except Exception as e:
-                self._accumulate_llm_calls({})
                 self.logger.end_plan(state_name)
                 self._notify(state_name, "error")
                 self._fail(state_name, str(e))
-                if self.data["execution_intent"] == INTENT:
-                    self._record_official_failure(state_name, str(e))
                 break
 
         # 优化阶段：仅在复现成功后触发
         plan_mode_reason = self._optimization_plan_mode_reason()
         if self.state != "ERROR":
-            if is_real_smoke(self.data):
-                self.data["optimization"] = {"optimized": False,
-                    "reason": "CPU 真实冒烟仅验证流程，未核对论文数值，不执行优化"}
-                self._notify("OPTIMIZING", "waiting")
-            elif plan_mode_reason:
+            if plan_mode_reason:
                 # 官方代码计划模式：优化闭环不适用（见原因说明），
                 # 不物化入口脚本原文、不产出误导性的失败 trial。
                 self.data["optimization"] = {"optimized": False,
                                              "reason": plan_mode_reason}
-                self._notify("OPTIMIZING", "waiting")
-            elif not self.mock_mode and not self.workspace_dir:
-                self.data["optimization"] = {"optimized": False,
-                    "reason": "未配置真实优化执行器，已跳过（真实模式不使用模拟优化）"}
                 self._notify("OPTIMIZING", "waiting")
             elif self.data.get("validation", {}).get("is_reproduced"):
                 self.state = "OPTIMIZING"
@@ -323,7 +282,7 @@ class Orchestrator:
             self.data["audit_stats"] = self.logger.get_stats()
             self.logger.log("Orchestrator", "finish_pipeline", "SUCCESS",
                             "流水线完成", self.data.get("audit_stats"))
-        self._notify(self.state, "error" if self.state == "ERROR" else "success")
+        self._notify(self.state, "success")
 
         return self.get_result()
 
@@ -443,71 +402,14 @@ class Orchestrator:
                     "weights": rm.fetch_weights(paper_id, weights_ref),
                 }
             storage = self.data.setdefault("storage", {})
-            storage["fetched"] = fetched
+            storage["fetched"] = {
+                k: {"path": v.get("path", ""), "state": v.get("state", "")}
+                if isinstance(v, dict) and "path" in v
+                else v
+                for k, v in fetched.items()}
         except Exception as exc:
             self.logger.log("Orchestrator", "fetch_resources", "WARNING",
                             f"资源拉取失败，不阻断流水线: {str(exc)[-200:]}")
-
-    def _prepare_official_smoke(self) -> None:
-        """Prepare only the selected official repository and evidence-backed data."""
-        resources = self.data["resources"]
-        url = self._clean_ref(resources.get("code_repo_url", ""))
-        if not url:
-            raise ValueError("未找到官方代码仓库，停止真实复现")
-        discovery = resources.get("repo_discovery") or {}
-        unit = {"unit_id": "main", "role": "main", "url": url,
-                "revision": discovery.get("pinned_revision", "")}
-        resources["code_units"] = [unit]
-        infos = self.resource_manager.fetch_units(self.data["paper_id"], [unit],
-                                                   verify_repository=True)
-        code = infos[0]
-        fetched = {"code": code, "units": infos, "dataset": {}, "weights": {"state": "none", "path": ""}}
-        self.data["storage"]["fetched"] = fetched
-        if code.get("state") not in ("cloned", "cached") or not code.get("commit"):
-            raise ValueError("官方仓库获取失败: " + code.get("detail", "无有效 HEAD"))
-        self.data["repo_path"] = code["path"]
-        self.data["repository_context"] = repository_context(code)
-        enrichment = self.agents["reader"].read_repository(self.data)
-        self.data["paper_info"] = enrichment["paper_info"]
-        self.data["repository_selection"] = enrichment["selection"]
-        self._accumulate_llm_calls(enrichment)
-        dataset_name = enrichment["selection"]["dataset"]
-        resources["dataset_url"] = dataset_name
-        dataset = self.resource_manager.fetch_dataset(self.data["paper_id"], dataset_name, level="full")
-        fetched["dataset"] = dataset
-        if dataset.get("data_kind") != "real" or dataset.get("state") not in ("downloaded", "cached"):
-            raise ValueError("真实数据准备失败: " + dataset.get("detail", "不可用"))
-
-    def _record_official_failure(self, stage: str, reason: str) -> None:
-        """A preparation failure still produces reviewable evidence and a report."""
-        if not self.data.get("execution"):
-            self.data["execution"] = {"execution_mode": "plan", "execution_intent": INTENT,
-                "success": False, "fallback_used": False, "failure_stage": stage,
-                "reason": f"{stage}: {reason}", "plan": self.data.get("execution_plan", {}),
-                "final": {"success": False, "exit_code": 1, "stdout": "", "stderr": reason}}
-        self.data["validation"] = self.agents["validator"].run(self.data)
-        self.data["optimization"] = {"optimized": False, "reason": "官方流程未通过，停止执行"}
-        self._save_profile_evidence()
-        self.data["audit_stats"] = self.logger.get_stats()
-        self.data["report"] = self.agents["reporter"].run(self.data).get("report", "")
-
-    def _save_profile_evidence(self) -> None:
-        """Persist the actual execution records for user inspection."""
-        import json
-        root = self.resource_manager.data_root / "runs" / self.logger.session_id
-        root.mkdir(parents=True, exist_ok=True)
-        execution = self.data.get("execution") or {}
-        execution["evidence_dir"] = str(root)
-        (root / "execution.json").write_text(
-            json.dumps(execution, ensure_ascii=False, indent=2), encoding="utf-8")
-        for stream in ("stdout", "stderr"):
-            (root / f"{stream}.txt").write_text(
-                (execution.get("final") or {}).get(stream) or "", encoding="utf-8")
-        (root / "context.json").write_text(json.dumps({
-            key: self.data.get(key) for key in ("paper_title", "execution_intent", "experiment_profile",
-                                               "paper_info", "resources", "repository_context",
-                                               "repository_selection", "storage")},
-            ensure_ascii=False, indent=2), encoding="utf-8")
 
     def _save_plan(self, result: dict) -> None:
         """执行计划落盘 data/plans/<paper_id>.json（失败仅告警）。"""
@@ -583,28 +485,6 @@ class Orchestrator:
 
     def _verify_step(self, state_name: str, agent, result: dict) -> None:
         """Prompt-Free 验证某步输出；未通过时按修正建议触发一次修正重试。"""
-        if is_real_smoke(self.data):
-            # Fixed inputs use local checks and must not trigger another
-            # training job through the LLM correction loop.
-            fetched = (self.data.get("storage") or {}).get("fetched") or {}
-            checks = {
-                "READ_PAPER": bool((result.get("paper_info") or {}).get("title")),
-                "FIND_RESOURCES": (fetched.get("code", {}).get("state") in ("cloned", "cached")
-                                   and fetched.get("dataset", {}).get("state") in ("downloaded", "cached")),
-                "BUILD_ENV": bool((result.get("env_config") or {}).get("requirements_txt")),
-                "PLAN_EXECUTION": bool((result.get("execution_plan") or {}).get("steps")),
-                "EXECUTE_CODE": result.get("success") is True,
-                "VALIDATE": result.get("status") == "smoke_verified",
-            }
-            passed = checks.get(state_name, False)
-            self.data.setdefault("verifications", []).append({
-                "state": state_name, "agent": agent.name,
-                "source": "local_execution_checks",
-                "pass": passed,
-                "issues": [] if passed else [f"{state_name} 未通过本地检查，请查看阶段输出"],
-                "llm_calls": 0,
-            })
-            return
         verifier = self.agents["verifier"]
         verif = verifier.run({
             "agent_name": agent.name,
@@ -659,10 +539,6 @@ class Orchestrator:
     def _accumulate_llm_calls(self, result: dict) -> None:
         """将 Agent / Verifier 输出的 llm_calls 增量累计进全局预算统计。"""
         calls = int((result or {}).get("llm_calls", 0) or 0)
-        if self._counted_llm_calls is not None:
-            total = self.llm.get_call_count()
-            calls = max(0, total - self._counted_llm_calls)
-            self._counted_llm_calls = total
         if calls:
             self.data["total_llm_calls"] = (
                 self.data.get("total_llm_calls", 0) + calls)

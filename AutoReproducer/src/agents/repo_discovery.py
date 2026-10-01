@@ -16,7 +16,6 @@
 字符串，不抛出，保证确定性链路不因网络中断。
 """
 import json
-import http.client
 import os
 import re
 import time
@@ -59,8 +58,7 @@ def normalize_github_repo_url(value: str) -> str:
         if bare:
             return f"https://github.com/{bare.group(1)}/{bare.group(2)}"
         return ""
-    owner, repo = match.group(1), match.group(2).rstrip(".")
-    repo = repo.removesuffix(".git")
+    owner, repo = match.group(1), match.group(2)
     return f"https://github.com/{owner}/{repo}"
 
 
@@ -70,8 +68,7 @@ def extract_plain_github_urls(text: str) -> List[str]:
         return []
     urls: List[str] = []
     for candidate in GITHUB_URL_RE.findall(text):
-        repo = candidate[1].rstrip("/.").removesuffix(".git")
-        url = f"https://github.com/{candidate[0]}/{repo}"
+        url = f"https://github.com/{candidate[0]}/{candidate[1].rstrip('/')}"
         if url not in urls:
             urls.append(url)
     return urls
@@ -131,14 +128,6 @@ def is_trusted_repo_candidate(query: str, candidate: RepoCandidate) -> bool:
     if candidate.source == "user_preference" \
             or candidate.source == "curated_fallback":
         return True
-    if candidate.source == "papers_with_code" and candidate.title:
-        normalize = lambda text: re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
-        # A repository linked by the exact paper need not repeat its title in
-        # the repository name (e.g. LTSF-Linear). Other search hits are distinct papers.
-        if normalize(query) == normalize(candidate.title):
-            return True
-        if len(significant_tokens(query)) >= 4:
-            return False
     lower_query = clean_paper_title(query).lower()
     lower_text = candidate_search_text(candidate).lower()
     if not lower_query or not lower_text:
@@ -339,7 +328,7 @@ def _http_json(url: str, timeout: float, headers: Optional[Dict] = None):
         with urllib.request.urlopen(request, timeout=timeout) as resp:
             return json.loads(resp.read().decode("utf-8", "replace")), ""
     except (urllib.error.URLError, urllib.error.HTTPError,
-            http.client.HTTPException, OSError, ValueError, json.JSONDecodeError) as exc:
+            OSError, ValueError, json.JSONDecodeError) as exc:
         return None, f"{type(exc).__name__}: {exc}"
 
 
@@ -418,8 +407,7 @@ def discover_repositories(query: str,
                           preferred_url: str = "",
                           max_results: int = 8,
                           timeout: float = 8.0,
-                          offline: bool = False,
-                          github_first: bool = False) -> Dict:
+                          offline: bool = False) -> Dict:
     """确定性仓库发现链主入口（无 LLM）。返回结构化结果。
 
     链：用户URL（最高优先，直接采用） -> PwC -> GitHub 搜索 ->
@@ -454,23 +442,16 @@ def discover_repositories(query: str,
         return _discovery_result(query, [], "", chain, False,
                                  "empty query")
 
-    if github_first:
-        chain.append("github_search")
-        if not offline:
-            gh_candidates, gh_error = _search_github(query, timeout=timeout)
-            candidates.extend(gh_candidates)
-
-    if not candidates:
-        chain.append("papers_with_code")
+    chain.append("papers_with_code")
     if offline:
         pwc_error = "offline: papers_with_code skipped"
-    elif not candidates:
+    else:
         # 2. PwC（HF Papers API）
         pwc_candidates, pwc_error = _search_pwc(query, timeout=timeout)
         candidates.extend(pwc_candidates)
 
     # 3. GitHub 搜索回退（PwC 无有效 URL 时）
-    if not any(c.repo_urls for c in candidates) and not github_first:
+    if not any(c.repo_urls for c in candidates):
         chain.append("github_search")
         if offline:
             gh_error = "offline: github_search skipped"
@@ -522,10 +503,8 @@ def _discovery_result(query: str, candidates: List[RepoCandidate],
         "fallback_used": fallback_used,
         "error": errors,
     }
-    unit_discovery = {**result, "candidates": [c.to_dict() for c in candidates
-                      if is_trusted_repo_candidate(query, c)]}
     result["code_units"] = [u.to_dict() for u in units_from_discovery(
-        unit_discovery, max_extra=2)]
+        result, max_extra=2)]
     return result
 
 

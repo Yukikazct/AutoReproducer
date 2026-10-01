@@ -86,9 +86,6 @@ class ResourceFinderAgent(BaseAgent):
     "weights_url": "预训练权重URL或'未找到'",
     "confidence": 0.0-1.0
 }}
-
-备用仓库必须实现同一篇论文；不要把论文对比的其他模型仓库列为备用。
-benchmark_framework_url 只填写运行该实现必需的独立评测框架；没有则填"未找到"。
 """
         llm_result = self.llm.chat(prompt, task="resource_finder")
         parsed = self._parse_json(llm_result)
@@ -105,15 +102,6 @@ benchmark_framework_url 只填写运行该实现必需的独立评测框架；�
         code_repo_url = selected or parsed.get("code_repo_url", "未找到")
         if _is_placeholder_url(code_repo_url or ""):
             code_repo_url = "未找到"
-        if code_repo_url != "未找到" and not discovery.get("selected_repo"):
-            from src.agents.repo_discovery import normalize_github_repo_url
-            code_repo_url = normalize_github_repo_url(code_repo_url) or "未找到"
-            if code_repo_url != "未找到":
-                discovery["selected_repo"] = code_repo_url
-                discovery["fallback_used"] = True
-                discovery["discovery_chain"].append("llm_inferred")
-                discovery["code_units"] = [{"unit_id": "main", "role": "main",
-                                            "url": code_repo_url, "source": "llm_inferred"}]
 
         # 5. 复现模式决策（auto -> smoke，full 需显式确认）
         requested_mode = (input_data.get("repro_mode")

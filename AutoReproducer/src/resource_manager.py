@@ -24,8 +24,6 @@ import json
 import os
 import shutil
 import subprocess
-import tempfile
-import uuid
 import zipfile
 from pathlib import Path, PureWindowsPath
 from typing import Any, Dict, List, Optional
@@ -104,8 +102,7 @@ class ResourceManager:
     def __init__(self, data_root: Optional[str] = None,
                  quota_bytes: Optional[int] = None,
                  dataset_registry: Optional[Any] = None,
-                 logger: Optional[Any] = None, mock_mode: bool = False):
-        self.mock_mode = mock_mode
+                 logger: Optional[Any] = None):
         self.data_root = Path(data_root) if data_root else DATA_ROOT
         self.repos_root = self.data_root / "repos"
         self.datasets_root = self.data_root / "datasets"
@@ -187,7 +184,7 @@ class ResourceManager:
 
     def fetch_code(self, paper_id: str, code_url: str,
                    target: Optional[str] = None,
-                   revision: str = "", verify_repository: bool = False) -> Dict:
+                   revision: str = "") -> Dict:
         """拉取论文代码仓库到 L0；已存在则幂等复用。
 
         revision 非空时，clone 后尝试浅拉取并 detach 到该 revision
@@ -204,17 +201,12 @@ class ResourceManager:
         info: Dict = {"path": "", "state": "skipped", "detail": "",
                       "commit": "", "revision": revision or ""}
         url = (code_url or "").strip()
-        if self.mock_mode:
-            return {**info, "state": "mock-skipped", "detail": "Mock 跳过官方仓库及缓存"}
         if not url:
             info["detail"] = "无代码仓库 URL"
             return info
-        if verify_repository:
-            return self._fetch_verified_code(repo_dir, url, revision, info)
         if repo_dir.exists() and any(repo_dir.iterdir()):
             info.update(path=str(repo_dir), state="cached",
-                        detail="缓存命中，复用已有仓库",
-                        commit=self._git_head_commit(repo_dir) if (repo_dir / ".git").exists() else "")
+                        detail="缓存命中，复用已有仓库")
             self._record_repo_source(repo_dir, url, info, "cached")
             return info
         if _is_placeholder_url(url):
@@ -241,8 +233,7 @@ class ResourceManager:
             info.update(state="clone-failed", detail=str(exc)[-300:])
         return info
 
-    def fetch_units(self, paper_id: str, units: List[Dict],
-                    verify_repository: bool = False) -> List[Dict]:
+    def fetch_units(self, paper_id: str, units: List[Dict]) -> List[Dict]:
         """多代码单元拉取：把每个 CodeUnit 克隆到
         data/repos/<paper_id>/<unit_id>/。
 
@@ -260,125 +251,12 @@ class ResourceManager:
             target = self._repo_dir(paper_id) / uid
             info = self.fetch_code(paper_id, unit.get("url", ""),
                                    target=str(target),
-                                   revision=unit.get("revision", ""),
-                                   **({"verify_repository": True} if verify_repository else {}))
+                                   revision=unit.get("revision", ""))
             info.update(unit_id=uid,
                         role=unit.get("role", "") or "alternative",
                         url=unit.get("url", ""))
             results.append(info)
         return results
-
-    @staticmethod
-    def _verified_repo_commit(path: Path, url: str, revision: str = "") -> str:
-        """Reject incomplete, foreign, modified or incorrectly pinned caches."""
-        if not (path / ".git").exists():
-            from src.repository_snapshot import verified_snapshot_commit
-            return verified_snapshot_commit(path, url, revision)
-        def git(*args):
-            proc = subprocess.run(["git", "-C", str(path), *args],
-                                  capture_output=True, text=True, timeout=15)
-            if proc.returncode:
-                raise ValueError(proc.stderr[-200:])
-            return proc.stdout.strip()
-        try:
-            if Path(git("rev-parse", "--show-toplevel")).resolve() != path.resolve():
-                return ""
-            normalize = lambda value: value.rstrip("/").removesuffix(".git")
-            if normalize(git("remote", "get-url", "origin")) != normalize(url):
-                return ""
-            head = git("rev-parse", "HEAD^{commit}")
-            if len(head) != 40 or any(c not in "0123456789abcdef" for c in head):
-                return ""
-            if revision and git("rev-parse", f"{revision}^{{commit}}") != head:
-                return ""
-            if git("status", "--porcelain", "--untracked-files=no"):
-                return ""
-            return head
-        except (OSError, ValueError, subprocess.SubprocessError):
-            return ""
-
-    def _fetch_verified_code(self, repo_dir: Path, url: str,
-                             revision: str, info: Dict) -> Dict:
-        if _is_placeholder_url(url):
-            return {**info, "state": "placeholder-skip", "detail": "占位 URL 不下载"}
-        if not _git_available():
-            return {**info, "state": "clone-failed", "detail": "git 不可用"}
-        commit = self._verified_repo_commit(repo_dir, url, revision)
-        if commit:
-            info.update(path=str(repo_dir), state="cached", commit=commit,
-                        detail="源码来源、内容与版本校验通过")
-            snapshot = repo_dir / ".autorepro-repo-snapshot.json"
-            if not (repo_dir / ".git").exists() and snapshot.is_file():
-                metadata = json.loads(snapshot.read_text(encoding="utf-8"))
-                info.update({k: metadata[k] for k in ("transport", "download_url", "archive_sha256")})
-            self._record_repo_source(repo_dir, url, info, "cached")
-            return info
-        repo_dir.parent.mkdir(parents=True, exist_ok=True)
-        errors = []
-        for attempt in range(2):
-            temporary = Path(tempfile.mkdtemp(prefix=f".{repo_dir.name}-clone-",
-                                               dir=repo_dir.parent))
-            try:
-                command = ["git", "clone", "--depth", "1", "--single-branch"]
-                if attempt:
-                    command += ["--config", "http.version=HTTP/1.1"]
-                proc = subprocess.run(command + [url, str(temporary)],
-                                      capture_output=True, text=True, timeout=60)
-                if proc.returncode:
-                    detail = (proc.stderr or proc.stdout)[-500:]
-                    errors.append(detail)
-                    if not any(word in detail.lower() for word in (
-                            "http2", "http/2", "timed out", "timeout", "reset",
-                            "early eof", "unable to access", "could not resolve")):
-                        break
-                    continue
-                self._pin_and_record(temporary, url, info, revision)
-                commit = self._verified_repo_commit(temporary, url, revision)
-                if not commit:
-                    errors.append("新仓库 HEAD、来源或指定版本校验失败")
-                    break
-                # Keep pre-existing invalid caches for inspection; never delete
-                # user modifications. Only a verified clone replaces the target.
-                if repo_dir.exists():
-                    backup = repo_dir.with_name(f".{repo_dir.name}-replaced-{uuid.uuid4().hex[:8]}")
-                    repo_dir.rename(backup)
-                    info["previous_cache"] = str(backup)
-                temporary.rename(repo_dir)
-                info.update(path=str(repo_dir), state="cloned", commit=commit,
-                            detail="官方仓库已克隆并校验", attempts=attempt + 1)
-                self._record_repo_source(repo_dir, url, info, "cloned")
-                return info
-            except subprocess.TimeoutExpired:
-                errors.append("Git 仓库下载超时（60 秒）")
-            except (OSError, subprocess.SubprocessError) as exc:
-                errors.append(str(exc)[-300:])
-                break
-            finally:
-                if temporary.exists():
-                    shutil.rmtree(temporary, ignore_errors=True)
-        # Git and the official API use different transports. This preserves
-        # official source provenance when github.com's Git endpoint is blocked.
-        temporary = Path(tempfile.mkdtemp(prefix=f".{repo_dir.name}-api-", dir=repo_dir.parent))
-        try:
-            from src.repository_snapshot import download_snapshot
-            metadata = download_snapshot(temporary, url, revision)
-            if repo_dir.exists():
-                backup = repo_dir.with_name(f".{repo_dir.name}-replaced-{uuid.uuid4().hex[:8]}")
-                repo_dir.rename(backup)
-                info["previous_cache"] = str(backup)
-            temporary.rename(repo_dir)
-            info.update(metadata, path=str(repo_dir), state="cloned", attempts=attempt + 1,
-                        detail="Git 传输失败，已下载并校验固定 commit 的官方 GitHub 源码 ZIP",
-                        git_errors=errors)
-            self._record_repo_source(repo_dir, url, info, "github_api_zip")
-            return info
-        except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError, zipfile.BadZipFile) as exc:
-            errors.append("官方源码 ZIP: " + str(exc)[-300:])
-        finally:
-            if temporary.exists():
-                shutil.rmtree(temporary, ignore_errors=True)
-        return {**info, "path": "", "commit": "", "state": "clone-failed",
-                "detail": "; ".join(errors), "attempts": attempt + 1}
 
     def fetch_units_for_plan(self, paper_id: str,
                              units: List[Dict]) -> List[Dict]:
@@ -457,28 +335,13 @@ class ResourceManager:
         info: Dict = {"path": "", "state": "skipped",
                       "detail": "", "level": level, "rows": 0}
         name = (dataset_name or "").strip()
-        if self.mock_mode:
-            return {**info, "state": "mock-skipped", "detail": "Mock 跳过数据下载"}
-        meta = self._registry_lookup(name)
-        if meta and meta.get("entry") == "builtin:etth1":
-            from src.etth1 import fetch_etth1
-            from src.experiment_profiles import DATA_REVISION
-            resource_id = f"{paper_id}:ETTh1"
-            self._resource_event("dataset", resource_id, "download", "running",
-                                 paper_id=paper_id)
-            result = fetch_etth1(ds_dir / "real" / f"ETTh1-{DATA_REVISION}")
-            self._resource_event("dataset", resource_id, "download",
-                                 "cached" if result["state"] == "cached" else
-                                 "succeeded" if result["state"] == "downloaded" else "failed",
-                                 paper_id=paper_id, **{k: v for k, v in result.items() if k != "state"})
-            return {**result, "level": level}
         if not name:
             info["detail"] = "无数据集名称"
             return info
         self._resource_event("dataset", f"{paper_id}:{name}", "download",
                              "running", paper_id=paper_id, level=level,
                              source=name)
-        if level != "full" and smoke_dir.exists() and any(smoke_dir.iterdir()):
+        if smoke_dir.exists() and any(smoke_dir.iterdir()):
             info.update(path=str(smoke_dir), state="cached",
                         level="smoke", detail="冒烟集缓存命中",
                         rows=_SMOKE_ROWS)
@@ -765,8 +628,6 @@ class ResourceManager:
         info: Dict = {"path": "", "state": "skipped",
                       "detail": "", "quantized": quantized}
         ref = (weights_ref or "").strip()
-        if self.mock_mode:
-            return {**info, "state": "mock-skipped", "detail": "Mock 跳过权重下载"}
         if not ref or ref.lower() in ("none", "无", "null"):
             info.update(state="none", detail="无权重引用，跳过")
             return info

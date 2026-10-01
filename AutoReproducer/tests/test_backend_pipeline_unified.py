@@ -27,26 +27,6 @@ from frontend.backend_pipeline import (  # noqa: E402
 from src.orchestrator import Orchestrator, STAGE_DISPLAY  # noqa: E402
 
 
-def test_llm_official_choice_reaches_unified_orchestrator(tmp_path, monkeypatch):
-    from frontend.backend_pipeline import run_pipeline_background
-
-    calls = []
-
-    def run(self, payload):
-        calls.append(payload)
-        return {"state": "COMPLETED", "error": None, "data": {"report": "fixture"}}
-
-    monkeypatch.setattr(Orchestrator, "run", run)
-    thread = run_pipeline_background(str(tmp_path / "progress.jsonl"), paper_title="DLinear",
-                                     mock_mode=False, use_llm_pipeline=True,
-                                     experiment_profile="dlinear_etth1_cpu_smoke", use_docker=True)
-    thread.join(timeout=10)
-    assert not thread.is_alive()
-    assert len(calls) == 1 and calls[0]["use_llm_pipeline"]
-    assert calls[0]["experiment_profile"] == ""
-    assert ProgressStore.read_snapshot(str(tmp_path / "progress.jsonl"))["done"]
-
-
 def _ledger_records(session_id: str):
     root = Path(__file__).resolve().parents[1]
     ledger_file = (root / "data" / "experiment_ledger"
@@ -115,9 +95,8 @@ def test_ui_result_has_complete_keys_and_finish_ledger(tmp_path):
     for key in ("state", "error", "data", "audit_logs", "audit_stats",
                 "report_path", "session_id"):
         assert key in result, f"结果缺少键 {key}"
-    assert result["report_path"] == ""  # 默认仅在当前会话展示
-    assert result["report_saved"] is False
-    assert result["data"]["report"]
+    assert result["report_path"]  # 报告已落盘
+    assert Path(result["report_path"]).exists()
 
     records = _ledger_records(result["session_id"])
     assert records[-1]["phase"] == "FINISH"

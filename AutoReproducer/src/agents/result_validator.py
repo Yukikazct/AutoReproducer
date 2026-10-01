@@ -7,12 +7,10 @@
 """
 import json
 import re
-import math
 from typing import Dict
 from src.base_agent import BaseAgent
 from src.llm.llm_client import LLMClient
 from src.metric_keys import norm_metric_key
-from src.official_smoke import INTENT, is_real_smoke
 
 # 指标提取模式：键名 -> 输出中的统一指标名
 # 注意 rmse 必须排在 mse 之前，否则 "rmse: 1.2" 会被 mse 分支抢先匹配
@@ -68,42 +66,6 @@ class ResultValidatorAgent(BaseAgent):
             stderr = stderr or execution["stages"][-1].get("stderr", "")
 
         paper_metrics = dict(paper_info.get("metrics", {}) or {})
-        if is_real_smoke(input_data):
-            actual = self._extract_metrics(stdout)
-            # Do not parse 1e309 as 1, or reuse an earlier finite value when the
-            # final evaluation reports nan/inf. Keep only the last test metrics.
-            for key in ("mse", "mae"):
-                values = re.findall(r"\b" + key + r"\s*[:=]\s*([^,\s]+)", stdout, re.I)
-                actual.pop(key, None)
-                if values:
-                    try:
-                        value = float(values[-1])
-                        if math.isfinite(value):
-                            actual[key] = value
-                    except ValueError:
-                        pass
-            datasets = execution.get("datasets") or []
-            ran = (execution.get("execution_mode") == "plan"
-                   and execution.get("success") is True
-                   and (execution.get("final") or {}).get("exit_code") == 0)
-            real_data = bool(datasets) and all(
-                d.get("data_kind") == "real" and d.get("sha256") for d in datasets)
-            valid = ran and real_data and all(
-                k in actual and math.isfinite(actual[k]) and actual[k] >= 0
-                for k in ("mse", "mae"))
-            if input_data.get("execution_intent") == INTENT:
-                plan = execution.get("plan") or {}
-                valid = valid and plan.get("source") == "llm" and not execution.get("fallback_used") \
-                    and any(s.get("kind") == "run" and s.get("success") is True
-                            and s.get("exit_code") == 0 for s in execution.get("stages", []))
-            reason = ("流程已验证，尚未核对论文数值（官方代码、真实 ETTh1、CPU 缩参训练）"
-                      if valid else execution.get("reason") or execution.get("plan_fail_reason")
-                      or "真实冒烟未通过：需官方执行成功、真实数据与有限的 MSE/MAE")
-            return {"status": "smoke_verified" if valid else "smoke_failed",
-                    "is_reproduced": None, "confidence": 1.0 if valid else 0.0,
-                    "reason": reason, "metrics_comparison": {"paper": {}, "actual": actual},
-                    "validation": {"match": None, "analysis": reason, "differences": []},
-                    "llm_calls": 0}
 
         # 语料对照层：无声明指标时用语料复现分作为论文声明值
         corpus_paper = input_data.get("corpus_paper") or paper_info.get("corpus_paper")
