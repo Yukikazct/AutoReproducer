@@ -81,7 +81,6 @@ class ResourceFinderAgent(BaseAgent):
 {{
     "code_repo_url": "最可能的GitHub URL或'未找到'",
     "alternative_repos": ["备用仓库1", "备用仓库2"],
-    "benchmark_framework_url": "论文使用的基准/评测框架仓库URL或'未找到'",
     "dataset_url": "数据集URL或'未找到'",
     "weights_url": "预训练权重URL或'未找到'",
     "confidence": 0.0-1.0
@@ -125,13 +124,6 @@ class ResourceFinderAgent(BaseAgent):
             "github_urls": github_urls,
         }
 
-        # 6. 多代码单元组装：发现链 main + LLM 备选/基准框架 + 数据集
-        #    所在仓库（iTransformer 的数据集 URL 指向 Time-Series-Library
-        #    即为 library 单元），供 ResourceManager 多仓库拉取与
-        #    ExecutionPlanner 规划使用。
-        resources["code_units"] = self._assemble_code_units(
-            discovery, parsed, pinned_revision)
-
         self.log_experiment(
             "FIND_RESOURCES", "定位代码仓库与数据集",
             inputs={"paper_info": paper_info},
@@ -151,58 +143,6 @@ class ResourceFinderAgent(BaseAgent):
         }
 
     # ---------------- 内部工具 ----------------
-
-    @staticmethod
-    def _assemble_code_units(discovery: Dict, parsed: Dict,
-                             pinned_revision: str = "") -> list:
-        """组装 code_units 列表（字典形态，落 resources.code_units）。
-
-        来源优先级：发现链（selected=main + 可信候选）> LLM 备选仓库
-        > LLM benchmark 框架 > 数据集所在 GitHub 仓库。全部按 URL 去重，
-        保序；unit_id 生成规则与 src.code_units 一致（main / alt_N /
-        lib_N）。
-        """
-        from src.agents.repo_discovery import normalize_github_repo_url
-        from src.code_units import dedupe_units, next_unit_id, CodeUnit
-
-        units: list = []
-        for raw in (discovery.get("code_units") or []):
-            unit = CodeUnit.from_dict(raw) if isinstance(raw, dict) \
-                else CodeUnit()
-            if not unit.url:
-                continue
-            if unit.unit_id == "main" and pinned_revision:
-                unit.revision = pinned_revision
-            units.append(unit)
-
-        def _append(url: str, role: str, source: str, notes: str = "") -> None:
-            normalized = normalize_github_repo_url(url or "")
-            if not normalized:
-                return
-            if any(u.url == normalized for u in units):
-                return
-            prefix = "lib" if role == "library" else "alt"
-            units.append(CodeUnit(
-                unit_id=next_unit_id(units, prefix),
-                role=role, url=normalized, source=source, notes=notes))
-
-        # LLM 备选仓库（最多 3 个）
-        for alt in (parsed.get("alternative_repos") or [])[:3]:
-            _append(alt, "alternative", "llm_inferred", "LLM 推断备选实现")
-        # LLM 基准框架（若给出）
-        benchmark = parsed.get("benchmark_framework_url") or ""
-        if benchmark and benchmark != "未找到":
-            _append(benchmark, "benchmark", "llm_inferred", "基准评测框架")
-        # 数据集 URL 本身是 GitHub 仓库（数据集与代码同仓的场景）
-        dataset_url = parsed.get("dataset_url") or ""
-        if dataset_url and dataset_url != "未找到":
-            normalized = normalize_github_repo_url(dataset_url)
-            if normalized and not any(u.url == normalized for u in units):
-                units.append(CodeUnit(
-                    unit_id=next_unit_id(units, "lib"),
-                    role="library", url=normalized, source="llm_inferred",
-                    notes="数据集位于该仓库（README 数据集链接指向它）"))
-        return [u.to_dict() for u in dedupe_units(units)]
 
     def _delta_llm_calls(self) -> int:
         total = self.llm.get_call_count()

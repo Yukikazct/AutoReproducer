@@ -22,8 +22,6 @@ _METRIC_PATTERNS = [
     (r"(?:loss|损失)\s*[:：=]?\s*([\d.]+)", "loss"),
     # \b 不可省：否则 "rmse: 1.2" 里的 "mse" 会被下面的 mse 分支抢先命中
     (r"\b(?:rmse|root[_\s]?mean[_\s]?squared[_\s]?error)\s*[:：=]?\s*([\d.]+)", "rmse"),
-    (r"\b(?:mae|mean[_\s]?absolute[_\s]?error)\s*[:：=]?\s*([\d.]+)", "mae"),
-    (r"\b(?:smape|symmetric[_\s]?mape)\s*[:：=]?\s*([\d.]+)", "smape"),
     (r"\b(?:mse|mean[_\s]?squared[_\s]?error)\s*[:：=]?\s*([\d.]+)", "mse"),
 ]
 # 复现成功判定的相对差异阈值
@@ -52,18 +50,9 @@ class ResultValidatorAgent(BaseAgent):
         # execution 兼容新结构（stages）与旧结构（execution.execution）
         stdout = execution.get("stdout", "") or ""
         stderr = execution.get("stderr", "") or ""
-        if not stdout:
-            # final 是执行层给出的**汇总输出**：生成路径下它恒等于
-            # stages[-1]（_execute_with_repair 失败时 return stages[-1]），
-            # 所以这里对生成路径零行为变化；而计划路径下 stages[-1] 可能
-            # 既不是产出指标的那一步（parse 步 / skipped_deps 的跳过步），
-            # 只看最后一条会把"跑出 mse/mae 了"误判成"没跑起来"。
-            final_block = execution.get("final") or {}
-            stdout = final_block.get("stdout", "") or ""
-            stderr = stderr or final_block.get("stderr", "") or ""
         if not stdout and execution.get("stages"):
             stdout = execution["stages"][-1].get("stdout", "")
-            stderr = stderr or execution["stages"][-1].get("stderr", "")
+            stderr = execution["stages"][-1].get("stderr", "")
 
         paper_metrics = dict(paper_info.get("metrics", {}) or {})
 

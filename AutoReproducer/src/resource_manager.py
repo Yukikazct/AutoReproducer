@@ -25,7 +25,7 @@ import os
 import shutil
 import subprocess
 import zipfile
-from pathlib import Path, PureWindowsPath
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 from src.resource_events import ResourceEventLogger
 
@@ -38,7 +38,6 @@ REPOS_ROOT = DATA_ROOT / "repos"          # 代码仓库：data/repos/<paper_id>
 DATASETS_ROOT = DATA_ROOT / "datasets"    # 数据集：data/datasets/<paper_id>/
 MANIFESTS_ROOT = DATA_ROOT / "manifests"  # 资源清单：data/manifests/<paper_id>.json
 ARCHIVE_ROOT = DATA_ROOT / "archive"      # L1 归档暂存：data/archive/<paper_id>.zip
-PLANS_ROOT = DATA_ROOT / "plans"          # 执行计划：data/plans/<paper_id>.json
 
 # L0 配额（字节），AUTOREPRO_L0_QUOTA_GB 环境变量可配，默认 20GB
 _DEFAULT_QUOTA_GB = 20
@@ -108,7 +107,6 @@ class ResourceManager:
         self.datasets_root = self.data_root / "datasets"
         self.manifests_root = self.data_root / "manifests"
         self.archive_root = self.data_root / "archive"
-        self.plans_root = self.data_root / "plans"
         self.quota_bytes = quota_bytes or _L0_QUOTA
         if dataset_registry is None:
             from src.dataset_registry import DatasetRegistry
@@ -118,7 +116,7 @@ class ResourceManager:
         self.resource_events = ResourceEventLogger(
             str(self.data_root / "resource_events.jsonl"))
         for d in (self.repos_root, self.datasets_root,
-                  self.manifests_root, self.archive_root, self.plans_root):
+                  self.manifests_root, self.archive_root):
             os.makedirs(d, exist_ok=True)
 
     # ---------------- 基础工具 ----------------
@@ -152,33 +150,6 @@ class ResourceManager:
 
     def _manifest_path(self, paper_id: str) -> Path:
         return self.manifests_root / f"{paper_id}.json"
-
-    def _plan_path(self, paper_id: str) -> Path:
-        return self.plans_root / f"{paper_id}.json"
-
-    # ---------------- 执行计划持久化 ----------------
-
-    def save_plan(self, plan: Dict) -> str:
-        """落盘执行计划 data/plans/<paper_id>.json；paper_id 缺失/非法时
-        抛 ValueError（不写越界文件）。"""
-        paper_id = str(plan.get("paper_id") or "").strip()
-        if (not paper_id or paper_id in (".", "..")
-                or "/" in paper_id or "\\" in paper_id):
-            raise ValueError(f"执行计划 paper_id 非法: {paper_id!r}")
-        path = self._plan_path(paper_id)
-        path.write_text(json.dumps(plan, ensure_ascii=False, indent=2),
-                        encoding="utf-8")
-        return str(path)
-
-    def load_plan(self, paper_id: str) -> Optional[Dict]:
-        """读取已落盘的执行计划；不存在/损坏返回 None。"""
-        path = self._plan_path(paper_id)
-        if not path.is_file():
-            return None
-        try:
-            return json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return None
 
     # ---------------- 懒加载：代码 ----------------
 
@@ -232,37 +203,6 @@ class ResourceManager:
         except Exception as exc:       # 网络 / 超时 / git 异常
             info.update(state="clone-failed", detail=str(exc)[-300:])
         return info
-
-    def fetch_units(self, paper_id: str, units: List[Dict]) -> List[Dict]:
-        """多代码单元拉取：把每个 CodeUnit 克隆到
-        data/repos/<paper_id>/<unit_id>/。
-
-        复用 fetch_code 的幂等缓存 / 占位跳过 / revision pin / 溯源标记，
-        逐单元落盘；unit_id 经 sanitize_unit_id 清洗（路径穿越防护），
-        空 id 直接跳过。任何单元失败只影响该单元（clone-failed），
-        不阻断其余单元。返回逐个单元的 fetch info（含 unit_id/role/url）。
-        """
-        from src.code_units import sanitize_unit_id
-        results: List[Dict] = []
-        for unit in units or []:
-            uid = sanitize_unit_id(unit.get("unit_id") or "main")
-            if not uid:
-                continue
-            target = self._repo_dir(paper_id) / uid
-            info = self.fetch_code(paper_id, unit.get("url", ""),
-                                   target=str(target),
-                                   revision=unit.get("revision", ""))
-            info.update(unit_id=uid,
-                        role=unit.get("role", "") or "alternative",
-                        url=unit.get("url", ""))
-            results.append(info)
-        return results
-
-    def fetch_units_for_plan(self, paper_id: str,
-                             units: List[Dict]) -> List[Dict]:
-        """fetch_units 的别名（按 ExecutionPlan.units 拉取），保持
-        计划层与资源层的调用语义清晰。"""
-        return self.fetch_units(paper_id, units)
 
     @staticmethod
     def _git_head_commit(repo_dir: Path) -> str:
@@ -689,41 +629,11 @@ class ResourceManager:
     def build_manifest(self, paper_id: str, paper_title: str = "",
                        code_url: str = "", dataset_name: str = "",
                        weights_ref: str = "") -> Dict:
-        """生成 manifest（磁盘状态为主，引用字段为辅）。
-
-        多代码单元布局（repos/<paper_id>/<unit_id>/）时额外产出
-        code_units 列表（unit_id/role/url/path/state/commit），
-        resources.code 指向 main 单元；单仓库旧布局（仓库文件直接在
-        repos/<paper_id>/ 根下）保持 resources.code = 仓库根，向后兼容。
-        """
+        """生成 manifest（磁盘状态为主，引用字段为辅）。"""
         repo_dir = self._repo_dir(paper_id)
         ds_dir = self._dataset_dir(paper_id)
-        code_units: List[Dict] = []
-        code_path = ""
-        main_dir = repo_dir / "main"
-        if main_dir.is_dir():
-            # 多单元布局：逐单元读取溯源标记
-            for child in sorted(repo_dir.iterdir()):
-                if not child.is_dir() or child.name == "weights":
-                    continue
-                unit: Dict = {"unit_id": child.name, "path": str(child),
-                              "state": "", "url": "", "commit": ""}
-                marker_file = child / ".autorepro-repo-source.json"
-                if marker_file.is_file():
-                    try:
-                        marker = json.loads(
-                            marker_file.read_text(encoding="utf-8"))
-                        unit.update(url=marker.get("repo_url", ""),
-                                    commit=marker.get("commit", ""),
-                                    state=marker.get("acquisition", ""))
-                    except (OSError, json.JSONDecodeError):
-                        pass
-                if child.name == "main":
-                    code_path = str(child)
-                code_units.append(unit)
-        elif repo_dir.exists() and any(repo_dir.iterdir()):
-            # 旧单仓库布局：仓库文件在根下
-            code_path = str(repo_dir)
+        code_path = str(repo_dir) if (repo_dir.exists()
+                                      and any(repo_dir.iterdir())) else ""
         ds_path = str(ds_dir / "dataset_smoke") if (
             (ds_dir / "dataset_smoke").exists()) else (
             str(ds_dir) if ds_dir.exists() and any(ds_dir.iterdir()) else "")
@@ -733,7 +643,7 @@ class ResourceManager:
             files = list(w_dir.iterdir())
             if files:
                 w_path = str(files[0])
-        manifest = {
+        return {
             "paper_id": paper_id,
             "created_at": _now_iso(),
             "resources": {"code": code_path,
@@ -743,9 +653,6 @@ class ResourceManager:
             "code_url": code_url or "",
             "dataset_name": dataset_name or "",
         }
-        if code_units:
-            manifest["code_units"] = code_units
-        return manifest
 
     def save_manifest(self, manifest: Dict) -> str:
         path = self._manifest_path(manifest["paper_id"])
@@ -815,12 +722,6 @@ class ResourceManager:
                             arc = f"{arc_dir}/{f.relative_to(root).as_posix()}"
                             zf.write(f, arc)
                             entries += 1
-            # 执行计划（多代码单元管理）：存在则一并归档（旧 zip 无此成员，
-            # 恢复逻辑对其保持兼容）
-            plan_path = self._plan_path(paper_id)
-            if plan_path.is_file():
-                zf.write(plan_path, f"plans/{paper_id}.json")
-                entries += 1
             if include_manifest:
                 manifest = self.get_manifest(paper_id)
                 if manifest:
@@ -839,78 +740,30 @@ class ResourceManager:
         restored: List[str] = []
         manifest: Optional[Dict] = None
         with zipfile.ZipFile(archive) as zf:
-            entries = []
-            try:
-                for info in zf.infolist():
-                    if info.filename == "manifest.json":
-                        continue
-                    target = self._restore_target(info.filename)
-                    if target is not None:
-                        entries.append((info, target))
-                if "manifest.json" in zf.namelist():
-                    manifest = json.loads(
-                        zf.read("manifest.json").decode("utf-8"))
-                    if manifest:
-                        self._validate_restore_manifest(manifest)
-            except ValueError as exc:
-                return {"ok": False,
-                        "detail": f"归档不安全或无效，未恢复任何文件: {exc}"}
-
-            for info, target in entries:
-                if info.is_dir():
-                    target.mkdir(parents=True, exist_ok=True)
+            for member in zf.namelist():
+                if member == "manifest.json":
+                    continue
+                parts = member.split("/", 1)
+                if len(parts) != 2 or not parts[0] or not parts[1]:
+                    continue
+                if parts[0] == "repos":
+                    target = self.repos_root / parts[1]
+                elif parts[0] == "datasets":
+                    target = self.datasets_root / parts[1]
+                else:
                     continue
                 os.makedirs(target.parent, exist_ok=True)
-                with zf.open(info) as src, open(target, "wb") as dst:
+                with zf.open(member) as src, open(target, "wb") as dst:
                     shutil.copyfileobj(src, dst)
                 restored.append(str(target))
+            if "manifest.json" in zf.namelist():
+                manifest = json.loads(
+                    zf.read("manifest.json").decode("utf-8"))
         if manifest:
             self.save_manifest(manifest)
         return {"ok": True, "restored": restored,
                 "manifest": manifest or self.get_manifest(
                     paper_id or Path(archive).stem)}
-
-    def _restore_target(self, member: str) -> Optional[Path]:
-        """Resolve a resource member and reject traversal/platform path escapes."""
-        normalized = member.replace("\\", "/")
-        parts = normalized.rstrip("/").split("/")
-        if not parts or parts[0] not in ("repos", "datasets", "plans"):
-            return None
-        relative_parts = parts[1:]
-        if not relative_parts:
-            return None
-        if (any(part in ("", ".", "..") for part in relative_parts)
-                or any(len(part) >= 2 and part[1] == ":"
-                       for part in relative_parts)
-                or PureWindowsPath(normalized).is_absolute()
-                or PureWindowsPath(normalized).drive):
-            raise ValueError(f"非法归档成员路径: {member}")
-
-        roots = {"repos": self.repos_root,
-                 "datasets": self.datasets_root,
-                 "plans": self.plans_root}
-        root = roots[parts[0]]
-        resolved_root = root.resolve()
-        target = root.joinpath(*relative_parts).resolve()
-        try:
-            target.relative_to(resolved_root)
-        except ValueError as exc:
-            raise ValueError(f"归档成员路径越界: {member}") from exc
-        return target
-
-    def _validate_restore_manifest(self, manifest: Dict) -> None:
-        """Keep an archived paper ID from escaping the manifests directory."""
-        paper_id = manifest.get("paper_id")
-        if (not isinstance(paper_id, str) or not paper_id
-                or paper_id in (".", "..")
-                or "/" in paper_id or "\\" in paper_id
-                or PureWindowsPath(paper_id).drive):
-            raise ValueError("manifest 中的 paper_id 非法")
-        target = self._manifest_path(paper_id).resolve()
-        try:
-            target.relative_to(self.manifests_root.resolve())
-        except ValueError as exc:
-            raise ValueError("manifest 路径越界") from exc
 
     # ---------------- L0 配额守护 ----------------
 

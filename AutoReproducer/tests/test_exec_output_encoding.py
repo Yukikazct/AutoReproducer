@@ -32,7 +32,7 @@ def _clear_deps_cache():
 
 
 def _executor() -> CodeExecutorAgent:
-    return CodeExecutorAgent(LLMClient(mock_mode=True), mock_mode=True)
+    return CodeExecutorAgent(LLMClient(mock_mode=True))
 
 
 def test_chinese_output_is_captured_and_is_str():

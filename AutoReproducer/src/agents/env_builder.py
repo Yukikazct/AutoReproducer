@@ -383,19 +383,6 @@ class EnvBuilderAgent(BaseAgent):
             return {"success": False,
                     "error": f"Docker 引擎不可用：{engine_reason}"
                              "（请启动 Docker Desktop 后重试）"}
-        # 基础镜像可用性：docker build 的 FROM 同样要访问 registry，受限
-        # 网络下与 docker run 一样会卡到 context deadline exceeded——那时
-        # 用户拿到的是一整段构建日志，而不是"镜像拉不到"这句话。预拉一次，
-        # 失败即带着人话短路（不进入 1800s 的构建超时）。
-        # 自建镜像（autorepro-*，含共享底座）跳过：它们只存在于本地，
-        # 不在任何 registry 上，pull 必然失败。
-        base_image = EnvBuilderAgent._parse_from_image(dockerfile)
-        if base_image and not base_image.startswith("autorepro"):
-            pull_err = BaseAgent.ensure_image_pulled(docker_cmd, base_image)
-            if pull_err:
-                self.log("build_image", "ERROR",
-                         f"基础镜像不可用，跳过构建: {base_image}")
-                return {"success": False, "tag": tag, "error": pull_err}
         build_dir = tempfile.mkdtemp(prefix="autorepro_env_")
         try:
             with open(os.path.join(build_dir, "Dockerfile"), "w",
@@ -490,25 +477,6 @@ class EnvBuilderAgent(BaseAgent):
             return res.returncode == 0 and bool((res.stdout or "").strip())
         except Exception:
             return False
-
-    @staticmethod
-    def _parse_from_image(dockerfile: str) -> str:
-        """取 Dockerfile 首个 FROM 的基础镜像名。
-
-        `FROM python:3.11-slim AS build` -> "python:3.11-slim"（别名词不影响
-        取镜像名）；多阶段构建只看第一段，与 _swap_to_base_image 的约定一致。
-        解析不出来（无 FROM / `FROM ${BASE}` 这类 ARG 变量）时返回 ""，
-        调用方跳过预拉——宁可少做一层加固，也不要对着一串变量名去 pull。
-        """
-        for ln in (dockerfile or "").splitlines():
-            stripped = ln.strip()
-            if not stripped.upper().startswith("FROM "):
-                continue
-            parts = stripped.split()
-            if len(parts) < 2 or parts[1].startswith("$"):
-                return ""
-            return parts[1]
-        return ""
 
     # ---------------- 内部工具 ----------------
 

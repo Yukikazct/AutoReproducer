@@ -57,7 +57,7 @@ except ImportError:
 # 页面配置
 st.set_page_config(
     page_title="AutoReproducer - 论文自动复现系统",
-    page_icon=None,
+    page_icon="🔬",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -65,246 +65,30 @@ st.set_page_config(
 # CSS 样式
 st.markdown("""
 <style>
-    :root {
-        --primary: #4f46e5;
-        --primary-dark: #3730a3;
-        --surface: #ffffff;
-        --surface-muted: #f8fafc;
-        --border: #e5e7eb;
-        --text: #172033;
-        --muted: #64748b;
+    .status-ok { color: #00ff00; font-weight: bold; }
+    .status-error { color: #ff0000; font-weight: bold; }
+    .status-running { color: #ffaa00; font-weight: bold; }
+    .status-waiting { color: #888888; }
+    .agent-card {
+        padding: 10px;
+        border-radius: 5px;
+        margin: 5px 0;
+        border-left: 4px solid #4CAF50;
     }
-
-    .stApp {
-        background:
-            radial-gradient(circle at 92% 0%, rgba(79, 70, 229, 0.08), transparent 28rem),
-            #f6f8fc;
-        color: var(--text);
-    }
-
-    .stApp header { display: none; }
-    .block-container {
-        max-width: 1500px;
-        padding: 2.5rem 3rem 4rem;
-    }
-
-    div[data-testid="stSidebar"] {
-        min-width: 310px;
-        max-width: 390px;
-        background: linear-gradient(180deg, #f8faff 0%, #eef2ff 100%);
-        border-right: 1px solid #dbe3f0;
-    }
-    div[data-testid="stSidebar"] > div:first-child {
-        padding: 2rem 1.35rem 2rem;
-    }
-    div[data-testid="stSidebar"] h2 {
-        color: #1e293b;
-        font-size: 1.35rem;
-        letter-spacing: -0.02em;
-        margin: 0.65rem 0 1.5rem;
-    }
-    div[data-testid="stSidebar"] hr {
-        border-color: #dbe3f0;
-        margin: 1.2rem 0;
-    }
-
+    .stApp header {display: none;}
     .main-title {
-        background: linear-gradient(110deg, #312e81 0%, #4f46e5 55%, #7c3aed 100%);
-        -webkit-background-clip: text;
-        background-clip: text;
-        color: transparent;
-        font-size: clamp(2rem, 4vw, 3.15rem);
-        font-weight: 800;
-        letter-spacing: -0.055em;
-        line-height: 1.1;
-        margin: 0.4rem 0 0.55rem;
         text-align: center;
+        font-size: 2.5em;
+        margin-bottom: 0;
     }
     .sub-title {
-        color: var(--muted);
-        font-size: 1.02rem;
-        letter-spacing: 0.02em;
-        margin: 0 auto 2rem;
         text-align: center;
+        color: #888;
+        margin-top: 0;
     }
-
-    h3, h4 {
-        color: #1e293b;
-        letter-spacing: -0.02em;
-    }
-    h3 {
-        border-bottom: 1px solid var(--border);
-        padding-bottom: 0.7rem;
-    }
-
-    div[data-testid="stTabs"] [role="tablist"] {
-        gap: 0.35rem;
-        border-bottom: 1px solid #dbe3f0;
-        margin-bottom: 1.5rem;
-    }
-    div[data-testid="stTabs"] button[role="tab"] {
-        border-radius: 0.65rem 0.65rem 0 0;
-        color: #64748b;
-        font-weight: 600;
-        padding: 0.75rem 1rem;
-    }
-    div[data-testid="stTabs"] button[role="tab"]:hover {
-        color: var(--primary);
-        background: rgba(79, 70, 229, 0.06);
-    }
-    div[data-testid="stTabs"] button[role="tab"][aria-selected="true"] {
-        color: var(--primary-dark);
-        background: rgba(79, 70, 229, 0.08);
-    }
-    div[data-testid="stTabs"] button[role="tab"][aria-selected="true"] p {
-        font-weight: 700;
-    }
-
-    .stButton > button, .stDownloadButton > button {
-        border: 1px solid #cbd5e1;
-        border-radius: 0.55rem;
-        font-weight: 600;
-        min-height: 2.6rem;
-        transition: border-color 0.15s ease, box-shadow 0.15s ease,
-                    transform 0.15s ease;
-    }
-    .stButton > button:hover, .stDownloadButton > button:hover {
-        border-color: var(--primary);
-        box-shadow: 0 4px 12px rgba(79, 70, 229, 0.14);
-        transform: translateY(-1px);
-    }
-    .stButton > button[kind="primary"] {
-        background: linear-gradient(135deg, #4f46e5, #6366f1);
-        border-color: #4f46e5;
-    }
-
-    div[data-testid="stMetric"] {
-        background: var(--surface);
-        border: 1px solid var(--border);
-        border-radius: 0.8rem;
-        box-shadow: 0 2px 8px rgba(15, 23, 42, 0.04);
-        padding: 0.85rem 1rem;
-    }
-    div[data-testid="stMetricLabel"] {
-        color: var(--muted);
-        font-weight: 600;
-    }
-    div[data-testid="stMetricValue"] {
-        color: #1e293b;
-        font-size: 1.45rem;
-    }
-
-    .agent-card {
-        background: var(--surface);
-        border: 1px solid var(--border);
-        border-left: 4px solid var(--primary);
-        border-radius: 0.75rem;
-        box-shadow: 0 3px 10px rgba(15, 23, 42, 0.05);
-        margin: 0.45rem 0;
-        min-height: 96px;
-        padding: 0.95rem 1rem;
-        transition: box-shadow 0.15s ease, transform 0.15s ease;
-    }
-    .agent-card:hover {
-        box-shadow: 0 8px 18px rgba(15, 23, 42, 0.09);
-        transform: translateY(-2px);
-    }
-    .agent-card h4 {
-        font-size: 1rem;
-        margin: 0 0 0.5rem;
-    }
-    .agent-card h4 small {
-        color: var(--primary);
-        font-size: 0.75rem;
-        font-weight: 600;
-    }
-    .agent-card span {
-        line-height: 1.5;
-    }
-
-    div[data-testid="stExpander"] {
-        background: var(--surface);
-        border: 1px solid var(--border);
-        border-radius: 0.75rem;
-        box-shadow: 0 2px 8px rgba(15, 23, 42, 0.035);
-        overflow: hidden;
-    }
-    div[data-testid="stExpander"] summary:hover {
-        background: #f8faff;
-    }
-
-    div[data-testid="stDataFrame"] {
-        border: 1px solid var(--border);
-        border-radius: 0.7rem;
-        overflow: hidden;
-    }
-    .pipeline-progress {
-        background: rgba(255, 255, 255, 0.82);
-        border: 1px solid #dbe3f0;
-        border-radius: 0.9rem;
-        box-shadow: 0 4px 14px rgba(15, 23, 42, 0.045);
-        margin: 1.35rem 0 1.8rem;
-        padding: 1rem 1.15rem 1.1rem;
-    }
-    .pipeline-progress-header {
-        align-items: center;
-        display: flex;
-        justify-content: space-between;
-        margin-bottom: 0.7rem;
-    }
-    .pipeline-progress-title {
-        color: #334155;
-        font-size: 0.88rem;
-        font-weight: 700;
-        letter-spacing: 0.01em;
-    }
-    .pipeline-progress-value {
-        color: var(--primary-dark);
-        font-size: 0.88rem;
-        font-weight: 800;
-    }
-    .pipeline-progress-track {
-        background: #e8edf5;
-        border-radius: 999px;
-        height: 0.62rem;
-        overflow: hidden;
-        position: relative;
-    }
-    .pipeline-progress-fill {
-        background: linear-gradient(90deg, #4f46e5 0%, #6366f1 55%, #8b5cf6 100%);
-        border-radius: inherit;
-        height: 100%;
-        min-width: 0;
-        position: relative;
-        transition: width 0.45s ease;
-    }
-    .pipeline-progress-fill::after {
-        background: rgba(255, 255, 255, 0.28);
-        content: "";
-        height: 100%;
-        position: absolute;
-        right: 0;
-        top: 0;
-        width: 2.5rem;
-    }
-    .pipeline-progress-meta {
-        color: #94a3b8;
-        font-size: 0.73rem;
-        margin-top: 0.55rem;
-    }
-    @media (max-width: 640px) {
-        .block-container {
-            padding: 1.5rem 1rem 3rem;
-        }
-        .pipeline-progress {
-            padding: 0.85rem;
-        }
-    }
-    div[data-testid="stAlert"] {
-        border-radius: 0.65rem;
-    }
-    .stCaption {
-        color: var(--muted);
+    div[data-testid="stSidebar"] {
+        min-width: 300px;
+        max-width: 400px;
     }
 
 </style>
@@ -338,28 +122,27 @@ if "pipeline_note" not in st.session_state:
 # ========== 侧边栏 ==========
 with st.sidebar:
     st.image("https://img.icons8.com/fluency/96/idea.png", width=60)
-    st.markdown("## 控制面板")
+    st.markdown("## ⚙️ 控制面板")
 
 # 模式选择
     st.session_state.mock_mode = st.toggle(
-        "Mock 模式（无需 API）",
+        "🧪 Mock模式（无需API）",
         value=st.session_state.mock_mode,
         help="启用Mock模式可直接演示，无需连接任何LLM服务")
 
-    # Docker 沙箱执行开关（真实模式生效）。**默认关闭，但关闭 ≠ 可以跑**：
-    # 真实模式下代码执行与容器沙箱是绑定的（官方仓库代码更是不可信第三方
-    # 代码），关掉开关等于"真实模式代码暂不执行"，执行层会以
-    # EXIT_ISOLATION_REQUIRED 拒绝，**不会**回退到宿主机上跑。
-    # 默认关只是为了让首次真实运行别无声地落进容器（容器内现装依赖：tmpfs
-    # 随 `--rm` 清空，numpy 级别约 20 秒、torch 级别几分钟，慢且难解释）；
-    # 下面的文案与帮助都按"必须显式打开"来讲，不留含糊。
+    # Docker 沙箱执行开关（真实模式生效）。
+    # 默认**关闭**：容器沙箱的代价是每次运行都要在容器里现装依赖（tmpfs 随
+    # `--rm` 清空，numpy 级别约 20 秒、torch 级别几分钟），默认开着会让用户
+    # 的第一次真实运行无声地落在容器里、慢且难解释；本地隔离执行（依赖装进
+    # data/deps/<hash>/，多论文共享）才是开箱即跑的那条路。
+    # 要用容器随时手动打开——今天它已在真实容器里实测跑通。
     if "use_docker" not in st.session_state:
         st.session_state.use_docker = False
     if "docker_probe" not in st.session_state:
         st.session_state.docker_probe = None       # None = 尚未探测
 
     # 引擎存活探测：CLI 二进制在 PATH 上 ≠ Docker Desktop 的引擎在跑。
-    # 只看 `shutil.which("docker")` 会把「装了没启动」误报成「已就绪」，
+    # 只看 `shutil.which("docker")` 会把「装了没启动」报成「✅ 已就绪」，
     # 随后 `docker run` 甩出 npipe 原始报错（用户实测踩到）。
     # 只在真实模式探测：Mock 模式不执行代码、用不上 Docker，也不必让
     # Mock 用例背上真实探测。结果缓存进 session_state —— 每轮 rerun 都
@@ -376,41 +159,34 @@ with st.sidebar:
             st.session_state.use_docker = False
 
     st.session_state.use_docker = st.toggle(
-        "Docker 沙箱执行（真实模式）",
+        "🐳 Docker 沙箱执行（真实模式）",
         value=st.session_state.use_docker,
         disabled=st.session_state.mock_mode or not docker_available,
-        help="真实模式必须启用 Docker 隔离执行；未启用或 Docker 不可用时"
-             "将拒绝执行模型生成代码，不会回退到宿主机运行")
+        help="真实模式下启用 Docker 隔离执行：依赖在容器内安装，"
+             "不污染本机环境；未安装 Docker 或 Mock 模式时自动降级为本地隔离执行")
     if st.session_state.mock_mode:
-        st.caption("Mock 模式不执行真实代码，无需 Docker")
+        st.caption("🧪 Mock 模式不执行真实代码，无需 Docker")
     elif not docker_available:
-        st.caption(f"{docker_reason}，真实模式代码执行已禁用；"
-                   "不会在宿主机运行模型生成代码")
-        if st.button("重新检测 Docker", key="docker_recheck",
+        st.caption(f"⚠️ {docker_reason}，将使用本地隔离执行（依赖安装在隔离目录）")
+        if st.button("🔄 重新检测 Docker", key="docker_recheck",
                      use_container_width=True,
                      help="启动 Docker Desktop 后点此重新探测，无需刷新页面"):
             st.session_state.docker_probe = None
             st.rerun()
     else:
-        st.caption("Docker 已就绪 ("
+        st.caption("✅ Docker 已就绪 ("
                    + ("将使用容器沙箱，首跑会在容器内安装依赖，偏慢"
                       if st.session_state.use_docker
-                      else "尚未启用容器沙箱，真实模式代码暂不执行")
+                      else "未启用容器沙箱，将使用本地隔离执行")
                    + ")")
-        # 首次运行要拉 python:3.11-slim；受限网络下拉 docker.io 会直接失败
-        # （实测 context deadline exceeded，随后被误当成"代码跑不起来"）。
-        # 这里提前把出路说清楚：加镜像源环境变量即可。
-        st.caption("首次运行需拉取基础镜像；网络不通时设置环境变量 "
-                   "`AUTOREPRO_DOCKER_IMAGE_MIRROR`（如 docker.m.daocloud.io）")
 
     # LLM API 配置（真实模式；OpenAI 兼容接口，不依赖本地部署）
-    with st.expander("LLM API 配置", expanded=not st.session_state.mock_mode):
+    with st.expander("🔗 LLM API 配置", expanded=not st.session_state.mock_mode):
         base_url = st.text_input(
             "API 地址（OpenAI 兼容）",
             value=os.environ.get("LLM_BASE_URL", "https://api.deepseek.com"),
             placeholder="如 https://api.deepseek.com",
-            help="支持受信任的 OpenAI 兼容 HTTPS 端点；自定义主机需由管理员"
-                 "加入 LLM_ALLOWED_HOSTS（逗号分隔）",
+            help="支持 DeepSeek / 千帆 / OpenAI 等任意 OpenAI 兼容端点",
             disabled=st.session_state.mock_mode)
         api_key = st.text_input(
             "API Key",
@@ -427,12 +203,12 @@ with st.sidebar:
         # 连接测试：真实调用一次 Chat Completions，验证 API 配置可用
         st.markdown("---")
         link_btn = st.button(
-            "测试 AI 连接",
+            "🔌 测试 AI 连接",
             disabled=st.session_state.mock_mode,
             use_container_width=True,
             help="真实调用一次 LLM API，验证地址/Key/模型配置可用")
         if st.session_state.mock_mode:
-            st.caption("Mock 模式不调用真实 LLM，连接测试不可用；"
+            st.caption("🧪 Mock 模式不调用真实 LLM，连接测试不可用；"
                        "关闭 Mock 开关后可输入 API 并测试")
         else:
             _cfg = resolve_llm_config(base_url, api_key, model_name)
@@ -448,11 +224,11 @@ with st.sidebar:
 
     # 预算上限
     max_trials = st.slider(
-        "优化预算（UCB 尝试次数）", min_value=3, max_value=20, value=10,
+        "🎯 优化预算（UCB 尝试次数）", min_value=3, max_value=20, value=10,
         help="Optimizer 在复现成功后最多尝试的优化方向次数")
 
     # 论文输入
-    st.markdown("### 论文输入")
+    st.markdown("### 📄 论文输入")
     input_mode = st.radio("输入方式", ["论文标题", "上传PDF"], key="input_mode")
 
     paper_title = st.session_state.paper_title
@@ -470,7 +246,7 @@ with st.sidebar:
                                          key="pdf_uploader")
 
     # 语料对照层（可选）：选择真实论文作为轻量锚点
-    st.markdown("### 语料对照（可选）")
+    st.markdown("### 🗂️ 语料对照(可选)")
     _corpus = [p["id"] for p in list_papers()]
     _corpus_choice = st.selectbox(
         "选择 PaperGuru-Benchmark 论文", ["无"] + _corpus, index=0,
@@ -480,54 +256,53 @@ with st.sidebar:
     # 启动 / 重置按钮
     col1, col2 = st.columns(2)
     with col1:
-        start_btn = st.button("开始复现", type="primary",
+        start_btn = st.button("🚀 开始复现", type="primary",
                               use_container_width=True,
                               disabled=st.session_state.running)
     with col2:
-        reset_btn = st.button("重置", use_container_width=True)
+        reset_btn = st.button("🔄 重置", use_container_width=True)
 
     # 系统状态
     st.markdown("---")
-    st.markdown("### 系统状态")
+    st.markdown("### 📊 系统状态")
     state_colors = {
-        "INIT": "", "READ_PAPER": "", "FIND_RESOURCES": "",
-        "BUILD_ENV": "", "EXECUTE_CODE": "", "VALIDATE": "",
-        "OPTIMIZING": "", "OPTIMIZED": "",
-        "GENERATE_REPORT": "", "COMPLETED": "", "ERROR": "",
+        "INIT": "⚪", "READ_PAPER": "📖", "FIND_RESOURCES": "🔍",
+        "BUILD_ENV": "🔧", "EXECUTE_CODE": "⚡", "VALIDATE": "✅",
+        "OPTIMIZING": "🧪", "OPTIMIZED": "🏆",
+        "GENERATE_REPORT": "📝", "COMPLETED": "🎉", "ERROR": "❌",
     }
     st.markdown(
-        f"**当前状态**: {state_colors.get(st.session_state.current_state, '')} "
+        f"**当前状态**: {state_colors.get(st.session_state.current_state, '⚪')} "
         f"`{st.session_state.current_state}`")
 
 
 # ========== 主界面 ==========
-st.markdown('<p class="main-title">AutoReproducer</p>',
+st.markdown('<p class="main-title">🔬 AutoReproducer</p>',
             unsafe_allow_html=True)
 st.markdown('<p class="sub-title">基于多智能体协作的论文自动复现与优化系统</p>',
             unsafe_allow_html=True)
 
 # 标签页
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "流水线状态", "复现报告", "审计日志", "状态机", "历史记录",
+    "📋 流水线状态", "📄 复现报告", "📜 审计日志", "🔍 状态机", "📂 历史记录",
 ])
 
 # ===== Tab 1: 流水线状态 =====
 with tab1:
-    st.markdown("### 复现流水线（复现 -> 验证 -> 优化 -> 报告）")
+    st.markdown("### 🏗️ 复现流水线（复现 -> 验证 -> 优化 -> 报告）")
 
     AGENT_DESC = {
-        "PaperReader": ("论文解析", "从 PDF/标题中提取结构化信息"),
-        "ResourceFinder": ("资源查找", "定位代码仓库和数据集"),
-        "EnvBuilder": ("环境构建", "自动搭建环境 + 依赖诊断"),
-        "ExecutionPlanner": ("执行规划", "多代码单元整体调用计划(安装->数据->训练->解析)"),
-        "CodeExecutor": ("代码执行", "官方入口脚本优先 + smoke/full 双阶段执行"),
-        "ResultValidator": ("结果验证", "比对论文声明值与运行结果"),
-        "Verifier": ("质量验证", "Prompt-Free 检查质量 + 修正闭环"),
-        "Optimizer": ("智能优化", "UCB 预算调度, Keep/Reject"),
-        "ReportGenerator": ("报告生成", "生成复现 + 优化 Markdown 报告"),
+        "📖 PaperReader": ("论文解析", "从PDF/标题中提取结构化信息"),
+        "🔍 ResourceFinder": ("资源查找", "定位代码仓库和数据集"),
+        "🔧 EnvBuilder": ("环境构建", "自动搭建环境 + 依赖诊断"),
+        "⚡ CodeExecutor": ("代码执行", "smoke + full 双阶段执行"),
+        "✅ ResultValidator": ("结果验证", "比对论文声明值与运行结果"),
+        "🛡️ Verifier": ("质量验证", "Prompt-Free 检查质量 + 修正闭环"),
+        "🧪 Optimizer": ("智能优化", "UCB 预算调度, Keep/Reject"),
+        "📝 ReportGenerator": ("报告生成", "生成复现+优化 Markdown 报告"),
     }
-    names = [a[1] for a in AGENTS] + ["Verifier", "Optimizer",
-                                      "ReportGenerator"]
+    names = [a[1] for a in AGENTS] + ["🛡️ Verifier", "🧪 Optimizer",
+                                      "📝 ReportGenerator"]
 
     # ---------- 后台复现实时进度（轮询进度文件） ----------
     pf = st.session_state.progress_file
@@ -549,12 +324,12 @@ with tab1:
         if snap.get("logs"):
             st.session_state.logs = snap["logs"]
         if snap.get("error"):
-            st.error(f"后台流水线异常: {snap['error']}")
+            st.error(f"❌ 后台流水线异常: {snap['error']}")
 
     if st.session_state.running and pf:
         if st_autorefresh is not None:
             st_autorefresh(interval=2000, key=f"ar_{pf}")
-            st.info("复现流水线正在后台运行，页面每 2 秒自动刷新，"
+            st.info("🔄 复现流水线正在后台运行，页面每 2 秒自动刷新，"
                     "实时展示各 Agent 进度。")
         else:
             st.warning("未安装 streamlit-autorefresh，页面不会自动刷新；"
@@ -564,20 +339,20 @@ with tab1:
     for i, name in enumerate(names):
         with cols[i % 3]:
             status = st.session_state.agent_status.get(name, "waiting")
-            status_icons = {"success": "成功", "error": "错误",
-                            "running": "运行中", "waiting": "等待中"}
+            status_icons = {"success": "✅", "error": "❌",
+                            "running": "🔄", "waiting": "⏳"}
             status_colors = {
                 "success": "border-left: 4px solid #4CAF50;",
                 "error": "border-left: 4px solid #f44336;",
                 "running": "border-left: 4px solid #FF9800;",
                 "waiting": "border-left: 4px solid #9E9E9E;",
             }
-            icon = status_icons.get(status, "等待中")
+            icon = status_icons.get(status, "⏳")
             border = status_colors.get(status, "")
             title, desc = AGENT_DESC.get(name, ("", ""))
             st.markdown(f"""
             <div class="agent-card" style="{border}">
-                <h4>{name} <small>（{icon}）</small></h4>
+                <h4>{icon} {name}</h4>
                 <small>{title}</small><br>
                 <span style="color: #888;">{desc}</span>
             </div>
@@ -586,33 +361,13 @@ with tab1:
     completed = sum(1 for a in names
                     if st.session_state.agent_status.get(a) == "success")
     progress = completed / len(names) if names else 0
-    progress_percent = round(progress * 100)
-    st.markdown(
-        f"""
-        <div class="pipeline-progress" role="progressbar"
-             aria-valuenow="{progress_percent}" aria-valuemin="0"
-             aria-valuemax="100">
-            <div class="pipeline-progress-header">
-                <span class="pipeline-progress-title">流水线完成度</span>
-                <span class="pipeline-progress-value">{progress_percent}%</span>
-            </div>
-            <div class="pipeline-progress-track">
-                <div class="pipeline-progress-fill"
-                     style="width: {progress_percent}%"></div>
-            </div>
-            <div class="pipeline-progress-meta">
-                已完成 {completed} 个阶段，共 {len(names)} 个阶段
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    st.progress(progress, text=f"整体进度: {completed}/{len(names)}")
 
     # 运行结果展示
     if st.session_state.result:
         result = st.session_state.result
         st.markdown("---")
-        st.markdown("### 运行摘要")
+        st.markdown("### 📊 运行摘要")
         stats = result.get("audit_stats", {})
         c1, c2, c3, c4, c5 = st.columns(5)
         c1.metric("总步骤数", stats.get("total_steps", 0))
@@ -631,13 +386,13 @@ with tab1:
                       f"{optimization.get('budget', 0)}")
 
         if result.get("state") == "COMPLETED":
-            st.success("复现流程成功完成！")
+            st.success("🎉 复现流程成功完成！")
         elif result.get("state") == "ERROR":
-            st.error(f"流程出错: {result.get('error', '未知错误')}")
+            st.error(f"❌ 流程出错: {result.get('error', '未知错误')}")
 
 # ===== Tab 2: 复现报告 =====
 with tab2:
-    st.markdown("### 复现与优化报告")
+    st.markdown("### 📄 复现与优化报告")
     if st.session_state.result and st.session_state.result.get("data", {}).get("report"):
         report = st.session_state.result["data"]["report"]
         # 深色 IDE 面板渲染已回滚（见 CHANGELOG [2026.09.20-12]）：
@@ -648,7 +403,7 @@ with tab2:
 
 # ===== Tab 3: 审计日志 =====
 with tab3:
-    st.markdown("### 审计日志")
+    st.markdown("### 📜 审计日志")
     if st.session_state.logs:
         col1, col2 = st.columns(2)
         with col1:
@@ -672,11 +427,11 @@ with tab3:
                              if l.get("status") == filter_status]
 
         for log in filtered_logs:
-            status_color = {"SUCCESS": "成功", "ERROR": "错误", "START": "开始",
-                            "RUNNING": "运行中", "WARNING": "警告"}.get(
-                                log.get("status", ""), "未知")
+            status_color = {"SUCCESS": "🟢", "ERROR": "🔴", "START": "🟡",
+                            "RUNNING": "🔄", "WARNING": "🟠"}.get(
+                                log.get("status", ""), "⚪")
             with st.expander(
-                f"[{status_color}] [{log.get('elapsed_sec', 0):.1f}s] "
+                f"{status_color} [{log.get('elapsed_sec', 0):.1f}s] "
                 f"{log.get('agent', '?')} - {log.get('action', '?')}"
             ):
                 st.json(log)
@@ -685,7 +440,7 @@ with tab3:
 
 # ===== Tab 4: 状态机 =====
 with tab4:
-    st.markdown("### 状态机定义")
+    st.markdown("### 🔍 状态机定义")
     st.markdown("系统使用有限状态机（FSM）管理 Agent 的流转。")
     state_info = """
 ```mermaid
@@ -720,8 +475,7 @@ stateDiagram-v2
         {"状态": "READ_PAPER", "说明": "解析论文PDF/标题,提取结构化信息", "Agent": "PaperReader"},
         {"状态": "FIND_RESOURCES", "说明": "查找代码仓库和数据集", "Agent": "ResourceFinder"},
         {"状态": "BUILD_ENV", "说明": "构建环境 + 5轮依赖诊断", "Agent": "EnvBuilder"},
-        {"状态": "PLAN_EXECUTION", "说明": "多代码单元整体调用计划(安装→数据→训练→解析)", "Agent": "ExecutionPlanner"},
-        {"状态": "EXECUTE_CODE", "说明": "官方入口脚本优先执行,失败回退生成脚本", "Agent": "CodeExecutor"},
+        {"状态": "EXECUTE_CODE", "说明": "smoke+full 双阶段执行", "Agent": "CodeExecutor"},
         {"状态": "VALIDATE", "说明": "验证结果与论文一致性", "Agent": "ResultValidator"},
         {"状态": "OPTIMIZING", "说明": "复现成功后,UCB 预算调度优化", "Agent": "Optimizer"},
         {"状态": "OPTIMIZED", "说明": "优化完成,产出最优方案", "Agent": "Optimizer"},
@@ -734,7 +488,7 @@ stateDiagram-v2
 
 # ===== Tab 5: 历史记录 =====
 with tab5:
-    st.markdown("### 复现历史与存储管理")
+    st.markdown("### 📂 复现历史与存储管理")
 
     # 删除类操作的反馈：必须跨 rerun 传递。删除后紧跟 st.rerun()，
     # 当次运行的 st.success 会被新一次运行整棵树丢弃，用户看不到任何提示。
@@ -753,7 +507,7 @@ with tab5:
             with open(rp, "r", encoding="utf-8") as fh:
                 report_content = fh.read()
             st.download_button(
-                "下载本次复现报告",
+                "⬇️ 下载本次复现报告",
                 data=report_content,
                 file_name=os.path.basename(rp),
                 mime="text/markdown",
@@ -762,8 +516,8 @@ with tab5:
 
 # -- 存储仪表板 --
     # -- 资源下载/安装监控 --
-    with st.expander("资源下载与安装监控", expanded=True):
-        if st.button("刷新资源状态", key="resource_refresh",
+    with st.expander("📡 资源下载与安装监控", expanded=True):
+        if st.button("🔄 刷新资源状态", key="resource_refresh",
                      use_container_width=True):
             st.rerun()
         events = list_resource_events(limit=100)
@@ -798,7 +552,7 @@ with tab5:
                 use_container_width=True, hide_index=True)
 
     # -- 存储仪表板 --
-    st.markdown("#### 存储占用")
+    st.markdown("#### 💾 存储占用")
     try:
         storage = get_storage_stats()
         cols = st.columns(3)
@@ -824,7 +578,7 @@ with tab5:
         st.error(f"获取存储统计失败: {e}")
 
     # -- 一键清理 --
-    with st.expander("清理管理"):
+    with st.expander("🧹 清理管理"):
         keep_days = st.slider("保留 runtime 文件天数", 1, 30, 7)
         if st.button("清理过期/终态 runtime 文件", use_container_width=True,
                      help="删除已结束复现（done/error）遗留的进度文件，以及超过保留天数的旧进度文件"):
@@ -835,7 +589,7 @@ with tab5:
 
         # -- 依赖缓存：不随历史记录一起删（跨会话共享，删了要重新下载） --
         st.markdown("---")
-        st.markdown("**依赖缓存**（跨会话共享，不随历史记录删除）")
+        st.markdown("**📦 依赖缓存**（跨会话共享，不随历史记录删除）")
         st.caption("隔离安装按**依赖清单内容**哈希寻址，同一份依赖跨论文复用。"
                    "删掉后下次执行同一依赖要重新下载安装，因此不并入"
                    "「清空历史」；需要腾空间时才在这里单独清。")
@@ -874,7 +628,7 @@ with tab5:
             confirm_deps = st.checkbox(
                 "我确认删除所选依赖缓存（下次执行同一依赖需重新下载安装）",
                 key="confirm_deps_del")
-            if st.button(f"删除所选 {len(picked_deps)} 个依赖目录",
+            if st.button(f"🗑️ 删除所选 {len(picked_deps)} 个依赖目录",
                          key="deps_del_btn", use_container_width=True,
                          type="secondary",
                          disabled=not picked_deps or not confirm_deps):
@@ -888,11 +642,11 @@ with tab5:
             st.caption("暂无依赖缓存。")
 
         st.markdown("---")
-        st.markdown("**历史会话清理**（危险操作，请谨慎）")
+        st.markdown("**🗑️ 历史会话清理**（危险操作，请谨慎）")
         confirm_clear = st.checkbox(
             "我确认清空全部历史复现会话（实验账本/审计日志/复现报告/runtime 进度）",
             key="confirm_clear_all")
-        if st.button("清空全部历史", use_container_width=True,
+        if st.button("🧹 清空全部历史", use_container_width=True,
                      type="secondary",
                      disabled=not confirm_clear):
             removed, freed = clear_sessions()
@@ -903,7 +657,7 @@ with tab5:
             st.rerun()
 
     # -- 历史会话列表 --
-    st.markdown("#### 历史复现会话")
+    st.markdown("#### 📋 历史复现会话")
     try:
         sessions = list_sessions()
         if not sessions:
@@ -935,12 +689,12 @@ with tab5:
             # 必须在下方 checkbox 实例化「之前」写 session_state：Streamlit
             # 不允许在 widget 创建后修改它的状态（会抛 StreamlitAPIException）。
             b1, b2, _pad = st.columns([1, 1, 3])
-            if b1.button("全选可见", key="hist_select_all",
+            if b1.button("☑️ 全选可见", key="hist_select_all",
                          use_container_width=True, disabled=not visible):
                 for s in visible:
                     st.session_state[f"hist_chk_{s['session_id']}"] = True
                 st.rerun()
-            if b2.button("清除选择", key="hist_clear_sel",
+            if b2.button("▫️ 清除选择", key="hist_clear_sel",
                          use_container_width=True):
                 for s in sessions:   # 含被筛选隐藏的，不留幽灵勾选
                     st.session_state[f"hist_chk_{s['session_id']}"] = False
@@ -949,7 +703,7 @@ with tab5:
             st.caption(f"共 {len(sessions)} 条 · 可见 {len(visible)} 条"
                        f"（勾选左侧方框即可，无需展开）")
             if any(s.get("state") == "RUNNING" for s in visible):
-                st.caption("可见列表含 RUNNING 会话：多为异常中断的残留；"
+                st.caption("⚠️ 可见列表含 RUNNING 会话：多为异常中断的残留；"
                            "若该复现仍在运行，删除会丢失它的记录"
                            "（被占用的文件自动跳过）。")
 
@@ -960,8 +714,7 @@ with tab5:
                     sid = sess["session_id"]
                     title = sess.get("paper_title", "未知论文")
                     state = sess.get("state", "未知")
-                    state_icon = {"COMPLETED": "完成", "ERROR": "错误"}.get(
-                        state, "等待中")
+                    state_icon = {"COMPLETED": "✅", "ERROR": "❌"}.get(state, "⏳")
                     duration = sess.get("duration_sec", 0)
                     llm_calls = sess.get("llm_calls", 0)
                     log_entries = sess.get("log_entries", 0)
@@ -984,7 +737,7 @@ with tab5:
                             with open(report_path, "r", encoding="utf-8") as fh:
                                 report_data = fh.read()
                             st.download_button(
-                                "下载报告",
+                                "⬇️ 下载报告",
                                 data=report_data,
                                 file_name=os.path.basename(report_path),
                                 mime="text/markdown",
@@ -1008,7 +761,7 @@ with tab5:
                         confirm_del = st.checkbox(
                             "确认删除本会话（账本/日志/报告/progress 一并删除）",
                             key=f"confirm_del_{sid}")
-                        if st.button("删除本会话", key=f"del_btn_{sid}",
+                        if st.button("🗑️ 删除本会话", key=f"del_btn_{sid}",
                                      type="secondary",
                                      disabled=not confirm_del):
                             removed, freed = delete_session(sid)
@@ -1021,7 +774,7 @@ with tab5:
                 # 已选必须在循环「之后」统计：checkbox 的勾选值在 widget
                 # 实例化时才写入 session_state，循环前算会滞后一次交互。
                 st.markdown("---")
-                st.markdown("**批量删除所选会话**（危险操作，请谨慎）")
+                st.markdown("**🗑️ 批量删除所选会话**（危险操作，请谨慎）")
                 selected = [
                     s for s in visible
                     if st.session_state.get(f"hist_chk_{s['session_id']}", False)
@@ -1032,7 +785,7 @@ with tab5:
                 confirm_batch = st.checkbox(
                     "我确认批量删除以上所选会话（账本/日志/报告/progress 一并删除）",
                     key="confirm_batch_del")
-                if st.button(f"删除所选 {len(selected)} 条",
+                if st.button(f"🗑️ 删除所选 {len(selected)} 条",
                              key="batch_del_btn", type="secondary",
                              disabled=not selected or not confirm_batch):
                     with st.spinner("正在删除..."):
@@ -1083,9 +836,9 @@ if start_btn:
         if (not st.session_state.mock_mode
                 and not (api_key.strip()
                          or os.environ.get("LLM_API_KEY", "").strip())):
-            st.warning("未填写 API Key：如果上游服务需要鉴权"
+            st.warning("⚠️ 未填写 API Key：如果上游服务需要鉴权"
                        "（如 DeepSeek/OpenAI），调用会返回 401 错误文本；"
-                       "建议先在侧边栏填写 Key 并点击「测试 AI 连接」验证。")
+                       "建议先在侧边栏填写 Key 并点击「🔌 测试 AI 连接」验证。")
         tmp_pdf = _save_uploaded_pdf(uploaded_file) if uploaded_file else ""
         progress_file = _new_progress_file()
         st.session_state.progress_file = progress_file

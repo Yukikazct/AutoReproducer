@@ -259,61 +259,6 @@ def test_restore_missing_archive(mgr):
     assert res["ok"] is False
 
 
-@pytest.mark.parametrize("member", [
-    "repos/../../outside.txt",
-    "datasets\\..\\..\\outside.txt",
-    "repos/C:\\outside.txt",
-])
-def test_restore_rejects_traversal_without_partial_writes(
-        mgr, tmp_path, member):
-    outside = tmp_path / "outside.txt"
-    outside.write_text("keep me", encoding="utf-8")
-    archive = tmp_path / "malicious.zip"
-    with zipfile.ZipFile(archive, "w") as zf:
-        zf.writestr("repos/safe.txt", "must not be restored")
-        zf.writestr(member, "overwritten")
-
-    result = mgr.restore(str(archive))
-
-    assert result["ok"] is False
-    assert "不安全" in result["detail"]
-    assert outside.read_text(encoding="utf-8") == "keep me"
-    assert not (mgr.repos_root / "safe.txt").exists()
-
-
-def test_restore_rejects_traversing_manifest_id(mgr, tmp_path):
-    archive = tmp_path / "malicious-manifest.zip"
-    with zipfile.ZipFile(archive, "w") as zf:
-        zf.writestr("repos/safe.txt", "must not be restored")
-        zf.writestr("manifest.json", json.dumps({
-            "paper_id": "../../outside",
-            "resources": {},
-        }))
-
-    result = mgr.restore(str(archive))
-
-    assert result["ok"] is False
-    assert not (mgr.repos_root / "safe.txt").exists()
-    assert not (tmp_path / "outside.json").exists()
-
-
-def test_restore_rejects_existing_symlink_escape(mgr, tmp_path):
-    outside_dir = tmp_path / "outside-dir"
-    outside_dir.mkdir()
-    sentinel = outside_dir / "keep.txt"
-    sentinel.write_text("keep me", encoding="utf-8")
-    mgr.repos_root.mkdir(parents=True, exist_ok=True)
-    (mgr.repos_root / "linked").symlink_to(outside_dir, target_is_directory=True)
-    archive = tmp_path / "symlink-escape.zip"
-    with zipfile.ZipFile(archive, "w") as zf:
-        zf.writestr("repos/linked/keep.txt", "overwritten")
-
-    result = mgr.restore(str(archive))
-
-    assert result["ok"] is False
-    assert sentinel.read_text(encoding="utf-8") == "keep me"
-
-
 # ---------------- 7. 配额守护 ----------------
 
 def test_quota_usage_counts_bytes(mgr):

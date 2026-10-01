@@ -64,7 +64,7 @@ def _clear_deps_cache():
 
 
 def _agent(llm):
-    return CodeExecutorAgent(llm, mock_mode=True)
+    return CodeExecutorAgent(llm)
 
 
 # 第一段停在半个表达式（未闭合括号），第二段按续写约定先重写末行再往下写

@@ -8,9 +8,7 @@ LLM_BASE_URL   API 地址（含 /v1 前缀或网关根地址均可）：
                        或 https://api.deepseek.com/v1
                        https://qianfan.baidubce.com/v2
                        https://api.openai.com/v1
-                   自定义主机需由管理员加入 LLM_ALLOWED_HOSTS。
-LLM_ALLOWED_HOSTS  额外受信任的主机名，逗号分隔（仅允许 HTTPS/公网地址）
-LLM_ALLOW_INSECURE_LOCAL=1  仅供本地开发测试，允许访问 localhost HTTP 服务
+                       http://localhost:11434   （Ollama 的 /v1 兼容端点）
     LLM_API_KEY    访问密钥；无鉴权的网关心跳 Authorization 头
     LLM_MODEL      模型名：deepseek-chat / ernie-4.0-8k / gpt-4o-mini / qwen2.5:7b 等
     LLM_TIMEOUT    请求超时秒数（默认 120）
@@ -20,11 +18,8 @@ Mock 模式按 `task` 任务标识精确分发确定性响应，杜绝关键词�
 """
 import json
 import os
-import ipaddress
-import socket
 import urllib.request
 import urllib.error
-from urllib.parse import urlsplit
 import time
 from typing import Optional
 
@@ -34,18 +29,6 @@ from typing import Optional
 # 要拿到更长代码，正确做法是分段续写（见 CodeExecutor._produce_code），
 # 而不是把这个值调大；支持更长输出的模型可通过 LLM_MAX_TOKENS 放开。
 DEFAULT_MAX_TOKENS = 8192
-DEFAULT_LLM_ALLOWED_HOSTS = {
-    "api.deepseek.com",
-    "api.openai.com",
-    "qianfan.baidubce.com",
-}
-
-
-class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
-    """Do not forward LLM credentials to a redirect destination."""
-
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        return None
 
 # 任务标识 -> Mock 响应（确定性、可复现，用于演示完整流水线）
 _MOCK_TASKS = {
@@ -62,7 +45,6 @@ _MOCK_TASKS = {
     "resource_finder": {
         "code_repo_url": "https://github.com/example/repo",
         "alternative_repos": ["https://github.com/example/repo-alt"],
-        "benchmark_framework_url": "https://github.com/example/benchmark",
         "dataset_url": "https://example.com/dataset",
         "confidence": 0.7,
     },
@@ -85,13 +67,6 @@ _MOCK_TASKS = {
         "print('Training complete. Test accuracy: 85.2%')\n"
         "print('Final loss: 0.3120')\n"
     ),
-    # 执行规划器 mock：无步骤 -> CodeExecutor 走生成脚本回退路径，
-    # 保证 mock e2e 行为与旧流水线一致（COMPLETED + is_reproduced=True）。
-    "execution_planner": {
-        "steps": [],
-        "notes": ["mock: 无可用代码单元，走生成脚本回退路径"],
-        "entry": {},
-    },
     "result_validator": {
         "match": True,
         "differences": [],
@@ -201,44 +176,6 @@ class LLMClient:
             return f"{base}/chat/completions"
         return f"{base}/v1/chat/completions"
 
-    def _validate_endpoint(self) -> None:
-        """仅向受信任的 HTTPS 公网 LLM 主机发送请求。"""
-        parsed = urlsplit(self._endpoint())
-        host = (parsed.hostname or "").lower().rstrip(".")
-        allowed_hosts = DEFAULT_LLM_ALLOWED_HOSTS | {
-            item.strip().lower().rstrip(".")
-            for item in os.environ.get("LLM_ALLOWED_HOSTS", "").split(",")
-            if item.strip()
-        }
-        allow_insecure_local = (
-            os.environ.get("LLM_ALLOW_INSECURE_LOCAL", "").strip() == "1"
-            and parsed.scheme == "http"
-            and host in {"localhost", "127.0.0.1", "::1"}
-        )
-        if (not host or parsed.username or parsed.password
-                or parsed.query or parsed.fragment
-                or (not allow_insecure_local
-                    and (parsed.scheme != "https"
-                         or parsed.port not in (None, 443)))):
-            raise ValueError(
-                "LLM 地址必须为不含凭据的 HTTPS 公网地址（端口 443）")
-        if not allow_insecure_local and host not in allowed_hosts:
-            raise ValueError(
-                f"LLM 主机 {host} 不在受信任列表中；"
-                "请将主机名加入 LLM_ALLOWED_HOSTS")
-        try:
-            addresses = socket.getaddrinfo(
-                host, 443, type=socket.SOCK_STREAM)
-        except OSError as exc:
-            raise ValueError(f"无法解析受信任的 LLM 主机 {host}: {exc}") from exc
-        if not addresses:
-            raise ValueError(f"LLM 主机 {host} 未解析到 IP 地址")
-        for address in addresses:
-            ip = ipaddress.ip_address(address[4][0].split("%", 1)[0])
-            if not ip.is_global and not allow_insecure_local:
-                raise ValueError(
-                    f"LLM 主机 {host} 解析到非公网地址，已拒绝请求")
-
     def _real_chat(self, prompt: str, system_prompt: str,
                    temperature: float) -> str:
         """真实 API 调用（OpenAI Chat Completions 格式，非流式）。"""
@@ -267,13 +204,11 @@ class LLMClient:
             headers["Authorization"] = f"Bearer {self.api_key}"
 
         try:
-            self._validate_endpoint()
             data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
             req = urllib.request.Request(self._endpoint(), data=data,
                                          headers=headers)
             t0 = time.monotonic()
-            opener = urllib.request.build_opener(_NoRedirectHandler())
-            with opener.open(req, timeout=self.timeout) as resp:
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 result = json.loads(resp.read().decode("utf-8"))
                 elapsed = time.monotonic() - t0
                 try:
@@ -366,9 +301,6 @@ class LLMClient:
             return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
 
         # ------- 回退：关键词匹配（兼容未传 task 的调用点）-------
-        if "有序执行计划" in prompt or "复现执行规划器" in prompt:
-            return json.dumps(_MOCK_TASKS["execution_planner"],
-                              ensure_ascii=False)
         if "质量验证器" in prompt or "待验证输出" in prompt:
             return json.dumps(_MOCK_TASKS["verifier"], ensure_ascii=False)
         if "比对论文声明" in prompt or "提取到的实际指标" in prompt:

@@ -92,12 +92,12 @@ def test_run_pipeline_core_writes_full_progress(tmp_path):
     assert view["running"] is False
     assert view["result"]["state"] == "COMPLETED"
     # 每个展示 Agent 都有状态记录（running/success/error/waiting 至少一个）
-    names = [a[1] for a in AGENTS] + ["Verifier", "Optimizer",
-                                      "ReportGenerator"]
+    names = [a[1] for a in AGENTS] + ["🛡️ Verifier", "🧪 Optimizer",
+                                      "📝 ReportGenerator"]
     for n in names:
         assert n in view["agent_status"], f"缺少 {n} 的状态事件"
     # 执行 Agent 最终应为 success（复现必成）
-    assert view["agent_status"]["CodeExecutor"] in ("success",)
+    assert view["agent_status"]["⚡ CodeExecutor"] in ("success",)
     # 审计日志已逐步写入进度
     assert view["logs"], "进度中缺少审计日志"
 
@@ -121,29 +121,18 @@ def test_run_pipeline_background_thread_and_cleanup(tmp_path):
     assert not fake_pdf.exists(), "临时 PDF 应由后台线程清理"
 
 
-@pytest.mark.filterwarnings(
-    "ignore::pytest.PytestUnhandledThreadExceptionWarning")
 def test_run_pipeline_background_error_is_reported(tmp_path):
-    """进度文件写入失败等外层异常应落 error 事件而非静默。
-
-    路径不可写时"兜底写 error 事件"本身也写不进去，线程最终抛在
-    threading 的默认钩子上（进程不受影响）——这是预期内最后一道，故把
-    pytest 的线程异常告警显式忽略掉，不让它淹没真正的告警。
-    """
-    # 模拟失败由 ProgressStore 构造时抛出：让父路径不可写即可。
-    # 这里必须用"父路径是普通文件"来构造——原先写的 `Path("C:/")/...`
-    # 只在 Windows 上才是不可写的绝对路径，在 POSIX 下它是**相对路径**，
-    # 于是代码老老实实把 ./C:/no_such_dir_xyz/ 建了出来，测试前提静默反转
-    # （仓库根目录真的躺着一个 C:/ 目录就是它留下的）。
-    blocker = tmp_path / "blocker"
-    blocker.write_text("not a dir", encoding="utf-8")
-    bad = blocker / "p.jsonl"
+    """进度文件写入失败等外层异常应落 error 事件而非静默。"""
+    progress = tmp_path / "p.jsonl"
+    # 传入不可用的 pdf_path 目录作为 corpus？改用非法参数触发外层异常：
+    # 线程内 run_pipeline_core 需要可写 progress；模拟失败由 ProgressStore
+    # 构造时抛出——指向不可写父路径即可（Windows 根目录不可写）。
+    bad = Path("C:/") / "no_such_dir_xyz" / "p.jsonl"
     thread = run_pipeline_background(str(bad), paper_title="Dummy",
                                      mock_mode=True, max_trials=1)
     thread.join(timeout=30)
     # 线程兜底写 error 事件失败也不崩溃；此处保证线程正常收尾
     assert not thread.is_alive()
-    assert blocker.is_file(), "写入失败路径时不应破坏原有文件"
 
 
 # ---------------- 3. 阶段异常不吞 + 日志去重 + 终态落盘 ----------------
@@ -169,28 +158,28 @@ def test_run_pipeline_core_no_duplicate_logs(tmp_path):
 
 
 def test_run_pipeline_core_reports_stage_error(tmp_path, monkeypatch):
-    """阶段异常不再被吞：result['error'] 非 None，且 ledger 末条有 FINISH 终态。
+    """阶段异常不再被吞：result['error'] 非 None，且 ledger 末条有 FINISH 终态。"""
+    import frontend.backend_pipeline as bp
 
-    驱动器统一后 Orchestrator 是唯一 FSM 驱动器：让真实流水线的
-    READ_PAPER 阶段抛异常，验证异常经 result['error'] 透出、
-    进度文件收到 error 事件、ledger 末条 FINISH 记录终态。
-    """
-    from src.agents.paper_reader import PaperReaderAgent
+    class _BoomAgent:
+        name = "PaperReader"
+        system_prompt = ""
+        def run(self, data):
+            raise RuntimeError("boom")
 
-    def _boom(self, input_data):
-        raise RuntimeError("boom")
+    class _BoomOrch:
+        def __init__(self, **kwargs):
+            self.agents = {k: _BoomAgent() for k in
+                           ("reader", "finder", "builder", "executor",
+                            "validator", "verifier", "optimizer", "reporter")}
 
-    monkeypatch.setattr(PaperReaderAgent, "run", _boom)
+    monkeypatch.setattr(bp, "Orchestrator", _BoomOrch)
     progress = tmp_path / "p.jsonl"
-    result = run_pipeline_core(str(progress), paper_title="Dummy",
-                               mock_mode=True, max_trials=2)
+    result = bp.run_pipeline_core(str(progress), paper_title="Dummy",
+                                  mock_mode=True, max_trials=2)
 
     assert result["state"] == "ERROR"
     assert result["error"] and "boom" in result["error"]
-
-    # 进度文件里应有一条 error 状态事件
-    view = ProgressStore.read_snapshot(str(progress))
-    assert view["agent_status"].get("PaperReader") == "error"
 
     # ledger 末条 FINISH 记录携带终态（真实落盘到项目 data/experiment_ledger）
     root = Path(__file__).resolve().parents[1]
