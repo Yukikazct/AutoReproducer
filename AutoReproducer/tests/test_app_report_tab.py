@@ -81,3 +81,17 @@ def test_long_output_is_not_truncated_on_page(at_report):
     assert "step 499 done" in blob
     assert TAIL in blob                            # 末行必须在
     assert "截断" not in blob
+
+
+def test_report_save_button_is_opt_in_and_survives_reset(at_report, tmp_path):
+    assert not (tmp_path / "reports").exists()
+    assert "报告尚未保存" in "\n".join(c.value for c in at_report.caption)
+    at_report.button(key="save_current_report").click().run()
+    assert not at_report.exception
+    saved = Path(at_report.session_state["result"]["report_path"])
+    assert saved.exists() and saved.is_relative_to(tmp_path)
+    assert at_report.button(key="save_current_report").disabled
+    next(b for b in at_report.button if b.label == "重置").click().run()
+    assert not at_report.exception
+    assert at_report.session_state["result"] is None
+    assert saved.exists()

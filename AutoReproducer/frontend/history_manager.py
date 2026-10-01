@@ -296,6 +296,7 @@ def _related_files(session_id: str) -> List[Path]:
         for f in reports_dir.glob("*.md"):
             if f.stem.endswith(f"_{session_id}"):
                 files.append(f)
+        files.extend(reports_dir.glob(f"*_{session_id}_execution.txt"))
 
     # runtime: progress_*.jsonl 文件名是毫秒时间戳，需按内容提取 session_id
     runtime_dir = base / "runtime"

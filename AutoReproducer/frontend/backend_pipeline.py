@@ -33,6 +33,7 @@ from typing import Any, Callable, Dict, List, Optional
 from src.orchestrator import Orchestrator
 from src.llm.llm_client import LLMClient
 from src.audit.audit_logger import AuditLogger
+from frontend.report_store import schedule_progress_cleanup
 
 # ---------------- 流水线 Agent 定义（与前端卡片一致） ----------------
 
@@ -136,7 +137,8 @@ def run_pipeline_core(progress_path: str,
                       max_trials: int = 10,
                       use_docker: bool = False,
                       workspace_dir: Optional[str] = None,
-                      experiment_profile: str = "") -> Dict[str, Any]:
+                      experiment_profile: str = "",
+                      use_llm_pipeline: bool = False) -> Dict[str, Any]:
     """后台执行完整复现流水线（复现 -> 验证 -> 优化 -> 报告）。
 
     Orchestrator（唯一 FSM 驱动器）的薄封装：通过 progress_cb 把阶段
@@ -179,7 +181,8 @@ def run_pipeline_core(progress_path: str,
             "paper_title": paper_title,
             "pdf_path": pdf_path,
             "corpus_paper": corpus_paper,
-            "experiment_profile": experiment_profile,
+            "experiment_profile": "" if use_llm_pipeline else experiment_profile,
+            "use_llm_pipeline": use_llm_pipeline,
         })
     except Exception as e:
         error_msg = f"流水线异常: {e}"
@@ -200,42 +203,8 @@ def run_pipeline_core(progress_path: str,
                 VERIFIER_NAME, "success")
     _emit_new_logs()
 
-    # 报告落盘（供历史记录与下载）
+    # 报告默认只用于当前会话展示，用户选择保存后才写入 reports/。
     report_path = ""
-    report_text = data.get("report", "")
-    if report_text:
-        try:
-            reports_dir = Path("data/reports")
-            reports_dir.mkdir(parents=True, exist_ok=True)
-            # 使用流水线 session_id 作为文件名时间戳，与 ledger 文件名保持一致
-            ts = logger.session_id
-            paper_title_safe = (data.get("paper_info", {}).get("title", "") or data.get("paper_title", "") or "report")[:30]
-            # 去除非法字符
-            paper_title_safe = "".join(c for c in paper_title_safe if c.isalnum() or c in (" ", "-", "_")).strip().replace(" ", "_")
-            report_file = reports_dir / f"{paper_title_safe}_{ts}.md"
-            report_file.write_text(report_text, encoding="utf-8")
-            report_path = str(report_file)
-
-            # 完整执行输出附件：报告现已**全文内嵌** code/stdout/stderr，
-            # 附件保留作为可直接下载/归档的纯文本旁路（终端里 wc/grep、
-            # 或想脱离 Markdown 单独留档时用）。
-            execution_raw = data.get("execution", {}) or {}
-            final_raw = execution_raw.get("final", {}) or {}
-            attach_lines = ["# 完整执行输出（未被截断）",
-                            "", "## 生成代码", "```python",
-                            execution_raw.get("code", "（无）"), "```",
-                            "", "## 标准输出 (full)", "```",
-                            final_raw.get("stdout", "（无输出）"), "```",
-                            "", "## 错误输出 (stderr)", "```",
-                            final_raw.get("stderr", "（无）"), "```", ""]
-            attach_file = reports_dir / f"{paper_title_safe}_{ts}_execution.txt"
-            attach_file.write_text("\n".join(attach_lines), encoding="utf-8")
-            # 在报告末尾补充附件说明，保证用户知道完整输出的位置
-            report_text += (f"\n\n---\n\n> 📎 **完整执行输出附件**: "
-                            f"`{attach_file.name}`（同一目录下，未被截断）\n")
-            report_file.write_text(report_text, encoding="utf-8")
-        except Exception:
-            pass  # 落盘失败不阻断主流程
 
     # 终态落盘：无论 COMPLETED 还是 ERROR，都在 ledger 末条写终态信息，
     # 供历史列表回填 state / duration_sec / llm_calls。
@@ -255,11 +224,13 @@ def run_pipeline_core(progress_path: str,
         "audit_logs": logger.get_summary(),
         "audit_stats": stats,
         "report_path": report_path,
+        "report_saved": False,
         "session_id": logger.session_id,
     }
     _emit_state(store, state, "", "success")
     _emit_new_logs()
     store.emit({"type": "done", "result": result})
+    schedule_progress_cleanup(progress_path)
     return result
 
 
@@ -272,6 +243,7 @@ def run_pipeline_background(progress_path: str, *,
                             use_docker: bool = False,
                             workspace_dir: Optional[str] = None,
                             experiment_profile: str = "",
+                            use_llm_pipeline: bool = False,
                             cleanup_pdf: bool = True,
                             on_done=None) -> threading.Thread:
     """启动后台线程执行流水线；返回守护线程句柄。
@@ -287,7 +259,8 @@ def run_pipeline_background(progress_path: str, *,
                 corpus_paper=corpus_paper, model_name=model_name,
                 base_url=base_url, api_key=api_key, mock_mode=mock_mode,
                 max_trials=max_trials, use_docker=use_docker,
-                workspace_dir=workspace_dir, experiment_profile=experiment_profile)
+                workspace_dir=workspace_dir, experiment_profile=experiment_profile,
+                use_llm_pipeline=use_llm_pipeline)
             if on_done:
                 try:
                     on_done(result)
@@ -295,6 +268,7 @@ def run_pipeline_background(progress_path: str, *,
                     pass
         except Exception as e:      # 兜底：流水线外层异常也写入进度
             store.emit({"type": "error", "error": str(e)})
+            schedule_progress_cleanup(progress_path)
             if on_done:
                 try:
                     on_done(None)

@@ -24,6 +24,7 @@ from src.agents.optimizer import OptimizerAgent
 from src.optimizer.real_simulator import RealSimulator
 from src.resource_manager import ResourceManager
 from src.experiment_profiles import resolve_profile, stage_result, PROFILES
+from src.official_smoke import INTENT, is_real_smoke, repository_context
 
 # 每步验证失败时最多触发的修正重试次数（预算约束）
 MAX_FIX_RETRIES = 1
@@ -113,6 +114,8 @@ class Orchestrator:
 
         self.data: Dict[str, Any] = {}
         self.error: Optional[str] = None
+        counter = getattr(self.llm, "get_call_count", None)
+        self._counted_llm_calls = counter() if callable(counter) else None
 
     def run(self, input_data: dict) -> dict:
         """执行完整的复现流程（复现 -> 验证 -> 优化 -> 报告）。
@@ -147,6 +150,7 @@ class Orchestrator:
             "repro_mode": input_data.get("repro_mode", "") or "",
             "experiment_profile": profile,
             "mock_mode": self.mock_mode,
+            "execution_intent": INTENT if input_data.get("use_llm_pipeline") and not self.mock_mode else "",
             "verifications": [],
             "fix_records": [],
         }
@@ -189,7 +193,10 @@ class Orchestrator:
                 # 三层存储：FIND_RESOURCES 后按需懒加载代码/数据集/权重
                 # 到 L0（失败不阻断流水线，仅告警）
                 if state_name == "FIND_RESOURCES":
-                    self._fetch_resources()
+                    if self.data["execution_intent"] == INTENT:
+                        self._prepare_official_smoke()
+                    else:
+                        self._fetch_resources()
 
                 # Docker 真实模式：BUILD_ENV 产出配置后即真实构建镜像，
                 # 成功把 image_tag 透传给 EXECUTE_CODE；失败不阻断（slim 降级）
@@ -228,7 +235,7 @@ class Orchestrator:
                     else:
                         self._materialize_workspace(code)
 
-                if state_name == "EXECUTE_CODE" and profile and not self.mock_mode:
+                if state_name == "EXECUTE_CODE" and is_real_smoke(self.data):
                     self._save_profile_evidence()
 
                 # Prompt-Free 验证 + 修正闭环
@@ -239,15 +246,18 @@ class Orchestrator:
                 self.logger.end_plan(state_name)
                 self._notify(state_name, "success")
             except Exception as e:
+                self._accumulate_llm_calls({})
                 self.logger.end_plan(state_name)
                 self._notify(state_name, "error")
                 self._fail(state_name, str(e))
+                if self.data["execution_intent"] == INTENT:
+                    self._record_official_failure(state_name, str(e))
                 break
 
         # 优化阶段：仅在复现成功后触发
         plan_mode_reason = self._optimization_plan_mode_reason()
         if self.state != "ERROR":
-            if profile and not self.mock_mode:
+            if is_real_smoke(self.data):
                 self.data["optimization"] = {"optimized": False,
                     "reason": "CPU 真实冒烟仅验证流程，未核对论文数值，不执行优化"}
                 self._notify("OPTIMIZING", "waiting")
@@ -313,7 +323,7 @@ class Orchestrator:
             self.data["audit_stats"] = self.logger.get_stats()
             self.logger.log("Orchestrator", "finish_pipeline", "SUCCESS",
                             "流水线完成", self.data.get("audit_stats"))
-        self._notify(self.state, "success")
+        self._notify(self.state, "error" if self.state == "ERROR" else "success")
 
         return self.get_result()
 
@@ -438,6 +448,49 @@ class Orchestrator:
             self.logger.log("Orchestrator", "fetch_resources", "WARNING",
                             f"资源拉取失败，不阻断流水线: {str(exc)[-200:]}")
 
+    def _prepare_official_smoke(self) -> None:
+        """Prepare only the selected official repository and evidence-backed data."""
+        resources = self.data["resources"]
+        url = self._clean_ref(resources.get("code_repo_url", ""))
+        if not url:
+            raise ValueError("未找到官方代码仓库，停止真实复现")
+        discovery = resources.get("repo_discovery") or {}
+        unit = {"unit_id": "main", "role": "main", "url": url,
+                "revision": discovery.get("pinned_revision", "")}
+        resources["code_units"] = [unit]
+        infos = self.resource_manager.fetch_units(self.data["paper_id"], [unit],
+                                                   verify_repository=True)
+        code = infos[0]
+        fetched = {"code": code, "units": infos, "dataset": {}, "weights": {"state": "none", "path": ""}}
+        self.data["storage"]["fetched"] = fetched
+        if code.get("state") not in ("cloned", "cached") or not code.get("commit"):
+            raise ValueError("官方仓库获取失败: " + code.get("detail", "无有效 HEAD"))
+        self.data["repo_path"] = code["path"]
+        self.data["repository_context"] = repository_context(code)
+        enrichment = self.agents["reader"].read_repository(self.data)
+        self.data["paper_info"] = enrichment["paper_info"]
+        self.data["repository_selection"] = enrichment["selection"]
+        self._accumulate_llm_calls(enrichment)
+        dataset_name = enrichment["selection"]["dataset"]
+        resources["dataset_url"] = dataset_name
+        dataset = self.resource_manager.fetch_dataset(self.data["paper_id"], dataset_name, level="full")
+        fetched["dataset"] = dataset
+        if dataset.get("data_kind") != "real" or dataset.get("state") not in ("downloaded", "cached"):
+            raise ValueError("真实数据准备失败: " + dataset.get("detail", "不可用"))
+
+    def _record_official_failure(self, stage: str, reason: str) -> None:
+        """A preparation failure still produces reviewable evidence and a report."""
+        if not self.data.get("execution"):
+            self.data["execution"] = {"execution_mode": "plan", "execution_intent": INTENT,
+                "success": False, "fallback_used": False, "failure_stage": stage,
+                "reason": f"{stage}: {reason}", "plan": self.data.get("execution_plan", {}),
+                "final": {"success": False, "exit_code": 1, "stdout": "", "stderr": reason}}
+        self.data["validation"] = self.agents["validator"].run(self.data)
+        self.data["optimization"] = {"optimized": False, "reason": "官方流程未通过，停止执行"}
+        self._save_profile_evidence()
+        self.data["audit_stats"] = self.logger.get_stats()
+        self.data["report"] = self.agents["reporter"].run(self.data).get("report", "")
+
     def _save_profile_evidence(self) -> None:
         """Persist the actual execution records for user inspection."""
         import json
@@ -450,6 +503,11 @@ class Orchestrator:
         for stream in ("stdout", "stderr"):
             (root / f"{stream}.txt").write_text(
                 (execution.get("final") or {}).get(stream) or "", encoding="utf-8")
+        (root / "context.json").write_text(json.dumps({
+            key: self.data.get(key) for key in ("paper_title", "execution_intent", "experiment_profile",
+                                               "paper_info", "resources", "repository_context",
+                                               "repository_selection", "storage")},
+            ensure_ascii=False, indent=2), encoding="utf-8")
 
     def _save_plan(self, result: dict) -> None:
         """执行计划落盘 data/plans/<paper_id>.json（失败仅告警）。"""
@@ -525,7 +583,7 @@ class Orchestrator:
 
     def _verify_step(self, state_name: str, agent, result: dict) -> None:
         """Prompt-Free 验证某步输出；未通过时按修正建议触发一次修正重试。"""
-        if self.data.get("experiment_profile") and not self.mock_mode:
+        if is_real_smoke(self.data):
             # Fixed inputs use local checks and must not trigger another
             # training job through the LLM correction loop.
             fetched = (self.data.get("storage") or {}).get("fetched") or {}
@@ -541,7 +599,7 @@ class Orchestrator:
             passed = checks.get(state_name, False)
             self.data.setdefault("verifications", []).append({
                 "state": state_name, "agent": agent.name,
-                "source": "deterministic_profile",
+                "source": "local_execution_checks",
                 "pass": passed,
                 "issues": [] if passed else [f"{state_name} 未通过本地检查，请查看阶段输出"],
                 "llm_calls": 0,
@@ -601,6 +659,10 @@ class Orchestrator:
     def _accumulate_llm_calls(self, result: dict) -> None:
         """将 Agent / Verifier 输出的 llm_calls 增量累计进全局预算统计。"""
         calls = int((result or {}).get("llm_calls", 0) or 0)
+        if self._counted_llm_calls is not None:
+            total = self.llm.get_call_count()
+            calls = max(0, total - self._counted_llm_calls)
+            self._counted_llm_calls = total
         if calls:
             self.data["total_llm_calls"] = (
                 self.data.get("total_llm_calls", 0) + calls)

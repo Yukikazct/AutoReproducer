@@ -33,6 +33,10 @@ from frontend.backend_pipeline import (
     ProgressStore,
     run_pipeline_background,
 )
+from frontend.report_store import (
+    save_report, discard_unsaved_report, delete_finished_progress,
+    cleanup_abandoned_progress,
+)
 from frontend.history_manager import (
     list_sessions,
     get_storage_stats,
@@ -335,6 +339,8 @@ if "progress_file" not in st.session_state:
 if "pipeline_note" not in st.session_state:
     st.session_state.pipeline_note = None
 
+cleanup_abandoned_progress()
+
 
 # ========== 侧边栏 ==========
 with st.sidebar:
@@ -347,13 +353,24 @@ with st.sidebar:
         value=st.session_state.mock_mode,
         help="启用Mock模式可直接演示，无需连接任何LLM服务")
 
+    llm_selected = st.toggle("LLM 规划与修复官方代码", key="llm_official_pipeline",
+                            disabled=st.session_state.mock_mode,
+                            help="调用 API 阅读官方仓库、规划训练，并在运行失败后诊断和修复。当前支持 DLinear / ETTh1。")
+    use_llm_pipeline = llm_selected and not st.session_state.mock_mode
+    if use_llm_pipeline:
+        st.caption("需要 API Key 与 Docker；当前支持 DLinear / ETTh1，执行失败后最多修复 3 轮。")
+        if not st.session_state.get("_last_llm_official_pipeline"):
+            st.session_state.use_docker = True
+    st.session_state._last_llm_official_pipeline = use_llm_pipeline
+
     selected_profile = st.selectbox(
         "答辩示例（可选）", ["", *PROFILES], key="experiment_profile",
         format_func=lambda value: PROFILES[value]["label"] if value else "自行输入论文名称",
         disabled=st.session_state.mock_mode)
     experiment_profile = selected_profile if not st.session_state.mock_mode else ""
     if experiment_profile:
-        st.caption("使用固定官方代码与真实 ETTh1，CPU 训练 1 轮；无需 API Key。")
+        if not use_llm_pipeline:
+            st.caption("使用固定官方代码与真实 ETTh1，CPU 训练 1 轮；无需 API Key。")
         if st.session_state.get("_last_profile") != experiment_profile:
             st.session_state.use_docker = True
             st.session_state.paper_title = PROFILES[experiment_profile]["title"]
@@ -565,6 +582,10 @@ with tab1:
             st.session_state.logs = snap["logs"]
         if snap.get("error"):
             st.error(f"后台流水线异常: {snap['error']}")
+        if not snap["running"]:
+            # Result is now in session memory; its temporary disk copy can go.
+            delete_finished_progress(pf)
+            st.session_state.progress_file = None
 
     if st.session_state.running and pf:
         if st_autorefresh is not None:
@@ -655,6 +676,25 @@ with tab2:
     st.markdown("### 复现与优化报告")
     if st.session_state.result and st.session_state.result.get("data", {}).get("report"):
         report = st.session_state.result["data"]["report"]
+        saved = bool(st.session_state.result.get("report_path"))
+        if saved:
+            st.caption("报告已保存到历史记录。")
+        else:
+            st.caption("报告尚未保存；重置或开始新任务后会自动销毁。")
+        save_col, download_col = st.columns(2)
+        with save_col:
+            if st.button("保存报告到历史", key="save_current_report", disabled=saved,
+                         use_container_width=True):
+                try:
+                    save_report(st.session_state.result)
+                except (OSError, ValueError) as exc:
+                    st.error(f"保存失败: {exc}")
+                else:
+                    st.rerun()
+        with download_col:
+            st.download_button("下载报告", data=report, file_name="reproduction_report.md",
+                               mime="text/markdown", key="download_current_report",
+                               use_container_width=True)
         # 深色 IDE 面板渲染已回滚（见 CHANGELOG [2026.09.20-12]）：
         # 面板在真实浏览器里代码不可见，改回原生 Markdown 渲染。
         st.markdown(report)
@@ -1084,14 +1124,16 @@ def _new_progress_file() -> str:
 # 启动按钮处理：后台线程执行流水线，主线程立即返回并轮询进度
 if start_btn:
     pt = st.session_state.paper_title or ""
-    if not st.session_state.mock_mode and not uploaded_file:
+    if use_llm_pipeline:
+        experiment_profile = ""
+    elif not st.session_state.mock_mode and not uploaded_file:
         explicit = experiment_profile if experiment_profile and pt == PROFILES[experiment_profile]["title"] else ""
         experiment_profile = resolve_profile(pt, explicit)
     elif uploaded_file:
         experiment_profile = ""
     if not pt and not uploaded_file:
         st.error("请先输入论文标题或上传PDF文件")
-    elif experiment_profile and (not docker_available or not st.session_state.use_docker):
+    elif (experiment_profile or use_llm_pipeline) and (not docker_available or not st.session_state.use_docker):
         st.error("真实实验需要 Docker：请启动 Docker Desktop，重新检测并启用容器沙箱。")
     elif not st.session_state.mock_mode and not experiment_profile and config_missing(base_url, model_name):
         st.error("真实模式缺少 LLM 配置（"
@@ -1109,6 +1151,7 @@ if start_btn:
                        "（如 DeepSeek/OpenAI），调用会返回 401 错误文本；"
                        "建议先在侧边栏填写 Key 并点击「测试 AI 连接」验证。")
         tmp_pdf = _save_uploaded_pdf(uploaded_file) if uploaded_file else ""
+        discard_unsaved_report(st.session_state.result, st.session_state.progress_file)
         progress_file = _new_progress_file()
         st.session_state.progress_file = progress_file
         st.session_state.running = True
@@ -1126,6 +1169,7 @@ if start_btn:
             api_key=api_key,
             mock_mode=st.session_state.mock_mode,
             experiment_profile=experiment_profile,
+            use_llm_pipeline=use_llm_pipeline,
             max_trials=max_trials,
             use_docker=(not st.session_state.mock_mode
                         and docker_available
@@ -1143,6 +1187,7 @@ if link_btn:
 
 # 重置按钮处理
 if reset_btn:
+    discard_unsaved_report(st.session_state.result, st.session_state.progress_file)
     st.session_state.orchestrator = None
     st.session_state.result = None
     st.session_state.running = False

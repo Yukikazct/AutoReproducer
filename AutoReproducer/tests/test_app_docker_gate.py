@@ -162,3 +162,46 @@ def test_mock_mode_skips_probe(at_app):
     assert not at.exception, at.exception
     assert probe.calls == 0, "Mock 模式不该触发 Docker 探测"
     assert "Mock 模式不执行真实代码" in _captions(at)
+
+
+def test_llm_official_mode_enables_docker_and_bypasses_title_preset(at_app, monkeypatch):
+    import frontend.backend_pipeline as backend
+
+    calls = []
+
+    def start(path, **kwargs):
+        calls.append(kwargs)
+        backend.ProgressStore(path).emit({"type": "done", "result": {
+            "state": "COMPLETED", "data": {}, "report_path": "", "report_saved": False}})
+
+    monkeypatch.setattr(backend, "run_pipeline_background", start)
+    make, probe = at_app
+    probe.ok = True
+    at = make()
+    at.session_state["paper_title"] = "Are Transformers Effective for Time Series Forecasting?"
+    at.run()
+    assert at.sidebar.toggle(key="llm_official_pipeline").disabled
+    _to_real_mode(at)
+    at.sidebar.toggle(key="llm_official_pipeline").set_value(True).run()
+    assert not at.exception
+    assert _docker_toggle(at).value
+    next(b for b in at.button if "开始复现" in b.label).click().run()
+    assert not at.exception
+    assert len(calls) == 1
+    assert calls[0]["use_llm_pipeline"] and calls[0]["use_docker"]
+    assert calls[0]["experiment_profile"] == ""
+
+
+def test_llm_official_mode_refuses_start_without_docker(at_app, monkeypatch):
+    import frontend.backend_pipeline as backend
+
+    monkeypatch.setattr(backend, "run_pipeline_background", lambda *a, **k: pytest.fail("Docker gate bypassed"))
+    make, probe = at_app
+    at = make()
+    at.session_state["paper_title"] = "DLinear"
+    at.run()
+    _to_real_mode(at)
+    at.sidebar.toggle(key="llm_official_pipeline").set_value(True).run()
+    next(b for b in at.button if "开始复现" in b.label).click().run()
+    assert not at.exception
+    assert any("真实实验需要 Docker" in e.value for e in at.error)

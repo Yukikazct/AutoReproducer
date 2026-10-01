@@ -34,6 +34,7 @@ import time
 import hashlib
 import json
 import uuid
+from src.official_smoke import INTENT
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -125,6 +126,11 @@ _DEPS_READY_MARK = ".ready"
 # 隔离目录自带的元数据文件名（requirements / 安装与最后使用时间），
 # 供「依赖缓存」管理界面识别与清理；不参与安装，写失败也不影响执行。
 _DEPS_META_NAME = "meta.json"
+
+
+def _timeout_stream(value) -> str:
+    """TimeoutExpired can carry bytes even with subprocess text=True."""
+    return value.decode("utf-8", errors="replace") if isinstance(value, bytes) else (value or "")
 
 
 def normalize_requirements(reqs: str) -> str:
@@ -592,6 +598,11 @@ class CodeExecutorAgent(BaseAgent):
                 json.dumps(plan, ensure_ascii=False), encoding="utf-8")
 
             stage_records: List[Dict] = []
+            official_repairs = None
+            if plan.get("execution_intent") == INTENT:
+                from src.official_repair import OfficialRepairLoop
+                official_repairs = OfficialRepairLoop(self, plan, workspace, unit_dirs,
+                                                      getattr(self, "_official_repair_data", {}))
             step_outcomes: Dict[str, object] = {}
             run_outputs: List[str] = []
             for step_dict in steps or []:
@@ -610,8 +621,12 @@ class CodeExecutorAgent(BaseAgent):
                 if step.kind == "parse":
                     record = self._parse_plan_step(step, run_outputs)
                 else:
-                    record = self._execute_plan_step_with_repair(
-                        step, workspace, unit_dirs)
+                    started = time.monotonic()
+                    if official_repairs is not None:
+                        record = official_repairs.execute(step)
+                    else:
+                        record = self._execute_plan_step_with_repair(step, workspace, unit_dirs)
+                    record["duration_sec"] = round(time.monotonic() - started, 3)
                 stage_records.append(record)
                 step_outcomes[step.step_id] = bool(record.get("success"))
                 if record.get("success") and step.kind == "run":
@@ -645,8 +660,12 @@ class CodeExecutorAgent(BaseAgent):
                 "plan": plan,
                 "actual_metrics": actual_metrics,
                 "experiment_profile": plan.get("experiment_profile", ""),
+                "execution_intent": plan.get("execution_intent", ""),
+                "failure_stage": real_failures[0].get("step_id", "") if real_failures else "",
                 "parameters": plan.get("parameters", {}),
                 "datasets": plan.get("datasets", []),
+                "source_modified": any(r.get("source_modified") for r in stage_records),
+                "llm_repair_rounds": official_repairs.rounds if official_repairs else 0,
                 "best_effort": False,
                 "fallback_used": False,
                 "plan_failed_irreparably": plan_failed,
@@ -659,7 +678,7 @@ class CodeExecutorAgent(BaseAgent):
                 self.log("execute_plan", "ERROR",
                          f"官方代码执行计划失败（{len(real_failures)} 步未通过），"
                          + ("保留失败记录，不替换官方实验"
-                            if plan.get("experiment_profile") else "回退生成脚本路径"),
+                            if plan.get("experiment_profile") or plan.get("execution_intent") == INTENT else "回退生成脚本路径"),
                          {"failures": [r.get("step_id") for r in real_failures]})
             else:
                 self.log_experiment(
@@ -745,6 +764,11 @@ class CodeExecutorAgent(BaseAgent):
         etype = (diag.get("error_type") or "").strip()
         detail = (diag.get("detail") or "").strip()
         lead = f"步骤 {step_id} 失败"
+        if first.get("repair_failure_reason"):
+            return f"{lead}：{first['repair_failure_reason']}"
+        if first.get("repair_skip_reason"):
+            stderr = (first.get("stderr") or "").strip()
+            return f"{lead}：{first['repair_skip_reason']}；{stderr[-200:]}"
         if etype == "docker_pull_failed":
             return (f"{lead}：Docker 镜像本地不存在且拉取失败"
                     f"（运行环境问题，非论文代码问题）。"
@@ -951,7 +975,7 @@ class CodeExecutorAgent(BaseAgent):
             if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", str(key)):
                 raise ValueError(f"非法环境变量名: {key}")
             base_cmd += ["-e", f"{key}={value}"]
-        if getattr(self, "experiment_profile", ""):
+        if getattr(self, "experiment_profile", "") or getattr(self, "execution_intent", "") == INTENT:
             for directory in (".tmp", ".home"):
                 path = Path(workspace) / directory
                 path.mkdir(exist_ok=True)
@@ -978,11 +1002,11 @@ class CodeExecutorAgent(BaseAgent):
             try:
                 res, _meta = self._run_docker_cmd_with_sandbox(
                     base_cmd, image, ["sh", "-c", install_cmd], budget)
-            except subprocess.TimeoutExpired:
+            except subprocess.TimeoutExpired as exc:
                 return {"step_id": step.step_id, "kind": step.kind,
                         "cmd": step.cmd, "unit_id": step.unit_id,
-                        "success": False, "stdout": "",
-                        "stderr": f"依赖安装执行超时({budget}s)",
+                        "success": False, "stdout": _timeout_stream(exc.stdout),
+                        "stderr": _timeout_stream(exc.stderr) + f"\n依赖安装执行超时({budget}s)",
                         "exit_code": -1, "timed_out": True,
                         "install_phase": {"run": True, "timed_out": True}}
             install_phase = {"run": True, "success": res.returncode == 0,
@@ -1006,11 +1030,11 @@ class CodeExecutorAgent(BaseAgent):
         try:
             res, sandbox_meta = self._run_docker_cmd_with_sandbox(
                 base_cmd, image, ["sh", "-c", run_cmd], timeout)
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as exc:
             return {"step_id": step.step_id, "kind": step.kind,
                     "cmd": step.cmd, "unit_id": step.unit_id,
-                    "success": False, "stdout": "",
-                    "stderr": f"执行超时({timeout}s)", "exit_code": -1,
+                    "success": False, "stdout": _timeout_stream(exc.stdout),
+                    "stderr": _timeout_stream(exc.stderr) + f"\n执行超时({timeout}s)", "exit_code": -1,
                     "timed_out": True, "install_phase": install_phase,
                     "sandbox": {"hardened": DOCKER_HARDEN}}
         return {"step_id": step.step_id, "kind": step.kind,
@@ -1046,11 +1070,11 @@ class CodeExecutorAgent(BaseAgent):
                     "exit_code": proc.returncode, "timed_out": False,
                     "install_phase": install_phase,
                     "sandbox": {"hardened": False, "local": True}}
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as exc:
             return {"step_id": step.step_id, "kind": step.kind,
                     "cmd": step.cmd, "unit_id": step.unit_id,
-                    "success": False, "stdout": "",
-                    "stderr": f"执行超时({timeout}s)", "exit_code": -1,
+                    "success": False, "stdout": _timeout_stream(exc.stdout),
+                    "stderr": _timeout_stream(exc.stderr) + f"\n执行超时({timeout}s)", "exit_code": -1,
                     "timed_out": True, "install_phase": install_phase,
                     "sandbox": {"hardened": False, "local": True}}
 
@@ -1093,6 +1117,9 @@ class CodeExecutorAgent(BaseAgent):
         code = input_data.get("code", "") or ""
         self.env_config = env_config  # 供执行阶段选择镜像/依赖
         self.experiment_profile = input_data.get("experiment_profile", "") if not self.mock_mode else ""
+        self.execution_intent = input_data.get("execution_intent", "") if not self.mock_mode else ""
+        self._official_repair_data = input_data
+        official_smoke = bool(self.experiment_profile or self.execution_intent == INTENT)
         # "尽力而为"标注位：外部代码路径没有生成这一步，保持默认值
         insufficient, fallback_used = False, False
 
@@ -1106,17 +1133,18 @@ class CodeExecutorAgent(BaseAgent):
         # 计划不可修复失败（GPU-only / 依赖不可装等）时回退生成脚本路径，
         # 计划执行记录合并进最终结果（execution_mode="generated_fallback"）。
         plan = input_data.get("execution_plan") or {}
-        if self.experiment_profile and not plan.get("steps"):
+        if official_smoke and not plan.get("steps"):
             return self._not_runnable(
                 "; ".join(plan.get("notes") or ["真实实验准备未完成"]), code="",
                 extra={"experiment_profile": self.experiment_profile, "plan": plan,
+                       "execution_intent": self.execution_intent,
                        "execution_mode": "plan", "fallback_used": False,
                        "parameters": plan.get("parameters", {}),
                        "datasets": plan.get("datasets", [])})
         plan_result = None
         if isinstance(plan, dict) and plan.get("steps"):
             plan_result = self._execute_plan(plan, paper_info)
-            if self.experiment_profile:
+            if official_smoke:
                 # The chosen experiment must never turn into generated fake
                 # reproduction code if its environment or data is unavailable.
                 return {**plan_result, "llm_calls": self._delta_llm_calls()}
@@ -2178,7 +2206,7 @@ class CodeExecutorAgent(BaseAgent):
         """
         t0 = time.monotonic()
         container_name = ""
-        if getattr(self, "experiment_profile", ""):
+        if getattr(self, "experiment_profile", "") or getattr(self, "execution_intent", "") == INTENT:
             container_name = "autorepro-demo-" + uuid.uuid4().hex
             base_cmd = base_cmd + ["--name", container_name]
         try:

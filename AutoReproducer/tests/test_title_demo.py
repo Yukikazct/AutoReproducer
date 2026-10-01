@@ -318,6 +318,8 @@ def test_llm_cli_requires_key_even_for_known_title(monkeypatch):
 def test_llm_cli_does_not_report_placeholder_success(tmp_path, monkeypatch):
     from scripts import real_e2e
     monkeypatch.setenv("LLM_API_KEY", "test-key-not-used")
+    monkeypatch.setattr("src.base_agent.BaseAgent.docker_engine_available",
+                        lambda *a: (True, None))
     class Pipeline:
         def __init__(self, **kwargs):
             pass

@@ -127,6 +127,7 @@ class ExecutionPlan:
     datasets: List[Dict] = field(default_factory=list)
     experiment_profile: str = ""
     parameters: Dict = field(default_factory=dict)
+    execution_intent: str = ""
 
     def to_dict(self) -> Dict:
         return {
@@ -140,6 +141,7 @@ class ExecutionPlan:
             "datasets": list(self.datasets),
             "experiment_profile": self.experiment_profile,
             "parameters": dict(self.parameters),
+            "execution_intent": self.execution_intent,
         }
 
     @classmethod
@@ -157,6 +159,7 @@ class ExecutionPlan:
         plan.datasets = [dict(d) for d in (data.get("datasets") or [])]
         plan.experiment_profile = str(data.get("experiment_profile") or "")
         plan.parameters = dict(data.get("parameters") or {})
+        plan.execution_intent = str(data.get("execution_intent") or "")
         return plan
 
     def has_steps(self) -> bool:

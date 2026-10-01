@@ -64,6 +64,13 @@ class EnvBuilderAgent(BaseAgent):
         """
         self.log("build_env", "START", "开始构建运行环境", input_data)
 
+        if input_data.get("execution_intent") == "official_smoke":
+            from src.official_smoke import cpu_environment
+            environment = cpu_environment(input_data["repository_context"])
+            self.log_experiment("BUILD_ENV", "采用已验证的官方代码 CPU 兼容环境",
+                                outputs=environment)
+            return {"env_config": environment, "llm_calls": 0}
+
         paper_info = input_data.get("paper_info", {}) or {}
         deps = list(paper_info.get("dependencies", []) or [])
 

@@ -12,6 +12,7 @@ from typing import Dict
 from src.base_agent import BaseAgent
 from src.llm.llm_client import LLMClient
 from src.metric_keys import norm_metric_key
+from src.official_smoke import INTENT, is_real_smoke
 
 # 指标提取模式：键名 -> 输出中的统一指标名
 # 注意 rmse 必须排在 mse 之前，否则 "rmse: 1.2" 会被 mse 分支抢先匹配
@@ -67,7 +68,7 @@ class ResultValidatorAgent(BaseAgent):
             stderr = stderr or execution["stages"][-1].get("stderr", "")
 
         paper_metrics = dict(paper_info.get("metrics", {}) or {})
-        if input_data.get("experiment_profile") and not input_data.get("mock_mode", False):
+        if is_real_smoke(input_data):
             actual = self._extract_metrics(stdout)
             # Do not parse 1e309 as 1, or reuse an earlier finite value when the
             # final evaluation reports nan/inf. Keep only the last test metrics.
@@ -90,6 +91,11 @@ class ResultValidatorAgent(BaseAgent):
             valid = ran and real_data and all(
                 k in actual and math.isfinite(actual[k]) and actual[k] >= 0
                 for k in ("mse", "mae"))
+            if input_data.get("execution_intent") == INTENT:
+                plan = execution.get("plan") or {}
+                valid = valid and plan.get("source") == "llm" and not execution.get("fallback_used") \
+                    and any(s.get("kind") == "run" and s.get("success") is True
+                            and s.get("exit_code") == 0 for s in execution.get("stages", []))
             reason = ("流程已验证，尚未核对论文数值（官方代码、真实 ETTh1、CPU 缩参训练）"
                       if valid else execution.get("reason") or execution.get("plan_fail_reason")
                       or "真实冒烟未通过：需官方执行成功、真实数据与有限的 MSE/MAE")

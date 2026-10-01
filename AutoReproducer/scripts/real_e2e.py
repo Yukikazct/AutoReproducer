@@ -6,7 +6,7 @@
 缺陷都是靠这条链路发现的。
 
 已适配标题默认使用官方 CPU 冒烟配置，无需 LLM；添加 `--llm-pipeline`
-可强制测试真实 API 通用流水线。
+可强制测试 API 官方 CPU 流水线，当前支持 DLinear / ETTh1。
 
 三种输入方式（任选其一）：
 
@@ -29,16 +29,14 @@ API key **只从环境变量读取，不落盘**：
 可选环境变量：`LLM_BASE_URL`（默认 https://api.deepseek.com）、
 `LLM_MODEL`（默认 deepseek-chat）。
 
-**关于 `--use-docker`**：发现官方仓库后，流水线会优先执行官方入口脚本
-（见 `PLAN_EXECUTION` 阶段）。官方代码属于不可信第三方代码，真实模式下
-必须在加固 Docker 沙箱里跑；不加 `--use-docker` 时执行层会拒绝执行官方
-代码（EXIT_ISOLATION_REQUIRED）并回退到 LLM 生成脚本——这是设计如此，
-不是 bug。要验证官方代码路径，请先启动 Docker：
+**关于 `--use-docker`**：官方代码必须在加固 Docker 沙箱里跑。
+预设与 `--llm-pipeline` 都自动启用 Docker 并检查引擎，失败保留官方执行
+记录与报告。通用 PDF 路径需显式添加此选项。先启动 Docker：
 
     python scripts/real_e2e.py --paper-title "iTransformer" --use-docker
 
-跑完在终端打印各阶段关键结论，并把完整报告写入
-`data/reports/_real_e2e_report.md`。
+跑完在终端打印各阶段关键结论。默认不保存报告；添加 `--save-report`
+保存到 `data/reports/_real_e2e_report.md`，或用 `--report-out` 指定保存路径。
 """
 import argparse
 import os
@@ -71,13 +69,14 @@ def _parse_args(argv=None):
     p.add_argument("--use-docker", action="store_true",
                    help="启用加固 Docker 沙箱执行官方代码（需 Docker 已启动）")
     p.add_argument("--llm-pipeline", action="store_true",
-                   help="强制走真实 LLM 通用流水线，跳过标题预设适配")
+                   help="真实 API 读取官方仓库并规划 CPU 实验（当前 DLinear / ETTh1，自动启用 Docker）")
     p.add_argument("--workspace", default=WORKSPACE,
                    help=f"优化工作区（默认 {WORKSPACE}）")
     p.add_argument("--max-trials", type=int, default=2,
                    help="优化试验上限（默认 2）")
-    p.add_argument("--report-out", default=REPORT_OUT,
-                   help=f"报告落盘路径（默认 {REPORT_OUT}）")
+    p.add_argument("--save-report", action="store_true", help=f"保存报告到 {REPORT_OUT}")
+    p.add_argument("--report-out", default="",
+                   help="明确选择保存报告并指定路径（默认不保存）")
     args = p.parse_args(argv)
     if not args.pdf and not args.paper_title and not args.profile:
         args.pdf = DEFAULT_PDF          # 都没给 -> 退回内置样例
@@ -95,7 +94,8 @@ def _print_plan(data):
     src = ex.get("plan_execution") or ex
     plan = src.get("plan") or {}
     if not plan:
-        print("  (无计划：未发现可用官方代码，走了生成脚本路径)")
+        print("  (无计划：官方准备失败，已停止执行)" if ex.get("execution_mode") == "plan"
+              else "  (无计划：未发现可用官方代码，走了生成脚本路径)")
         return
 
     for u in plan.get("units", []) or []:
@@ -164,7 +164,7 @@ def main(argv=None):
     key = os.environ.get("LLM_API_KEY", "")
     if not key and not args.profile:
         sys.exit("未设置 LLM_API_KEY（本脚本不会从文件读取密钥）")
-    if args.profile:
+    if args.profile or args.llm_pipeline:
         from src.base_agent import BaseAgent
         available, reason = BaseAgent.docker_engine_available()
         if not available:
@@ -205,7 +205,7 @@ def main(argv=None):
 
     result = orch.run(payload)
     data = result["data"]
-    if args.profile and result.get("error"):
+    if result.get("error"):
         print("实验错误:", result["error"])
 
     print("=" * 60)
@@ -264,21 +264,17 @@ def main(argv=None):
             out.append(ln)
     print("\n".join(out or ["(未找到第 5 节)"]))
 
-    out_path = Path(args.report_out)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(report, encoding="utf-8")
-    print()
-    print(f"完整报告已写入 {out_path}")
+    if args.report_out or args.save_report:
+        out_path = Path(args.report_out or REPORT_OUT)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(report, encoding="utf-8")
+        print(f"\n完整报告已写入 {out_path}")
+    else:
+        print("\n报告未保存；需要保留时请使用 --save-report 或 --report-out。")
     if args.profile:
         return 0 if va.get("status") == "smoke_verified" else 1
     if args.llm_pipeline:
-        execution = data.get("execution") or {}
-        verified = (execution.get("success") is True
-                    and not execution.get("best_effort")
-                    and not execution.get("not_runnable")
-                    and (execution.get("execution_mode") == "plan"
-                         or va.get("is_reproduced") is True))
-        return 0 if result.get("state") == "COMPLETED" and verified else 1
+        return 0 if result.get("state") == "COMPLETED" and va.get("status") == "smoke_verified" else 1
     return 0
 
 

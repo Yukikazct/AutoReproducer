@@ -154,6 +154,14 @@ class ReportGeneratorAgent(BaseAgent):
                              f"| {_txt(unit.get('role'))} "
                              f"| {_txt(unit.get('url'))} | {status} |")
         notes = plan.get("notes") or []
+        scenario = plan_result.get("verification_scenario") or {}
+        if scenario.get("kind") == "fault_injection":
+            lines.append("- **验收场景**: 故障注入验证；" + _txt(scenario.get("description")))
+            lines.append(f"- **官方缓存未改动**: {scenario.get('cache_unchanged')}")
+        if "llm_repair_rounds" in plan_result:
+            lines.append(f"- **LLM 官方修复轮数**: {plan_result.get('llm_repair_rounds', 0)} / 3")
+            lines.append("- **官方源码修改**: " + ("执行副本已修改；补丁见下方，缓存原仓库未改动。"
+                         if plan_result.get("source_modified") else "无已生效的源码补丁。"))
         if notes:
             lines.append("- **规划备注**:")
             lines += [f"  - {n}" for n in notes]
@@ -187,9 +195,35 @@ class ReportGeneratorAgent(BaseAgent):
                 for st, r in repairs:
                     lines.append(
                         f"  - {_txt(st.get('step_id'))} 第 "
-                        f"{_txt(st.get('repair_attempts'))} 次"
+                        f"{_txt(r.get('round', st.get('repair_attempts')))} 次"
                         f"[{_txt(r.get('error_type'))}] "
-                        f"{_txt(r.get('strategy'))}: {_txt(r.get('detail'))}")
+                        f"{_txt(r.get('strategy'))}: {_txt(r.get('detail'))}"
+                        + (f"（{r['status']}）" if r.get("status") else ""))
+                    if r.get("rejection"):
+                        lines.append(f"    校验/调用失败: {_txt(r['rejection'])}")
+                    if r.get("rolled_back"):
+                        lines.append("    最终未通过，源码补丁已回滚。")
+                    for patch in r.get("patches") or []:
+                        lines += ["", f"#### 修复补丁：{_txt(patch.get('path'))}",
+                                  f"SHA-256: `{patch.get('before_sha256')}` → `{patch.get('after_sha256')}`",
+                                  "```diff", _txt(patch.get("diff")), "```"]
+                    for key, label in (("dependency_install", "补充依赖安装"), ("environment_check", "修复后环境检查")):
+                        if r.get(key):
+                            result = r[key]
+                            lines += ["", f"#### {label}（退出码 {result.get('exit_code')}）",
+                                      "```", _txt(result.get("cmd")), _txt(result.get("stdout")),
+                                      _txt(result.get("stderr")), "```"]
+            for st in stages:
+                if st.get("repair_skip_reason"):
+                    lines.append(f"- **修复跳过**: {st.get('step_id')} / {st['repair_skip_reason']}")
+                if st.get("repair_failure_reason"):
+                    lines.append(f"- **修复终止原因**: {_txt(st['repair_failure_reason'])}")
+                if not st.get("repairs"):
+                    continue
+                for index, run in enumerate(st.get("executions") or []):
+                    lines += ["", f"#### {st.get('step_id')} 第 {index + 1} 次实际执行（退出码 {run.get('exit_code')}）",
+                              "```", _txt(run.get("cmd")), _txt(run.get("stdout")),
+                              _txt(run.get("stderr")), "```"]
             # 镜像拉取失败必须单独点出来：它是**运行环境**问题，不点破的话
             # 读者从"执行步骤 ❌ 退出码 125 + 一串 docker 原始报错"里只会
             # 得出"这份论文的官方代码跑不起来"的结论——归因错人。
@@ -247,13 +281,28 @@ class ReportGeneratorAgent(BaseAgent):
 
         if data.get("mock_mode"):
             lines += ["> Mock 演示：不代表真实论文复现。", ""]
-        if data.get("experiment_profile") and not data.get("mock_mode"):
+        if (data.get("experiment_profile") or data.get("execution_intent") == "official_smoke") and not data.get("mock_mode"):
             plan = data.get("execution_plan") or {}
-            lines += [f"**实验预设**: `{data['experiment_profile']}`",
+            label = (f"**实验预设**: `{data['experiment_profile']}`" if data.get("experiment_profile")
+                     else "**执行模式**: API 官方 CPU 冒烟（基于仓库证据的 LLM 计划）")
+            lines += [label,
                       "> 官方代码 + 真实数据的 CPU 冒烟验证，未核对论文数值。",
                       f"- 实际参数: `{plan.get('parameters', {})}`"]
+            if execution.get("failure_stage"):
+                lines.append(f"- 失败阶段: `{execution['failure_stage']}`")
+            if plan.get("llm_proposal"):
+                lines += [f"- LLM 提出的命令: `{plan['llm_proposal'].get('command', '')}`",
+                          f"- CPU 预算与数据路径调整: `{plan.get('policy_overrides', {})}`"]
+            for stage in execution.get("stages") or []:
+                if "duration_sec" in stage:
+                    lines.append(f"- {stage.get('step_id')} 耗时: {stage['duration_sec']} 秒")
             for unit in plan.get("units") or []:
                 lines.append(f"- 仓库 commit: `{unit.get('revision', '')}`")
+            code_resource = ((data.get("storage") or {}).get("fetched") or {}).get("code") or {}
+            if code_resource.get("transport") == "github_api_zip":
+                lines += ["- 源码获取: 官方 GitHub API ZIP（Git 传输回退）",
+                          f"- 源码下载地址: {code_resource.get('download_url', '')}",
+                          f"- 源码 ZIP SHA-256: `{code_resource.get('archive_sha256', '')}`"]
             for dataset in plan.get("datasets") or []:
                 lines += [f"- 数据来源: {dataset.get('source_url', '')}",
                           f"- 数据 SHA-256: `{dataset.get('sha256', '')}`",

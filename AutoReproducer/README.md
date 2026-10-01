@@ -56,30 +56,65 @@ streamlit run app.py
 也可用 `--profile dlinear_etth1_cpu_smoke` 明确选择预设。已适配的标题自动启用
 Docker；Docker 未启动时直接提示，不在宿主机执行第三方代码。
 
-要测试 API 驱动的通用流水线，可使用 `--llm-pipeline` 强制跳过标题适配。
+要测试 API 驱动的官方流水线，可使用 `--llm-pipeline` 强制跳过标题预设。
 先在当前终端设置 `LLM_API_KEY`，再执行：
 
 ```bash
-.venv/bin/python scripts/real_e2e.py --paper-title "Are Transformers Effective for Time Series Forecasting?" --llm-pipeline --use-docker
+.venv/bin/python scripts/real_e2e.py --paper-title "Are Transformers Effective for Time Series Forecasting?" --llm-pipeline --max-trials 0
 ```
 
-该路径实际调用 LLM 解析论文、补充资源并规划执行；仅有标题时可能缺少正文与
-数据集信息，不保证完成官方复现。未运行或生成占位实现时 CLI 返回非零退出码。
+该路径实际调用 LLM 解析标题、补充资源，再读取下载后的 README、官方脚本、
+Python 入口与模型源码，选择实验并提出训练命令。程序校验命令、绑定真实数据并
+限制 CPU 预算，原始 LLM 命令与调整项都会保留。当前 API 执行适配范围为官方
+`cure-lab/LTSF-Linear` 中的 **DLinear / ETTh1**；其他仓库返回明确的未适配说明。
+Docker 自动启用，仓库、数据或执行失败会生成失败说明并返回非零退出码；
+报告是否写入磁盘由保存选项决定。
+
+官方执行遇到 Python 错误时，LLM 会读取实际 traceback、相关源码和执行命令，
+提出最小源码补丁、固定版本的缺失依赖或修正命令，再真实重跑。整个计划最多
+3 轮修复；源码仅修改临时执行副本，缓存原仓库保持不变。补丁通过路径、语法和
+评测/数据切分/参数定义/种子检查后才能生效；依赖修复约束现有版本，并重新检查
+CPU 环境。Docker、镜像和下载网络故障不消耗代码修复预算。
+报告与执行证据保留每次错误输出、退出码、补丁 diff、文件 SHA-256 和重跑结果；
+修复失败回滚源码并停止，不生成替代算法。
+
+2026-10-01 本机 API + Docker 验收通过：4 次 API 调用，复用已校验的官方
+源码与真实数据缓存后约 62 秒完成训练评估，MSE `0.4090158939`、MAE
+`0.4168139100`。本次按默认设置未保存 Markdown 报告，执行证据位于
+`data/runs/20261001_152653/`，判定为 `smoke_verified`。
+
+官方修复链也已进行真实 API + Docker **故障注入验收**：仅在临时副本中将
+`configs.seq_len` 改为不存在的 `configs.sequence_length`，实际触发 AttributeError。
+LLM 1 轮修复后训练评估退出成功，MSE `0.4090158939`、MAE `0.4168139100`，
+共 5 次 API 调用。证据位于 `data/runs/20261001_154729/`，明确标注故障注入，
+并验证官方缓存未改动；这不是上游原生故障记录。可自行复测（隐藏输入 Key）：
+
+```bash
+.venv/bin/python scripts/verify_official_repair.py --ask-key
+```
 
 网页测试：运行 `streamlit run app.py`，关闭 Mock，输入论文名称并启用 Docker；
 也可选择侧栏“答辩示例”，自动填写标题。手动修改标题时，以修改后的标题为准。
+要使用真实 API 规划和自动修复，请开启侧栏“LLM 规划与修复官方代码”，填写 API
+配置，输入 DLinear 对应论文标题；该开关会跳过固定预设，沿用同一个后台流水线。
 
 首次运行需要克隆仓库、拉取镜像和安装依赖。ETTh1 使用固定官方版本，校验
 完整 17,420 行时间序列与文件指纹；原始下载域名不可达时自动尝试 GitHub API。
 代码与数据会缓存；目前容器依赖安装仍按运行单独进行，不承诺第二次免安装。
+API 路径只复用来源、版本与文件内容校验通过的源码缓存。Git 下载连接失败时，
+自动尝试固定 commit 的官方 GitHub API ZIP，并记录下载地址与压缩包 SHA-256；
+重复运行逐文件校验，下载不完整或缓存改动都会拒绝使用。Git 每次预算 60 秒，
+最多两次；官方 ZIP 下载预算 240 秒。
 
 ### 本轮验收标准
 
 - `execution_mode=plan`：实际运行官方仓库入口；失败不会换成生成脚本冒充结果。
 - `status=smoke_verified`：训练和评估成功，得到有限的 MSE、MAE。
 - `is_reproduced=None`：这是 CPU 缩参的真实流程验证，**不代表达到论文指标**。
-- 完整报告：`data/reports/_real_e2e_report.md`；原始逐步执行记录与输出：
-  `data/runs/<session_id>/execution.json`、`stdout.txt`、`stderr.txt`。
+- 报告默认仅供当前会话查看。网页点击“保存报告到历史”后写入 `data/reports/`；
+  CLI 添加 `--save-report` 保存到 `data/reports/_real_e2e_report.md`，或用
+  `--report-out <路径>` 指定保存位置。原始逐步执行记录与输出位于
+  `data/runs/<session_id>/execution.json`、`context.json`、`stdout.txt`、`stderr.txt`。
 - CLI 退出码：成功为 0，已适配样例验证失败为 1；可把报告和执行记录用于反馈。
 
 每次只运行 ETTh1 的 96 步预测、1 个 epoch，保留官方数据切分和 7 个通道。
@@ -88,6 +123,15 @@ DLinear/NLinear 保留官方种子 2021；后两者使用适配 Python 3.11 的 
 （torch 2.0.0 替代原要求 1.9.0），报告中会标注，论文算法源码不修改。
 
 本轮先供真实运行测试；多文件优化、代码编辑工作台和更多论文适配留待反馈后推进。
+
+### 报告保存与自动销毁
+
+网页报告默认不写入报告目录；未保存报告在重置或开始新任务时销毁。
+读取完成后立即删除临时进度文件中的报告副本；关闭页面而未读取的终态进度
+最多保留 1 小时，后台定时销毁，服务器重启后也会清理过期副本。
+选择“保存报告到历史”会保留 Markdown 和完整执行输出附件；下载按钮可以直接
+下载当前报告。已保存报告保留至手动删除历史记录，删除时会一并删除附件。
+审计日志、代码和数据缓存按各自的历史及缓存管理入口清理。
 
 2026-10-01 本机 Docker 实测：DLinear 首次下载真实 ETTh1 后成功运行，
 MSE `0.4090158939`、MAE `0.4168139100`；缓存复用运行约 53 秒，指标一致。
