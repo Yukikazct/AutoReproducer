@@ -58,12 +58,16 @@ def test_llm_connection(base_url: str = "", api_key: str = "",
         (False, 错误消息) —— 未配置 / HTTP 错误 / 网络错误 / 异常响应。
     """
     cfg = resolve_llm_config(base_url, api_key, model)
-    llm = LLMClient(mock_mode=False,
-                    base_url=cfg["base_url"],
-                    api_key=cfg["api_key"],
-                    model=cfg["model"],
-                    timeout=timeout)
-    resp = (llm.chat(prompt, temperature=0.1) or "").strip()
+    try:
+        llm = LLMClient(mock_mode=False,
+                        base_url=cfg["base_url"],
+                        api_key=cfg["api_key"],
+                        model=cfg["model"],
+                        timeout=timeout,
+                        max_tokens=64)
+        resp = (llm.chat(prompt, temperature=0.1) or "").strip()
+    except Exception as exc:
+        return False, f"[LLM API Error: {exc}]"
     if resp.startswith("[LLM API Error"):
         return False, resp
     preview = resp[:100]

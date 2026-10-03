@@ -11,6 +11,8 @@ import os
 import sys
 import tempfile
 import time
+from html import escape
+from pathlib import Path
 
 import streamlit as st
 
@@ -23,6 +25,7 @@ from src.audit.audit_logger import AuditLogger
 from src.base_agent import BaseAgent
 from src.corpus import list_papers
 from frontend.llm_config import (
+    CONNECT_TEST_TIMEOUT,
     resolve_llm_config,
     config_missing,
     test_llm_connection,
@@ -62,37 +65,10 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# CSS 样式
-st.markdown("""
-<style>
-    .status-ok { color: #00ff00; font-weight: bold; }
-    .status-error { color: #ff0000; font-weight: bold; }
-    .status-running { color: #ffaa00; font-weight: bold; }
-    .status-waiting { color: #888888; }
-    .agent-card {
-        padding: 10px;
-        border-radius: 5px;
-        margin: 5px 0;
-        border-left: 4px solid #4CAF50;
-    }
-    .stApp header {display: none;}
-    .main-title {
-        text-align: center;
-        font-size: 2.5em;
-        margin-bottom: 0;
-    }
-    .sub-title {
-        text-align: center;
-        color: #888;
-        margin-top: 0;
-    }
-    div[data-testid="stSidebar"] {
-        min-width: 300px;
-        max-width: 400px;
-    }
-
-</style>
-""", unsafe_allow_html=True)
+# 页面样式独立维护，避免业务逻辑与大段 CSS 混在一起。
+_styles = Path(__file__).resolve().parent / "frontend" / "styles.css"
+st.markdown(f"<style>{_styles.read_text(encoding='utf-8')}</style>",
+            unsafe_allow_html=True)
 
 # 初始化 Session 状态
 if "orchestrator" not in st.session_state:
@@ -119,10 +95,94 @@ if "pipeline_note" not in st.session_state:
     st.session_state.pipeline_note = None
 
 
+@st.fragment
+def render_llm_settings():
+    """配置和连接测试局部刷新，反馈直接显示在按钮旁。"""
+    with st.expander("🔗 LLM API 配置", expanded=not st.session_state.mock_mode):
+        base_url = st.text_input(
+            "API 地址（OpenAI 兼容）",
+            value=os.environ.get("LLM_BASE_URL", "https://api.deepseek.com"),
+            key="llm_base_url",
+            placeholder="如 https://api.deepseek.com",
+            help="支持 DeepSeek / 千帆 / OpenAI 等任意 OpenAI 兼容端点",
+            disabled=st.session_state.mock_mode)
+        api_key = st.text_input(
+            "API Key", value=os.environ.get("LLM_API_KEY", ""),
+            key="llm_api_key", type="password",
+            help="远程 API 的访问密钥（无鉴权服务可留空）",
+            disabled=st.session_state.mock_mode)
+        model_name = st.text_input(
+            "模型名称", value=os.environ.get("LLM_MODEL", "deepseek-chat"),
+            key="llm_model",
+            placeholder="如 deepseek-chat / ernie-4.0-8k / gpt-4o-mini",
+            disabled=st.session_state.mock_mode)
+
+        cfg = resolve_llm_config(base_url, api_key, model_name)
+        # 改配置后清掉旧结果，避免新地址/模型仍显示上次的「连接成功」。
+        if cfg != st.session_state.get("connection_config"):
+            st.session_state.connection_result = None
+            st.session_state.connection_config = cfg
+
+        st.markdown("---")
+        test_clicked = st.button(
+            "🔌 测试 AI 连接", key="test_llm_connection",
+            disabled=st.session_state.mock_mode,
+            use_container_width=True,
+            help="真实调用一次 LLM API，验证地址/Key/模型配置可用")
+        feedback = st.empty()
+        if test_clicked:
+            st.session_state.connection_result = None
+            feedback.info("正在测试 AI 连接，请稍候…")
+            with st.spinner(f"正在请求 API（超时 {CONNECT_TEST_TIMEOUT} 秒）…"):
+                st.session_state.connection_result = test_llm_connection(
+                    base_url, api_key, model_name)
+
+        if st.session_state.mock_mode:
+            st.caption("🧪 Mock 模式不调用真实 LLM，连接测试不可用；"
+                       "关闭 Mock 开关后可输入 API 并测试")
+        else:
+            result = st.session_state.connection_result
+            if result:
+                ok, msg = result
+                if ok:
+                    feedback.success(msg)
+                else:
+                    feedback.error(f"连接失败：{msg}")
+            st.caption(f"当前生效: `{cfg['model']}` @ `{cfg['base_url']}`"
+                       "（输入留空时回退环境变量）")
+
+
+@st.fragment
+def render_paper_input():
+    """切换输入方式只刷新论文区域，立即展示原生 PDF 上传入口。"""
+    st.markdown('<div class="sidebar-section-label"><span>01</span> 论文输入</div>',
+                unsafe_allow_html=True)
+    input_mode = st.radio("输入方式", ["论文标题", "上传PDF"], key="input_mode")
+    if input_mode == "论文标题":
+        st.session_state.paper_title = st.text_input(
+            "论文标题", value=st.session_state.paper_title,
+            placeholder="输入论文标题...", key="paper_title_input")
+    else:
+        uploaded_file = st.file_uploader(
+            "上传PDF文件", type=["pdf"], key="pdf_uploader",
+            help="点击 Upload 选择本地 PDF，或将 PDF 拖入上传区域")
+        if uploaded_file is None:
+            st.caption("请点击 Upload 选择 PDF 文件，上传后再开始复现。")
+        else:
+            st.success(f"已上传：{uploaded_file.name}"
+                       f"（{format_size(uploaded_file.size)}）")
+
+
 # ========== 侧边栏 ==========
 with st.sidebar:
-    st.image("https://img.icons8.com/fluency/96/idea.png", width=60)
-    st.markdown("## ⚙️ 控制面板")
+    st.markdown("""
+    <div class="sidebar-brand">
+        <span class="brand-icon">✳</span>
+        <div><strong>AutoReproducer</strong><small>RESEARCH WORKSPACE</small></div>
+    </div>
+    <div class="sidebar-intro">配置复现任务</div>
+    <p class="sidebar-help">选择运行模式、提交论文，然后启动研究流水线。</p>
+    """, unsafe_allow_html=True)
 
 # 模式选择
     st.session_state.mock_mode = st.toggle(
@@ -180,47 +240,10 @@ with st.sidebar:
                       else "未启用容器沙箱，将使用本地隔离执行")
                    + ")")
 
-    # LLM API 配置（真实模式；OpenAI 兼容接口，不依赖本地部署）
-    with st.expander("🔗 LLM API 配置", expanded=not st.session_state.mock_mode):
-        base_url = st.text_input(
-            "API 地址（OpenAI 兼容）",
-            value=os.environ.get("LLM_BASE_URL", "https://api.deepseek.com"),
-            placeholder="如 https://api.deepseek.com",
-            help="支持 DeepSeek / 千帆 / OpenAI 等任意 OpenAI 兼容端点",
-            disabled=st.session_state.mock_mode)
-        api_key = st.text_input(
-            "API Key",
-            value=os.environ.get("LLM_API_KEY", ""),
-            type="password",
-            help="远程 API 的访问密钥（无鉴权服务可留空）",
-            disabled=st.session_state.mock_mode)
-        model_name = st.text_input(
-            "模型名称",
-            value=os.environ.get("LLM_MODEL", "deepseek-chat"),
-            placeholder="如 deepseek-chat / ernie-4.0-8k / gpt-4o-mini",
-            disabled=st.session_state.mock_mode)
-
-        # 连接测试：真实调用一次 Chat Completions，验证 API 配置可用
-        st.markdown("---")
-        link_btn = st.button(
-            "🔌 测试 AI 连接",
-            disabled=st.session_state.mock_mode,
-            use_container_width=True,
-            help="真实调用一次 LLM API，验证地址/Key/模型配置可用")
-        if st.session_state.mock_mode:
-            st.caption("🧪 Mock 模式不调用真实 LLM，连接测试不可用；"
-                       "关闭 Mock 开关后可输入 API 并测试")
-        else:
-            _cfg = resolve_llm_config(base_url, api_key, model_name)
-            st.caption(f"当前生效: `{_cfg['model']}` @ `{_cfg['base_url']}`"
-                       "（输入留空时回退环境变量）")
-            _cr = st.session_state.connection_result
-            if _cr:
-                ok, msg = _cr
-                if ok:
-                    st.success(msg)
-                else:
-                    st.error(msg)
+    render_llm_settings()
+    base_url = st.session_state.llm_base_url
+    api_key = st.session_state.llm_api_key
+    model_name = st.session_state.llm_model
 
     # 预算上限
     max_trials = st.slider(
@@ -228,25 +251,14 @@ with st.sidebar:
         help="Optimizer 在复现成功后最多尝试的优化方向次数")
 
     # 论文输入
-    st.markdown("### 📄 论文输入")
-    input_mode = st.radio("输入方式", ["论文标题", "上传PDF"], key="input_mode")
-
-    paper_title = st.session_state.paper_title
-    uploaded_file = None
-
-    if input_mode == "论文标题":
-        paper_title = st.text_input(
-            "论文标题",
-            value=st.session_state.paper_title,
-            placeholder="输入论文标题...",
-            key="paper_title_input")
-        st.session_state.paper_title = paper_title
-    else:
-        uploaded_file = st.file_uploader("上传PDF文件", type=["pdf"],
-                                         key="pdf_uploader")
+    render_paper_input()
+    input_mode = st.session_state.input_mode
+    uploaded_file = (st.session_state.get("pdf_uploader")
+                     if input_mode == "上传PDF" else None)
 
     # 语料对照层（可选）：选择真实论文作为轻量锚点
-    st.markdown("### 🗂️ 语料对照(可选)")
+    st.markdown('<div class="sidebar-section-label"><span>02</span> 语料对照 <em>可选</em></div>',
+                unsafe_allow_html=True)
     _corpus = [p["id"] for p in list_papers()]
     _corpus_choice = st.selectbox(
         "选择 PaperGuru-Benchmark 论文", ["无"] + _corpus, index=0,
@@ -264,7 +276,8 @@ with st.sidebar:
 
     # 系统状态
     st.markdown("---")
-    st.markdown("### 📊 系统状态")
+    st.markdown('<div class="sidebar-section-label"><span>03</span> 系统状态</div>',
+                unsafe_allow_html=True)
     state_colors = {
         "INIT": "⚪", "READ_PAPER": "📖", "FIND_RESOURCES": "🔍",
         "BUILD_ENV": "🔧", "EXECUTE_CODE": "⚡", "VALIDATE": "✅",
@@ -272,15 +285,44 @@ with st.sidebar:
         "GENERATE_REPORT": "📝", "COMPLETED": "🎉", "ERROR": "❌",
     }
     st.markdown(
-        f"**当前状态**: {state_colors.get(st.session_state.current_state, '⚪')} "
-        f"`{st.session_state.current_state}`")
+        f'<div class="sidebar-status"><span class="status-pulse"></span>'
+        f'<span>当前状态</span><strong>'
+        f'{state_colors.get(st.session_state.current_state, "⚪")} '
+        f'{escape(st.session_state.current_state)}</strong></div>',
+        unsafe_allow_html=True)
 
 
 # ========== 主界面 ==========
-st.markdown('<p class="main-title">🔬 AutoReproducer</p>',
-            unsafe_allow_html=True)
-st.markdown('<p class="sub-title">基于多智能体协作的论文自动复现与优化系统</p>',
-            unsafe_allow_html=True)
+_state_label = {
+    "INIT": "等待开始", "READ_PAPER": "解析论文", "FIND_RESOURCES": "查找资源",
+    "BUILD_ENV": "构建环境", "EXECUTE_CODE": "执行代码", "VALIDATE": "验证结果",
+    "OPTIMIZING": "智能优化", "OPTIMIZED": "优化完成",
+    "GENERATE_REPORT": "生成报告", "COMPLETED": "任务完成", "ERROR": "运行异常",
+}.get(st.session_state.current_state, "运行中")
+_hero_status = ("error" if st.session_state.current_state == "ERROR" else
+                "success" if st.session_state.current_state == "COMPLETED" else
+                "running" if st.session_state.running else "idle")
+st.markdown(f"""
+<div class="hero">
+    <div class="hero-top">
+        <span class="hero-eyebrow"><span class="eyebrow-dot"></span> AUTO REPRODUCER / 研究工作台</span>
+        <span class="hero-status hero-status-{_hero_status}">{escape(_state_label)}</span>
+    </div>
+    <div class="hero-content">
+        <div>
+            <h1>让研究成果，<br><span>被可靠地复现。</span></h1>
+            <p>从论文解析到实验验证、智能优化与报告生成，<br>在一个工作台中追踪完整的复现过程。</p>
+        </div>
+        <div class="hero-visual" aria-hidden="true">
+            <div class="visual-orbit orbit-one"></div><div class="visual-orbit orbit-two"></div>
+            <div class="visual-core">✳</div>
+            <span class="visual-node node-one"></span><span class="visual-node node-two"></span>
+            <span class="visual-node node-three"></span>
+        </div>
+    </div>
+    <div class="hero-steps"><span><b>01</b> 解析论文</span><i>→</i><span><b>02</b> 查找资源</span><i>→</i><span><b>03</b> 验证与优化</span><i>→</i><span><b>04</b> 生成报告</span></div>
+</div>
+""", unsafe_allow_html=True)
 
 # 标签页
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
@@ -289,7 +331,10 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
 
 # ===== Tab 1: 流水线状态 =====
 with tab1:
-    st.markdown("### 🏗️ 复现流水线（复现 -> 验证 -> 优化 -> 报告）")
+    st.markdown("""<div class="section-heading"><div><span class="section-kicker">LIVE PIPELINE</span>
+    <h2>复现流水线</h2><p>每个 Agent 的执行状态都会在这里实时更新。</p></div>
+    <span class="section-aside">论文解析 · 验证 · 优化 · 报告</span></div>""",
+                unsafe_allow_html=True)
 
     AGENT_DESC = {
         "📖 PaperReader": ("论文解析", "从PDF/标题中提取结构化信息"),
@@ -335,28 +380,24 @@ with tab1:
             st.warning("未安装 streamlit-autorefresh，页面不会自动刷新；"
                        "可刷新浏览器页面查看最新进度。")
 
-    cols = st.columns(3)
+    agent_cards = []
     for i, name in enumerate(names):
-        with cols[i % 3]:
-            status = st.session_state.agent_status.get(name, "waiting")
-            status_icons = {"success": "✅", "error": "❌",
-                            "running": "🔄", "waiting": "⏳"}
-            status_colors = {
-                "success": "border-left: 4px solid #4CAF50;",
-                "error": "border-left: 4px solid #f44336;",
-                "running": "border-left: 4px solid #FF9800;",
-                "waiting": "border-left: 4px solid #9E9E9E;",
-            }
-            icon = status_icons.get(status, "⏳")
-            border = status_colors.get(status, "")
-            title, desc = AGENT_DESC.get(name, ("", ""))
-            st.markdown(f"""
-            <div class="agent-card" style="{border}">
-                <h4>{icon} {name}</h4>
-                <small>{title}</small><br>
-                <span style="color: #888;">{desc}</span>
+        status = st.session_state.agent_status.get(name, "waiting")
+        status_text = {"success": "已完成", "error": "出现错误",
+                       "running": "进行中", "waiting": "等待中"}.get(status, "等待中")
+        status_class = status if status in {"success", "error", "running"} else "waiting"
+        title, desc = AGENT_DESC.get(name, ("", ""))
+        agent_cards.append(f"""
+            <div class="agent-card agent-{status_class}">
+                <div class="agent-top"><span class="agent-index">{i + 1:02d} / {len(names):02d}</span>
+                <span class="agent-status">{status_text}</span></div>
+                <div class="agent-name">{escape(name)}</div>
+                <div class="agent-title">{escape(title)}</div>
+                <p>{escape(desc)}</p>
             </div>
-            """, unsafe_allow_html=True)
+            """)
+    st.markdown('<div class="agent-grid">' + ''.join(card.strip() for card in agent_cards) + '</div>',
+                unsafe_allow_html=True)
 
     completed = sum(1 for a in names
                     if st.session_state.agent_status.get(a) == "success")
@@ -392,18 +433,18 @@ with tab1:
 
 # ===== Tab 2: 复现报告 =====
 with tab2:
-    st.markdown("### 📄 复现与优化报告")
+    st.markdown('<div class="section-heading"><div><span class="section-kicker">RESEARCH OUTPUT</span><h2>复现与优化报告</h2><p>查看实验结论、验证结果与优化建议。</p></div></div>', unsafe_allow_html=True)
     if st.session_state.result and st.session_state.result.get("data", {}).get("report"):
         report = st.session_state.result["data"]["report"]
         # 深色 IDE 面板渲染已回滚（见 CHANGELOG [2026.09.20-12]）：
         # 面板在真实浏览器里代码不可见，改回原生 Markdown 渲染。
         st.markdown(report)
     else:
-        st.info("运行复现流程后，这里将显示完整的复现与优化报告。")
+        st.markdown('<div class="empty-state"><span>▤</span><div class="empty-title">报告将在这里生成</div><p>在左侧提交论文并启动复现，完成后即可查看实验报告。</p></div>', unsafe_allow_html=True)
 
 # ===== Tab 3: 审计日志 =====
 with tab3:
-    st.markdown("### 📜 审计日志")
+    st.markdown('<div class="section-heading"><div><span class="section-kicker">TRACE & EVIDENCE</span><h2>审计日志</h2><p>按 Agent 和状态筛选，查看每一步的运行记录。</p></div></div>', unsafe_allow_html=True)
     if st.session_state.logs:
         col1, col2 = st.columns(2)
         with col1:
@@ -436,12 +477,11 @@ with tab3:
             ):
                 st.json(log)
     else:
-        st.info("运行复现流程后，这里将显示详细的审计日志。")
+        st.markdown('<div class="empty-state"><span>≡</span><div class="empty-title">暂无运行记录</div><p>启动复现后，这里会记录各 Agent 的执行过程。</p></div>', unsafe_allow_html=True)
 
 # ===== Tab 4: 状态机 =====
 with tab4:
-    st.markdown("### 🔍 状态机定义")
-    st.markdown("系统使用有限状态机（FSM）管理 Agent 的流转。")
+    st.markdown('<div class="section-heading"><div><span class="section-kicker">WORKFLOW MAP</span><h2>状态机定义</h2><p>系统通过有限状态机管理 Agent 的流转与异常恢复。</p></div></div>', unsafe_allow_html=True)
     state_info = """
 ```mermaid
 stateDiagram-v2
@@ -488,7 +528,7 @@ stateDiagram-v2
 
 # ===== Tab 5: 历史记录 =====
 with tab5:
-    st.markdown("### 📂 复现历史与存储管理")
+    st.markdown('<div class="section-heading"><div><span class="section-kicker">ARCHIVE & STORAGE</span><h2>复现历史与存储</h2><p>回顾已运行的会话，并管理实验产物与缓存。</p></div></div>', unsafe_allow_html=True)
 
     # 删除类操作的反馈：必须跨 rerun 传递。删除后紧跟 st.rerun()，
     # 当次运行的 st.success 会被新一次运行整棵树丢弃，用户看不到任何提示。
@@ -821,9 +861,10 @@ def _new_progress_file() -> str:
 
 # 启动按钮处理：后台线程执行流水线，主线程立即返回并轮询进度
 if start_btn:
-    pt = st.session_state.paper_title or ""
+    pt = st.session_state.paper_title.strip() if input_mode == "论文标题" else ""
     if not pt and not uploaded_file:
-        st.error("请先输入论文标题或上传PDF文件")
+        st.sidebar.error("请先上传PDF文件" if input_mode == "上传PDF"
+                         else "请先输入论文标题")
     elif not st.session_state.mock_mode and config_missing(base_url, model_name):
         st.error("真实模式缺少 LLM 配置（"
                  + "、".join(config_missing(base_url, model_name))
@@ -863,14 +904,6 @@ if start_btn:
             cleanup_pdf=True)   # 临时 PDF 由后台线程负责删除
         st.rerun()
 
-# 测试连接按钮处理
-if link_btn:
-    st.session_state.connection_result = None
-    with st.spinner("正在测试 API 连接..."):
-        ok, msg = test_llm_connection(base_url, api_key, model_name)
-    st.session_state.connection_result = (ok, msg)
-    st.rerun()
-
 # 重置按钮处理
 if reset_btn:
     st.session_state.orchestrator = None
@@ -885,9 +918,8 @@ if reset_btn:
     st.rerun()
 
 # 底部信息
-st.markdown("---")
 st.markdown("""
-<div style="text-align: center; color: #888; font-size: 0.8em;">
-    AutoReproducer v0.2.0 | 基于多智能体协作的论文自动复现与优化系统
+<div class="app-footer">
+    <span>✳ AutoReproducer</span><span>v0.2.0 · 让复现过程清晰可见</span>
 </div>
 """, unsafe_allow_html=True)

@@ -14,7 +14,7 @@ import pytest
 from frontend.llm_config import (
     resolve_llm_config,
     config_missing,
-    test_llm_connection,
+    test_llm_connection as check_llm_connection,
     DEFAULT_BASE_URL,
     DEFAULT_MODEL,
 )
@@ -121,7 +121,7 @@ class TestConfigMissing:
 
 class TestConnection:
     def test_success(self, fake_openai_server, clean_env):
-        ok, msg = test_llm_connection(
+        ok, msg = check_llm_connection(
             base_url=fake_openai_server, api_key="sk-test-123", model="m1",
             timeout=10)
         assert ok is True
@@ -129,19 +129,29 @@ class TestConnection:
         cap = _FakeHandler.captured
         assert cap["path"] == "/v1/chat/completions"
         assert cap["body"]["model"] == "m1"
+        assert cap["body"]["max_tokens"] == 64
         assert cap["auth"] == "Bearer sk-test-123"
 
     def test_http_error(self, fake_openai_server, clean_env):
         _FakeHandler.fail = 401
-        ok, msg = test_llm_connection(
+        ok, msg = check_llm_connection(
             base_url=fake_openai_server, api_key="sk-bad", model="m1",
             timeout=10)
         assert ok is False
         assert "HTTP 401" in msg
 
     def test_unreachable(self, clean_env):
-        ok, msg = test_llm_connection(
+        ok, msg = check_llm_connection(
             base_url="http://127.0.0.1:1",  # 端口 1 通常无服务监听，必然连接失败
             model="m1", timeout=5)
         assert ok is False
         assert "LLM API Error" in msg
+
+    def test_unexpected_exception_is_reported(self, clean_env, monkeypatch):
+        def fail(*args, **kwargs):
+            raise RuntimeError("invalid response")
+
+        monkeypatch.setattr("frontend.llm_config.LLMClient.chat", fail)
+        ok, msg = check_llm_connection(model="m1")
+        assert ok is False
+        assert "invalid response" in msg
