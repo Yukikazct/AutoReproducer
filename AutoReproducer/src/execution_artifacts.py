@@ -27,17 +27,7 @@ def prepare_plot_runtime(workdir: str, docker: bool = False) -> dict:
     # sitecustomize is loaded from PYTHONPATH at Python startup. Missing
     # Matplotlib remains the executor's normal dependency/self-heal concern.
     (runtime / "sitecustomize.py").write_text(
-        "import os\n"
-        "try:\n"
-        "    from matplotlib import font_manager, rcParams\n"
-        "except ImportError:\n"
-        "    pass\n"
-        "else:\n"
-        "    font = os.environ.get('AUTOREPRO_FONT_PATH', '')\n"
-        "    if os.path.isfile(font):\n"
-        "        font_manager.fontManager.addfont(font)\n"
-        "        name = font_manager.FontProperties(fname=font).get_name()\n"
-        "        rcParams['font.sans-serif'] = [name, 'DejaVu Sans']\n",
+        (PROJECT_ROOT / "src" / "plot_runtime.py").read_text(encoding="utf-8"),
         encoding="utf-8")
     if docker:
         return {"MPLBACKEND": "Agg", "MPLCONFIGDIR": "/tmp/autorepro-matplotlib",

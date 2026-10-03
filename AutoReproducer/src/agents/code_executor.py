@@ -44,6 +44,7 @@ from src.agents.dependency_resolver import (
 )
 from src.resource_events import ResourceEventLogger
 from src.execution_artifacts import prepare_plot_runtime, collect_images, FONT_PATH
+from src.storage_usage import directory_usage, docker_image_usage, disk_usage_snapshot, unmeasured_disk_usage
 
 LOCAL_TIMEOUT_SMOKE = 10
 LOCAL_TIMEOUT_FULL = 60
@@ -505,7 +506,8 @@ class CodeExecutorAgent(BaseAgent):
         self.log("execute_code", "START", "开始执行代码", input_data)
 
         paper_info = input_data.get("paper_info", {}) or {}
-        env_config = input_data.get("env_config", {}) or {}
+        env_config = {**(input_data.get("env_config", {}) or {}),
+                      "estimated_disk_gb": None, "disk_usage": unmeasured_disk_usage()}
         code = input_data.get("code", "") or ""
         self.env_config = env_config  # 供执行阶段选择镜像/依赖
         self._runtime_source_env = env_config
@@ -559,6 +561,9 @@ class CodeExecutorAgent(BaseAgent):
 
         code, stages, repair_attempts, final = self._execute_with_repair(
             code, paper_info)
+        if final.get("disk_usage"):
+            self.env_config = {**self.env_config, "disk_usage": final["disk_usage"],
+                               "estimated_disk_gb": None}
         result = {"stages": stages, "success": final["success"],
                   "final": final, "code": code,
                   "repair_attempts": repair_attempts,
@@ -1175,6 +1180,8 @@ class CodeExecutorAgent(BaseAgent):
                  {"exit_code": EXIT_NOT_RUNNABLE, "not_runnable": True})
         return {"stages": [stage], "success": False, "final": stage,
                 "code": code, "not_runnable": True, "reason": reason,
+                "effective_env_config": getattr(self, "env_config", None) or {
+                    "estimated_disk_gb": None, "disk_usage": unmeasured_disk_usage()},
                 "sanitize_stats": sanitize_stats or
                 {"prose_dropped": 0, "code_dropped": 0},
                 **(extra or {}),
@@ -1242,14 +1249,16 @@ class CodeExecutorAgent(BaseAgent):
         # 依赖预装：缺失依赖时运行必然失败，先安装再执行
         deps_err = self._ensure_local_deps(workdir)
         if deps_err:
+            usage = self._collect_disk_usage(workdir, stage, cleanup)
             if cleanup:
                 shutil.rmtree(workdir, ignore_errors=True)
             return {"success": False, "stdout": "",
                     "stderr": deps_err, "exit_code": -4,
-                    "deps_prepared": False}
+                    "deps_prepared": False, "disk_usage": usage}
 
         script = os.path.join(workdir, "run.py")
         timeout = LOCAL_TIMEOUT_SMOKE if stage == "smoke" else LOCAL_TIMEOUT_FULL
+        result = None
         try:
             with open(script, "w", encoding="utf-8") as f:
                 f.write(code)
@@ -1278,15 +1287,62 @@ class CodeExecutorAgent(BaseAgent):
                                          getattr(self.logger, "session_id", "")))
             return result
         except subprocess.TimeoutExpired:
-            return {"success": False, "stdout": "",
+            result = {"success": False, "stdout": "",
                     "stderr": f"执行超时({timeout}s, {stage})", "exit_code": -1,
                     "deps_prepared": True}
+            return result
         except Exception as e:
-            return {"success": False, "stdout": "", "stderr": str(e),
+            result = {"success": False, "stdout": "", "stderr": str(e),
                     "exit_code": -2, "deps_prepared": True}
+            return result
         finally:
+            if isinstance(result, dict):
+                result["disk_usage"] = self._collect_disk_usage(workdir, stage, cleanup)
             if cleanup:
                 shutil.rmtree(workdir, ignore_errors=True)
+
+    def _collect_disk_usage(self, workdir, stage, cleanup, docker_cmd=None, image=None):
+        """读取当前执行相关目录，不扫描宿主 Python、下载缓存或工作区外数据。"""
+        workspace = Path(workdir)
+        components = [directory_usage(
+            workspace, "workspace", "执行工作区文件体积", retained=not cleanup,
+            exclude=(".autorepro_deps", ".autorepro_tmp", ".autorepro_plot"))]
+        for name, key, label in ((".autorepro_plot", "runtime", "绘图运行辅助文件"),
+                                 (".autorepro_tmp", "install_temp", "依赖安装临时文件")):
+            path = workspace / name
+            if path.exists():
+                components.append(directory_usage(path, key, label, retained=not cleanup))
+        if docker_cmd:
+            deps = workspace / ".autorepro_deps"
+            if deps.exists():
+                components.append(directory_usage(deps, "dependencies", "工作区隔离依赖文件体积",
+                                                  retained=not cleanup))
+            if stage == "full":
+                components.append(docker_image_usage(docker_cmd, image))
+            else:
+                components.append({"key": "docker_image", "label": "Docker 镜像内容体积",
+                                   "status": "not_measured", "bytes": None,
+                                   "note": "当前仅执行冒烟阶段，镜像大小尚未读取。"})
+        else:
+            paths = set(self._heal_dirs)
+            if self._deps_dir:
+                paths.add(self._deps_dir)
+            # 安装失败仍保留已经写入的部分文件；缓存命中也按当前清单定位。
+            reqs = (getattr(self, "env_config", {}) or {}).get("requirements_txt") or ""
+            candidate = DEPS_CACHE_ROOT / reqs_digest(reqs) if reqs.strip() else None
+            if not self.mock_mode and candidate is not None and candidate.exists():
+                paths.add(str(candidate))
+            for index, path in enumerate(sorted(paths), 1):
+                components.append(directory_usage(path, f"dependency_cache_{index}",
+                                                  "隔离依赖缓存文件体积", shared=True))
+            if self.mock_mode and reqs.strip():
+                components.append({"key": "dependencies", "label": "隔离依赖文件体积",
+                                   "status": "not_measured", "bytes": None,
+                                   "note": "模拟模式跳过依赖安装，未测量依赖体积。"})
+        snapshot = disk_usage_snapshot(components)
+        snapshot["stage"] = stage
+        snapshot["excluded"] = ("宿主 Python 和全局包、下载缓存、工作区外数据、容器临时层与 Docker VM 物理空间")
+        return snapshot
 
     def _run_local_script(self, script: str, workdir: str,
                           timeout: int) -> Dict:
@@ -1692,6 +1748,7 @@ class CodeExecutorAgent(BaseAgent):
             workdir = os.path.abspath(workdir)
         script = os.path.join(workdir, "run.py")
         timeout = DOCKER_TIMEOUT_SMOKE if stage == "smoke" else DOCKER_TIMEOUT_FULL
+        result = None
         try:
             plot_env = prepare_plot_runtime(workdir, docker=True)
             with open(script, "w", encoding="utf-8") as f:
@@ -1812,13 +1869,18 @@ class CodeExecutorAgent(BaseAgent):
             def decoded(value):
                 return value.decode("utf-8", errors="replace") if isinstance(value, bytes) else (value or "")
             stderr, phase_info = self._decode_docker_phase(decoded(exc.stderr))
-            return {"success": False, "stdout": decoded(exc.stdout),
+            result = {"success": False, "stdout": decoded(exc.stdout),
                     "stderr": stderr + f"\n容器启动或准备超时({exc.timeout:g}s)，未取得程序执行结果。",
                     "exit_code": -1, "execution_phase": "container_preparation"}
+            return result
         except Exception as e:
-            return {"success": False, "stdout": "", "stderr": str(e),
+            result = {"success": False, "stdout": "", "stderr": str(e),
                     "exit_code": -2}
+            return result
         finally:
+            if isinstance(result, dict):
+                result["disk_usage"] = self._collect_disk_usage(
+                    workdir, stage, cleanup, docker_cmd=docker_cmd, image=image)
             if cleanup:
                 shutil.rmtree(workdir, ignore_errors=True)
 

@@ -60,7 +60,6 @@ _MOCK_TASKS = {
             "RUN pip install -r requirements.txt"
         ),
         "setup_commands": ["pip install -r requirements.txt"],
-        "estimated_disk_gb": 3.0,
     },
 # 纯标准库实现：不依赖 numpy 等第三方包，确保无额外依赖环境下
     # Mock 端到端链路可真实执行（CodeExecutor 会以子进程运行本代码）。

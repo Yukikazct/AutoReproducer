@@ -8,6 +8,7 @@ import re
 from src.base_agent import BaseAgent
 from src.metric_keys import norm_metric_key
 from src.runtime_metrics import metric_unit
+from src.storage_usage import format_bytes
 from src.execution_artifacts import image_data_url
 
 
@@ -35,6 +36,36 @@ def _markdown_text(value: str) -> str:
     """Treat generated filenames and artifact diagnostics as plain text."""
     return re.sub(r"([\\`*_{}\[\]()<>!|])", r"\\\1",
                   value.replace("\n", " ").replace("\r", " "))
+
+
+def _disk_usage_lines(usage):
+    components = (usage or {}).get("components") or []
+    if not components:
+        return ["- **磁盘统计**: 未测量（安装与执行后读取实际大小，不展示模型估值）"]
+    state = {"measured": "已测量", "partial": "部分已测量"}.get(usage.get("status"), "未测量")
+    lines = [f"- **磁盘统计**: {state}（各项分别列出，不合计为环境总占用）"]
+    for component in components:
+        name = _markdown_text(_txt(component.get("label"), "文件体积"))
+        value = format_bytes(component.get("bytes"))
+        status = component.get("status")
+        if status not in {"measured", "partial"}:
+            value = "未测量"
+        elif status == "partial":
+            value = f"已读取部分 {value}，统计不完整"
+        if component.get("basis") == "file_stat" and status in {"measured", "partial"}:
+            note = "共享缓存，含已有文件" if component.get("shared") else (
+                "清理前快照" if not component.get("retained") else "执行后目录，含已有文件")
+            value += f"（文件体积实测；{note}）"
+        elif component.get("basis") == "docker_image_inspect" and status == "measured":
+            value += "（Docker 实测的镜像逻辑大小，含共享层）"
+        lines.append(f"  - **{name}**: {value}")
+        if status != "measured" and component.get("note"):
+            lines.append("    " + _markdown_text(str(component["note"])))
+    lines.append("  > 文件体积、镜像大小均不等于本次新增磁盘占用；缓存和镜像层可能由多次任务共享。")
+    excluded = usage.get("excluded")
+    if excluded:
+        lines.append("  > 未计入：" + _markdown_text(str(excluded)) + "。")
+    return lines
 
 
 # 报告内代码与执行输出**全文内嵌**，不设展示上限。
@@ -101,8 +132,9 @@ class ReportGeneratorAgent(BaseAgent):
         lines += ["## 3. 环境配置",
                   f"- **Python版本**: {env_config.get('python_version', 'N/A')}",
                   f"- **依赖数**: "
-                  f"{len(_txt(env_config.get('requirements_txt')).splitlines())}",
-                  f"- **预估磁盘**: {env_config.get('estimated_disk_gb', 'N/A')} GB"]
+                  f"{len(_txt(env_config.get('requirements_txt')).splitlines())}"]
+        disk_usage = (execution.get("final") or {}).get("disk_usage") or env_config.get("disk_usage")
+        lines += _disk_usage_lines(disk_usage)
         if env_config.get("dependency_corpus"):
             lines.append("- **语料依赖来源**: " + _markdown_text(
                 str(env_config["dependency_corpus"])))

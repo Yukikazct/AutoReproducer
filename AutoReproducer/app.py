@@ -90,7 +90,11 @@ if "paper_title" not in st.session_state:
 if "connection_result" not in st.session_state:
     st.session_state.connection_result = None
 if "progress_file" not in st.session_state:
-    st.session_state.progress_file = None
+    # 定向重启服务时可恢复已完成报告，不重新调用模型或启动任务。
+    resume = os.environ.get("AUTOREPRO_RESUME_PROGRESS", "")
+    previous = ProgressStore.read_snapshot(resume) if resume else None
+    st.session_state.progress_file = (
+        resume if previous and previous["done"] and previous["result"] else None)
 if "pipeline_note" not in st.session_state:
     st.session_state.pipeline_note = None
 
@@ -168,9 +172,8 @@ def render_llm_settings():
                        "（输入留空时回退环境变量）")
 
 
-@st.fragment
 def render_paper_input():
-    """切换输入方式只刷新论文区域，立即展示原生 PDF 上传入口。"""
+    """输入方式切换与页面一起刷新，保持上传入口和启动按钮状态同步。"""
     st.markdown('<div class="sidebar-section-label"><span>01</span> 论文输入</div>',
                 unsafe_allow_html=True)
     input_mode = st.radio("输入方式", ["论文标题", "上传PDF"], key="input_mode")

@@ -83,6 +83,40 @@ def test_docker_runtime_uses_writable_cache_and_noninteractive_backend(tmp_path)
     assert "addfont" in (tmp_path / ".autorepro_plot" / "sitecustomize.py").read_text()
 
 
+@pytest.mark.parametrize("font_setup", [
+    "plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'DejaVu Sans']",
+    "plt.rcdefaults()",
+    "plt.style.use('classic')",
+])
+def test_cjk_font_survives_generated_font_overrides(font_setup):
+    pytest.importorskip("matplotlib")
+    executor = CodeExecutorAgent(LLMClient(mock_mode=True), logger=Mock(), mock_mode=True)
+    code = f"""import matplotlib.pyplot as plt
+from matplotlib import font_manager
+{font_setup}
+fig, ax = plt.subplots()
+ax.plot([1, 2], [2, 1], label='训练数据')
+ax.set_title('中文标题：真实气温与预测值', fontsize=19)
+ax.set_xlabel('显式字体：残差分布', fontproperties=font_manager.FontProperties(
+    fname=font_manager.findfont('DejaVu Sans'), size=13))
+ax.text(1, 1.5, 'English only', fontfamily='DejaVu Sans')
+ax.legend()
+plt.tight_layout()
+fig.savefig('plot.png')
+assert ax.title.get_fontproperties().get_file().endswith('NotoSansSC.ttf')
+assert ax.title.get_fontsize() == 19
+assert ax.xaxis.label.get_fontsize() == 13
+assert ax.texts[0].get_fontproperties().get_file() is None
+print('CJK layout and rendering verified')
+"""
+    result = executor.run({"code": code})
+    assert result["success"], result["final"]["stderr"]
+    assert "Glyph" not in result["final"]["stderr"]
+    assert "findfont" not in result["final"]["stderr"]
+    assert "CJK layout and rendering verified" in result["final"]["stdout"]
+    assert len(result["final"]["artifacts"]) == 1
+
+
 def test_session_cleanup_includes_retained_figures(tmp_path, monkeypatch):
     import frontend.history_manager as history
     monkeypatch.setattr(history, "get_project_data_dir", lambda: tmp_path)

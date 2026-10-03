@@ -81,3 +81,46 @@ def test_long_output_is_not_truncated_on_page(at_report):
     assert "step 499 done" in blob
     assert TAIL in blob                            # 末行必须在
     assert "截断" not in blob
+
+
+def test_server_restart_restores_completed_report(tmp_path, monkeypatch):
+    from streamlit.testing.v1 import AppTest
+    from frontend.backend_pipeline import ProgressStore
+    from src.agents.report_generator import ReportGeneratorAgent
+
+    monkeypatch.setattr(hm, "get_project_data_dir", lambda: tmp_path)
+    progress = tmp_path / "finished.jsonl"
+    store = ProgressStore(str(progress))
+    report = ReportGeneratorAgent()._build_report({
+        "env_config": {"python_version": "3.11", "requirements_txt": "numpy\nmatplotlib",
+                       "estimated_disk_gb": 1.5},
+        "execution": {"final": {"disk_usage": {
+            "status": "measured", "components": [{
+                "label": "隔离依赖文件体积", "status": "measured", "bytes": 172216759,
+                "basis": "file_stat", "retained": False}]}}},
+    })
+    store.emit({"type": "done", "result": {
+        "state": "COMPLETED", "data": {"report": report}}})
+    monkeypatch.setenv("AUTOREPRO_RESUME_PROGRESS", str(progress))
+    app = AppTest.from_file(APP_PATH, default_timeout=120).run()
+    assert not app.exception
+    assert app.session_state.progress_file == str(progress)
+    assert app.session_state.running is False
+    blob = _markdown_values(app)
+    assert "预估磁盘" not in blob
+    assert "164.24 MiB" in blob
+    assert "**依赖数**: 2" in blob
+
+
+def test_server_restart_does_not_resume_unfinished_job(tmp_path, monkeypatch):
+    from streamlit.testing.v1 import AppTest
+    from frontend.backend_pipeline import ProgressStore
+
+    monkeypatch.setattr(hm, "get_project_data_dir", lambda: tmp_path)
+    progress = tmp_path / "unfinished.jsonl"
+    ProgressStore(str(progress)).emit({"type": "state", "state": "EXECUTE_CODE"})
+    monkeypatch.setenv("AUTOREPRO_RESUME_PROGRESS", str(progress))
+    app = AppTest.from_file(APP_PATH, default_timeout=120).run()
+    assert not app.exception
+    assert app.session_state.progress_file is None
+    assert app.session_state.result is None

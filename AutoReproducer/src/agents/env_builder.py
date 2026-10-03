@@ -14,6 +14,7 @@ import tempfile
 from typing import Dict, List
 from src.base_agent import BaseAgent
 from src.llm.llm_client import LLMClient
+from src.storage_usage import unmeasured_disk_usage
 from src.agents.dependency_resolver import (
     dependency_root, resolve_dependencies,
 )
@@ -88,9 +89,9 @@ class EnvBuilderAgent(BaseAgent):
     "required_packages": ["包名>=版本"],
     "python_version": "3.11",
     "dockerfile": "完整的Dockerfile内容",
-    "setup_commands": ["环境搭建命令列表"],
-    "estimated_disk_gb": 5.0
+    "setup_commands": ["环境搭建命令列表"]
 }}
+磁盘占用由安装和执行后实测，不要估计或生成磁盘大小。
 """
         llm_result = self.llm.chat(prompt, task="env_builder")
         parsed = self._parse_json(llm_result)
@@ -116,7 +117,6 @@ class EnvBuilderAgent(BaseAgent):
             ),
             "setup_commands": (parsed or {}).get("setup_commands", [])
                               or ["pip install -r requirements.txt"],
-            "estimated_disk_gb": (parsed or {}).get("estimated_disk_gb", 3.0),
         }
 
         # 语料对照层：真实论文的 requirements 直接采用
@@ -149,7 +149,8 @@ class EnvBuilderAgent(BaseAgent):
             "dockerfile": parsed.get("dockerfile", ""),
             "python_version": parsed.get("python_version", "3.11"),
             "setup_commands": parsed.get("setup_commands", []),
-            "estimated_disk_gb": parsed.get("estimated_disk_gb", 3.0),
+            "estimated_disk_gb": None,
+            "disk_usage": unmeasured_disk_usage(),
             "dependency_diagnosis": diagnose_report,
             "static_dependencies": static_deps,
             "static_source": ("code" if code_src else "repo")

@@ -9,3 +9,8 @@ font = "sans serif"
 [runner]
 # 保留同一会话的执行顺序，避免快速重跑中断控件注册和上传状态更新。
 fastReruns = false
+
+[server]
+# 原生文件监听漏报时，后端模块会一直停留在旧版本。轮询检测源码变更。
+fileWatcherType = "poll"
+runOnSave = true
