@@ -4,8 +4,10 @@
 验证结果（指标对比） / 智能优化（UCB 尝试记录） / 验证闭环 / 审计与预算统计。
 """
 from datetime import datetime
+import re
 from src.base_agent import BaseAgent
 from src.metric_keys import norm_metric_key
+from src.execution_artifacts import image_data_url
 
 
 def _fmt(value, spec: str = ".2f", default: float = 0.0) -> str:
@@ -26,6 +28,12 @@ def _txt(value, default: str = "") -> str:
     if isinstance(value, str):
         return value
     return default if value is None else str(value)
+
+
+def _markdown_text(value: str) -> str:
+    """Treat generated filenames and artifact diagnostics as plain text."""
+    return re.sub(r"([\\`*_{}\[\]()<>!|])", r"\\\1",
+                  value.replace("\n", " ").replace("\r", " "))
 
 
 # 报告内代码与执行输出**全文内嵌**，不设展示上限。
@@ -158,6 +166,21 @@ class ReportGeneratorAgent(BaseAgent):
             lines.append(
                 f"  - {st.get('stage')}: {'✅ 通过' if st_ok else '❌ 失败'} "
                 f"(退出码 {st.get('exit_code')})")
+        artifacts = final.get("artifacts") or []
+        if artifacts:
+            lines += ["", "### 运行生成的图片", ""]
+            for index, artifact in enumerate(artifacts, 1):
+                name = _txt(artifact.get("name"), f"图 {index}")
+                name = _markdown_text(name)
+                url = image_data_url(artifact)
+                if url:
+                    # Use a fixed alt label so sandbox filenames cannot inject Markdown.
+                    lines += [f"**图 {index}**：{name}", "",
+                              f"![运行结果图 {index}]({url})", ""]
+                else:
+                    lines += [f"> 图 {index} 无法读取，图片文件可能已被清理。", ""]
+        for warning in final.get("artifact_warnings") or []:
+            lines += [f"> {_markdown_text(str(warning))}", ""]
         if execution.get("code"):
             lines += ["", "### 生成代码", "```python",
                       _txt(execution["code"]), "```"]

@@ -42,6 +42,7 @@ from src.agents.dependency_resolver import (
     find_missing_module, python_package_for,
 )
 from src.resource_events import ResourceEventLogger
+from src.execution_artifacts import prepare_plot_runtime, collect_images, FONT_PATH
 
 LOCAL_TIMEOUT_SMOKE = 10
 LOCAL_TIMEOUT_FULL = 60
@@ -849,6 +850,10 @@ class CodeExecutorAgent(BaseAgent):
 4. 若内容较长一次写不完，请在**一个完整语句的边界**停下（不要停在半个
    表达式中间），我会让你继续写完剩余部分；
 5. {self._rule5(insufficient)}
+6. 需要绘图时使用 Matplotlib 的 Agg 后端，将图保存为当前工作目录或其
+   子目录中的 PNG 文件（如 plt.savefig('plots/result.png')），随后关闭图；
+   系统会将图片嵌入报告。中文字体已配置，请不要强制改回 DejaVu Sans，
+   不要只调用 plt.show()，也不要将图片写到 /tmp 等工作目录外的位置。
 """
 
     @staticmethod
@@ -1242,6 +1247,8 @@ class CodeExecutorAgent(BaseAgent):
             if healed:
                 result = {**result, "healed": healed}
             result["deps_prepared"] = True
+            result.update(collect_images(workdir, stage,
+                                         getattr(self.logger, "session_id", "")))
             return result
         except subprocess.TimeoutExpired:
             return {"success": False, "stdout": "",
@@ -1264,7 +1271,7 @@ class CodeExecutorAgent(BaseAgent):
             # 不依赖系统 locale。缺了它，Windows 中文环境下捕获中文输出会抛
             # UnicodeDecodeError，stdout 变成 None。
             encoding="utf-8", errors="replace",
-            cwd=workdir, env=self._exec_env())
+            cwd=workdir, env=self._exec_env(workdir))
         return {
             "success": result.returncode == 0,
             # `or ""` 兜底：解码失败等异常路径下 stdout/stderr 可能是 None，
@@ -1457,7 +1464,7 @@ class CodeExecutorAgent(BaseAgent):
         return sum(item.stat().st_size for item in path.rglob("*")
                    if item.is_file())
 
-    def _exec_env(self) -> Dict:
+    def _exec_env(self, workdir: Optional[str] = None) -> Dict:
         """构造子进程执行环境：依赖隔离目录存在时注入 PYTHONPATH。
 
         隔离安装的包（data/deps/<hash>/ + 自愈 heal-<module>/ 目录）经
@@ -1482,6 +1489,11 @@ class CodeExecutorAgent(BaseAgent):
                 env["PYTHONPATH"] = joined + os.pathsep + existing
             else:
                 env["PYTHONPATH"] = joined
+        if workdir:
+            plot_env = prepare_plot_runtime(workdir)
+            plot_env["PYTHONPATH"] += (os.pathsep + env["PYTHONPATH"]
+                                       if env.get("PYTHONPATH") else "")
+            env.update(plot_env)
         return env
 
     # ---------------- P1-⑪ Docker 沙箱加固 ----------------
@@ -1654,11 +1666,17 @@ class CodeExecutorAgent(BaseAgent):
         script = os.path.join(workdir, "run.py")
         timeout = DOCKER_TIMEOUT_SMOKE if stage == "smoke" else DOCKER_TIMEOUT_FULL
         try:
+            plot_env = prepare_plot_runtime(workdir, docker=True)
             with open(script, "w", encoding="utf-8") as f:
                 f.write(code)
             mount = workdir.replace("\\", "/")
             base_cmd = [docker_cmd, "run", "--rm",
                         "-v", f"{mount}:/app", "-w", "/app"]
+            for key, value in plot_env.items():
+                base_cmd.extend(["-e", f"{key}={value}"])
+            if FONT_PATH.is_file():
+                font_mount = str(FONT_PATH.parent).replace("\\", "/")
+                base_cmd.extend(["-v", f"{font_mount}:/autorepro-fonts:ro"])
             healed: list = []
             # runner 命令构造：python:3.11-slim 基础镜像场景把 requirements
             # 与自愈补装包都前置到 pip 安装（容器每次 --rm 不保留现场，
@@ -1681,7 +1699,7 @@ class CodeExecutorAgent(BaseAgent):
                     install_parts.append(" ".join(heal_pkgs) + " ")
                 if pip_target:
                     install_parts.append(
-                        f"-q && PYTHONPATH={pip_target} python run.py")
+                        f"-q && PYTHONPATH={pip_target}:/app/.autorepro_plot python run.py")
                 else:
                     install_parts.append("-q && python run.py")
                 return ["sh", "-c", "".join(install_parts)]
@@ -1733,6 +1751,8 @@ class CodeExecutorAgent(BaseAgent):
             }
             if healed:
                 result["healed"] = healed
+            result.update(collect_images(workdir, stage,
+                                         getattr(self.logger, "session_id", "")))
             return result
         except subprocess.TimeoutExpired:
             return {"success": False, "stdout": "",
