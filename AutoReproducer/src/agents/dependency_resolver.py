@@ -150,6 +150,66 @@ def detect_code_dependencies(code: str) -> List[str]:
     return dedupe(modules)
 
 
+def align_runtime_requirements(env_config: dict, code: str,
+                               declared: Iterable[str] = (),
+                               preserve_all: bool = False) -> dict:
+    """Check the final script, pruning only guesses for self-contained scripts.
+
+    Repository/corpus declarations and explicit user environments remain
+    authoritative. Dynamic imports or pip directives make pruning ambiguous.
+    Keep version constraints for packages that are still needed.
+    """
+    packages = env_config.get("required_packages") or []
+    if isinstance(packages, str):
+        packages = [packages]
+    original = env_config.get("requirements_txt") or "\n".join(packages)
+    lines = [line.strip() for line in original.splitlines()
+             if line.strip() and not line.lstrip().startswith("#")]
+    imports = [python_package_for(m) for m in detect_code_dependencies(code)]
+    if isinstance(declared, str):
+        declared = [declared]
+    declared = filter_standard_library(normalize_py39(declared))
+    def key(token):
+        return re.sub(r"[-_.]+", "-", dependency_root(token))
+    needed = {key(p) for p in imports + declared}
+    try:
+        tree = ast.parse(code)
+        dynamic = any(isinstance(n, ast.ImportFrom) and n.module == "importlib" or
+            isinstance(n, ast.Call) and (
+            isinstance(n.func, ast.Name) and n.func.id in
+            {"__import__", "import_module", "exec", "eval"} or
+            isinstance(n.func, ast.Attribute) and n.func.attr in
+            {"import_module", "load_module", "exec_module"}) for n in ast.walk(tree))
+    except (SyntaxError, ValueError):
+        dynamic = True
+    guessed = (env_config.get("dependency_source") == "llm" or
+               env_config.get("dependency_source") is None and
+               env_config.get("static_source") in {"none", "code"})
+    prune = (guessed and not preserve_all and not dynamic
+             and not env_config.get("image_tag")
+             and env_config.get("static_source") != "repo"
+             and not any(line.startswith("-") or " @ " in line for line in lines))
+    retained = [line for line in lines if not prune or key(line) in needed]
+    removed = [line for line in lines if line not in retained]
+    added = []
+    roots = {key(line) for line in retained}
+    for package in declared + imports:
+        if key(package) not in roots:
+            retained.append(package)
+            added.append(package)
+            roots.add(key(package))
+    effective = {**env_config, "requirements_txt": "\n".join(retained)}
+    if "required_packages" in effective:
+        effective["required_packages"] = retained
+    effective["runtime_dependency_selection"] = {
+        "original_requirements_txt": original,
+        "effective_requirements_txt": effective["requirements_txt"],
+        "added": added, "removed": removed, "imports": imports,
+        "source": "final_script_imports", "pruned_guesses": prune,
+    }
+    return effective
+
+
 # ---------------------------------------------------------------- 仓库解析
 
 _SKIP_REPO_DIRS = {

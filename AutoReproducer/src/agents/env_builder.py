@@ -75,7 +75,13 @@ class EnvBuilderAgent(BaseAgent):
 
         prompt = f"""根据论文信息生成运行环境配置。
 论文方法: {paper_info.get('method', '未知')}
+论文标题: {paper_info.get('title', '未知')}
+论文数据集: {paper_info.get('dataset', '未知')}
 已有依赖: {deps}
+
+只列出这篇论文实际需要的包。保留已有依赖的版本约束；不要给普通 NumPy
+线性回归添加 torch、transformers 或大模型工具包。若信息不足，使用已有
+依赖或空列表，后续执行阶段会按生成代码的 import 补全缺失包。
 
 返回JSON格式:
 {{
@@ -98,7 +104,7 @@ class EnvBuilderAgent(BaseAgent):
                 and "未找到" not in p and "未知" not in p
                 and p.strip().lower() not in ("none", "n/a", "unknown", "no", "暂无")]
         if not pkgs:
-            pkgs = deps or ["torch>=2.0.0"]
+            pkgs = deps or []
         parsed = {
             "required_packages": pkgs,
             "python_version": (parsed or {}).get("python_version", "3.11"),
@@ -148,6 +154,8 @@ class EnvBuilderAgent(BaseAgent):
             "static_dependencies": static_deps,
             "static_source": ("code" if code_src else "repo")
                              if static_deps else "none",
+            "dependency_source": "corpus" if corpus_deps else "llm",
+            "dependency_corpus": corpus_paper if corpus_deps else "",
         }
 
         self.log_experiment(

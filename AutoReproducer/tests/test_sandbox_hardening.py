@@ -11,11 +11,11 @@
    no-new-privileges）重跑，记录 sandbox.degraded 级别；
 4. 与加固无关的失败（ModuleNotFoundError）不降级，直接进入缺包自愈；
 5. AUTOREPRO_DOCKER_HARDEN=0 时完全不加固（兼容极端环境）；
-6. 加固开启时 pip 安装走 tmpfs（--target /tmp/site-packages +
+6. 加固开启时 pip 安装走隔离工作目录（--target /app/.autorepro_deps +
    PYTHONPATH 注入），兼容只读 rootfs 与非 root 用户；
 7. 白名单可通过 AUTOREPRO_DOCKER_IMAGE_ALLOWLIST 扩展；
 8. tmpfs 挂载必须**可执行**：Docker `--tmpfs` 默认 noexec，而依赖装在
-   /tmp/site-packages 里，C 扩展的 .so 需要 mmap(PROT_EXEC)——本机实测
+   /tmp/site-packages 里，C 扩展的 .so 需要 mmap(PROT_EXEC)——旧版本实测
    numpy 报 "failed to map segment from shared object"（Permission denied,
    126），同一命令加 exec 后通过。挂载选项判据按逗号切分取成员，
    `"exec" in "noexec"` 是子串，用字符串 in 会把这个 bug 判成「有 exec」。
@@ -222,8 +222,8 @@ class TestHardeningArgs:
                            "degraded": False,
                            "image_allowed": True}
 
-    def test_pip_install_targets_tmpfs(self, monkeypatch, tmp_path):
-        """加固开启：pip 安装走 tmpfs 目录 + PYTHONPATH 注入。"""
+    def test_pip_install_targets_isolated_workspace(self, monkeypatch, tmp_path):
+        """大包写入隔离磁盘目录，保留只读 rootfs 与非 root 用户。"""
         calls: list = []
 
         def fake_run(cmd, **kw):
@@ -240,9 +240,13 @@ class TestHardeningArgs:
                                                workdir=str(tmp_path))
         assert result["success"] is True
         joined = _cmd_str(calls)
-        assert "--target /tmp/site-packages" in joined
-        assert "PYTHONPATH=/tmp/site-packages" in joined
+        assert "--target /app/.autorepro_deps" in joined
+        assert "PYTHONPATH=/app/.autorepro_deps" in joined
+        assert "TMPDIR=/app/.autorepro_tmp" in joined
+        assert (tmp_path / ".autorepro_tmp").is_dir()
         assert "-r /app/requirements.txt" in joined
+        assert "--read-only" in joined
+        assert "--user" in joined
 
     def test_hardening_disabled_no_extra_args(self, monkeypatch, tmp_path):
         """AUTOREPRO_DOCKER_HARDEN=0：完全不加固，pip 走系统路径。"""
@@ -269,7 +273,7 @@ class TestHardeningArgs:
         assert "--user" not in joined
         assert "--pids-limit" not in joined
         assert "--target" not in joined
-        assert "PYTHONPATH=/tmp/site-packages" not in joined
+        assert "PYTHONPATH=/app/.autorepro_deps" not in joined
 
 
 # ---------------- 3. 加固不兼容自动降级 ----------------
@@ -421,7 +425,7 @@ class TestHardeningDegrade:
         # 自愈轮 pip --target tmpfs（加固下 PYTHONPATH 注入）
         second = _cmd_str(calls, 1)
         assert "opencv-python" in second
-        assert "PYTHONPATH=/tmp/site-packages" in second
+        assert "PYTHONPATH=/app/.autorepro_deps" in second
 
     def test_unresolvable_hardening_failure_returns_last(self, monkeypatch,
                                                          tmp_path):

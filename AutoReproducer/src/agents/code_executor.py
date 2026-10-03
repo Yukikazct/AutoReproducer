@@ -25,6 +25,7 @@
 import ast
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -39,7 +40,7 @@ from src.base_agent import BaseAgent
 from src.llm.llm_client import LLMClient
 from src.agents.env_builder import PIP_INDEX_URL, PIP_FIND_LINKS
 from src.agents.dependency_resolver import (
-    find_missing_module, python_package_for,
+    find_missing_module, python_package_for, align_runtime_requirements,
 )
 from src.resource_events import ResourceEventLogger
 from src.execution_artifacts import prepare_plot_runtime, collect_images, FONT_PATH
@@ -48,6 +49,9 @@ LOCAL_TIMEOUT_SMOKE = 10
 LOCAL_TIMEOUT_FULL = 60
 DOCKER_TIMEOUT_SMOKE = 30
 DOCKER_TIMEOUT_FULL = 300
+DOCKER_PIP_TIMEOUT = 300
+DOCKER_STARTUP_TIMEOUT = 30
+EXIT_DEPENDENCY_FAILED = -7
 # 本地依赖安装超时（numpy/matplotlib/torch 等大包需要更长时间）
 LOCAL_PIP_TIMEOUT = 300
 # 运行时缺模块自我修复上限：缺包 -> 隔离安装 -> 重跑，最多 3 轮
@@ -72,8 +76,9 @@ DOCKER_DEFAULT_MEM = os.environ.get("AUTOREPRO_DOCKER_MEM", "2g")
 DOCKER_DEFAULT_PIDS = int(os.environ.get("AUTOREPRO_DOCKER_PIDS", "256"))
 # 容器内非 root 用户（默认 nobody，可覆盖 AUTOREPRO_DOCKER_USER）
 DOCKER_DEFAULT_USER = os.environ.get("AUTOREPRO_DOCKER_USER", "65534:65534")
-# 加固开启时 pip 安装目标：tmpfs 可写目录（--read-only + 非 root 兼容）
-DOCKER_PIP_SITE = "/tmp/site-packages"
+# Dependencies need disk space (torch stacks can exceed the 256 MB /tmp tmpfs).
+# The existing isolated /app mount is writable for nobody and removed afterwards.
+DOCKER_PIP_SITE = "/app/.autorepro_deps"
 # 加固参数与容器环境不兼容的错误特征（命中则按可用性降级重跑）
 _HARDEN_INCOMPATIBLE_HINTS = (
     "unknown flag", "unknown shorthand flag", "not supported",
@@ -217,7 +222,7 @@ EXIT_NOT_RUNNABLE = -5
 EXIT_DANGER_BLOCKED = -6
 # Exit code：Docker 引擎（daemon）不可用，未进入沙箱
 EXIT_DOCKER_DAEMON_DOWN = -4
-_NON_CODE_REPAIR_EXIT_CODES = {-1, -3, -4, EXIT_DANGER_BLOCKED}
+_NON_CODE_REPAIR_EXIT_CODES = {-1, -3, -4, EXIT_DANGER_BLOCKED, EXIT_DEPENDENCY_FAILED}
 
 # 本地无沙箱执行前的危险代码静态门：命中即拒绝执行。高信号、对「复现
 # 训练脚本」低误报；是正则兜底而非正式沙箱，生产复现不可信代码请用 Docker。
@@ -447,6 +452,15 @@ class CodeExecutorAgent(BaseAgent):
         attempts = []
         current = code
         for repair_round in range(MAX_EXECUTION_REPAIRS + 1):
+            if hasattr(self, "_runtime_source_env"):
+                self.env_config = align_runtime_requirements(
+                    self._runtime_source_env, current, self._runtime_declared,
+                    preserve_all=self._runtime_preserve_all)
+                selection = self.env_config["runtime_dependency_selection"]
+                if selection["added"] or selection["removed"]:
+                    self.log("align_runtime_dependencies", "WARNING",
+                             "按最终代码校准执行依赖",
+                             selection)
             smoke = self._execute_code(current, stage="smoke")
             stages.append({"stage": "smoke", "repair_round": repair_round,
                            **smoke})
@@ -494,6 +508,9 @@ class CodeExecutorAgent(BaseAgent):
         env_config = input_data.get("env_config", {}) or {}
         code = input_data.get("code", "") or ""
         self.env_config = env_config  # 供执行阶段选择镜像/依赖
+        self._runtime_source_env = env_config
+        self._runtime_declared = paper_info.get("dependencies") or []
+        self._runtime_preserve_all = bool(input_data.get("corpus_paper"))
         # "尽力而为"标注位：外部代码路径没有生成这一步，保持默认值
         insufficient, fallback_used = False, False
 
@@ -546,6 +563,7 @@ class CodeExecutorAgent(BaseAgent):
                   "final": final, "code": code,
                   "repair_attempts": repair_attempts,
                   "sanitize_stats": sanitize_stats,
+                  "effective_env_config": self.env_config,
                   **best_effort_fields}
         if not final["success"]:
             self.log_experiment(
@@ -1519,7 +1537,7 @@ class CodeExecutorAgent(BaseAgent):
             return args
         # tmpfs 的 exec 必须显式给：Docker `--tmpfs` 默认挂载选项是
         # rw,nosuid,nodev,**noexec**（本机实测 mount 输出），而加固模式下
-        # pip --target 把依赖装进 /tmp/site-packages —— C 扩展的 .so 需要
+        # 旧版 pip --target 把依赖装进 /tmp/site-packages —— C 扩展的 .so 需要
         # mmap(PROT_EXEC)，noexec 下 numpy 直接
         # "failed to map segment from shared object"（Permission denied，126）。
         # 保留 nosuid/nodev：要挡的是 setuid 与设备节点，不是「执行刚装进来的
@@ -1548,7 +1566,7 @@ class CodeExecutorAgent(BaseAgent):
             return self._run_docker_cmd_with_sandbox_impl(
                 base_cmd, image, runner, timeout)
         finally:
-            self.logger.record_sandbox_exec(round(time.time() - t0, 3))
+            self.logger.record_sandbox_exec(round(time.monotonic() - t0, 3))
 
     def _run_docker_cmd_with_sandbox_impl(
             self, base_cmd: List[str], image: str, runner: List[str],
@@ -1611,8 +1629,8 @@ class CodeExecutorAgent(BaseAgent):
         - 镜像白名单：非官方/自建镜像前缀直接拒绝执行（exit_code -5）；
         - 加固参数：cap-drop ALL / no-new-privileges / 只读 rootfs + tmpfs /
           非 root（nobody）/ CPU·mem·pids 限额，随 Docker 可用性自动降级；
-          加固开启时 pip 安装到 tmpfs（/tmp/site-packages）并注入 PYTHONPATH，
-          兼容只读 rootfs 与非 root 用户。
+          pip 安装到隔离 /app 工作目录并注入 PYTHONPATH，安装临时文件也
+          使用工作目录，兼容只读 rootfs、非 root 用户及超过 tmpfs 容量的大包。
         """
         docker_cmd = self._resolve_docker_cmd()
         if docker_cmd is None:
@@ -1674,6 +1692,8 @@ class CodeExecutorAgent(BaseAgent):
                         "-v", f"{mount}:/app", "-w", "/app"]
             for key, value in plot_env.items():
                 base_cmd.extend(["-e", f"{key}={value}"])
+            Path(workdir, ".autorepro_tmp").mkdir(exist_ok=True)
+            base_cmd.extend(["-e", "TMPDIR=/app/.autorepro_tmp"])
             if FONT_PATH.is_file():
                 font_mount = str(FONT_PATH.parent).replace("\\", "/")
                 base_cmd.extend(["-v", f"{font_mount}:/autorepro-fonts:ro"])
@@ -1682,30 +1702,34 @@ class CodeExecutorAgent(BaseAgent):
             # 与自愈补装包都前置到 pip 安装（容器每次 --rm 不保留现场，
             # 缺包必须累积进命令重跑）；自定义 image_tag 镜像假定已含依赖，
             # 仅做脚本运行（缺包时同样改走 pip 前置自愈）。
-            # 加固开启时 pip 安装到 tmpfs（只读 rootfs + 非 root 均可写），
+            # 依赖安装到隔离工作目录，避免大包撑满 /tmp tmpfs；
+            # rootfs 保持只读，仍使用非 root 用户与原有资源限制。
             # 并以 PYTHONPATH 注入该目录，使 run.py 能导入新增依赖。
             pip_target = DOCKER_PIP_SITE if DOCKER_HARDEN else ""
+            supervisor = "/app/.autorepro_plot/timeout_runner.py"
+            shutil.copyfile(_PROJECT_ROOT / "src" / "sandbox_timeout.py",
+                            Path(workdir) / ".autorepro_plot" / "timeout_runner.py")
+            script_runner = ["python", "-S", supervisor, "execution", str(timeout),
+                             "python", "-u", "run.py"]
+            install_requirements = bool(image == "python:3.11-slim" and reqs)
 
             def _make_runner(heal_pkgs: list) -> list:
-                install_parts = ["pip install --disable-pip-version-check ",
-                                 f"-i {PIP_INDEX_URL} ",
-                                 f"--find-links {PIP_FIND_LINKS} "]
+                install = ["python", "-S", supervisor, "dependencies",
+                           str(DOCKER_PIP_TIMEOUT), "pip", "install",
+                           "--disable-pip-version-check", "-i", PIP_INDEX_URL,
+                           "--find-links", PIP_FIND_LINKS]
                 if pip_target:
-                    install_parts.append(f"--target {pip_target} "
-                                         "--no-cache-dir ")
-                if reqs:
-                    install_parts.append("-r /app/requirements.txt ")
-                if heal_pkgs:
-                    install_parts.append(" ".join(heal_pkgs) + " ")
-                if pip_target:
-                    install_parts.append(
-                        f"-q && PYTHONPATH={pip_target}:/app/.autorepro_plot python run.py")
-                else:
-                    install_parts.append("-q && python run.py")
-                return ["sh", "-c", "".join(install_parts)]
+                    install += ["--target", pip_target, "--no-cache-dir"]
+                if install_requirements:
+                    install += ["-r", "/app/requirements.txt"]
+                install += heal_pkgs + ["-q"]
+                prefix = (f"PYTHONPATH={pip_target}:/app/.autorepro_plot "
+                          if pip_target else "")
+                return ["sh", "-c", shlex.join(install) + " && "
+                        + prefix + shlex.join(script_runner)]
 
             reqs_file = None
-            if image == "python:3.11-slim" and reqs:
+            if install_requirements:
                 reqs_file = os.path.join(workdir, "requirements.txt")
                 with open(reqs_file, "w", encoding="utf-8") as f:
                     f.write(reqs)
@@ -1717,15 +1741,23 @@ class CodeExecutorAgent(BaseAgent):
             sandbox_meta: Dict = {"hardened": DOCKER_HARDEN,
                                   "image_allowed": True}
             seen = set()
+            phase_info = {}
             for _ in range(MAX_PIP_SELF_HEAL + 1):
+                installing = bool(install_requirements or healed)
                 runner = (_make_runner(healed_pkgs := [h["package"]
                            for h in healed])
-                          if (image == "python:3.11-slim" and reqs)
-                          or healed else ["python", "run.py"])
+                          if installing else script_runner)
+                # Installation and program execution have separate deadlines
+                # inside the container. The host also caps Docker startup/hangs.
+                outer_timeout = (DOCKER_STARTUP_TIMEOUT + timeout
+                                 + (DOCKER_PIP_TIMEOUT if installing else 0))
                 result, _sandbox_run = self._run_docker_cmd_with_sandbox(
-                    base_cmd, image, runner, timeout)
+                    base_cmd, image, runner, outer_timeout)
                 sandbox_meta = {"image_allowed": True, **_sandbox_run}
+                result.stderr, phase_info = self._decode_docker_phase(result.stderr or "")
                 if result.returncode == 0:
+                    break
+                if phase_info.get("phase") == "dependencies":
                     break
                 module = find_missing_module(result.stderr or "")
                 if not module or module in seen \
@@ -1739,14 +1771,27 @@ class CodeExecutorAgent(BaseAgent):
                          f"Docker 缺模块 {module},累积重跑")
             # 循环至少执行一次（MAX_PIP_SELF_HEAL >= 0），result 必已赋值
             assert result is not None
+            exit_code = result.returncode
+            stderr = result.stderr or ""
+            phase = phase_info.get("phase", "execution")
+            if phase_info.get("timeout"):
+                limit = phase_info["seconds"]
+                if phase == "dependencies":
+                    stderr += f"\n依赖安装超时({limit:g}s)，代码尚未执行。"
+                else:
+                    stderr += f"\n执行超时({limit:g}s, {stage})"
+                exit_code = -1
+            if phase == "dependencies":
+                exit_code = EXIT_DEPENDENCY_FAILED
             result = {
                 "success": result.returncode == 0,
                 # `or ""` 兜底：解码失败等异常路径下 stdout/stderr 可能是 None，
                 # 而 None 会让下游 `full.get("stdout", "无输出")` 拿到 None、
                 # 报告 `"\n".join(lines)` 崩（dict.get 的默认值对 None 不生效）。
                 "stdout": result.stdout or "",
-                "stderr": result.stderr or "",
-                "exit_code": result.returncode,
+                "stderr": stderr,
+                "exit_code": exit_code,
+                "execution_phase": phase,
                 "sandbox": sandbox_meta,
             }
             if healed:
@@ -1754,9 +1799,13 @@ class CodeExecutorAgent(BaseAgent):
             result.update(collect_images(workdir, stage,
                                          getattr(self.logger, "session_id", "")))
             return result
-        except subprocess.TimeoutExpired:
-            return {"success": False, "stdout": "",
-                    "stderr": f"执行超时({timeout}s, {stage})", "exit_code": -1}
+        except subprocess.TimeoutExpired as exc:
+            def decoded(value):
+                return value.decode("utf-8", errors="replace") if isinstance(value, bytes) else (value or "")
+            stderr, phase_info = self._decode_docker_phase(decoded(exc.stderr))
+            return {"success": False, "stdout": decoded(exc.stdout),
+                    "stderr": stderr + f"\n容器启动或准备超时({exc.timeout:g}s)，未取得程序执行结果。",
+                    "exit_code": -1, "execution_phase": "container_preparation"}
         except Exception as e:
             return {"success": False, "stdout": "", "stderr": str(e),
                     "exit_code": -2}
@@ -1765,6 +1814,22 @@ class CodeExecutorAgent(BaseAgent):
                 shutil.rmtree(workdir, ignore_errors=True)
 
     # ---------------- 内部工具 ----------------
+
+    @staticmethod
+    def _decode_docker_phase(stderr: str) -> tuple:
+        from src.sandbox_timeout import MARKER
+        lines, info = [], {}
+        for line in stderr.splitlines(keepends=True):
+            if line.startswith(MARKER):
+                try:
+                    parsed = json.loads(line[len(MARKER):])
+                    if parsed.get("phase") in {"execution", "dependencies"}:
+                        info = parsed
+                        continue
+                except (ValueError, AttributeError):
+                    pass
+            lines.append(line)
+        return "".join(lines), info
 
     def _delta_llm_calls(self) -> int:
         total = self.llm.get_call_count()

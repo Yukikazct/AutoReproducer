@@ -242,6 +242,8 @@ class Orchestrator:
             self.data["env_config"] = result.get("env_config", {})
         elif state_name == "EXECUTE_CODE":
             self.data["execution"] = result
+            if result.get("effective_env_config"):
+                self.data["env_config"] = result["effective_env_config"]
         elif state_name == "VALIDATE":
             self.data["validation"] = result
 

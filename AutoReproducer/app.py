@@ -280,6 +280,9 @@ with st.sidebar:
         "选择 PaperGuru-Benchmark 论文", ["无"] + _corpus, index=0,
         key="corpus_paper_select")
     corpus_paper = None if _corpus_choice == "无" else _corpus_choice
+    if corpus_paper:
+        st.caption(f"当前任务会使用 {corpus_paper} 的依赖和参考指标。"
+                   "仅运行上传的 PDF 时，请将语料对照设为“无”。")
 
     # 启动 / 重置按钮
     col1, col2 = st.columns(2)

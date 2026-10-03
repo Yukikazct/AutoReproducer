@@ -197,6 +197,8 @@ def run_pipeline_core(progress_path: str,
                 data["env_config"] = result.get("env_config", {})
             elif stage_name == "EXECUTE_CODE":
                 data["execution"] = result
+                if result.get("effective_env_config"):
+                    data["env_config"] = result["effective_env_config"]
             elif stage_name == "VALIDATE":
                 data["validation"] = result
 

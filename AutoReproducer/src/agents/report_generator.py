@@ -64,8 +64,8 @@ class ReportGeneratorAgent(BaseAgent):
     def _build_report(self, data: dict) -> str:
         paper_info = data.get("paper_info", {}) or {}
         resources = data.get("resources", {}) or {}
-        env_config = data.get("env_config", {}) or {}
         execution = data.get("execution", {}) or {}
+        env_config = execution.get("effective_env_config") or data.get("env_config", {}) or {}
         validation = data.get("validation", {}) or {}
         optimization = data.get("optimization", {}) or {}
         audit = data.get("audit_stats", {}) or {}
@@ -102,6 +102,9 @@ class ReportGeneratorAgent(BaseAgent):
                   f"- **依赖数**: "
                   f"{len(_txt(env_config.get('requirements_txt')).splitlines())}",
                   f"- **预估磁盘**: {env_config.get('estimated_disk_gb', 'N/A')} GB"]
+        if env_config.get("dependency_corpus"):
+            lines.append("- **语料依赖来源**: " + _markdown_text(
+                str(env_config["dependency_corpus"])))
         diag = env_config.get("dependency_diagnosis", {}) or {}
         if diag:
             lines += ["", "### 依赖诊断（5轮循环）",
@@ -120,6 +123,14 @@ class ReportGeneratorAgent(BaseAgent):
                     f"- 第 {rnd.get('round')} 轮: 🔧 发现 {descs} -> {fixs}")
         lines += ["", "### requirements.txt", "```",
                   _txt(env_config.get("requirements_txt"), "无"), "```", ""]
+        selection = env_config.get("runtime_dependency_selection") or {}
+        if selection.get("added") or selection.get("removed"):
+            lines += ["### 执行前依赖校准", ""]
+            if selection.get("added"):
+                lines.append("- **按代码补全**: " + _markdown_text(", ".join(selection["added"])))
+            if selection.get("removed"):
+                lines.append("- **移除未使用的模型猜测包**: " + _markdown_text(", ".join(selection["removed"])))
+            lines.append("")
 
         # 4. 代码执行（smoke + full）
         lines += ["## 4. 代码执行",
