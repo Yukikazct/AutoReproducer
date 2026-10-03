@@ -1,0 +1,52 @@
+{
+  "scientific_notation": {
+    "loss": 1.2
+  },
+  "first_vs_final_metric": {
+    "loss": 1.0
+  },
+  "missing_required_metric": {
+    "match": true,
+    "differences": [
+      "accuracy: 声明 0.9 vs 实际 0.9 (归一化后相对差异 0.0%)",
+      "f1: 论文声明 0.85，运行输出未提取到该指标"
+    ],
+    "missing_metrics": [
+      "f1: 论文声明 0.85，运行输出未提取到该指标"
+    ],
+    "confidence": 0.8,
+    "analysis": "本地数值比对完成；1 个声明指标未提取到"
+  },
+  "mse_100x_difference": {
+    "match": true,
+    "differences": [
+      "mse: 声明 0.5 vs 实际 50 (归一化后相对差异 0.0%)"
+    ],
+    "missing_metrics": [],
+    "confidence": 0.8,
+    "analysis": "本地数值比对完成"
+  },
+  "failed_run_with_metric": {
+    "validation": {
+      "match": true,
+      "confidence": 1.0,
+      "differences": [],
+      "verdict_sources": {
+        "llm": true,
+        "local": true
+      }
+    },
+    "metrics_comparison": {
+      "paper": {
+        "accuracy": 0.9
+      },
+      "actual": {
+        "accuracy": 0.9
+      }
+    },
+    "is_reproduced": true,
+    "status": "reproduced",
+    "confidence": 1.0,
+    "llm_calls": 1
+  }
+}
