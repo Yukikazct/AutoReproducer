@@ -40,7 +40,7 @@ def test_missing_reference_has_no_verdict_and_does_not_call_model(stdout):
     assert "参考指标" in orchestrator._optimization_skip_reason()
 
 
-def test_corpus_reference_still_allows_comparison(monkeypatch):
+def test_corpus_score_cannot_replace_paper_performance_reference(monkeypatch):
     monkeypatch.setattr("src.corpus.get_declared_score", lambda _: 0.85)
     llm = Mock(spec=LLMClient)
     llm.get_call_count.return_value = 1
@@ -49,9 +49,10 @@ def test_corpus_reference_still_allows_comparison(monkeypatch):
         "paper_info": {"metrics": {}}, "corpus_paper": "corpus-anchor",
         "execution": _execution(stdout="reproduction_score = 0.85\n"),
     })
-    assert result["is_reproduced"] is True
-    assert result["status"] == "reproduced"
-    llm.chat.assert_called_once()
+    assert result["is_reproduced"] is None
+    assert result["status"] == "no_reference_metrics"
+    assert result["metrics_comparison"]["paper"] == {}
+    llm.chat.assert_not_called()
 
 
 def test_report_keeps_pip_notice_as_diagnostic_and_preserves_actual_metrics():

@@ -1,341 +1,257 @@
-"""ResultValidatorAgent - 结果验证 Agent，比对论文声明值与运行结果。
-
-对齐方案「Phase 5: 结果验证」：
-- 将实际运行结果与论文声明数值比对；
-- 输出复现报告：成功/失败、数值差异、可能原因分析；
-- 判断标准：环境是否 OK、输出是否 OK、描述是否 OK（输出 is_reproduced）。
-"""
+"""结果验证：先核验执行证据，再按显式单位确定性比较最终指标。"""
 import json
 import re
 from typing import Dict
+
 from src.base_agent import BaseAgent
 from src.llm.llm_client import LLMClient
 from src.metric_keys import norm_metric_key
+from src.runtime_metrics import (
+    comparable_values, metric_number, metric_unit, parse_runtime_metrics,
+)
 
-# 指标提取模式：键名 -> 输出中的统一指标名
-# 注意 rmse 必须排在 mse 之前，否则 "rmse: 1.2" 会被 mse 分支抢先匹配
-_METRIC_PATTERNS = [
-    (r"(?:accuracy|acc|精确率|准确率|测试集准确率)\s*[:：=]?\s*([\d.]+)\s*%?", "accuracy"),
-    (r"(?:f1[_-]?score|f1)\s*[:：=]?\s*([\d.]+)", "f1_score"),
-    (r"(?:precision|精确率)\s*[:：=]?\s*([\d.]+)\s*%?", "precision"),
-    (r"(?:recall|召回率)\s*[:：=]?\s*([\d.]+)\s*%?", "recall"),
-    (r"(?:loss|损失)\s*[:：=]?\s*([\d.]+)", "loss"),
-    # \b 不可省：否则 "rmse: 1.2" 里的 "mse" 会被下面的 mse 分支抢先命中
-    (r"\b(?:rmse|root[_\s]?mean[_\s]?squared[_\s]?error)\s*[:：=]?\s*([\d.]+)", "rmse"),
-    (r"\b(?:mse|mean[_\s]?squared[_\s]?error)\s*[:：=]?\s*([\d.]+)", "mse"),
-]
-# 复现成功判定的相对差异阈值
 _TOLERANCE = 0.05
 
 
 class ResultValidatorAgent(BaseAgent):
-    """验证运行结果是否与论文声明一致。"""
+    """模型解释偏差；执行状态、指标完整性和数值规则决定结论。"""
 
-    system_prompt = "比对实际运行指标与论文声明值,输出复现成功/失败、数值差异与原因分析"
+    system_prompt = "核验执行证据和最终指标，确定性比对论文数值，模型只解释偏差"
 
     def __init__(self, llm_client: LLMClient, logger=None):
         super().__init__("ResultValidator", logger)
         self.llm = llm_client
 
     def run(self, input_data: dict) -> dict:
-        """验证执行结果。
-
-        input_data: {"paper_info": dict, "execution": dict, "corpus_paper": str}
-        """
         self.log("validate", "START", "开始验证结果", input_data)
-
         paper_info = input_data.get("paper_info", {}) or {}
         execution = input_data.get("execution", {}) or {}
-
-        # execution 兼容新结构（stages）与旧结构（execution.execution）
-        stdout = execution.get("stdout", "") or ""
-        stderr = execution.get("stderr", "") or ""
-        if not stdout and execution.get("stages"):
-            stdout = execution["stages"][-1].get("stdout", "")
-            stderr = execution["stages"][-1].get("stderr", "")
-
+        final = self._final_execution(execution)
+        stdout = final.get("stdout", "") or ""
         paper_metrics = dict(paper_info.get("metrics", {}) or {})
+        paper_units = paper_info.get("metric_units", {}) or {}
+        structured = final.get("metric_records", final.get("metrics"))
+        records, metric_errors = parse_runtime_metrics(stdout, structured, expected_names=paper_metrics)
+        actual_metrics = {r["name"]: r["value"] for r in records if r["value"] is not None}
+        actual_units = {r["name"]: r["unit"] for r in records}
+        execution_status, execution_reason = self._execution_state(execution)
 
-        # 语料对照层：无声明指标时用语料复现分作为论文声明值
-        corpus_paper = input_data.get("corpus_paper") or paper_info.get("corpus_paper")
-        if not paper_metrics and corpus_paper:
-            from src.corpus import get_declared_score
-            score = get_declared_score(corpus_paper)
-            if score is not None:
-                paper_metrics = {"reproduction_score": round(float(score), 4)}
+        def finish(status, match, reason, comparison=None, level=None):
+            inner = {**(comparison or {}), "match": match, "analysis": reason,
+                     "verdict_source": "deterministic", "relative_tolerance": _TOLERANCE}
+            inner.setdefault("differences", [])
+            inner.setdefault("confidence", 0.0)
+            result = {
+                "validation": inner,
+                "metrics_comparison": {"paper": paper_metrics, "actual": actual_metrics,
+                                       "paper_units": paper_units, "actual_units": actual_units},
+                "metric_records": records,
+                "is_reproduced": match, "status": status, "reason": reason,
+                "execution_status": execution_status,
+                "result_level": level or ("reproduced" if match else "inconclusive"),
+                "confidence": inner["confidence"], "llm_calls": self._delta_llm_calls(),
+            }
+            self.log_experiment("VALIDATE", reason, inputs={"paper_metrics": paper_metrics},
+                                outputs={"actual_metrics": actual_metrics,
+                                         "metric_records": records},
+                                result={"status": status, "is_reproduced": match})
+            self.log("validate", "SUCCESS" if match is True else "WARNING", reason, result)
+            return result
 
-        # 代码根本没跑起来（语法错误/危险调用被前置拦截，或沙箱启动即失败）
-        # -> "无法验证"，不能报成"复现失败"——后者会误导用户以为方法不对。
         not_runnable = self._detect_not_runnable(execution, stdout)
         if not_runnable:
-            reason = f"代码未能运行，无法与论文声明比对（原因：{not_runnable}）"
-            self.log_experiment(
-                "VALIDATE", "代码未运行,跳过指标比对",
-                inputs={"execution_stage": (execution.get("final") or {}).get("stage")},
-                outputs={"status": "not_runnable"},
-                result={"is_reproduced": None, "reason": not_runnable})
-            self.log("validate", "WARNING", reason)
-            return {
-                "validation": {"match": None, "differences": [],
-                               "confidence": 0.0, "analysis": reason},
-                "metrics_comparison": {"paper": paper_metrics, "actual": {}},
-                "is_reproduced": None,
-                "status": "not_runnable",
-                "reason": not_runnable,
-                "confidence": 0.0,
-                "llm_calls": self._delta_llm_calls(),
-            }
-
-        # 信息不足下的"尽力而为"执行：代码确实跑了，但它是占位实现，不能拿去
-        # 与论文声明比对 -> 第四态 best_effort（既不判成功也不判失败）。
-        # 顺序即优先级：真没跑（not_runnable）> 跑了但不可核对（best_effort）>
-        # 正常比对——"没跑起来"永远比"跑了个占位"更该优先告知用户。
-        #
-        # 为什么要这一态：不拦的话，占位脚本一旦打印出任何可提取的数值，
-        # `_local_compare` 原先对"无论文声明指标"是乐观判定（跑出数值即 match=True）
-        # -> 报告显示假的 ✅ 复现成功、还会真去触发优化；一个数值都抽不到时又
-        # 显示假的 ❌ 失败。两种都是把"信息不足"翻译成了错误结论。
+            return finish("not_runnable", None,
+                          f"代码未能运行，无法与论文声明比对（原因：{not_runnable}）",
+                          level="failed")
+        if execution_status == "failed":
+            return finish("execution_failed", False,
+                          f"执行失败，不能判定论文数值复现：{execution_reason}", level="failed")
+        if execution_status == "incomplete":
+            return finish("execution_incomplete", None,
+                          f"执行证据不足，无法核验：{execution_reason}")
+        if metric_errors:
+            return finish("invalid_metrics", False, "最终运行指标无效：" + "；".join(metric_errors),
+                          {"differences": metric_errors, "invalid_metrics": metric_errors},
+                          level="failed")
         if execution.get("best_effort") or paper_info.get("insufficient_info"):
-            actual_metrics = self._extract_metrics(stdout)   # 证据照留
-            reason = ("论文信息不足，代码为尽力而为的占位实现，其输出不能与"
-                      "论文声明比对（不判定为复现成功或失败）")
-            self.log_experiment(
-                "VALIDATE", "信息不足,跳过结论判定",
-                inputs={"stdout_tail": stdout[-300:]},
-                outputs={"status": "best_effort",
-                         "actual_metrics": actual_metrics},
-                result={"is_reproduced": None, "reason": reason})
-            self.log("validate", "WARNING", reason)
-            return {
-                # differences 是"逐项数值差异"，占位实现没有可比对的项；
-                # 理由已经在 analysis/reason 里，塞进 differences 只会让报告
-                # 把同一句话印三遍。
-                "validation": {"match": None, "differences": [],
-                               "confidence": 0.0, "analysis": reason},
-                "metrics_comparison": {"paper": paper_metrics,
-                                       "actual": actual_metrics},
-                "is_reproduced": None,
-                "status": "best_effort",
-                "reason": reason,
-                "confidence": 0.0,
-                "llm_calls": self._delta_llm_calls(),
-            }
+            return finish("best_effort", None,
+                          "论文信息不足，代码为尽力而为的占位实现，其输出不能与论文声明比对"
+                          "（不判定为复现成功或失败）")
+        if execution_status == "smoke_passed":
+            return finish("smoke_passed", None,
+                          "仅完成冒烟检查，尚未完成完整实验与论文数值核验。", level="smoke_passed")
 
-        actual_metrics = self._extract_metrics(stdout)
+        required = paper_info.get("required_metrics", []) or []
+        local = self._local_compare(paper_metrics, actual_metrics, paper_units, actual_units,
+                                    required_metrics=required)
+        norm_records = {r["name"]: r for r in records}
+        for key, declared in paper_metrics.items():
+            record = norm_records.get(norm_metric_key(key))
+            if not record:
+                continue
+            expected_split = declared.get("split") if isinstance(declared, dict) else None
+            expected_stage = declared.get("stage") if isinstance(declared, dict) else None
+            errors = []
+            if record["stage"] == "train":
+                errors.append(f"{key}: 只有训练指标，缺少最终评估指标")
+            if expected_split and record["split"] != str(expected_split).lower():
+                errors.append(f"{key}: 数据划分不一致（要求 {expected_split}，实际 {record['split'] or '未标注'}）")
+            if expected_stage and record["stage"] != str(expected_stage).lower():
+                errors.append(f"{key}: 指标阶段不一致（要求 {expected_stage}，实际 {record['stage'] or '未标注'}）")
+            if errors:
+                local["match"] = False
+                local["confidence"] = 0.4
+                local.setdefault("invalid_metrics", []).extend(errors)
+                local["differences"].extend(errors)
+                local["analysis"] = "指标来源不满足最终评估要求"
 
-        # 没有参考数值时，既不能凭运行产出宣称复现成功，也不能判为失败。
-        # 在调用模型前确定这一结论，避免模型与本地判据产生相反的猜测。
-        if not paper_metrics:
-            reason = ("论文未声明参考指标数值，无法核验运行结果是否与论文一致。"
-                      "已保留实际运行指标；需补充参考数值后才能判断复现结论。")
-            self.log_experiment(
-                "VALIDATE", "缺少参考指标,跳过数值比对",
-                inputs={"paper_metrics": paper_metrics},
-                outputs={"status": "no_reference_metrics",
-                         "actual_metrics": actual_metrics},
-                result={"is_reproduced": None, "reason": reason})
-            self.log("validate", "WARNING", reason)
-            return {
-                "validation": {"match": None, "differences": [],
-                               "confidence": 0.0, "analysis": reason},
-                "metrics_comparison": {"paper": {}, "actual": actual_metrics},
-                "is_reproduced": None,
-                "status": "no_reference_metrics",
-                "reason": reason,
-                "confidence": 0.0,
-                "llm_calls": self._delta_llm_calls(),
-            }
+        if not paper_metrics and local["match"] is not False:
+            # 语料库复现评分是评测项目得分，不能充当上传论文的性能参考数值。
+            return finish("no_reference_metrics", None,
+                          "论文未声明参考指标数值，无法核验运行结果是否与论文一致。"
+                          "已保留实际运行指标；需补充参考数值后才能判断复现结论。")
+        if local.get("missing_metrics") or local.get("invalid_metrics"):
+            return finish("not_reproduced", False, local["analysis"], local, level="failed")
 
-        # LLM 比对 + 本地数值校验兜底。
-        # 判据必须写进 prompt：不写的话模型只能凭感觉判，实测同样的输入
-        # （声明 0.0892 / 实际 0.0869）会在 true/false 之间反复横跳，而它
-        # 与本地规则取交集，一次 false 就把正确结论否决掉。
-        prompt = f"""比对论文声明的指标与代码运行结果。
-
+        # 模型输出不能改变已经确定的 match，也不能替换逐项数值差异。
+        prompt = f"""比对论文声明的指标与代码运行结果，解释以下确定性数值判定。
 论文声明指标: {json.dumps(paper_metrics, ensure_ascii=False)}
-代码运行输出: {stdout[:2000]}
+论文指标单位: {json.dumps(paper_units, ensure_ascii=False)}
 提取到的实际指标: {json.dumps(actual_metrics, ensure_ascii=False)}
+实际指标单位: {json.dumps(actual_units, ensure_ascii=False)}
+确定性结果: {json.dumps(local, ensure_ascii=False)}
 
-判定规则（必须严格遵守，不要自行加严或放宽）:
-1. 以"提取到的实际指标"为运行结果的准据。输出里若同时出现论文声明值
-   （例如复现脚本自己打印了一行声明指标做对照），**不得**把它当成运行结果。
-2. 指标名的大小写与分隔符差异不构成不同指标：MSE 与 mse、F1_score 与
-   "F1 Score" 是同一个指标，必须照常比对。
-3. 逐项算相对差异 |实际-声明|/|声明|：
-   - ≤ {_TOLERANCE:.0%} 视为一致（实验存在随机性，这是正常波动）；
-   - > {_TOLERANCE:.0%} 视为不一致；
-   - 声明了但确实没跑出该指标，视为不一致（无法证实），并在 differences 里写明。
-4. match=true 当且仅当所有声明指标都一致。只要有一项超阈值或无对应输出，
-   match 必须为 false。
-5. 分析里给出每个指标的实际相对差异百分比，不要只说"接近"或"有差异"。
-
-返回JSON格式:
-{{
-    "match": true/false,
-    "differences": ["指标1: 声明值 vs 实际值 (相对差异 X%)"],
-    "confidence": 0.0-1.0,
-    "analysis": "分析说明"
-}}
+规则：所有声明指标都一致、执行成功且所有必需指标有限时才可通过。
+相对差异 |实际-声明|/|声明| ≤ {_TOLERANCE:.0%} 视为一致。
+指标名的大小写与分隔符差异不构成不同指标；仅显式百分比/比例单位允许换算。
+输出中的论文声明值不得当作运行结果。仅冒烟通过不等于论文数值复现。
+你只解释偏差，不得覆盖确定性判定。返回 JSON：
+{{"match": true/false, "analysis": "原因解释"}}
 """
-        llm_result = self.llm.chat(prompt, task="result_validator")
-        parsed = self._parse_json(llm_result)
-        if not parsed or "match" not in parsed:
-            parsed = self._local_compare(paper_metrics, actual_metrics)
-
-        # 本地校验：与 LLM 结果取交集（两者都判成功才算成功）
-        local = self._local_compare(paper_metrics, actual_metrics)
-        llm_ok = bool(parsed.get("match", False))
-        local_ok = bool(local.get("match", False))
-        match = llm_ok and local_ok
-        if paper_metrics and not actual_metrics:
-            match = False  # 有声明无实测值 -> 不可判定为复现成功
-
-        confidence = float(parsed.get("confidence", 0.0) or 0.0)
-        differences = list(parsed.get("differences", []) or [])
-        # 两个独立判据结论相反时，如实记下分歧并按"最弱一环"报置信度。
-        # 否则会出现"LLM 说 match=true/置信度 1.0，最终却报未复现且置信度 1.0"
-        # 这种自相矛盾的结论——用户无法分辨到底是"确定没复现"还是"判据打架"。
-        if llm_ok != local_ok:
-            differences.append(
-                f"判据分歧: 模型判定 match={llm_ok}，本地数值比对判定 "
-                f"match={local_ok}；以交集为准（{match}）")
-            confidence = min(confidence, float(local.get("confidence", 0.0) or 0.0))
-
-        result = {
-            "validation": {**parsed, "match": match, "differences": differences,
-                           "verdict_sources": {"llm": llm_ok, "local": local_ok}},
-            "metrics_comparison": {"paper": paper_metrics, "actual": actual_metrics},
-            "is_reproduced": match,
-            "status": "reproduced" if match else "not_reproduced",
-            "confidence": round(confidence, 4),
-        }
-
-        self.log_experiment(
-            "VALIDATE", "比对论文声明与运行结果",
-            inputs={"paper_metrics": paper_metrics, "stdout_tail": stdout[-500:]},
-            outputs=actual_metrics,
-            result={"is_reproduced": match, "differences": parsed.get("differences", [])},
-        )
-        self.log("validate",
-                 "SUCCESS" if match else "WARNING",
-                 f"验证{'通过' if match else '未通过'} - 置信度: {result['confidence']:.2f}",
-                 result)
-
-        return {**result, "llm_calls": self._delta_llm_calls()}
-
-    # ---------------- 内部工具 ----------------
+        parsed = {}
+        try:
+            parsed = self._parse_json(self.llm.chat(prompt, task="result_validator"))
+        except Exception as exc:
+            self.log("explain_metrics", "WARNING", f"模型解释不可用，保留确定性判定：{type(exc).__name__}")
+        llm_match = parsed.get("match") if isinstance(parsed.get("match"), bool) else None
+        local["verdict_sources"] = {"llm": llm_match, "local": local["match"]}
+        if llm_match is not None and llm_match != local["match"]:
+            local["differences"].append(
+                f"判据分歧: 模型解释 match={llm_match}，确定性数值判定 match={local['match']}；采用确定性判定")
+        elif llm_match is local["match"] and isinstance(parsed.get("analysis"), str) and parsed["analysis"].strip():
+            local["analysis"] += "；" + parsed["analysis"].strip()
+        match = local["match"]
+        return finish("reproduced" if match else "not_reproduced", match, local["analysis"], local,
+                      level="reproduced" if match else "experiment_completed")
 
     @staticmethod
-    def _detect_not_runnable(execution: Dict, stdout: str) -> str:
-        """判断执行是否"压根没跑起来"；是则返回原因文本，否则返回 ""。
+    def _final_execution(execution):
+        if execution.get("final"):
+            return execution["final"]
+        if execution.get("stages"):
+            return execution["stages"][-1]
+        return execution.get("execution") or execution
 
-        与"跑起来了但结果不符"区分：只有前者才应报"无法验证"。判据：
-        1. CodeExecutor 前置门拦下（not_runnable 标记 / exit_code=-5）；
-        2. 最终阶段失败且没有任何 stdout（依赖装不上、语法错误、超时等）。
+    @classmethod
+    def _execution_state(cls, execution):
+        final = cls._final_execution(execution)
+        history = execution.get("steps") or execution.get("stages") or []
+        # 自愈历史中的旧失败已经由新一轮重跑替代，不能污染最终结论。
+        if history and final.get("repair_round") is not None:
+            history = [st for st in history if st.get("repair_round") == final["repair_round"]]
+        current = {}
+        for index, step in enumerate(history):
+            current[step.get("id") or step.get("stage") or index] = step
+        checks = [final, *current.values(), execution]
+        for step in checks:
+            if step.get("required") is False:
+                continue
+            code = step.get("exit_code")
+            failed = step.get("success") is False or step.get("timed_out") or step.get("cancelled")
+            if code is not None and code != 0:
+                failed = True
+            if failed:
+                name = step.get("id") or step.get("stage") or "执行"
+                detail = str(step.get("stderr") or step.get("reason") or "").strip()[:200]
+                return "failed", f"{name} 失败（退出码 {code if code is not None else '未知'}）" + (f"：{detail}" if detail else "")
+        required = [st for st in current.values() if st.get("required") is not False]
+        if not final or not (final.get("exit_code") == 0 or final.get("success") is True):
+            return "incomplete", "缺少最终阶段成功状态或退出码"
+        if any(not (st.get("exit_code") == 0 or st.get("success") is True) for st in required):
+            return "incomplete", "存在未完成的必需步骤"
+        stage = str(final.get("stage") or "").lower()
+        if stage in {"smoke", "import_check", "check", "precheck"} or execution.get("validation_level") == "smoke":
+            return "smoke_passed", ""
+        if stage in {"train", "training", "prepare", "dependencies"}:
+            return "incomplete", "仅完成训练或准备步骤，缺少最终评估执行证据"
+        return "experiment_completed", ""
 
-        注意"跑了但信息不足"（best_effort）**不**属于这里：那是另一态，由
-        `run()` 里的 best_effort 分支处理，本方法不该把它报成"没跑起来"。
-        """
+    @classmethod
+    def _detect_not_runnable(cls, execution: Dict, stdout: str) -> str:
         if execution.get("not_runnable"):
             return (execution.get("reason") or "代码未进入执行阶段").strip()
-        final = execution.get("final") or {}
+        final = cls._final_execution(execution)
         if final.get("not_runnable"):
             return (final.get("stderr") or "代码未进入执行阶段").strip()
-        if final and not final.get("success") and not (stdout or "").strip():
-            detail = (final.get("stderr") or "").strip()
-            return (detail[:200] if detail else "执行未产出任何输出")
+        if (final.get("success") is False or final.get("exit_code", 0) != 0) and not str(stdout).strip():
+            return str(final.get("stderr") or "执行未产出任何输出").strip()[:200]
         return ""
 
     @staticmethod
     def _norm_metric_key(key) -> str:
-        """指标键归一（规则见 `src/metric_keys.py`，与报告展示层同源）。
-
-        实测（真实模式）：论文声明 `{"MSE": 0.0892}`，运行输出打印
-        `MSE: 0.0869`，经 `_extract_metrics` 归一成键 `mse`；而这里原先用
-        `akey == key` 精确比对，`"MSE" != "mse"` 于是判"声明了但没提取到"，
-        把 2.6%（远小于 5% 阈值）的差异**误报成未复现**，理由还写反了。
-        """
         return norm_metric_key(key)
 
-    def _local_compare(self, paper_metrics: Dict, actual_metrics: Dict) -> Dict:
-        """本地规则比对：同键指标相对差异 <= 5% 视为匹配。"""
-        if not paper_metrics:
-            return {"match": None, "differences": [], "confidence": 0.0,
-                    "analysis": "论文未声明参考指标数值，无法核验"}
-        if not actual_metrics:
-            return {"match": False, "differences": ["论文声明指标但运行输出未提取到数值"],
-                    "confidence": 0.3, "analysis": "运行输出缺少可解析的数值指标"}
-
-        # 键归一后再比对（大小写/分隔符不敏感）；同归一键取首次出现值
-        norm_actual: Dict[str, object] = {}
-        for akey, aval in actual_metrics.items():
-            norm_actual.setdefault(self._norm_metric_key(akey), aval)
-
-        differences, missing = [], []
-        match_all = True
-        matched = 0
+    def _local_compare(self, paper_metrics: Dict, actual_metrics: Dict,
+                       paper_units=None, actual_units=None, required_metrics=None) -> Dict:
+        norm_actual = {norm_metric_key(k): v for k, v in actual_metrics.items()}
+        p_units = {norm_metric_key(k): v for k, v in (paper_units or {}).items()}
+        a_units = {norm_metric_key(k): v for k, v in (actual_units or {}).items()}
+        differences, missing, invalid = [], [], []
+        match = bool(paper_metrics)
+        for key in required_metrics or []:
+            if norm_metric_key(key) not in norm_actual:
+                missing.append(f"{key}: 运行输出未提取到必需指标")
         for key, declared in paper_metrics.items():
-            try:
-                declared_num = float(declared)
-            except (TypeError, ValueError):
+            normalized = norm_metric_key(key)
+            declared_num = metric_number(declared)
+            if declared_num is None:
+                invalid.append(f"{key}: 论文参考值不是有限数值")
                 continue
-            actual = None
-            aval = norm_actual.get(self._norm_metric_key(key))
-            if aval is not None:
-                try:
-                    actual = float(aval)
-                except (TypeError, ValueError):
-                    actual = None
-            if actual is None:
-                # 声明了但输出里没提取到：如实记为"无法比对"（不再静默跳过）
-                missing.append(
-                    f"{key}: 论文声明 {declared_num:g}，运行输出未提取到该指标")
+            if normalized not in norm_actual:
+                missing.append(f"{key}: 论文声明 {declared_num:g}，运行输出未提取到该指标")
                 continue
-            matched += 1
-            # 口径统一：一方为小数(0~1)、另一方为百分数(>=10)时,归一到小数再比对
-            declared_raw, actual_raw = declared_num, actual
-            if declared_num <= 1.0 and actual >= 10.0:
-                actual = actual / 100.0
-            elif declared_num >= 10.0 and actual <= 1.0:
-                declared_num = declared_num / 100.0
-            diff = abs(actual - declared_num) / max(abs(declared_num), 1e-9)
+            actual = norm_actual[normalized]
+            actual_num = metric_number(actual)
+            if actual_num is None:
+                invalid.append(f"{key}: 实际指标不是有限数值")
+                continue
+            p_unit = metric_unit(declared, p_units.get(normalized))
+            a_unit = metric_unit(actual, a_units.get(normalized))
+            reference, measured, error = comparable_values(declared_num, actual_num, p_unit, a_unit)
+            if error:
+                invalid.append(f"{key}: {error}")
+                continue
+            diff = abs(measured - reference) / abs(reference) if reference else (0.0 if measured == 0 else float("inf"))
             if diff > _TOLERANCE:
-                match_all = False
-            differences.append(
-                f"{key}: 声明 {declared_raw:g} vs 实际 {actual_raw:g} "
-                f"(归一化后相对差异 {diff:.1%})")
-
-        if matched == 0:
-            # 声明指标一个都没对上 -> 不是"复现成功",而是数据对不上号
-            match_all = False
-        differences += missing
-        return {"match": match_all, "differences": differences,
-                "missing_metrics": missing,
-                "confidence": 0.8 if match_all else 0.4,
-                "analysis": ("本地数值比对完成"
-                             + (f"；{len(missing)} 个声明指标未提取到" if missing
-                                else ""))}
+                match = False
+            differences.append(f"{key}: 声明 {declared_num:g} vs 实际 {actual_num:g} (相对差异 {diff:.1%})")
+        if missing or invalid:
+            match = False
+        differences += missing + invalid
+        if not paper_metrics and not missing and not invalid:
+            match = None
+        analysis = "本地数值比对完成"
+        if missing:
+            analysis += f"；{len(missing)} 个必需指标未提取到"
+        if invalid:
+            analysis += f"；{len(invalid)} 个指标值或单位无效"
+        return {"match": match, "differences": differences, "missing_metrics": missing,
+                "invalid_metrics": invalid, "confidence": 0.8 if match else (0.4 if match is False else 0.0),
+                "analysis": analysis}
 
     def _extract_metrics(self, text: str) -> Dict:
-        """从输出文本中提取指标数值。"""
-        metrics: Dict[str, float] = {}
-        for pattern, name in _METRIC_PATTERNS:
-            match = re.search(pattern, text, re.IGNORECASE)
-            if match:
-                try:
-                    metrics[name] = float(match.group(1))
-                except ValueError:
-                    pass
-        # 覆盖键=值 风格的行（如 accuracy=0.852）
-        for line in (text or "").splitlines():
-            m = re.match(r"\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([\d.]+)\s*$", line)
-            if m:
-                try:
-                    metrics[m.group(1).lower()] = float(m.group(2))
-                except ValueError:
-                    pass
-        # 值为 0~1 的 accuracy 统一保留（用于与声明 0.85 对齐）
-        return metrics
+        records, _ = parse_runtime_metrics(text)
+        return {r["name"]: r["value"] for r in records if r["value"] is not None}
 
     def _delta_llm_calls(self) -> int:
         total = self.llm.get_call_count()

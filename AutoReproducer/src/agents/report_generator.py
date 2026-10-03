@@ -7,6 +7,7 @@ from datetime import datetime
 import re
 from src.base_agent import BaseAgent
 from src.metric_keys import norm_metric_key
+from src.runtime_metrics import metric_unit
 from src.execution_artifacts import image_data_url
 
 
@@ -216,8 +217,16 @@ class ReportGeneratorAgent(BaseAgent):
             state_text = "⚠️ 无法核对（论文信息不足，代码为占位实现，非论文结论）"
         elif validation.get("status") == "no_reference_metrics":
             state_text = "⚠️ 无法核验（论文未声明参考指标数值）"
+        elif validation.get("status") == "execution_failed":
+            state_text = "❌ 执行失败（不能判定论文数值复现）"
+        elif validation.get("status") == "execution_incomplete":
+            state_text = "⚠️ 无法核验（执行证据不足）"
+        elif validation.get("status") == "invalid_metrics":
+            state_text = "❌ 无法核验（最终指标无效）"
+        elif validation.get("status") == "smoke_passed":
+            state_text = "⚠️ 仅冒烟通过（尚未完成论文数值核验）"
         elif validation.get("is_reproduced"):
-            state_text = "✅ 成功"
+            state_text = "✅ 论文数值核验通过"
         else:
             state_text = "❌ 失败"
         lines += ["## 5. 验证结果",
@@ -232,6 +241,14 @@ class ReportGeneratorAgent(BaseAgent):
                 (validation.get("validation") or {}).get("analysis")):
             lines.append(f"- **判定原因**: {reason}")
         inner = validation.get("validation") or {}
+        execution_level = {"failed": "执行失败", "incomplete": "执行证据不足",
+                           "smoke_passed": "仅冒烟通过",
+                           "experiment_completed": "完整执行已完成"}.get(validation.get("execution_status"))
+        if execution_level:
+            lines.append(f"- **执行级别**: {execution_level}")
+        if inner.get("verdict_source") == "deterministic":
+            tolerance = inner.get("relative_tolerance", 0.05)
+            lines.append(f"- **判定依据**: 执行状态、必需指标完整性、显式单位及 {tolerance:.0%} 相对误差规则；模型仅解释偏差")
         # 逐项数值差异（"声明 X vs 实际 Y，相对差异 Z%"）——判定结论的依据，
         # 只给"成功/失败"而不给差异，用户无法判断判定是否合理。
         diffs = inner.get("differences") or []
@@ -263,7 +280,24 @@ class ReportGeneratorAgent(BaseAgent):
                     ak, av = cell.get("actual", (nk, "N/A"))
                     # 两侧键名写法不同则标注原写法，避免"对不上号"的疑惑
                     name = pk if pk == ak else f"{pk} / {ak}"
+                    def metric_cell(value, unit_map, key):
+                        unit = metric_unit(value, unit_map.get(key))
+                        if isinstance(value, dict):
+                            value = value.get("value", "N/A")
+                        suffix = {"percent": "%", "fraction": " (比例)"}.get(unit, " " + unit if unit else "")
+                        return f"{value}{suffix}"
+                    pv = metric_cell(pv, metrics_comp.get("paper_units") or {}, pk)
+                    av = metric_cell(av, metrics_comp.get("actual_units") or {}, ak)
                     lines.append(f"| {name} | {pv} | {av} |")
+        records = validation.get("metric_records") or []
+        if records:
+            lines += ["", "### 实际指标证据", "| 指标 | 单位 | 数据划分 | 阶段 | 来源 |",
+                      "|------|------|----------|------|------|"]
+            for record in records:
+                cells = [record.get("name"), record.get("unit") or "未标注",
+                         record.get("split") or "未标注", record.get("stage") or "未标注",
+                         record.get("source")]
+                lines.append("| " + " | ".join(_markdown_text(_txt(c)) for c in cells) + " |")
         lines.append("")
 
         # 6. 智能优化

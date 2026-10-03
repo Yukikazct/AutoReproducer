@@ -728,6 +728,7 @@ class CodeExecutorAgent(BaseAgent):
 论文方法: {paper_info.get('method', '未知')}
 数据集: {paper_info.get('dataset', '未知')}
 指标: {paper_info.get('metrics', {})}
+指标单位: {paper_info.get('metric_units', {})}
 
 【已经写完的部分（结尾 {_CONTINUE_TAIL_LINES} 行）】
 ```python
@@ -851,6 +852,7 @@ class CodeExecutorAgent(BaseAgent):
         return f"""根据论文信息生成一份**完整**的复现脚本。
 论文方法: {paper_info.get('method', '未知')}
 指标: {paper_info.get('metrics', {})}
+指标单位: {paper_info.get('metric_units', {})}
 数据集: {paper_info.get('dataset', '未知')}
 
 【脚本必须覆盖的完整流程】
@@ -872,6 +874,13 @@ class CodeExecutorAgent(BaseAgent):
    子目录中的 PNG 文件（如 plt.savefig('plots/result.png')），随后关闭图；
    系统会将图片嵌入报告。中文字体已配置，请不要强制改回 DejaVu Sans，
    不要只调用 plt.show()，也不要将图片写到 /tmp 等工作目录外的位置。
+7. 评估完成后，最后打印一行 AUTOREPRO_METRICS: 加 JSON，记录本次实际
+   计算的最终指标，不能填入论文参考值。协议示例：
+   {{"version": 1, "metrics": [{{"name": "mse", "value": measured_mse,
+   "unit": "", "split": "test", "stage": "final"}}]}}。
+   用 json.dumps(..., allow_nan=False) 序列化；所有论文声明指标都须输出。
+   unit 明确使用 percent、fraction 或原始单位，未知则留空；如实填写数据
+   划分。信息不足的占位脚本不得编造指标，可省略这一行。
 """
 
     @staticmethod

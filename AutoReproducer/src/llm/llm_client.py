@@ -39,6 +39,7 @@ _MOCK_TASKS = {
                   "以状态机驱动论文复现与优化闭环",
         "dependencies": ["Python 3.11+", "PyTorch", "Streamlit", "PyPDF2"],
         "metrics": {"accuracy": 0.85, "f1_score": 0.82},
+        "metric_units": {"accuracy": "fraction", "f1_score": "fraction"},
         "dataset": "CIFAR-10",
         "code_url": "https://github.com/example/autoreproducer",
     },
@@ -64,8 +65,15 @@ _MOCK_TASKS = {
 # 纯标准库实现：不依赖 numpy 等第三方包，确保无额外依赖环境下
     # Mock 端到端链路可真实执行（CodeExecutor 会以子进程运行本代码）。
     "code_executor": (
+        "import json\n"
         "print('Training complete. Test accuracy: 85.2%')\n"
+        "print('Final f1_score: 0.8234')\n"
         "print('Final loss: 0.3120')\n"
+        "print('AUTOREPRO_METRICS: ' + json.dumps({'version': 1, 'metrics': ["
+        "{'name': 'accuracy', 'value': 0.852, 'unit': 'fraction', 'split': 'test', 'stage': 'final'}, "
+        "{'name': 'f1_score', 'value': 0.8234, 'unit': 'fraction', 'split': 'test', 'stage': 'final'}, "
+        "{'name': 'loss', 'value': 0.3120, 'unit': '', 'split': 'test', 'stage': 'final'}"
+        "]}, allow_nan=False))\n"
     ),
     "result_validator": {
         "match": True,

@@ -252,6 +252,10 @@ def run_pipeline_core(progress_path: str,
                           "无法作为优化基线")
             elif validation.get("status") == "no_reference_metrics":
                 reason = "论文未声明参考指标数值，无法确认复现基线，跳过优化"
+            elif validation.get("status") in {"execution_failed", "execution_incomplete", "invalid_metrics"}:
+                reason = f"执行或指标证据未通过核验，跳过优化（{validation.get('reason', '证据无效')}）"
+            elif validation.get("status") == "smoke_passed":
+                reason = "仅冒烟通过，尚无完整实验基线，跳过优化"
             else:
                 reason = "复现未成功,跳过优化"
             data["optimization"] = {"optimized": False, "reason": reason}

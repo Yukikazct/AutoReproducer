@@ -12,6 +12,12 @@
 import re
 
 _SEP_RE = re.compile(r"[\s\-]+")
+_ALIASES = {
+    "acc": "accuracy", "准确率": "accuracy", "测试集准确率": "accuracy",
+    "f1": "f1_score", "f1score": "f1_score", "精确率": "precision",
+    "召回率": "recall", "损失": "loss", "mean_squared_error": "mse",
+    "root_mean_squared_error": "rmse",
+}
 
 
 def norm_metric_key(key) -> str:
@@ -19,4 +25,5 @@ def norm_metric_key(key) -> str:
 
     只折叠写法差异，不合并真正不同的指标——`rmse` 与 `mse` 归一后仍不同。
     """
-    return _SEP_RE.sub("_", str(key).strip().lower())
+    normalized = _SEP_RE.sub("_", str(key).strip().lower())
+    return _ALIASES.get(normalized, normalized)

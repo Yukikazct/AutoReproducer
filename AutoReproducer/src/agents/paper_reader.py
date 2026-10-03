@@ -59,6 +59,7 @@ class PaperReaderAgent(BaseAgent):
     "method": "方法描述",
     "dependencies": ["依赖库列表"],
     "metrics": {{"指标名": 数值}},
+    "metric_units": {{"指标名": "percent / fraction / 原始单位"}},
     "dataset": "数据集名称",
     "code_url": "代码仓库URL或'未找到'",
     "insufficient_info": false
@@ -69,6 +70,8 @@ class PaperReaderAgent(BaseAgent):
 方法/领域可以填写；推断不出的字段一律留空（method/dataset 填 ""、
 metrics 填 {{}}），并把 "insufficient_info" 设为 true。
 严禁编造摘要、数据集、指标数值等任何未经证实的信息。
+指标单位必须来自原文：百分数记 percent，明确的 0~1 比例记 fraction；
+MSE/MAE 等保留原始单位。单位未知时留空，不按数值大小猜百分比。
 
 论文内容：
 {pdf_text[:3000]}
@@ -171,6 +174,7 @@ metrics 填 {{}}），并把 "insufficient_info" 设为 true。
             "method": method,
             "dependencies": [],
             "metrics": {},
+            "metric_units": {},
             "dataset": "未知",
             "code_url": "未找到",
         }
@@ -185,10 +189,12 @@ metrics 填 {{}}），并把 "insufficient_info" 设为 true。
             if code_urls:
                 info["code_url"] = code_urls[0]
             metrics_re = re.findall(
-                r"(?:accuracy|acc|精确率|准确率)\s*[:：]\s*([\d.]+)%?", text,
+                r"(?:accuracy|acc|准确率)\s*[:：]\s*([\d.]+)\s*(%)?", text,
                 re.IGNORECASE)
             if metrics_re:
-                info["metrics"]["accuracy"] = float(metrics_re[0])
+                info["metrics"]["accuracy"] = float(metrics_re[0][0])
+                if metrics_re[0][1]:
+                    info["metric_units"]["accuracy"] = "percent"
         return info
 
     def _extract_text(self, pdf_path: str) -> str:

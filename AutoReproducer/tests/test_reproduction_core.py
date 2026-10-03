@@ -482,7 +482,8 @@ class TestValidatorThreeStates:
 
     def test_matched_is_reproduced(self):
         agent = _validator()
-        result = agent.run({"paper_info": {"metrics": {"accuracy": 0.85}},
+        result = agent.run({"paper_info": {"metrics": {"accuracy": 0.85},
+                                           "metric_units": {"accuracy": "fraction"}},
                             "execution": self._ran("Test accuracy: 85.2%")})
         assert result["is_reproduced"] is True
         assert result["status"] == "reproduced"
@@ -540,8 +541,8 @@ class TestValidatorMetricDetails:
     def test_missing_metric_is_reported_not_silently_skipped(self):
         cmp = _validator()._local_compare(
             {"accuracy": 0.85, "f1_score": 0.80}, {"accuracy": 0.85})
-        assert cmp["match"] is True              # 部分匹配仍算通过
-        assert cmp["missing_metrics"]            # 但缺失项要如实记录
+        assert cmp["match"] is False             # 所有声明指标都必须有实测值
+        assert cmp["missing_metrics"]
         assert "f1_score" in cmp["missing_metrics"][0]
         assert any("f1_score" in d for d in cmp["differences"])
 
@@ -580,7 +581,7 @@ class TestValidatorKeyNormalization:
         assert result["status"] == "reproduced"
         assert result["is_reproduced"] is True
         assert result["metrics_comparison"]["actual"]["mse"] == pytest.approx(0.0869)
-        assert result["confidence"] == pytest.approx(0.9)
+        assert result["confidence"] == pytest.approx(0.8)
 
     @pytest.mark.parametrize("declared", ["f1_score", "F1_score", "f1-score",
                                           "F1 Score", " f1_score "])
@@ -615,12 +616,12 @@ class TestValidatorVerdictHonesty:
         assert result["validation"]["verdict_sources"] == {"llm": True, "local": False}
         assert any("判据分歧" in d for d in result["validation"]["differences"])
 
-    def test_agreement_keeps_llm_confidence(self):
+    def test_agreement_uses_deterministic_confidence(self):
         result = self._run_with_llm(llm_match=True, conf=0.9,
-                                    stdout="Test accuracy: 85.2%",
+                                    stdout="Test accuracy: 0.852",
                                     paper_metrics={"accuracy": 0.85})
         assert result["is_reproduced"] is True
-        assert result["confidence"] == pytest.approx(0.9)
+        assert result["confidence"] == pytest.approx(0.8)
         assert not any("判据分歧" in d for d in result["validation"]["differences"])
 
 
