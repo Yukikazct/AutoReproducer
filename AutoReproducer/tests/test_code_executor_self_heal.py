@@ -356,6 +356,7 @@ def test_docker_self_heal_with_reqs(monkeypatch, tmp_path):
     joined = " ".join(str(x) for x in heal_runner)
     assert "-r /app/requirements.txt" in joined
     assert "opencv-python" in joined
+    assert "--disable-pip-version-check" in joined
 
 
 def test_docker_custom_image_pip_heal_after_missing(monkeypatch, tmp_path):

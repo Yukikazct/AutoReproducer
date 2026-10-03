@@ -68,6 +68,7 @@ def test_store_error_event(tmp_path):
     view = ProgressStore.read_snapshot(str(p))
     assert view["running"] is False
     assert view["error"] == "boom"
+    assert view["state"] == "ERROR"
 
 
 def test_store_missing_file_returns_empty_view(tmp_path):
@@ -121,18 +122,22 @@ def test_run_pipeline_background_thread_and_cleanup(tmp_path):
     assert not fake_pdf.exists(), "临时 PDF 应由后台线程清理"
 
 
-def test_run_pipeline_background_error_is_reported(tmp_path):
+def test_run_pipeline_background_error_is_reported(tmp_path, monkeypatch):
     """进度文件写入失败等外层异常应落 error 事件而非静默。"""
     progress = tmp_path / "p.jsonl"
-    # 传入不可用的 pdf_path 目录作为 corpus？改用非法参数触发外层异常：
-    # 线程内 run_pipeline_core 需要可写 progress；模拟失败由 ProgressStore
-    # 构造时抛出——指向不可写父路径即可（Windows 根目录不可写）。
-    bad = Path("C:/") / "no_such_dir_xyz" / "p.jsonl"
-    thread = run_pipeline_background(str(bad), paper_title="Dummy",
+
+    def fail(*args, **kwargs):
+        raise OSError("simulated progress failure")
+
+    monkeypatch.setattr("frontend.backend_pipeline.run_pipeline_core", fail)
+    thread = run_pipeline_background(str(progress), paper_title="Dummy",
                                      mock_mode=True, max_trials=1)
     thread.join(timeout=30)
-    # 线程兜底写 error 事件失败也不崩溃；此处保证线程正常收尾
     assert not thread.is_alive()
+    view = ProgressStore.read_snapshot(str(progress))
+    assert view["running"] is False
+    assert view["state"] == "ERROR"
+    assert "simulated progress failure" in view["error"]
 
 
 # ---------------- 3. 阶段异常不吞 + 日志去重 + 终态落盘 ----------------

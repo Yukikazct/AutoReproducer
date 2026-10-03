@@ -109,6 +109,7 @@ class ProgressStore:
             elif etype == "error":
                 view["error"] = ev.get("error")
                 view["running"] = False
+                view["state"] = "ERROR"
             view["updated_at"] = ev.get("at", view["updated_at"])
         return view
 
@@ -247,6 +248,8 @@ def run_pipeline_core(progress_path: str,
             elif validation.get("status") == "best_effort":
                 reason = ("代码为尽力而为的占位实现（论文信息不足），"
                           "无法作为优化基线")
+            elif validation.get("status") == "no_reference_metrics":
+                reason = "论文未声明参考指标数值，无法确认复现基线，跳过优化"
             else:
                 reason = "复现未成功,跳过优化"
             data["optimization"] = {"optimized": False, "reason": reason}
@@ -302,7 +305,7 @@ def run_pipeline_core(progress_path: str,
                             execution_raw.get("code", "（无）"), "```",
                             "", "## 标准输出 (full)", "```",
                             final_raw.get("stdout", "（无输出）"), "```",
-                            "", "## 错误输出 (stderr)", "```",
+                            "", "## 诊断输出 (stderr)", "```",
                             final_raw.get("stderr", "（无）"), "```", ""]
             attach_file = reports_dir / f"{paper_title_safe}_{ts}_execution.txt"
             attach_file.write_text("\n".join(attach_lines), encoding="utf-8")

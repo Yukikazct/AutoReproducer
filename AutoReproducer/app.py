@@ -94,6 +94,22 @@ if "progress_file" not in st.session_state:
 if "pipeline_note" not in st.session_state:
     st.session_state.pipeline_note = None
 
+# 先读取后台状态，再渲染侧边栏和主区域。终态时停止轮询后也能立即
+# 更新「开始复现」按钮、系统状态和顶部提示，避免留在上一阶段。
+pf = st.session_state.progress_file
+snap = ProgressStore.read_snapshot(pf) if pf else None
+if snap:
+    if snap["result"]:
+        st.session_state.result = snap["result"]
+    if not snap["running"]:
+        st.session_state.running = False
+    if snap.get("agent_status"):
+        st.session_state.agent_status.update(snap["agent_status"])
+    if snap.get("state"):
+        st.session_state.current_state = snap["state"]
+    if snap.get("logs"):
+        st.session_state.logs = snap["logs"]
+
 
 @st.fragment
 def render_llm_settings():
@@ -350,26 +366,8 @@ with tab1:
                                       "📝 ReportGenerator"]
 
     # ---------- 后台复现实时进度（轮询进度文件） ----------
-    pf = st.session_state.progress_file
-    snap = None
-    if pf:
-        snap = ProgressStore.read_snapshot(pf)
-    if snap:
-        if snap["result"]:
-            st.session_state.result = snap["result"]
-        if not snap["running"]:
-            # done 或 error 两种终态都会把 running 置 False；后台提前失败时
-            # 没有 result 事件，但必须清除 running，否则「开始复现」永久禁用。
-            st.session_state.running = False
-        if snap.get("agent_status"):
-            for k, v in snap["agent_status"].items():
-                st.session_state.agent_status[k] = v
-        if snap.get("state"):
-            st.session_state.current_state = snap["state"]
-        if snap.get("logs"):
-            st.session_state.logs = snap["logs"]
-        if snap.get("error"):
-            st.error(f"❌ 后台流水线异常: {snap['error']}")
+    if snap and snap.get("error"):
+        st.error(f"❌ 后台流水线异常: {snap['error']}")
 
     if st.session_state.running and pf:
         if st_autorefresh is not None:

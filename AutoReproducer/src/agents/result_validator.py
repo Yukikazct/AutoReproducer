@@ -92,7 +92,7 @@ class ResultValidatorAgent(BaseAgent):
         # 正常比对——"没跑起来"永远比"跑了个占位"更该优先告知用户。
         #
         # 为什么要这一态：不拦的话，占位脚本一旦打印出任何可提取的数值，
-        # `_local_compare` 对"无论文声明指标"是乐观判定（跑出数值即 match=True）
+        # `_local_compare` 原先对"无论文声明指标"是乐观判定（跑出数值即 match=True）
         # -> 报告显示假的 ✅ 复现成功、还会真去触发优化；一个数值都抽不到时又
         # 显示假的 ❌ 失败。两种都是把"信息不足"翻译成了错误结论。
         if execution.get("best_effort") or paper_info.get("insufficient_info"):
@@ -122,6 +122,29 @@ class ResultValidatorAgent(BaseAgent):
             }
 
         actual_metrics = self._extract_metrics(stdout)
+
+        # 没有参考数值时，既不能凭运行产出宣称复现成功，也不能判为失败。
+        # 在调用模型前确定这一结论，避免模型与本地判据产生相反的猜测。
+        if not paper_metrics:
+            reason = ("论文未声明参考指标数值，无法核验运行结果是否与论文一致。"
+                      "已保留实际运行指标；需补充参考数值后才能判断复现结论。")
+            self.log_experiment(
+                "VALIDATE", "缺少参考指标,跳过数值比对",
+                inputs={"paper_metrics": paper_metrics},
+                outputs={"status": "no_reference_metrics",
+                         "actual_metrics": actual_metrics},
+                result={"is_reproduced": None, "reason": reason})
+            self.log("validate", "WARNING", reason)
+            return {
+                "validation": {"match": None, "differences": [],
+                               "confidence": 0.0, "analysis": reason},
+                "metrics_comparison": {"paper": {}, "actual": actual_metrics},
+                "is_reproduced": None,
+                "status": "no_reference_metrics",
+                "reason": reason,
+                "confidence": 0.0,
+                "llm_calls": self._delta_llm_calls(),
+            }
 
         # LLM 比对 + 本地数值校验兜底。
         # 判据必须写进 prompt：不写的话模型只能凭感觉判，实测同样的输入
@@ -237,9 +260,8 @@ class ResultValidatorAgent(BaseAgent):
     def _local_compare(self, paper_metrics: Dict, actual_metrics: Dict) -> Dict:
         """本地规则比对：同键指标相对差异 <= 5% 视为匹配。"""
         if not paper_metrics:
-            return {"match": bool(actual_metrics), "differences": [],
-                    "confidence": 0.8 if actual_metrics else 0.3,
-                    "analysis": "无论文声明指标,以运行产出是否有效判定"}
+            return {"match": None, "differences": [], "confidence": 0.0,
+                    "analysis": "论文未声明参考指标数值，无法核验"}
         if not actual_metrics:
             return {"match": False, "differences": ["论文声明指标但运行输出未提取到数值"],
                     "confidence": 0.3, "analysis": "运行输出缺少可解析的数值指标"}

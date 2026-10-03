@@ -164,7 +164,10 @@ class ReportGeneratorAgent(BaseAgent):
         lines += ["", "### 执行输出(full)", "```",
                   _txt(final.get("stdout"), "无输出"), "```"]
         if final.get("stderr"):
-            lines += ["### 错误输出", "```", _txt(final["stderr"]), "```"]
+            lines += ["### 诊断输出（stderr）"]
+            if final.get("success") and final.get("exit_code") == 0:
+                lines.append("> 本阶段退出码为 0，执行成功；stderr 也可能包含提示或警告。")
+            lines += ["```", _txt(final["stderr"]), "```"]
         lines.append("")
 
         # 5. 验证结果 + 指标对比
@@ -177,6 +180,8 @@ class ReportGeneratorAgent(BaseAgent):
             # 落到下面会被判成 ❌ 失败——那等于把"我们没拿到论文信息"说成
             # "论文复现失败"。
             state_text = "⚠️ 无法核对（论文信息不足，代码为占位实现，非论文结论）"
+        elif validation.get("status") == "no_reference_metrics":
+            state_text = "⚠️ 无法核验（论文未声明参考指标数值）"
         elif validation.get("is_reproduced"):
             state_text = "✅ 成功"
         else:

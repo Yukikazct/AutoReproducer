@@ -66,3 +66,22 @@ def test_pdf_mode_requires_file_even_if_title_was_entered(app, monkeypatch):
     assert not app.exception
     start.assert_not_called()
     assert any("请先上传PDF文件" in error.value for error in app.sidebar.error)
+
+
+@pytest.mark.parametrize("terminal", ["COMPLETED", "ERROR"])
+def test_terminal_progress_updates_controls_in_same_render(app, tmp_path, terminal):
+    progress = tmp_path / "progress.jsonl"
+    store = pipeline.ProgressStore(str(progress))
+    if terminal == "COMPLETED":
+        store.emit({"type": "done", "result": {"state": "COMPLETED", "data": {}}})
+    else:
+        store.emit({"type": "error", "error": "test failure"})
+    app.session_state["running"] = True
+    app.session_state["current_state"] = "VALIDATE"
+    app.session_state["progress_file"] = str(progress)
+    app.run()
+    assert not app.exception
+    assert app.session_state["running"] is False
+    assert app.session_state["current_state"] == terminal
+    assert next(b for b in app.sidebar.button if "开始复现" in b.label).disabled is False
+    assert terminal in " ".join(m.value for m in app.sidebar.markdown)

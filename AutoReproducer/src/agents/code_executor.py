@@ -1669,7 +1669,8 @@ class CodeExecutorAgent(BaseAgent):
             pip_target = DOCKER_PIP_SITE if DOCKER_HARDEN else ""
 
             def _make_runner(heal_pkgs: list) -> list:
-                install_parts = [f"pip install -i {PIP_INDEX_URL} ",
+                install_parts = ["pip install --disable-pip-version-check ",
+                                 f"-i {PIP_INDEX_URL} ",
                                  f"--find-links {PIP_FIND_LINKS} "]
                 if pip_target:
                     install_parts.append(f"--target {pip_target} "

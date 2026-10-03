@@ -252,6 +252,8 @@ class Orchestrator:
             return f"代码未能运行，无法优化（{validation.get('reason', '未运行')}）"
         if validation.get("status") == "best_effort":
             return "代码为尽力而为的占位实现（论文信息不足），无法作为优化基线"
+        if validation.get("status") == "no_reference_metrics":
+            return "论文未声明参考指标数值，无法确认复现基线，跳过优化"
         return "复现未成功,跳过优化"
 
     # ---------------- 三层存储：懒加载与 manifest ----------------
