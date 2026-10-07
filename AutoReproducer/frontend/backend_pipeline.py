@@ -77,7 +77,38 @@ class ProgressStore:
             "result": None, "done": False, "error": None,
             "running": True, "updated_at": "",
             "execution_output": "", "repository_step": "",
+            "pipeline_stages": [],
         }
+        stages: Dict[str, Dict[str, Any]] = {}
+        stage_order: List[str] = []
+        legacy_latest: Dict[tuple, str] = {}
+        has_plan = False
+        legacy_repository = False
+
+        def apply_stage(identifier: str, event: Dict[str, Any]) -> None:
+            if identifier not in stages:
+                stages[identifier] = {"id": identifier, "agent": event.get("agent", ""),
+                                      "title": event.get("title", event.get("agent", identifier)),
+                                      "description": event.get("description", ""), "status": "waiting"}
+                stage_order.append(identifier)
+            row = stages[identifier]
+            status = event.get("status", "waiting")
+            if status == "running":
+                # A bounded correction starts a fresh attempt on the same row.
+                row.pop("reason", None)
+                row.pop("outcome", None)
+            row["status"] = status
+            for key in ("agent", "state", "attempt", "calls", "reason", "outcome"):
+                if key in event:
+                    row[key] = event[key]
+
+        def finish_pending(reason: str, failed: bool) -> None:
+            for row in stages.values():
+                if row["status"] == "waiting":
+                    row.update(status="blocked", reason=reason)
+                elif row["status"] == "running":
+                    row.update(status="error" if failed else "blocked", reason=reason)
+
         if not p.exists():
             return view
         try:
@@ -93,30 +124,97 @@ class ProgressStore:
             except json.JSONDecodeError:
                 continue
             etype = ev.get("type")
-            if etype == "state":
+            if etype == "pipeline_plan":
+                planned = ev.get("stages")
+                if not isinstance(planned, list):
+                    continue
+                has_plan = True
+                planned_order = []
+                for stage in planned:
+                    if not isinstance(stage, dict) or not isinstance(stage.get("id"), str):
+                        continue
+                    identifier = stage["id"]
+                    if identifier in planned_order:
+                        continue
+                    # select_experiment may already have finished before this
+                    # profile-specific plan is available; keep observed state.
+                    observed = stages.get(identifier, {})
+                    stages[identifier] = {**stage, **observed}
+                    stages[identifier].setdefault("status", "waiting")
+                    for key in ("agent", "title", "description"):
+                        if key in stage:
+                            stages[identifier][key] = stage[key]
+                    planned_order.append(identifier)
+                stage_order = planned_order + [identifier for identifier in stage_order
+                                               if identifier not in planned_order]
+            elif etype == "state":
                 view["state"] = ev.get("state", view["state"])
                 agent = ev.get("agent", "")
                 if agent:
                     view["agent_status"][agent] = ev.get("status", "waiting")
+                    identifier = ev.get("phase_id")
+                    if identifier:
+                        apply_stage(identifier, ev)
+                    elif not has_plan and ev.get("status") != "waiting":
+                        # Historical files have no phase IDs. Preserve event
+                        # order and each running-after-terminal occurrence,
+                        # rather than pretending that role cards are stages.
+                        pair = (ev.get("state", ""), agent)
+                        identifier = legacy_latest.get(pair)
+                        previous = stages.get(identifier, {}) if identifier else {}
+                        if not identifier or (ev.get("status") == "running" and
+                                              previous.get("status") in {"success", "error", "skipped", "blocked"}):
+                            identifier = f"legacy_{len(stages) + 1}"
+                            legacy_latest[pair] = identifier
+                            title = {"READ_PAPER": "论文解析", "FIND_RESOURCES": "资源准备",
+                                     "BUILD_ENV": "环境分析与准备", "EXECUTE_CODE": "代码执行",
+                                     "VALIDATE": "结果验证", "GENERATE_REPORT": "报告生成"}.get(pair[0], pair[0] or agent)
+                            if agent.endswith("Optimizer"):
+                                title = "智能优化（未启用）" if ev.get("status") == "skipped" else "智能优化"
+                            elif agent.endswith("Verifier"):
+                                title += "质量核验"
+                            elif agent.endswith("SourceLoader"):
+                                title = "加载公开证据"
+                                legacy_repository = True
+                            apply_stage(identifier, {**ev, "title": title,
+                                "description": "依据历史进度事件的真实出现顺序恢复"})
+                        else:
+                            apply_stage(identifier, ev)
             elif etype == "log":
                 lg = ev.get("log")
                 if isinstance(lg, dict):
                     view["logs"].append(lg)
             elif etype == "repository_step":
                 view["repository_step"] = ev.get("step_id", "")
+                legacy_repository = True
             elif etype == "repository_output":
+                # A bounded live viewport; complete streams remain in run logs/report.
                 view["execution_output"] = (view["execution_output"] + ev.get("text", ""))[-16000:]
             elif etype == "done":
                 view["done"] = True
                 view["running"] = False
                 view["result"] = ev.get("result")
+                legacy_repository = legacy_repository or bool(
+                    ((view["result"] or {}).get("data") or {}).get("experiment_spec"))
                 view["state"] = (ev.get("result") or {}).get(
                     "state", view["state"]) or view["state"]
+                failed = view["state"] == "ERROR"
+                finish_pending("上游阶段失败，本阶段未执行" if failed else
+                               "流水线已结束，本阶段未执行", failed)
             elif etype == "error":
                 view["error"] = ev.get("error")
                 view["running"] = False
                 view["state"] = "ERROR"
+                finish_pending("流水线异常终止，本阶段未执行", True)
             view["updated_at"] = ev.get("at", view["updated_at"])
+        view["pipeline_stages"] = [stages[identifier] for identifier in stage_order]
+        if not has_plan and legacy_repository:
+            for row in view["pipeline_stages"]:
+                if row.get("agent", "").endswith("Verifier"):
+                    if row.get("state") == "BUILD_ENV":
+                        row["title"] = "训练前证据预审"
+                    elif row.get("state") == "VALIDATE":
+                        row["title"] = "训练后核验"
         return view
 
 

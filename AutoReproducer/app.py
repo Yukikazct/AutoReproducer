@@ -3,7 +3,7 @@
 修复与增强：
 - 论文标题 / 上传 PDF 正确传递到 PaperReader；
 - 侧边栏 LLM API 配置（OpenAI 兼容端点 / Key / 模型）真实生效；
-- 展示优化结果（最优方向/改进幅度）与 LLM 预算统计；
+- 按实际执行阶段展示进度与 LLM 调用统计；
 - 复现流水线后台线程执行，前端轮询进度文件实时展示当前阶段
   （OpenAI 兼容端点 / Key / 模型真实生效）。
 """
@@ -33,7 +33,6 @@ from frontend.llm_config import (
     test_llm_connection,
 )
 from frontend.backend_pipeline import (
-    AGENTS,
     ProgressStore,
     run_pipeline_background,
 )
@@ -85,6 +84,8 @@ if "current_state" not in st.session_state:
     st.session_state.current_state = "INIT"
 if "agent_status" not in st.session_state:
     st.session_state.agent_status = {}
+if "pipeline_stages" not in st.session_state:
+    st.session_state.pipeline_stages = []
 if "mock_mode" not in st.session_state:
     st.session_state.mock_mode = False
 if "paper_title" not in st.session_state:
@@ -105,16 +106,13 @@ if "pipeline_note" not in st.session_state:
 pf = st.session_state.progress_file
 snap = ProgressStore.read_snapshot(pf) if pf else None
 if snap:
-    if snap["result"]:
-        st.session_state.result = snap["result"]
-    if not snap["running"]:
-        st.session_state.running = False
-    if snap.get("agent_status"):
-        st.session_state.agent_status.update(snap["agent_status"])
-    if snap.get("state"):
-        st.session_state.current_state = snap["state"]
-    if snap.get("logs"):
-        st.session_state.logs = snap["logs"]
+    # 每次使用当前任务的完整快照，避免切换进度文件时残留上次的完成状态。
+    st.session_state.result = snap["result"]
+    st.session_state.running = snap["running"]
+    st.session_state.agent_status = snap.get("agent_status", {})
+    st.session_state.pipeline_stages = snap.get("pipeline_stages", [])
+    st.session_state.current_state = snap["state"]
+    st.session_state.logs = snap["logs"]
 
 
 @st.fragment
@@ -293,7 +291,6 @@ with st.sidebar:
         bool(st.session_state.get("repository_llm_review"))
         and not bool(st.session_state.get("repository_prepare_only")))
 
-
     # 语料对照层（可选）：选择真实论文作为轻量锚点
     st.markdown('<div class="sidebar-section-label"><span>02</span> 语料对照 <em>可选</em></div>',
                 unsafe_allow_html=True)
@@ -373,22 +370,9 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
 # ===== Tab 1: 流水线状态 =====
 with tab1:
     st.markdown("""<div class="section-heading"><div><span class="section-kicker">LIVE PIPELINE</span>
-    <h2>复现流水线</h2><p>每个 Agent 的执行状态都会在这里实时更新。</p></div>
-    <span class="section-aside">论文解析 · 验证 · 优化 · 报告</span></div>""",
+    <h2>复现流水线</h2><p>按实际执行顺序追踪各阶段；同一 Agent 的不同任务分别显示。</p></div>
+    <span class="section-aside">准备 · 执行 · 核验 · 报告</span></div>""",
                 unsafe_allow_html=True)
-
-    AGENT_DESC = {
-        "📖 PaperReader": ("论文解析", "从PDF/标题中提取结构化信息"),
-        "🔍 ResourceFinder": ("资源查找", "定位代码仓库和数据集"),
-        "🔧 EnvBuilder": ("环境构建", "自动搭建环境 + 依赖诊断"),
-        "⚡ CodeExecutor": ("代码执行", "smoke + full 双阶段执行"),
-        "✅ ResultValidator": ("结果验证", "比对论文声明值与运行结果"),
-        "🛡️ Verifier": ("质量验证", "Prompt-Free 检查质量 + 修正闭环"),
-        "🧪 Optimizer": ("智能优化（预留）", "当前未开放，不执行优化"),
-        "📝 ReportGenerator": ("报告生成", "生成复现+优化 Markdown 报告"),
-    }
-    names = [a[1] for a in AGENTS] + ["🛡️ Verifier", "🧪 Optimizer",
-                                      "📝 ReportGenerator"]
 
     # ---------- 后台复现实时进度（轮询进度文件） ----------
     if snap and snap.get("error"):
@@ -398,38 +382,59 @@ with tab1:
         if st_autorefresh is not None:
             st_autorefresh(interval=2000, key=f"ar_{pf}")
             st.info("🔄 复现流水线正在后台运行，页面每 2 秒自动刷新，"
-                    "实时展示各 Agent 进度。")
+                    "实时展示各阶段进度。")
         else:
             st.warning("未安装 streamlit-autorefresh，页面不会自动刷新；"
                        "可刷新浏览器页面查看最新进度。")
 
+    stages = st.session_state.pipeline_stages
     agent_cards = []
-    for i, name in enumerate(names):
-        status = st.session_state.agent_status.get(name, "waiting")
+    for i, stage in enumerate(stages):
+        status = stage.get("status", "waiting")
         status_text = {"success": "已完成", "error": "出现错误",
-                       "running": "进行中", "waiting": "等待中"}.get(status, "等待中")
+                       "running": "进行中", "waiting": "等待中",
+                       "skipped": "已跳过", "blocked": "未执行"}.get(status, "等待中")
+        if status == "error" and stage.get("outcome") in {"rejected", "fail"}:
+            status_text = "核验未通过"
+        elif status == "error" and stage.get("outcome") == "execution_failed":
+            status_text = "执行失败"
         status_class = status if status in {"success", "error", "running"} else "waiting"
-        title, desc = AGENT_DESC.get(name, ("", ""))
-        agent_cards.append(f"""
-            <div class="agent-card agent-{status_class}">
-                <div class="agent-top"><span class="agent-index">{i + 1:02d} / {len(names):02d}</span>
-                <span class="agent-status">{status_text}</span></div>
-                <div class="agent-name">{escape(name)}</div>
-                <div class="agent-title">{escape(title)}</div>
-                <p>{escape(desc)}</p>
-            </div>
-            """)
-    st.markdown('<div class="agent-grid">' + ''.join(card.strip() for card in agent_cards) + '</div>',
-                unsafe_allow_html=True)
-
-    completed = sum(1 for a in names
-                    if st.session_state.agent_status.get(a) == "success")
-    progress = completed / len(names) if names else 0
-    st.progress(progress, text=f"整体进度: {completed}/{len(names)}")
-
+        title = stage.get("title", stage.get("agent", "执行阶段"))
+        desc = stage.get("description", "")
+        details = []
+        if stage.get("attempt", 0) > 1:
+            details.append(f"第 {stage['attempt']} 次尝试")
+        if stage.get("calls"):
+            details.append(f"LLM 调用 {stage['calls']} 次")
+        outcome = {"reproduced": "数值验收通过", "not_reproduced": "数值验收未通过",
+                   "inconclusive": "证据不足", "prepared": "仅完成准备"}.get(stage.get("outcome"))
+        if outcome:
+            details.append(outcome)
+        if stage.get("reason"):
+            details.append(str(stage["reason"]))
+        detail_text = escape(" · ".join(details)).replace("\r", "").replace("\n", "<br>")
+        detail_html = f'<p>{detail_text}</p>' if details else ""
+        # 连续 HTML 不插入空行，避免 Markdown 将后续卡片识别为缩进代码块。
+        agent_cards.append(
+            f'<div class="agent-card agent-{status_class}" data-stage-id="{escape(stage["id"], quote=True)}">'
+            f'<div class="agent-top"><span class="agent-index">{i + 1:02d} / {len(stages):02d}</span>'
+            f'<span class="agent-status">{status_text}</span></div>'
+            f'<div class="agent-name">{escape(title)}</div>'
+            f'<div class="agent-title">{escape(stage.get("agent", ""))}</div>'
+            f'<p>{escape(desc)}</p>{detail_html}</div>')
+    if agent_cards:
+        st.markdown('<div class="agent-grid">' + ''.join(card.strip() for card in agent_cards) + '</div>',
+                    unsafe_allow_html=True)
+        completed = sum(stage.get("status") == "success" for stage in stages)
+        enabled_count = sum(stage.get("status") != "skipped" for stage in stages)
+        progress = completed / enabled_count if enabled_count else 0
+        st.progress(progress, text=f"阶段完成: {completed}/{enabled_count}（复现结论以数值验收为准）")
+    else:
+        st.info("启动后将按实际执行顺序显示阶段状态。智能优化接口预留，当前不参与执行。")
     if snap and snap.get("execution_output"):
         with st.expander("官方仓库实时输出（最近16000字符，完整日志保存在运行目录）", expanded=True):
-            st.code(snap["execution_output"], language="text")
+            with st.container(height=240):
+                st.text(snap["execution_output"])
 
     # 运行结果展示
     if st.session_state.result:
@@ -462,7 +467,7 @@ with tab1:
 
 # ===== Tab 2: 复现报告 =====
 with tab2:
-    st.markdown('<div class="section-heading"><div><span class="section-kicker">RESEARCH OUTPUT</span><h2>复现与优化报告</h2><p>查看实验结论、验证结果与优化建议。</p></div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-heading"><div><span class="section-kicker">RESEARCH OUTPUT</span><h2>复现报告</h2><p>查看实验结论、执行证据与验证结果。</p></div></div>', unsafe_allow_html=True)
     if st.session_state.result and st.session_state.result.get("data", {}).get("report"):
         report = st.session_state.result["data"]["report"]
         # 深色 IDE 面板渲染已回滚（见 CHANGELOG [2026.09.20-12]）：
@@ -579,7 +584,6 @@ with tab5:
                 mime="text/markdown",
                 use_container_width=True,
             )
-
             try:
                 bundle = build_report_bundle(report_content, rp)
                 st.download_button("⬇️ 下载报告和图片（ZIP）", data=bundle,
@@ -925,6 +929,7 @@ if start_btn:
         st.session_state.result = None
         st.session_state.logs = []
         st.session_state.agent_status = {}
+        st.session_state.pipeline_stages = []
         st.session_state.current_state = "INIT"
         st.session_state.pipeline_note = (
             "复现流水线已在后台启动，进度实时刷新中…")
@@ -957,6 +962,7 @@ if reset_btn:
     st.session_state.logs = []
     st.session_state.current_state = "INIT"
     st.session_state.agent_status = {}
+    st.session_state.pipeline_stages = []
     st.session_state.connection_result = None
     st.session_state.progress_file = None
     st.session_state.pipeline_note = None

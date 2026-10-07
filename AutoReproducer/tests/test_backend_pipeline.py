@@ -78,6 +78,171 @@ def test_store_missing_file_returns_empty_view(tmp_path):
     assert view["result"] is None
 
 
+def test_phase_plan_preserves_early_completion_and_separates_verifier_roles(tmp_path):
+    path = tmp_path / "phases.jsonl"
+    store = ProgressStore(str(path))
+    store.emit({"type": "state", "phase_id": "select_experiment", "state": "READ_PAPER",
+                "agent": "PaperReader", "status": "success"})
+    plan = [
+        {"id": "select_experiment", "agent": "PaperReader", "title": "选择实验", "status": "waiting"},
+        {"id": "review_readiness", "agent": "Verifier", "title": "训练前预审", "status": "waiting"},
+        {"id": "execute_repository", "agent": "CodeExecutor", "title": "真实执行", "status": "waiting"},
+        {"id": "verify_protocol", "agent": "Verifier", "title": "训练后核验", "status": "waiting"},
+        {"id": "review_result_summary", "agent": "ResultValidator", "status": "skipped"},
+        {"id": "generate_report", "agent": "ReportGenerator", "status": "waiting"},
+    ]
+    store.emit({"type": "pipeline_plan", "stages": plan})
+    store.emit({"type": "state", "phase_id": "review_readiness", "state": "BUILD_ENV",
+                "agent": "Verifier", "status": "success", "outcome": "accepted"})
+    store.emit({"type": "state", "phase_id": "execute_repository", "state": "EXECUTE_CODE",
+                "agent": "CodeExecutor", "status": "running"})
+    # Compatibility events do not add fictitious stages to the explicit plan.
+    store.emit({"type": "state", "state": "EXECUTE_CODE", "agent": "Optimizer", "status": "skipped"})
+    view = ProgressStore.read_snapshot(str(path))
+    rows = {row["id"]: row for row in view["pipeline_stages"]}
+    assert list(rows) == [stage["id"] for stage in plan]
+    assert rows["select_experiment"]["status"] == "success"
+    assert rows["select_experiment"]["title"] == "选择实验"
+    assert rows["review_readiness"]["status"] == "success"
+    assert rows["verify_protocol"]["status"] == "waiting"
+    assert rows["generate_report"]["status"] == "waiting"
+    assert rows["review_result_summary"]["status"] == "skipped"
+    assert view["agent_status"]["Verifier"] == "success"
+
+
+def test_phase_correction_reuses_row_and_clears_previous_rejection(tmp_path):
+    path = tmp_path / "retry.jsonl"
+    store = ProgressStore(str(path))
+    stage = {"type": "state", "phase_id": "analyze_reader", "state": "READ_PAPER", "agent": "PaperReader"}
+    store.emit({**stage, "status": "running", "attempt": 1})
+    store.emit({**stage, "status": "error", "attempt": 1, "reason": "Incorrect citation", "outcome": "rejected"})
+    store.emit({**stage, "status": "running", "attempt": 2})
+    rows = ProgressStore.read_snapshot(str(path))["pipeline_stages"]
+    assert len(rows) == 1
+    assert rows[0]["status"] == "running" and rows[0]["attempt"] == 2
+    assert "reason" not in rows[0] and "outcome" not in rows[0]
+    store.emit({**stage, "status": "success", "attempt": 2, "calls": 1, "outcome": "accepted"})
+    assert ProgressStore.read_snapshot(str(path))["pipeline_stages"][0]["outcome"] == "accepted"
+
+
+def test_legacy_progress_restores_event_order_and_distinct_role_occurrences(tmp_path):
+    path = tmp_path / "legacy.jsonl"
+    store = ProgressStore(str(path))
+    for name in ("PaperReader", "ResourceFinder", "EnvBuilder", "CodeExecutor", "ResultValidator", "Verifier"):
+        store.emit({"type": "state", "state": "INIT", "agent": name, "status": "waiting"})
+    for state, agent in [("READ_PAPER", "PaperReader"), ("BUILD_ENV", "EnvBuilder"),
+                         ("READ_PAPER", "PaperReader"), ("BUILD_ENV", "Verifier"),
+                         ("EXECUTE_CODE", "CodeExecutor")]:
+        store.emit({"type": "state", "state": state, "agent": agent, "status": "running"})
+        store.emit({"type": "state", "state": state, "agent": agent, "status": "success"})
+    # Old repository runs emitted only the final local verifier's completion.
+    store.emit({"type": "state", "state": "VALIDATE", "agent": "Verifier", "status": "success"})
+    store.emit({"type": "done", "result": {"state": "COMPLETED", "data": {"experiment_spec": {"id": "legacy_repository"}}}})
+    view = ProgressStore.read_snapshot(str(path))
+    rows = view["pipeline_stages"]
+    assert [row["agent"] for row in rows] == ["PaperReader", "EnvBuilder", "PaperReader", "Verifier", "CodeExecutor", "Verifier"]
+    assert len({row["id"] for row in rows}) == 6
+    assert rows[3]["title"] == "训练前证据预审"
+    assert rows[5]["title"] == "训练后核验"
+    assert all(row["status"] == "success" for row in rows)
+    assert view["done"] is True
+
+
+def test_legacy_generic_quality_checks_and_skipped_optimizer_have_accurate_titles(tmp_path):
+    path = tmp_path / "generic_legacy.jsonl"
+    store = ProgressStore(str(path))
+    store.emit({"type": "state", "state": "READ_PAPER", "agent": "Verifier", "status": "success"})
+    store.emit({"type": "state", "state": "VALIDATE", "agent": "Optimizer", "status": "skipped"})
+    rows = ProgressStore.read_snapshot(str(path))["pipeline_stages"]
+    assert rows[0]["title"] == "论文解析质量核验"
+    assert rows[1]["title"] == "智能优化（未启用）"
+
+
+@pytest.mark.parametrize("terminal", ["done", "error"])
+def test_terminal_progress_marks_unexecuted_phases_blocked(tmp_path, terminal):
+    path = tmp_path / "blocked.jsonl"
+    store = ProgressStore(str(path))
+    store.emit({"type": "pipeline_plan", "stages": [
+        {"id": "review_readiness", "status": "waiting"},
+        {"id": "execute_repository", "status": "waiting"},
+        {"id": "review_result_summary", "status": "skipped"},
+        {"id": "generate_report", "status": "waiting"},
+    ]})
+    store.emit({"type": "state", "phase_id": "review_readiness", "agent": "Verifier", "status": "error"})
+    store.emit({"type": "state", "phase_id": "generate_report", "agent": "ReportGenerator", "status": "success"})
+    store.emit({"type": "done", "result": {"state": "ERROR"}} if terminal == "done" else
+               {"type": "error", "error": "failed"})
+    rows = {row["id"]: row for row in ProgressStore.read_snapshot(str(path))["pipeline_stages"]}
+    assert rows["review_readiness"]["status"] == "error"
+    assert rows["execute_repository"]["status"] == "blocked"
+    assert rows["execute_repository"]["reason"]
+    assert rows["review_result_summary"]["status"] == "skipped"
+    assert rows["generate_report"]["status"] == "success"
+
+
+def test_repository_progress_preserves_output_and_terminal(tmp_path):
+    path = tmp_path / "p.jsonl"
+    store = ProgressStore(str(path))
+    store.emit({"type": "repository_step", "step_id": "train_and_eval", "status": "running"})
+    store.emit({"type": "repository_output", "stream": "stdout", "text": "Epoch: 1\n"})
+    store.emit({"type": "repository_output", "stream": "stderr", "text": "warning\n"})
+    store.emit({"type": "done", "result": {"state": "COMPLETED"}})
+    view = ProgressStore.read_snapshot(str(path))
+    assert view["repository_step"] == "train_and_eval"
+    assert view["execution_output"] == "Epoch: 1\nwarning\n"
+    assert view["running"] is False
+
+
+def test_backend_uses_shared_orchestrator_resource_hooks(tmp_path):
+    result = run_pipeline_core(str(tmp_path / "p.jsonl"), paper_title="Dummy Paper", mock_mode=True)
+    assert result["state"] == "COMPLETED"
+    assert set(result["data"]["storage"]["fetched"]) == {"code", "dataset", "weights"}
+    assert result["data"]["storage"]["manifest_path"]
+
+
+@pytest.mark.parametrize("requested", [False, True])
+def test_backend_forwards_reserved_optimization_and_phase_plan(tmp_path, monkeypatch, requested):
+    import frontend.backend_pipeline as backend
+
+    captured = {}
+
+    class PipelineFixture:
+        def __init__(self, **kwargs):
+            pass
+
+        def run(self, input_data, on_event):
+            captured.update(input_data)
+            on_event({"type": "pipeline_plan", "stages": [
+                {"id": "review_readiness", "agent": "Verifier", "title": "预审", "status": "waiting"}]})
+            on_event({"type": "state", "phase_id": "review_readiness", "state": "BUILD_ENV",
+                      "agent": "Verifier", "status": "success"})
+            return {"state": "COMPLETED", "data": {}}
+
+    monkeypatch.setattr(backend, "Orchestrator", PipelineFixture)
+    path = tmp_path / "forwarding.jsonl"
+    result = backend.run_pipeline_core(str(path), mock_mode=True, enable_optimization=requested)
+    assert result["state"] == "COMPLETED"
+    assert captured["enable_optimization"] is requested
+    rows = ProgressStore.read_snapshot(str(path))["pipeline_stages"]
+    assert rows[0]["agent"] == "🛡️ Verifier" and rows[0]["status"] == "success"
+
+
+def test_background_forwards_reserved_optimization(tmp_path, monkeypatch):
+    import frontend.backend_pipeline as backend
+
+    captured = {}
+
+    def core(progress_path, **kwargs):
+        captured.update(kwargs)
+        return {"state": "COMPLETED"}
+
+    monkeypatch.setattr(backend, "run_pipeline_core", core)
+    thread = backend.run_pipeline_background(str(tmp_path / "reserved.jsonl"), enable_optimization=True)
+    thread.join(timeout=5)
+    assert not thread.is_alive()
+    assert captured["enable_optimization"] is True
+
+
 # ---------------- 2. 后台全链路（Mock 模式） ----------------
 
 def test_run_pipeline_core_writes_full_progress(tmp_path):
@@ -194,23 +359,3 @@ def test_run_pipeline_core_reports_stage_error(tmp_path, monkeypatch):
     finish = records[-1]
     assert finish["phase"] == "FINISH"
     assert finish["result"]["state"] == "ERROR"
-
-
-def test_repository_progress_preserves_output_and_terminal(tmp_path):
-    path = tmp_path / "p.jsonl"
-    store = ProgressStore(str(path))
-    store.emit({"type": "repository_step", "step_id": "train_and_eval", "status": "running"})
-    store.emit({"type": "repository_output", "stream": "stdout", "text": "Epoch: 1\n"})
-    store.emit({"type": "repository_output", "stream": "stderr", "text": "warning\n"})
-    store.emit({"type": "done", "result": {"state": "COMPLETED"}})
-    view = ProgressStore.read_snapshot(str(path))
-    assert view["repository_step"] == "train_and_eval"
-    assert view["execution_output"] == "Epoch: 1\nwarning\n"
-    assert view["running"] is False
-
-
-def test_backend_uses_shared_orchestrator_resource_hooks(tmp_path):
-    result = run_pipeline_core(str(tmp_path / "p.jsonl"), paper_title="Dummy Paper", mock_mode=True)
-    assert result["state"] == "COMPLETED"
-    assert set(result["data"]["storage"]["fetched"]) == {"code", "dataset", "weights"}
-    assert result["data"]["storage"]["manifest_path"]

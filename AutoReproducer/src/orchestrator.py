@@ -29,9 +29,16 @@ MAX_FIX_RETRIES = 1
 # 透传给 CodeExecutor，让复现代码在本镜像内运行（含论文依赖）
 DEFAULT_IMAGE_TAG = "autorepro-env"
 
+_MAIN_PHASE_IDS = {"READ_PAPER": "generate_reader", "FIND_RESOURCES": "find_resources",
+                   "BUILD_ENV": "build_environment", "EXECUTE_CODE": "execute_code",
+                   "VALIDATE": "validate_result"}
+_VERIFY_PHASE_IDS = {"READ_PAPER": "verify_reader", "FIND_RESOURCES": "verify_finder",
+                     "BUILD_ENV": "verify_builder", "EXECUTE_CODE": "verify_executor",
+                     "VALIDATE": "verify_validator"}
+
 
 class Orchestrator:
-    """编排器 - 管理复现->验证->优化->报告 流水线的状态机流转。"""
+    """编排复现、验证与报告；优化参数保留供未来实现。"""
 
     # 状态定义
     STATES = [
@@ -85,13 +92,14 @@ class Orchestrator:
         self.error: Optional[str] = None
 
     def run(self, input_data: dict, on_event=None) -> dict:
-        """执行完整的复现流程（复现 -> 验证 -> 优化 -> 报告）。
+        """执行复现、验证与报告；智能优化接口当前尚未开放。
 
         input_data 支持:
           - "paper_title": 论文标题（字符串输入方式）
           - "pdf_path": 论文 PDF 路径（上传/本地文件）
           - "code": 可选，外部提供的真实复现代码
           - "corpus_paper": 可选，PaperGuru-Benchmark 论文 id（语料对照层）
+          - "enable_optimization": 可选布尔值，缺省 False；True 也记录为未开放并跳过
         """
         self.on_event = on_event
         self.state, self.error = "INIT", None
@@ -143,10 +151,14 @@ class Orchestrator:
             ("EXECUTE_CODE", self.agents["executor"]),
             ("VALIDATE", self.agents["validator"]),
         ]
+        if self.on_event:
+            self.on_event({"type": "pipeline_plan", "pipeline": "generic",
+                           "stages": self._generic_plan(pipeline)})
 
         for state_name, agent in pipeline:
             self.state = state_name
-            self._emit_state(state_name, agent.name, "running")
+            self._emit_state(state_name, agent.name, "running", phase_id=_MAIN_PHASE_IDS[state_name], attempt=1)
+            main_completed = False
             # P1-⑫ 用量计量：阶段级 plan（enter/exit 界定，失败也出栈）
             self.logger.begin_plan(state_name)
             self.logger.log("Orchestrator", f"enter_{state_name}", "RUNNING",
@@ -178,39 +190,44 @@ class Orchestrator:
                             {"error": build_res.get("error") or
                                       (build_res.get("stderr") or "")[-300:]})
 
+                # Main work and its quality review have independent stage rows.
+                self._emit_agent_completion(state_name, agent, result, attempt=1)
+                main_completed = True
                 # Prompt-Free 验证 + 修正闭环
                 self._verify_step(state_name, agent, result)
 
                 self.logger.log("Orchestrator", f"exit_{state_name}", "SUCCESS",
                                 f"完成阶段: {state_name}")
                 self.logger.end_plan(state_name)
-                self._emit_state(state_name, agent.name, "success")
             except Exception as e:
                 self.logger.end_plan(state_name)
-                self._emit_state(state_name, agent.name, "error")
+                if not main_completed:
+                    self._emit_state(state_name, agent.name, "error", phase_id=_MAIN_PHASE_IDS[state_name],
+                                     attempt=1, reason=str(e), outcome="exception")
                 self._fail(state_name, str(e))
                 break
 
-        # 优化仅保留未来参数接口，不启动模拟、补丁或重训。
+        # 优化仅保留未来参数接口：成功、失败或显式请求均不启动优化。
         if self.state != "ERROR":
             self.logger.log("Orchestrator", "skip_OPTIMIZING", "SKIP",
                             self.data["optimization"]["reason"], self.data["optimization"])
-            self._emit_state(self.state, "Optimizer", "skipped")
+            self._emit_state(self.state, "Optimizer", "skipped", phase_id="reserve_optimization",
+                             reason=self.data["optimization"]["reason"], outcome="not_implemented")
 
         # 报告生成（合并复现 + 优化）
         if self.state != "ERROR":
             self.state = "GENERATE_REPORT"
-            self._emit_state(self.state, "ReportGenerator", "running")
+            self._emit_state(self.state, "ReportGenerator", "running", phase_id="generate_report", attempt=1)
             self.logger.begin_plan("GENERATE_REPORT")
             self.data["audit_stats"] = self.logger.get_stats()
             try:
                 self.data["report"] = self.agents["reporter"].run(self.data) \
                     .get("report", "")
                 self.logger.end_plan("GENERATE_REPORT")
-                self._emit_state(self.state, "ReportGenerator", "success")
+                self._emit_state(self.state, "ReportGenerator", "success", phase_id="generate_report", attempt=1)
             except Exception as e:
                 self.logger.end_plan("GENERATE_REPORT")
-                self._emit_state(self.state, "ReportGenerator", "error")
+                self._emit_state(self.state, "ReportGenerator", "error", phase_id="generate_report", attempt=1, reason=str(e))
                 self._fail("GENERATE_REPORT", str(e))
 
         if self.state != "ERROR":
@@ -224,11 +241,53 @@ class Orchestrator:
         self._emit_state(self.state, "", "error" if self.error else "success")
         return self.get_result()
 
-    def _emit_state(self, state, agent, status):
+    def _emit_state(self, state, agent, status, *, phase_id=None, attempt=None, reason=None, outcome=None):
         if self.on_event:
-            self.on_event({"type": "state", "state": state, "agent": agent, "status": status})
+            event = {"type": "state", "state": state, "agent": agent, "status": status}
+            event.update({key: value for key, value in {"phase_id": phase_id, "attempt": attempt,
+                          "reason": reason, "outcome": outcome}.items() if value is not None})
+            self.on_event(event)
 
     # ---------------- 内部流程 ----------------
+
+    def _generic_plan(self, pipeline):
+        titles = {"READ_PAPER": "论文解析", "FIND_RESOURCES": "资源定位",
+                  "BUILD_ENV": "环境分析与配置", "EXECUTE_CODE": "代码执行",
+                  "VALIDATE": "论文数值比对"}
+        stages = []
+        for state, agent in pipeline:
+            stages += [{"id": _MAIN_PHASE_IDS[state], "agent": agent.name, "title": titles[state],
+                        "description": "执行本阶段工作；质量审查单独记录。", "status": "waiting"},
+                       {"id": _VERIFY_PHASE_IDS[state], "agent": "Verifier", "title": "核验" + titles[state],
+                        "description": "审查本阶段输出，按实际轮次记录修正和最终结果。", "status": "waiting"}]
+        stages += [{"id": "reserve_optimization", "agent": "Optimizer", "title": "智能优化（预留接口）",
+                    "description": "当前版本尚未开放。", "status": "skipped"},
+                   {"id": "generate_report", "agent": "ReportGenerator", "title": "报告生成",
+                    "description": "汇总真实执行与独立核验结果。", "status": "waiting"}]
+        return stages
+
+    def _emit_agent_completion(self, state_name, agent, result, attempt):
+        status, reason, outcome = "success", None, "completed"
+        if state_name == "EXECUTE_CODE":
+            final = (result or {}).get("final") or {}
+            if (result.get("success") is False or result.get("not_runnable")
+                    or final.get("success") is False or final.get("timed_out") or final.get("cancelled")
+                    or final.get("exit_code") not in (None, 0)):
+                status, outcome = "error", "execution_failed"
+                reason = result.get("reason") or final.get("reason") or final.get("stderr") or "执行输出表明本阶段未成功。"
+        elif state_name == "VALIDATE":
+            outcome = result.get("status") or (
+                "reproduced" if result.get("is_reproduced") is True else "inconclusive")
+            # A completed comparison may reject the paper's numbers. Keep that
+            # conclusion separate from failure to execute the validation stage.
+            if (result.get("success") is False or result.get("result_level") == "failed"
+                    or outcome == "execution_failed"):
+                status = "error"
+            reason = result.get("reason")
+            if not reason and result.get("is_reproduced") is not True:
+                reason = "最终数值未通过确定性复现核验。"
+        self._emit_state(state_name, agent.name, status, phase_id=_MAIN_PHASE_IDS[state_name],
+                         attempt=attempt, reason=str(reason)[:600] if reason else None, outcome=outcome)
 
     def _reserved_optimization(self, input_data: dict) -> dict:
         requested = input_data.get("enable_optimization", self.enable_optimization) is True
@@ -284,7 +343,7 @@ class Orchestrator:
         code_url = self._clean_ref(
             discovery.get("selected_repo")
             or resources.get("code_repo_url", ""))
-        # Mock demonstrations remain offline even for curated known titles.
+        # Mock demonstrations must remain offline even for curated known titles.
         if self.mock_mode:
             code_url = ""
         pinned_revision = discovery.get("pinned_revision") or ""
@@ -370,15 +429,33 @@ class Orchestrator:
     def _verify_step(self, state_name: str, agent, result: dict) -> None:
         """Prompt-Free 验证某步输出；未通过时按修正建议触发一次修正重试。"""
         verifier = self.agents["verifier"]
-        verif = verifier.run({
-            "agent_name": agent.name,
-            "system_prompt": getattr(agent, "system_prompt", "") or agent.name,
-            "output": result,
-        })
-        self._accumulate_llm_calls(verif)
+        def review(output, attempt):
+            self._emit_state(state_name, "Verifier", "running", phase_id=_VERIFY_PHASE_IDS[state_name], attempt=attempt)
+            try:
+                reviewed = verifier.run({
+                    "agent_name": agent.name,
+                    "system_prompt": getattr(agent, "system_prompt", "") or agent.name,
+                    "output": output,
+                })
+                accepted = bool(reviewed.get("pass"))
+                issues = reviewed.get("issues") or []
+                reason = None if accepted else (
+                    "；".join(str(issue) for issue in issues[:3])[:600]
+                    if isinstance(issues, list) else str(issues)[:600])
+                self._accumulate_llm_calls(reviewed)
+            except Exception as exc:
+                self._emit_state(state_name, "Verifier", "error", phase_id=_VERIFY_PHASE_IDS[state_name],
+                                 attempt=attempt, reason=str(exc), outcome="exception")
+                raise
+            self._emit_state(state_name, "Verifier", "success" if accepted else "error",
+                             phase_id=_VERIFY_PHASE_IDS[state_name], attempt=attempt,
+                             reason=reason or (None if accepted else "质量审查未通过。"),
+                             outcome="accepted" if accepted else "rejected")
+            return reviewed
+
+        verif = review(result, 1)
         self.data.setdefault("verifications", []).append(
             {"state": state_name, "agent": agent.name, **verif})
-        self._emit_state(state_name, "Verifier", "success" if verif.get("pass") else "waiting")
 
         if not verif.get("pass", False):
             self.logger.log("Verifier", state_name, "WARNING",
@@ -392,15 +469,17 @@ class Orchestrator:
                 self.logger.log("Verifier", f"fix_{state_name}", "RUNNING",
                                 f"第 {retries} 次修正: {agent.name}",
                                 {"suggestions": suggestions})
-                fixed_result = agent.run(self.data)
-                self._merge_result(state_name, fixed_result)
-                self._accumulate_llm_calls(fixed_result)
-                verif = verifier.run({
-                    "agent_name": agent.name,
-                    "system_prompt": getattr(agent, "system_prompt", "") or agent.name,
-                    "output": fixed_result,
-                })
-                self._accumulate_llm_calls(verif)
+                self._emit_state(state_name, agent.name, "running", phase_id=_MAIN_PHASE_IDS[state_name], attempt=retries + 1)
+                try:
+                    fixed_result = agent.run(self.data)
+                    self._merge_result(state_name, fixed_result)
+                    self._accumulate_llm_calls(fixed_result)
+                    self._emit_agent_completion(state_name, agent, fixed_result, attempt=retries + 1)
+                except Exception as exc:
+                    self._emit_state(state_name, agent.name, "error", phase_id=_MAIN_PHASE_IDS[state_name],
+                                     attempt=retries + 1, reason=str(exc), outcome="exception")
+                    raise
+                verif = review(fixed_result, retries + 1)
                 self.data.setdefault("verifications", []).append(
                     {"state": state_name, "agent": agent.name,
                      "round": retries + 1, **verif})
