@@ -277,10 +277,10 @@ with st.sidebar:
     api_key = st.session_state.llm_api_key
     model_name = st.session_state.llm_model
 
-    # 预算上限
-    max_trials = st.slider(
-        "🎯 优化预算（UCB 尝试次数）", min_value=3, max_value=20, value=10,
-        help="Optimizer 在复现成功后最多尝试的优化方向次数")
+    # 预留可选入口；当前版本不执行优化，也不消耗优化预算。
+    st.session_state.enable_optimization = False
+    st.checkbox("启用智能优化（预留）", key="enable_optimization", disabled=True)
+    st.caption("智能优化暂未开放，当前只执行复现、核验和报告生成。")
 
     # 论文输入
     render_paper_input()
@@ -352,7 +352,7 @@ st.markdown(f"""
     <div class="hero-content">
         <div>
             <h1>让研究成果，<br><span>被可靠地复现。</span></h1>
-            <p>从论文解析到实验验证、智能优化与报告生成，<br>在一个工作台中追踪完整的复现过程。</p>
+            <p>从论文解析到实验执行、结果核验与报告生成，<br>在一个工作台中追踪完整的复现过程。</p>
         </div>
         <div class="hero-visual" aria-hidden="true">
             <div class="visual-orbit orbit-one"></div><div class="visual-orbit orbit-two"></div>
@@ -361,7 +361,7 @@ st.markdown(f"""
             <span class="visual-node node-three"></span>
         </div>
     </div>
-    <div class="hero-steps"><span><b>01</b> 解析论文</span><i>→</i><span><b>02</b> 查找资源</span><i>→</i><span><b>03</b> 验证与优化</span><i>→</i><span><b>04</b> 生成报告</span></div>
+    <div class="hero-steps"><span><b>01</b> 解析论文</span><i>→</i><span><b>02</b> 准备实验</span><i>→</i><span><b>03</b> 执行与核验</span><i>→</i><span><b>04</b> 生成报告</span></div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -384,7 +384,7 @@ with tab1:
         "⚡ CodeExecutor": ("代码执行", "smoke + full 双阶段执行"),
         "✅ ResultValidator": ("结果验证", "比对论文声明值与运行结果"),
         "🛡️ Verifier": ("质量验证", "Prompt-Free 检查质量 + 修正闭环"),
-        "🧪 Optimizer": ("智能优化", "UCB 预算调度, Keep/Reject"),
+        "🧪 Optimizer": ("智能优化（预留）", "当前未开放，不执行优化"),
         "📝 ReportGenerator": ("报告生成", "生成复现+优化 Markdown 报告"),
     }
     names = [a[1] for a in AGENTS] + ["🛡️ Verifier", "🧪 Optimizer",
@@ -445,14 +445,6 @@ with tab1:
         c5.metric("LLM调用", stats.get("llm_calls", 0))
 
         data = result.get("data", {}) or {}
-        optimization = data.get("optimization", {}) or {}
-        if optimization.get("optimized"):
-            o1, o2, o3 = st.columns(3)
-            o1.metric("最优优化方向", str(optimization.get("best_arm", "无"))[:18])
-            o2.metric("改进幅度", f"{optimization.get('improvement', 0):.2%}")
-            o3.metric("预算使用", f"{optimization.get('budget_used', 0)}/"
-                      f"{optimization.get('budget', 0)}")
-
         if result.get("state") == "COMPLETED":
             validation = data.get("validation") or {}
             if validation.get("result_level") == "failed":
@@ -530,17 +522,13 @@ stateDiagram-v2
     FIND_RESOURCES --> BUILD_ENV
     BUILD_ENV --> EXECUTE_CODE
     EXECUTE_CODE --> VALIDATE
-    VALIDATE --> OPTIMIZING: 复现成功
-    VALIDATE --> GENERATE_REPORT: 复现失败
-    OPTIMIZING --> OPTIMIZED
-    OPTIMIZED --> GENERATE_REPORT
+    VALIDATE --> GENERATE_REPORT
     GENERATE_REPORT --> COMPLETED
     READ_PAPER --> ERROR
     FIND_RESOURCES --> ERROR
     BUILD_ENV --> ERROR
     EXECUTE_CODE --> ERROR
     VALIDATE --> ERROR
-    OPTIMIZING --> ERROR
     GENERATE_REPORT --> ERROR
     ERROR --> INIT
     COMPLETED --> [*]
@@ -556,13 +544,12 @@ stateDiagram-v2
         {"状态": "BUILD_ENV", "说明": "构建环境 + 5轮依赖诊断", "Agent": "EnvBuilder"},
         {"状态": "EXECUTE_CODE", "说明": "smoke+full 双阶段执行", "Agent": "CodeExecutor"},
         {"状态": "VALIDATE", "说明": "验证结果与论文一致性", "Agent": "ResultValidator"},
-        {"状态": "OPTIMIZING", "说明": "复现成功后,UCB 预算调度优化", "Agent": "Optimizer"},
-        {"状态": "OPTIMIZED", "说明": "优化完成,产出最优方案", "Agent": "Optimizer"},
-        {"状态": "GENERATE_REPORT", "说明": "生成Markdown复现+优化报告", "Agent": "ReportGenerator"},
+        {"状态": "GENERATE_REPORT", "说明": "生成Markdown复现报告", "Agent": "ReportGenerator"},
         {"状态": "COMPLETED", "说明": "流水线完成", "Agent": "—"},
         {"状态": "ERROR", "说明": "出错状态，可重试", "Agent": "—"},
     ]
     st.table(state_data)
+    st.caption("智能优化为预留可选接口，当前未启用；上图展示当前主流程。详细阶段以流水线状态为准。")
 
 
 # ===== Tab 5: 历史记录 =====
@@ -955,7 +942,7 @@ if start_btn:
             model_name=model_name, base_url=base_url,
             api_key=api_key,
             mock_mode=st.session_state.mock_mode,
-            max_trials=max_trials,
+            enable_optimization=False,
             use_docker=(not st.session_state.mock_mode
                         and docker_available
                         and st.session_state.use_docker),

@@ -225,11 +225,16 @@ class TestEndToEnd:
         data = e2e_result["data"]
         assert data.get("validation", {}).get("is_reproduced") is True
 
-    def test_optimization_ran(self, e2e_result):
+    def test_optimization_is_reserved_and_disabled(self, e2e_result):
         opt = e2e_result["data"].get("optimization", {})
-        assert opt.get("optimized") is True
-        assert opt.get("budget_used", 0) <= opt.get("budget", 0)
-        assert opt.get("best_arm") is not None
+        assert opt.get("optimized") is False
+        assert opt.get("available") is False
+        assert opt.get("requested") is False
+        assert opt.get("status") == "disabled"
+        report = e2e_result["data"].get("report", "")
+        assert "当前版本仅保留未来接口" in report
+        assert "✅ 已优化" not in report
+        assert "⚠️ 已优化（模拟）" not in report
 
     def test_report_generated(self, e2e_result):
         report = e2e_result["data"].get("report", "")

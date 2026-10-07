@@ -139,6 +139,7 @@ def run_pipeline_core(progress_path: str,
                       experiment_profile: Optional[str] = None,
                       use_llm_review: bool = False,
                       allow_result_summary_review: bool = False,
+                      enable_optimization: bool = False,
                       prepare_only: bool = False,
                       offline: bool = False) -> Dict[str, Any]:
     """后台执行完整复现流水线（复现 -> 验证 -> 优化 -> 报告）。
@@ -210,6 +211,7 @@ def run_pipeline_core(progress_path: str,
             "prepare_only": prepare_only, "offline": offline,
             "use_llm_review": use_llm_review,
             "allow_result_summary_review": allow_result_summary_review,
+            "enable_optimization": enable_optimization,
         }, on_event=_on_event)
         data = outcome["data"]
         error_msg = outcome.get("error")
@@ -297,7 +299,8 @@ def run_pipeline_background(progress_path: str, *,
                             experiment_profile: Optional[str] = None,
                             use_llm_review: bool = False,
                             allow_result_summary_review: bool = False,
-                                  prepare_only: bool = False,
+                            enable_optimization: bool = False,
+                            prepare_only: bool = False,
                             offline: bool = False,
                             cleanup_pdf: bool = True,
                             on_done=None) -> threading.Thread:
@@ -316,7 +319,8 @@ def run_pipeline_background(progress_path: str, *,
                 max_trials=max_trials, use_docker=use_docker,
                 workspace_dir=workspace_dir, experiment_profile=experiment_profile,
                 prepare_only=prepare_only, offline=offline, use_llm_review=use_llm_review,
-                allow_result_summary_review=allow_result_summary_review)
+                allow_result_summary_review=allow_result_summary_review,
+                enable_optimization=enable_optimization)
             if on_done:
                 try:
                     on_done(result)

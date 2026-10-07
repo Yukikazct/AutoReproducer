@@ -1,11 +1,11 @@
-"""P1 真实优化闭环测试：RealSimulator + 安全网 + Orchestrator 接入。
+"""预留优化实现的单元测试，以及生产 Orchestrator 的禁用约束。
 
 核心断言：
-1. Orchestrator 配置 workspace_dir 后注入真实执行器（替代哈希模拟）；
+1. Orchestrator 配置 workspace_dir 仍不启动尚未开放的优化；
 2. 补丁白名单拦截（policy_rejected）且不触碰工作区；
 3. 真实执行 Keep：奖励 > 3% 且工作区快照回滚（原代码不被破坏）+ 补丁落盘；
 4. 执行失败 Reject：奖励为 0 且工作区回滚；
-5. Mock LLM 全流水线端到端：复现 -> 验证 -> 真实优化 -> 报告（COMPLETED）。
+5. Mock LLM 全流水线端到端：复现 -> 验证 -> 报告（跳过优化）。
 
 运行: python -m pytest tests/test_optimizer_real.py -v
 """
@@ -69,11 +69,13 @@ def mock_llm() -> LLMClient:
     return LLMClient(mock_mode=True)
 
 
-# ---------------- 1. Orchestrator 注入 ----------------
+# ---------------- 1. Orchestrator 预留接口 ----------------
 
-def test_orchestrator_injects_real_simulator_only_with_workspace(tmp_path):
+def test_orchestrator_workspace_does_not_activate_reserved_optimization(tmp_path):
     orch = Orchestrator(mock_mode=True, workspace_dir=str(tmp_path / "ws"))
-    assert isinstance(orch.agents["optimizer"].simulator, RealSimulator)
+    assert not isinstance(orch.agents["optimizer"].simulator, RealSimulator)
+    assert orch.enable_optimization is False
+    assert not (tmp_path / "ws").exists()
 
     plain = Orchestrator(mock_mode=True)
     assert plain.agents["optimizer"].simulator is OptimizerAgent._simulate_trial
@@ -159,7 +161,7 @@ def test_execute_in_workspace_runs_in_given_dir(tmp_path, mock_llm):
 
 # ---------------- 5. Mock LLM 全流水线端到端 ----------------
 
-def test_full_pipeline_with_real_optimization(tmp_path, mock_llm):
+def test_full_pipeline_with_workspace_preserves_reproduction_and_skips_optimization(tmp_path, mock_llm):
     ws = tmp_path / "ws"
     orch = Orchestrator(llm_client=mock_llm, mock_mode=True,
                         workspace_dir=str(ws), max_trials=2)
@@ -169,30 +171,23 @@ def test_full_pipeline_with_real_optimization(tmp_path, mock_llm):
     assert result["state"] == "COMPLETED"
     assert data["validation"]["is_reproduced"] is True
     opt = data.get("optimization", {})
-    assert opt.get("optimized") is True
-    # 真实优化:单案例提升（90.0% vs 85.2%）>= 3%
-    assert opt.get("improvement", 0.0) > 0.03
-    assert opt.get("best_arm")
-    # 工作区已被物化且优化后未被补丁破坏（快照回滚生效，保持物化原样）
-    materialized = (ws / "run.py").read_text(encoding="utf-8")
-    assert "85.2%" in materialized
-    # 审计账本记录真实执行
-    records = opt.get("optimization_report", [])
-    assert records and any(r.get("detail", {}).get("type") == "real_exec"
-                           for r in records)
-    assert (tmp_path / "optimized_patches").exists()
+    assert opt.get("optimized") is False
+    assert opt["status"] == "disabled" and opt["available"] is False
+    assert not opt.get("optimization_report") and not opt.get("best_arm")
+    assert not ws.exists()
+    assert not (tmp_path / "optimized_patches").exists()
 
 
-# ---------------- 6. 无工作区时行为不变(兼容) ----------------
+# ---------------- 6. 无工作区同样跳过优化 ----------------
 
-def test_orchestrator_without_workspace_keeps_mock_simulation(mock_llm):
+def test_orchestrator_without_workspace_does_not_run_mock_simulation(mock_llm):
     orch = Orchestrator(llm_client=mock_llm, mock_mode=True, max_trials=1)
     result = orch.run({"paper_title": "Dummy Paper"})
     assert result["state"] == "COMPLETED"
-    records = result["data"].get("optimization", {}).get(
-        "optimization_report", [])
-    assert records and all(
-        r.get("detail", {}).get("type") == "ucb_mock" for r in records)
+    optimization = result["data"]["optimization"]
+    assert optimization["optimized"] is False
+    assert optimization["status"] == "disabled"
+    assert not optimization.get("optimization_report")
 
 
 # ---------------- 奖励指标的键匹配与方向 ----------------

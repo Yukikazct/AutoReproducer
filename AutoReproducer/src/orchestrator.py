@@ -2,7 +2,7 @@
 
 职责（对齐方案 4.1 / 4.4）：
 1. 任务分解与流程控制：INIT -> READ_PAPER -> FIND_RESOURCES -> BUILD_ENV
-   -> EXECUTE_CODE -> VALIDATE -> (OPTIMIZING -> OPTIMIZED) -> GENERATE_REPORT
+   -> EXECUTE_CODE -> VALIDATE -> GENERATE_REPORT
    -> COMPLETED / ERROR；
 2. Prompt-Free 验证闭环：每步输出经 Verifier 校验，未通过时按修正建议
    触发一次修正重试（预算内），形成「生成->验证->修正->再验证」；
@@ -20,7 +20,6 @@ from src.agents.result_validator import ResultValidatorAgent
 from src.agents.report_generator import ReportGeneratorAgent
 from src.agents.verifier import VerifierAgent
 from src.agents.optimizer import OptimizerAgent
-from src.optimizer.real_simulator import RealSimulator
 from src.resource_manager import ResourceManager
 
 # 每步验证失败时最多触发的修正重试次数（预算约束）
@@ -45,7 +44,8 @@ class Orchestrator:
                  mock_mode: bool = True, logger: Optional[AuditLogger] = None,
                  max_trials: int = 10, use_docker: bool = False,
                  workspace_dir: Optional[str] = None,
-                 resource_manager: Optional[ResourceManager] = None):
+                 resource_manager: Optional[ResourceManager] = None,
+                 enable_optimization: bool = False):
         self.state = "INIT"
         self.mock_mode = mock_mode
         self.on_event = None
@@ -58,8 +58,8 @@ class Orchestrator:
             self.llm.usage_hook = self.logger.record_llm_usage
         self.max_trials = max_trials
         self.use_docker = use_docker
-        # 优化工作区:提供时启用 Optimizer 真实执行闭环(补丁 -> 白名单 ->
-        # 快照 -> 重跑 -> 真实指标 -> Keep/Reject);缺省保持哈希模拟。
+        # 预留未来优化接口；当前版本即使请求启用也不执行优化。
+        self.enable_optimization = enable_optimization is True
         self.workspace_dir = workspace_dir
         # L0 热缓存资源管理（三层存储）：FIND_RESOURCES 后按需懒加载，
         # COMPLETED 前落盘 manifest 与统计；可注入以隔离数据根（测试）。
@@ -81,12 +81,6 @@ class Orchestrator:
                                         max_trials=self.max_trials),
             "reporter": ReportGeneratorAgent(self.logger),
         }
-        # 真实优化闭环:注入真实执行器(替代默认哈希模拟)
-        if self.workspace_dir:
-            self.agents["optimizer"].simulator = RealSimulator(
-                llm=self.llm, executor=self.agents["executor"],
-                workspace_dir=self.workspace_dir, logger=self.logger)
-
         self.data: Dict[str, Any] = {}
         self.error: Optional[str] = None
 
@@ -109,7 +103,10 @@ class Orchestrator:
                 from src.repository_reproduction import RepositoryReproduction
                 result = RepositoryReproduction(
                     self.resource_manager.data_root, self.logger, self.use_docker,
-                    llm=self.llm).run(input_data, on_event=on_event)
+                    llm=self.llm).run(
+                        ({**input_data, "enable_optimization": self.enable_optimization}
+                         if "enable_optimization" not in input_data and self.enable_optimization
+                         else input_data), on_event=on_event)
                 self.state, self.data, self.error = result["state"], result["data"], result["error"]
             self._emit_state(self.state, "", "error" if self.error else "success")
             return self.get_result()
@@ -126,6 +123,7 @@ class Orchestrator:
             "code_repo_url": input_data.get("code_repo_url", ""),
             "verifications": [],
             "fix_records": [],
+            "optimization": self._reserved_optimization(input_data),
         }
 
         # 论文稳定 ID（三层存储索引）：corpus 语料键 / sha1(title) 前 12 位
@@ -180,13 +178,6 @@ class Orchestrator:
                             {"error": build_res.get("error") or
                                       (build_res.get("stderr") or "")[-300:]})
 
-                # 真实优化工作区：把复现代码物化到磁盘，
-                # 供 Optimizer 真实执行器快照/补丁/重跑
-                if state_name == "EXECUTE_CODE" and self.workspace_dir:
-                    code = (result or {}).get("code", "") or \
-                        self.data.get("execution", {}).get("code", "")
-                    self._materialize_workspace(code)
-
                 # Prompt-Free 验证 + 修正闭环
                 self._verify_step(state_name, agent, result)
 
@@ -200,35 +191,11 @@ class Orchestrator:
                 self._fail(state_name, str(e))
                 break
 
-        # 优化阶段：仅在复现成功后触发
+        # 优化仅保留未来参数接口，不启动模拟、补丁或重训。
         if self.state != "ERROR":
-            if self.data.get("validation", {}).get("is_reproduced"):
-                self.state = "OPTIMIZING"
-                self.logger.begin_plan("OPTIMIZING")
-                self.logger.log("Orchestrator", "enter_OPTIMIZING", "RUNNING",
-                                "进入优化阶段")
-                try:
-                    # 真实优化:把论文指标键绑定到执行器(奖励方向与对齐依据)
-                    sim = getattr(self.agents["optimizer"], "simulator", None)
-                    if isinstance(sim, RealSimulator):
-                        sim.bind_paper(self.data.get("paper_info") or {})
-                    opt_result = self.agents["optimizer"].run(self.data)
-                    self.data["optimization"] = opt_result
-                    self._accumulate_llm_calls(opt_result)
-                    self.state = "OPTIMIZED"
-                    self.logger.log("Orchestrator", "exit_OPTIMIZING", "SUCCESS",
-                                    "优化阶段完成")
-                    self.logger.end_plan("OPTIMIZING")
-                except Exception as e:
-                    self.logger.end_plan("OPTIMIZING")
-                    self._fail("OPTIMIZING", str(e))
-            else:
-                self.data["optimization"] = {
-                    "optimized": False,
-                    "reason": self._optimization_skip_reason()}
-
-        if self.state != "ERROR":
-            self._emit_state(self.state, "Optimizer", "success" if self.data.get("optimization", {}).get("optimized") else "skipped")
+            self.logger.log("Orchestrator", "skip_OPTIMIZING", "SKIP",
+                            self.data["optimization"]["reason"], self.data["optimization"])
+            self._emit_state(self.state, "Optimizer", "skipped")
 
         # 报告生成（合并复现 + 优化）
         if self.state != "ERROR":
@@ -262,6 +229,13 @@ class Orchestrator:
             self.on_event({"type": "state", "state": state, "agent": agent, "status": status})
 
     # ---------------- 内部流程 ----------------
+
+    def _reserved_optimization(self, input_data: dict) -> dict:
+        requested = input_data.get("enable_optimization", self.enable_optimization) is True
+        return {"optimized": False, "requested": requested, "available": False,
+                "status": "not_implemented" if requested else "disabled",
+                "reason": ("智能优化接口已预留，当前版本尚未开放。" if requested
+                           else "智能优化未启用；当前版本仅保留未来接口。")}
 
     def _merge_result(self, state_name: str, result: dict) -> None:
         """将 Agent 输出合并进数据上下文。"""
@@ -478,7 +452,7 @@ class Orchestrator:
             "FIND_RESOURCES": ["BUILD_ENV", "ERROR"],
             "BUILD_ENV": ["EXECUTE_CODE", "ERROR"],
             "EXECUTE_CODE": ["VALIDATE", "ERROR"],
-            "VALIDATE": ["OPTIMIZING", "GENERATE_REPORT", "ERROR"],
+            "VALIDATE": ["GENERATE_REPORT", "ERROR"],
             "OPTIMIZING": ["OPTIMIZED", "ERROR"],
             "OPTIMIZED": ["GENERATE_REPORT"],
             "GENERATE_REPORT": ["COMPLETED", "ERROR"],
