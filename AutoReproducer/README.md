@@ -2,6 +2,28 @@
 
 基于多智能体协作的论文自动复现与优化系统
 
+## DLinear 官方仓库复现（2026-10-07：真实 4 + 1 多 Agent 流程通过）
+
+网页默认真实模式。“输入方式 → 官方仓库预设”默认执行 DLinear 的 ETTh1 多变量 **336→96 完整作者实验**：固定源码和真实数据，按最多 10 轮、patience 3 的官方协议训练、加载验证集最优 checkpoint，再测试和独立复算指标。保持 Mock 与 Docker 关闭，使用本地 CPU。默认勾选“使用真实多 Agent 分析论文、仓库和环境”；自行勾选“允许 API 分析本次指标、轮数和核验状态摘要”后，训练后再执行结果解释。取消分析选项时，作者训练本身无需 LLM API。
+
+新运行 `repository_e9408141e3dd44319e854bbdf4a70c0c` 通过生产网页后台入口完成：PaperReader、ResourceFinder、EnvBuilder、Verifier 读取 **16 个真实公开来源**，四阶段各 **1** 次调用且一次通过；训练后 ResultValidator 对已允许的数值摘要调用 **1** 次。真实 `deepseek-chat` API 合计 **5 次、零修正重试**，客户端与审计计数一致。报告分别标注论文原文、作者脚本和代码设置/默认值，作者依赖声明不冒充已核实的原始运行环境。
+
+本次重新训练在第 **7** 轮触发作者早停，最终 **MSE 0.3841444、MAE 0.4047131**，相对论文 Table 2 的 0.375/0.399 分别差 **2.44%/1.43%**，均进入项目事前设置的 **5% 相对容差**。113 个固定源码文件、数据 SHA、实际训练协议、预测产物和独立指标复算均通过，最终状态 `reproduced`、`analysis_status=completed`。该容差是项目验收规则，不是论文阈值；API 解释不覆盖确定性数值判定。结论只覆盖上述一个实验，仓库预设保留作者方案，不执行自动模型优化。
+
+查看[新完整报告](data/runs/repository_e9408141e3dd44319e854bbdf4a70c0c/report.md)、[最终结果](data/runs/repository_e9408141e3dd44319e854bbdf4a70c0c/result.json)、[四阶段分析](data/runs/repository_e9408141e3dd44319e854bbdf4a70c0c/repository_analysis.json)、[结果解释](data/runs/repository_e9408141e3dd44319e854bbdf4a70c0c/result_analysis.json)及[报告和图片 ZIP](data/runs/repository_e9408141e3dd44319e854bbdf4a70c0c/report_with_figures.zip)。旧版单次 API 基线的[原始报告](data/runs/repository_66efc14890e34cb196a07a7d2bcb78fe/report.md)仍保留，新运行的指标与第 7 轮早停结果相同。完整对照见[复现结果](docs/dlinear_reproduction_result.md)。
+
+重跑步骤见 [DLinear 用户测试步骤](docs/dlinear_testing.md)，从 `AutoReproducer/` 目录运行：
+
+```bash
+python scripts/reproduce_repository.py --profile dlinear_etth1_reference --offline
+# 四阶段公开分析 + 完整训练 + 允许 API 解释结果摘要：
+python scripts/reproduce_repository.py --profile dlinear_etth1_reference --offline --llm-review --analysis-mode multi_agent --result-review
+```
+
+当前固定预设使用本地 CPU，依赖缓存按 Python ABI、OS 和架构隔离。Windows/NVIDIA CUDA 训练需另行适配和验证，建议在 WSL2 中准备对应 PyTorch/CUDA 环境；本次实测平台为 macOS ARM64。框架和硬件变化可能影响结果，不保证重跑得到逐位相同数值。
+
+Markdown 图片使用同目录的 `<report_stem>_assets/` 相对资产目录。分享时使用网页“⬇️ 下载报告和图片（ZIP）”并保留解压后的目录结构；只复制 `.md` 无法携带图片。预分析拒绝会保留原文诊断并停止训练；每阶段最多一次修正，其他运行的实际调用数可能与本次 5 次不同。
+
 ## 快速启动
 
 ```bash
@@ -24,7 +46,7 @@ streamlit run app.py
 
 浏览器访问 http://localhost:8501
 
-> 依赖 Python 3.11+。Docker 真实执行需本地已安装并启动 Docker Desktop（可选，仅真实模式需要）。
+> 依赖 Python 3.11+；DLinear 固定预设支持 Python 3.11/3.12，本地 CPU 路径无需 Docker。通用代码执行选择 Docker 时，需本地安装并启动 Docker Desktop。
 > docker CLI 自动探测：优先 `DOCKER_PATH` 环境变量 → 系统 PATH → Docker Desktop
 > 常见安装目录（`C:\Program Files\Docker\Docker\resources\bin\docker.exe`），
 > Windows 上即使 docker 不在 PATH 中也能正常构建/执行。
@@ -35,14 +57,16 @@ streamlit run app.py
 ## 运行测试
 
 ```bash
-# 完整测试套件（Mock 模式，无需 LLM API/Docker，CI 全绿）
+# 完整测试套件（无需真实 LLM API；真实实验记录另行保存）
 python -m pytest tests/ -v
 
 # 只看端到端集成用例
 python -m pytest tests/ -v -k TestEndToEnd
 ```
 
-## 核心流程（复现 → 验证 → 优化闭环）
+## 当前核心流程（复现 → 验证 → 报告）
+
+智能优化目前仅保留可选接口，暂不开发或执行。网页入口禁用，`enable_optimization` 默认 `False`；即使调用方传入 `True`，也返回 `not_implemented`、`optimized=False`，不触发模拟优化、补丁或重训。下方优化相关模块保留供后续开发，不参与当前复现流水线。
 
 **1 个编排器 + 8 个专职 Agent：**
 
@@ -54,16 +78,17 @@ python -m pytest tests/ -v -k TestEndToEnd
 | ⚡ CodeExecutor | 在本地或 Docker 沙箱中运行代码 |
 | ✅ ResultValidator | 比对论文声明值与运行结果 |
 | 🛡️ Verifier | Prompt-Free 质量验证（复用各 Agent 系统提示词） |
-| 🧪 Optimizer | UCB 预算调度下的智能优化（Keep/Reject） |
-| 📝 ReportGenerator | 生成 Markdown 复现 + 优化报告 |
+| 🧪 Optimizer | 预留接口，当前跳过 |
+| 📝 ReportGenerator | 生成 Markdown 复现报告 |
 
 **状态机流转：**
 
 ```
 INIT → READ_PAPER → FIND_RESOURCES → BUILD_ENV → EXECUTE_CODE → VALIDATE
-  → (复现成功) OPTIMIZING → OPTIMIZED → GENERATE_REPORT → COMPLETED
-  → (复现失败) GENERATE_REPORT → COMPLETED
+  → GENERATE_REPORT → COMPLETED
 ```
+
+网页根据有序执行阶段显示进度，Agent 名称只是负责人。同一 Verifier 的训练前预审和训练后本地核验分别记录，重试复用对应阶段，错误终止后未执行的阶段明确标注。阶段完成比例不代表论文数值验收通过；验收结论以 `validation` 为准。官方仓库实时输出使用 240 像素高的滚动窗口，完整日志仍保存于运行目录。
 
 **每个阶段输出都会经过 Prompt-Free 验证**（Verifier 复用该 Agent 的
 `system_prompt` 作为质量标准）；验证未通过时按修正建议触发一次修正重试，
@@ -71,8 +96,8 @@ INIT → READ_PAPER → FIND_RESOURCES → BUILD_ENV → EXECUTE_CODE → VALIDA
 
 ## 核心创新点
 
-1. **复现-优化一体化闭环** — 复现成功自动触发优化，产出优化报告
-2. **预算感知 UCB 调度** — 多臂老虎机算法在优化方向间智能分配预算（预算上限可配，默认 10 次）
+1. **真实实验与确定性核验** — 完整执行后分别检查协议、独立指标复算和数值验收
+2. **优化接口预留** — UCB 等既有模块保留，当前生产流程不调用
 3. **Prompt-Free 双层验证** — 复用各 Agent 系统提示词作为质量标准，无需额外验证提示词
 4. **可审计完整实验追踪** — 所有步骤的输入输出 / 决策依据写入 `data/logs/` JSONL，
    实验账本（Ledger）写入 `data/experiment_ledger/`，支持 `replay()` 按时间轴回放
@@ -107,7 +132,7 @@ INIT → READ_PAPER → FIND_RESOURCES → BUILD_ENV → EXECUTE_CODE → VALIDA
 - `fetch_code` / `fetch_dataset` / `fetch_weights`：只拉当前任务最小集（代码仓库 depth 1 克隆、数据集冒烟子集、权重本地复制或按子路径下载），重复 fetch 幂等复用缓存，绝不重复下载；
 - `manifest`：每篇论文的资源清单写入 `data/manifests/<paper_id>.json`（兼容 2026-09-09 存量格式），`cleaned_at` 记录清理时间；
 - **L0 配额守护**：`AUTOREPRO_L0_QUOTA_GB` 可配（默认 20GB），超限时 `enforce_quota` 按最近使用（LRU）返回建议归档清单，不自动删除；
-- 所有真实网络下载均"尽力而为"：网络不可用时诚实降级为本地合成冒烟集（`dataset_smoke`），在 `state` 字段标注实际状态，绝不静默伪造大文件。
+- 通用论文流程的下载助手采用“尽力而为”策略：网络不可用时可返回明确标记的 `dataset_smoke` 诊断数据。本文顶部的官方仓库完整实验使用单独的固定来源与哈希校验，代码或真实数据不可用时直接失败，不替换为合成数据。
 
 ### 隔离依赖安装（P0-3）
 
@@ -182,8 +207,8 @@ python scripts/resource_cli.py quota-check --size-gb 1.5   # 下载前预检
 
 ## 两种模式
 
-- **Mock 模式**（默认）— 无需 LLM API / Docker，直接演示完整流程
-- **真实模式** — 调用任意 **OpenAI 兼容的远程 LLM API**（不依赖本地部署；需配置 `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL`），可选 Docker 真实执行论文代码
+- **真实模式**（网页默认）— 配置 **OpenAI 兼容的远程 LLM API** 执行分析；官方仓库预设也可关闭分析选项后直接训练。本地 CPU 不依赖 Docker。
+- **Mock 模式**（手动开启）— 无需 LLM API / Docker，演示通用流程；官方仓库预设要求真实模式。
 
 > **安全提示**：真实模式的代码执行分两种沙箱——**本地子进程**（默认，便捷但
 > 无沙箱隔离，运行前会做一道「危险代码静态门」拦截 `subprocess`/`os.system`/

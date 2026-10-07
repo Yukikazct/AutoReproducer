@@ -1,18 +1,22 @@
 # AutoReproducer：基于 GitHub 多文件仓库的论文复现实施方案
 
-检查日期：2026-10-03。检查版本：de0fa6a。目标：先交付两篇论文的可信演示 Demo。
+原始检查日期：2026-10-03，检查版本：de0fa6a。进展更新：2026-10-07。DLinear单项论文实验已真实复现通过，Neural ODE与通用仓库扩展仍是后续计划。
 
-本文是待实施的方案。本次完成了源码检查、测试和上游仓库核查，尚未 fork 仓库、改造业务代码或重新训练这两篇论文。
+本文保留原始审查和后续实施方案，并记录现已交付的DLinear完整实验。2026-10-07新运行已通过生产网页后台入口完成四阶段公开分析、固定作者仓库的ETTh1多变量336→96训练/test、独立协议与指标复算和允许的结果摘要解释；没有fork、提交或推送代码。
+
+> 新已验证结果：`repository_e9408141e3dd44319e854bbdf4a70c0c`使用默认`dlinear_etth1_reference`，按作者最多10轮/patience 3协议在第7轮早停；MSE 0.3841443955898285、MAE 0.40471312403678894，相对Table 2的0.375/0.399偏差2.44%/1.43%，通过项目事前5%相对容差（非论文阈值）。16个公开来源、113份固定源码、真实数据、运行协议和独立复算均通过；deepseek-chat四阶段各1次、结果摘要解释1次，共5次真实API调用、零修正重试。数值状态`reproduced`与分析状态`completed`分别记录，结论仅覆盖该一个实验。详见[新完整报告](../data/runs/repository_e9408141e3dd44319e854bbdf4a70c0c/report.md)、[报告与图片ZIP](../data/runs/repository_e9408141e3dd44319e854bbdf4a70c0c/report_with_figures.zip)、[结果记录](dlinear_reproduction_result.md)及[重跑步骤](dlinear_testing.md)。
+
+旧运行`repository_66efc14890e34cb196a07a7d2bcb78fe`的[单次公开协议API基线报告](../data/runs/repository_66efc14890e34cb196a07a7d2bcb78fe/report.md)保留；新运行重新训练得到相同指标和第7轮早停结果。前期多Agent引用/映射/环境说明被拒绝的记录保留为真实诊断，不将它们写成通过或跳过门控。
 
 ## 1. 检查结论与本轮目标
 
-当前项目已经有可复用的前端、论文解析、资源发现、环境构建、审计日志、代码修复和报告功能。主要断点是：**执行对象仍是一段代码字符串，没有贯通“论文 → 原始仓库 → 实验入口 → 多文件执行 → 论文指标”的链路。**
+2026-10-03原始审查定位的断点是单文件执行没有贯通“论文→仓库→实验入口→多文件执行→论文指标”。2026-10-07已通过`repository_profiles.py`、`repository_reproduction.py`、`repository_runner.py`、`repository_validation.py`接通DLinear纵向链路，网页与CLI共用`Orchestrator.run`。下表保留原始问题作为通用化改造依据，不代表这些断点仍全部存在于DLinear路径。
 
 下一版本的最小交付定义为：用户选择论文预设或输入 PDF + 已知 GitHub URL，系统获取固定版本的完整仓库，在独立工作区按实验计划准备数据、训练、评估，展示真实日志、曲线、指标和来源。支持两篇已适配论文；陌生仓库先产出候选计划，不能直接宣称普遍支持。
 
-### 1.1 已核实的问题
+### 1.1 原始检查发现的问题（2026-10-03）
 
-| 优先级 | 当前证据 | 对目标的影响 | 建议动作 |
+| 优先级 | 原始证据 | 对目标的影响 | 建议动作 |
 |---|---|---|---|
 | P0 | src/agents/code_executor.py:509 读取 code 字符串；:532 生成代码；:1242、:1684 写入 run.py | 官方仓库的 models、utils、数据加载器和配置没有作为执行对象被使用 | 新增仓库执行路径，保留目录结构、cwd、参数和依赖 |
 | P0 | src/orchestrator.py:145 调用资源下载，但执行器未消费 storage.fetched.code.path | “找到并下载仓库”没有转化为“运行该仓库” | 显式传递 RepositorySnapshot、ExecutionPlan 和工作区路径 |
@@ -27,7 +31,8 @@
 ### 1.2 实测记录
 
 - Python 3.12.2，执行现有 tests：**691 passed，1 skipped，1 warning**。首次受限运行有 6 个本地 HTTP 测试服务器绑定端口错误；允许回环端口后全量重跑得到上述结果。
-- 测试通过表明已有行为较稳定，不代表已经完成真实论文复现。本次没有调用付费 LLM，也没有启动两篇论文的训练。
+- 上述为2026-10-03测试基线。2026-10-07较早批次完整套件为 **913 passed，4 skipped，1 warning**（PyPDF2旧依赖弃用），后续网页/仓库/CLI相关 **70项针对性检查通过**，`git diff --check`通过；这些是保留的历史工程检查。新的四阶段加结果解释共5次真实API、作者训练与独立复算另见本页新运行证据，不能将历史913项作为新批次完整测试数。Neural ODE尚未在本轮训练。
+- 新多Agent批次的最终完整回归为 **1138 passed，4 skipped，1 warning**（PyPDF2弃用警告）。该工程回归与新运行的真实API、作者训练和独立指标核验分别记录。
 - 额外诊断得到以下反例，记录在 [validator_probes_20261003.json](review/validator_probes_20261003.json)：
   - loss: 1.2e-4 被解析为 1.2。
   - 同时存在首轮 loss=1.0 和最终 loss=0.01 时，冒号形式匹配可能取首轮值。
@@ -46,7 +51,7 @@
 | 多文件调用 | exp → models → layers / data_provider / utils | examples → torchdiffeq 包 → 内部 ODE 求解器 |
 | 数据 | ETTh1，约 2.6 MB，官方时间切分 | 示例通过已知微分方程生成轨迹，无外部数据下载 |
 | 展示 | 真实值/预测值曲线、MSE、MAE、训练过程 | 真实/学习轨迹、相图、向量场、误差曲线 |
-| 可声称的结论 | 冒烟通过；完成协议与论文表格核对后，才可判选定实验的数值复现 | 官方示例与方法行为复现；不等价于复现论文全部实验或论文表格 |
+| 可声称的结论 | 已完成作者完整训练、协议核验与独立指标复算；ETTh1 336→96选定实验数值复现通过 | 待适配：官方示例与方法行为复现；不等价于论文全部实验或表格复现 |
 
 选择依据：DLinear 已有本地历史产物；Neural ODE 官方示例输入简单、天然可视化，源码会在没有 CUDA 时选择 CPU。两者都可检验完整仓库执行能力。运行时长须在目标机器实测，不能把“支持 CPU”理解为已保证几分钟收敛。
 
@@ -55,7 +60,7 @@
 - DLinear 历史缓存 commit：0c113668a3b88c4c4ee586b8c5ec3e539c4de5a6。
 - torchdiffeq 本次 GitHub 查询的 master commit：657943acefa826ef04c025ebeb1ff5e9d60dc268。运行前按此 SHA 获取并再校验入口文件；本次查看的是查询当时的 master 示例。
 - DLinear 历史报告 data/reports/dlinear_cache_verified.md 记录 1 epoch、seq_len=96、pred_len=96，MSE≈0.4090、MAE≈0.4168；这是历史冒烟记录，不能当作本次重跑结果或论文目标。
-- 当前源码中未找到该历史 experiment_profile / execution_plan 实现，不能仅凭 data/plans 中留存 JSON 就认为当前主线仍支持该功能。可复用数据、配置与日志作为回归样例，业务入口需要重新接入。
+- 原始审查时历史experiment_profile/execution_plan未贯通主线；本轮已重新接入固定预设、完整仓库执行和证据判定。旧单次API完整基线来自`repository_66efc14890e34cb196a07a7d2bcb78fe`，新四阶段加结果解释的完整结果来自`repository_e9408141e3dd44319e854bbdf4a70c0c`；历史1轮数据保留为旧冒烟记录。
 
 ## 3. 从 GitHub fork 到固定版本工作区
 
@@ -143,7 +148,7 @@ repo-key 由规范化 URL 生成；run-id 使用 UUID 或时间戳加随机后�
 {
   "version": 1,
   "mode": "repository",
-  "profile": "dlinear_etth1_smoke",
+  "profile": "dlinear_etth1_reference",
   "repository": {
     "url": "https://github.com/cure-lab/LTSF-Linear.git",
     "revision": "0c113668a3b88c4c4ee586b8c5ec3e539c4de5a6"
@@ -162,17 +167,17 @@ repo-key 由规范化 URL 生成；run-id 使用 UUID 或时间戳加随机后�
     {
       "id": "train_and_eval",
       "kind": "run",
-      "argv": ["python", "-u", "run_longExp.py", "--is_training", "1", "--model_id", "demo_etth1_96_96", "--model", "DLinear", "--data", "ETTh1", "--root_path", "./dataset/", "--data_path", "ETTh1.csv", "--features", "M", "--seq_len", "96", "--pred_len", "96", "--enc_in", "7", "--train_epochs", "1", "--batch_size", "32", "--num_workers", "0", "--learning_rate", "0.005", "--itr", "1"],
+      "argv": ["python", "-u", "run_longExp.py", "--is_training", "1", "--model_id", "ETTh1_336_96", "--model", "DLinear", "--data", "ETTh1", "--root_path", "./dataset/", "--data_path", "ETTh1.csv", "--features", "M", "--seq_len", "336", "--pred_len", "96", "--enc_in", "7", "--train_epochs", "10", "--patience", "3", "--batch_size", "32", "--num_workers", "0", "--learning_rate", "0.005", "--itr", "1"],
       "cwd": ".",
       "env": {"CUDA_VISIBLE_DEVICES": "", "OMP_NUM_THREADS": "2", "MPLBACKEND": "Agg"},
       "depends_on": ["import_check"],
-      "timeout_s": 600,
+      "timeout_s": 1800,
       "parser": "dlinear_final_test",
       "expected_metrics": ["mse", "mae"]
     }
   ],
-  "limits": {"repair_rounds": 2, "llm_calls": 20, "total_seconds": 1200},
-  "validation": {"level": "smoke", "paper_match_required": false}
+  "limits": {"repair_rounds": 2, "llm_calls": 20, "total_seconds": 2400},
+  "validation": {"level": "reference", "paper_match_required": true, "relative_tolerance": 0.05}
 }
 ```
 
@@ -181,7 +186,7 @@ repo-key 由规范化 URL 生成；run-id 使用 UUID 或时间戳加随机后�
 ### 第四步：准备适配平台的依赖和真实数据
 
 - 修改 EnvBuilder：优先处理 requirements、pyproject、environment 文件，生成可追溯环境。环境缓存键至少含源码依赖 hash、Python 版本、OS/架构、CPU/CUDA 类型。
-- DLinear 原始 requirements 固定 torch==1.9.0，README 使用 Python 3.6.9。不能直接假设适用于当前 Python 3.12 / Apple Silicon。可评估已有历史 Python 3.11 + torch 2.0.0 配置，先做 import 验证，再记录为“兼容环境”并冻结实际安装结果；原始论文环境与兼容环境要区分。
+- DLinear原始requirements为torch==1.9.0、README为Python 3.6.9。本轮实际通过Python 3.12.2/macOS ARM64/CPU兼容环境：torch 2.5.1、numpy 1.26.4、pandas 2.2.3、scikit-learn 1.5.2、matplotlib 3.9.2，来源与偏差已记录。当前预设固定CPU；Windows CUDA建议在WSL2中准备匹配环境并另行适配验证，不会自动使用显卡，也不能承诺逐位相同指标。
 - torchdiffeq 的 setup.py 声明 torch>=1.5.0、scipy>=1.4.0；示例另用 numpy，可视化用 matplotlib。应安装工作区中的项目源码，使 examples 导入这一版本的本地包。
 - 数据缓存必须记录下载来源、SHA-256、大小和切分信息。下载失败返回 data_unavailable；仓库复现模式不自动用合成数据替代真实 ETTh1。
 - 安装、下载允许网络；正式实验优先在准备好的容器中执行，固定资源与超时。复用现有 Docker 加固和依赖准备能力，但要扩展为挂载整个仓库。
@@ -246,25 +251,26 @@ report = reporter.render(spec, execution, validation)
 | reproduced | 配置、数据切分和评估口径匹配论文目标，所有必需指标满足事前定义的容差 |
 | inconclusive | 已完成执行但缺参考值、配置不完全一致或证据不足 |
 
-按适用结论展示；例如“实验已完成，论文数值核验 inconclusive”。任何必要步骤 exit_code 非零，均不得判 reproduced。LLM 负责解释偏差，不负责覆盖确定性判定。参考分数 PaperGuru reproduction_score 不能替代论文模型性能指标。
+依据实际证据展示结论：当前DLinear固定单项已通过完整协议和数值核验；缺参考数值的其他实验仍只能显示证据不足。任何必要步骤exit_code非零均不得判reproduced。LLM解析公开协议和解释偏差，不覆盖确定性判定；PaperGuru reproduction_score不能替代论文性能指标。
 
 ## 5. 两篇论文的具体执行清单
 
-### 5.1 DLinear：优先完成第一个纵向闭环
+### 5.1 DLinear：已完成第一个纵向闭环
 
 1. 从 fork 或上游获取固定 SHA 的完整代码。
-2. 根据论文版本与作者脚本，建立两个预设：dlinear_etth1_smoke 和 dlinear_etth1_reference。
+2. 默认`dlinear_etth1_reference`完整作者实验；`dlinear_etth1_smoke`仅保留为开发诊断。
 3. ETTh1 可复用历史已校验数据来源：
    https://raw.githubusercontent.com/zhouhaoyi/ETDataset/1d16c8f4f943005d613b5bc962e9eeb06058cf07/ETT-small/ETTh1.csv
    本地历史 SHA-256 为 f18de3ad269cef59bb07b5438d79bb3042d3be49bdeecf01c1cd6d29695ee066。复用前重新校验；不能用历史 manifest 代替文件检查。
 4. 将文件挂载到仓库 dataset/ETTh1.csv。先测试 exp.exp_main 与 models.DLinear 的 import。
-5. smoke 使用上面计划中的 seq_len=96、pred_len=96、1 epoch，只验可运行性。
-6. reference 使用选定论文表格对应的参数。作者 etth1.sh 当前是 seq_len=336、pred_len=96 的第一条命令，学习率 0.005、batch size 32；不能将 96 输入窗口的 smoke 指标与 336 输入窗口的论文结果直接比较。
-7. 脚本完成训练并评估，收集最终 MSE/MAE、真实/预测数组、checkpoint 和曲线。核查保存产物的具体路径与本次 model_id 对应关系。
-8. run_longExp.py 当前固定 seed=2021。先保留该基线；需要多种子时加一个可审查的 seed 参数补丁，不能仅设置 PYTHONHASHSEED 就宣称改变了 NumPy/PyTorch 随机种子。
-9. 将论文目标数值、表号、标准化方式和容差核对后写进预设。暂未核对的目标保持 null，报告只给真实测量值。
+5. 使用完整输入336、预测96、最多10轮、patience 3、Adam初始lr 0.005和batch 32。本次连续完成7轮后官方早停，加载验证集最优checkpoint再test。
+6. Table 2目标MSE 0.375、MAE 0.399；本次实际0.3841443955898285/0.40471312403678894，分别相差2.44%/1.43%，均在项目既有5%相对容差内，该容差非论文阈值。
+7. 实际Namespace、固定113份源码、数据SHA、8209/2785/2785窗口、完整训练与唯一checkpoint/预测数组均通过独立协议核验。预测数组shape为(2785,96,7)，独立重建真实测试标签并复算指标，与作者日志在1e-6内一致；报告包含两张真实实验图。
+8. 保留原入口seed 2021；[作者明确论文只跑一个seed](https://github.com/cure-lab/LTSF-Linear/issues/33#issuecomment-1331937601)，无需将其他消融的多次实验规则套入本项。
+9. 新运行由PaperReader、ResourceFinder、EnvBuilder、Verifier读取16个真实公开来源，逐项引用论文/作者script/default；四阶段各1次且零修正，全部通过后才执行官方训练。允许后ResultValidator用1次API解释MSE/MAE、完成轮数和核验状态摘要，共5次；本地指标与确定性判定不由API替代。原始日志、`repository_analysis.json`、`result_analysis.json`、协议核验与独立指标复算分别落盘；旧单次API基线保留。
+10. 网页默认真实模式，官方预设使用本地CPU而不依赖Docker；CLI重跑使用 `--llm-review --analysis-mode multi_agent --result-review`。四阶段可各修正最多一次，报告以真实客户端差量统计调用，不承诺每次都是5次。报告图片存同目录相对companion资产，分享用报告图片ZIP。完整重跑步骤见[dlinear_testing.md](dlinear_testing.md)。
 
-验收：网页点击运行后确实执行仓库里的 run_longExp.py 和跨文件导入；支持从日志追溯到 repo SHA、数据 SHA、实际参数；完整复现状态由对应协议决定。
+验收已通过：网页/CLI执行官方`run_longExp.py`和跨文件导入，可追溯源码与数据SHA、实际参数、完整协议、独立复算及结果。结论仅为DLinear/ETTh1 336→96选定实验数值复现；Neural ODE、多文件自动修复与陌生仓库通用化仍须后续实现。
 
 ### 5.2 Neural ODE：验证第二个仓库可以复用同一执行器
 
