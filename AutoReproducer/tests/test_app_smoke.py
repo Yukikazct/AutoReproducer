@@ -27,9 +27,10 @@ def _app() -> AppTest:
 
 def test_mock_mode_panel_renders():
     at = _app()
+    at.session_state["mock_mode"] = True
     at.run()
     assert not at.exception, at.exception
-    # Mock 开关默认开启
+    # 显式选择 Mock 后才启用演示。
     assert len(at.sidebar.toggle) >= 1
     assert at.sidebar.toggle[0].value is True
     # 提示文案
@@ -41,11 +42,10 @@ def test_mock_mode_panel_renders():
     assert link.disabled is True
 
 
-def test_real_mode_panel_enables_inputs_and_button():
+def test_real_mode_is_default_and_enables_inputs_and_button():
     at = _app()
     at.run()
-    at.sidebar.toggle[0].set_value(False)
-    at.run()
+    assert at.sidebar.toggle[0].value is False
     assert not at.exception, at.exception
     # 配置输入可用
     inputs = {i.label: i for i in at.sidebar.text_input}

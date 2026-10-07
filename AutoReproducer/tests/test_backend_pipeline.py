@@ -172,11 +172,10 @@ def test_run_pipeline_core_reports_stage_error(tmp_path, monkeypatch):
         def run(self, data):
             raise RuntimeError("boom")
 
-    class _BoomOrch:
+    class _BoomOrch(bp.Orchestrator):
         def __init__(self, **kwargs):
-            self.agents = {k: _BoomAgent() for k in
-                           ("reader", "finder", "builder", "executor",
-                            "validator", "verifier", "optimizer", "reporter")}
+            super().__init__(**kwargs)
+            self.agents["reader"] = _BoomAgent()
 
     monkeypatch.setattr(bp, "Orchestrator", _BoomOrch)
     progress = tmp_path / "p.jsonl"
@@ -195,3 +194,23 @@ def test_run_pipeline_core_reports_stage_error(tmp_path, monkeypatch):
     finish = records[-1]
     assert finish["phase"] == "FINISH"
     assert finish["result"]["state"] == "ERROR"
+
+
+def test_repository_progress_preserves_output_and_terminal(tmp_path):
+    path = tmp_path / "p.jsonl"
+    store = ProgressStore(str(path))
+    store.emit({"type": "repository_step", "step_id": "train_and_eval", "status": "running"})
+    store.emit({"type": "repository_output", "stream": "stdout", "text": "Epoch: 1\n"})
+    store.emit({"type": "repository_output", "stream": "stderr", "text": "warning\n"})
+    store.emit({"type": "done", "result": {"state": "COMPLETED"}})
+    view = ProgressStore.read_snapshot(str(path))
+    assert view["repository_step"] == "train_and_eval"
+    assert view["execution_output"] == "Epoch: 1\nwarning\n"
+    assert view["running"] is False
+
+
+def test_backend_uses_shared_orchestrator_resource_hooks(tmp_path):
+    result = run_pipeline_core(str(tmp_path / "p.jsonl"), paper_title="Dummy Paper", mock_mode=True)
+    assert result["state"] == "COMPLETED"
+    assert set(result["data"]["storage"]["fetched"]) == {"code", "dataset", "weights"}
+    assert result["data"]["storage"]["manifest_path"]

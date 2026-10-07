@@ -68,6 +68,48 @@ def test_pdf_mode_requires_file_even_if_title_was_entered(app, monkeypatch):
     assert any("请先上传PDF文件" in error.value for error in app.sidebar.error)
 
 
+def test_repository_preset_requires_real_mode(app, monkeypatch):
+    start = Mock()
+    monkeypatch.setattr(pipeline, "run_pipeline_background", start)
+    app.sidebar.toggle[0].set_value(True).run()
+    app.sidebar.radio(key="input_mode").set_value("官方仓库预设").run()
+    next(b for b in app.sidebar.button if "开始复现" in b.label).click().run()
+    assert not app.exception
+    start.assert_not_called()
+    assert any("关闭 Mock" in error.value for error in app.sidebar.error)
+
+
+def test_repository_preset_starts_without_llm_configuration(app, monkeypatch):
+    start = Mock()
+    monkeypatch.setattr(pipeline, "run_pipeline_background", start)
+    app.sidebar.toggle[0].set_value(False).run()
+    app.sidebar.radio(key="input_mode").set_value("官方仓库预设").run()
+    app.sidebar.text_input(key="llm_base_url").set_value("").run()
+    app.sidebar.text_input(key="llm_model").set_value("").run()
+    app.sidebar.checkbox(key="repository_prepare_only").set_value(True).run()
+    next(b for b in app.sidebar.button if "开始复现" in b.label).click().run()
+    assert not app.exception
+    start.assert_called_once()
+    kwargs = start.call_args.kwargs
+    assert kwargs["experiment_profile"] == "dlinear_etth1_reference"
+    assert kwargs["prepare_only"] is True
+    assert kwargs["mock_mode"] is False
+    assert kwargs["use_docker"] is False
+    assert not app.error
+
+
+def test_repository_preset_docker_is_explicitly_rejected(app, monkeypatch):
+    start = Mock()
+    monkeypatch.setattr(pipeline, "run_pipeline_background", start)
+    app.sidebar.toggle[0].set_value(False).run()
+    app.sidebar.radio(key="input_mode").set_value("官方仓库预设").run()
+    app.sidebar.toggle[1].set_value(True).run()
+    next(b for b in app.sidebar.button if "开始复现" in b.label).click().run()
+    assert not app.exception
+    start.assert_not_called()
+    assert any("仅支持本地 CPU" in error.value for error in app.sidebar.error)
+
+
 @pytest.mark.parametrize("terminal", ["COMPLETED", "ERROR"])
 def test_terminal_progress_updates_controls_in_same_render(app, tmp_path, terminal):
     progress = tmp_path / "progress.jsonl"
@@ -85,3 +127,19 @@ def test_terminal_progress_updates_controls_in_same_render(app, tmp_path, termin
     assert app.session_state["current_state"] == terminal
     assert next(b for b in app.sidebar.button if "开始复现" in b.label).disabled is False
     assert terminal in " ".join(m.value for m in app.sidebar.markdown)
+
+
+def test_numerical_mismatch_is_not_presented_as_reproduction_success(app, tmp_path):
+    progress = tmp_path / "progress.jsonl"
+    pipeline.ProgressStore(str(progress)).emit({"type": "done", "result": {
+        "state": "COMPLETED", "data": {"validation": {
+            "status": "not_reproduced", "result_level": "experiment_completed",
+            "reason": "MSE超出固定容差", "is_reproduced": False,
+        }},
+    }})
+    app.session_state["running"] = True
+    app.session_state["progress_file"] = str(progress)
+    app.run()
+    assert not app.exception
+    assert any("论文数值验收未通过" in notice.value for notice in app.warning)
+    assert not any("复现流程成功完成" in notice.value for notice in app.success)

@@ -24,6 +24,7 @@ from src.llm.llm_client import LLMClient
 from src.audit.audit_logger import AuditLogger
 from src.base_agent import BaseAgent
 from src.corpus import list_papers
+from src.repository_profiles import PROFILE_LABELS, PAPER_TITLE
 from frontend.report_renderer import render_report, build_report_bundle
 from frontend.llm_config import (
     CONNECT_TEST_TIMEOUT,
@@ -85,7 +86,7 @@ if "current_state" not in st.session_state:
 if "agent_status" not in st.session_state:
     st.session_state.agent_status = {}
 if "mock_mode" not in st.session_state:
-    st.session_state.mock_mode = True
+    st.session_state.mock_mode = False
 if "paper_title" not in st.session_state:
     st.session_state.paper_title = ""
 if "connection_result" not in st.session_state:
@@ -177,12 +178,12 @@ def render_paper_input():
     """输入方式切换与页面一起刷新，保持上传入口和启动按钮状态同步。"""
     st.markdown('<div class="sidebar-section-label"><span>01</span> 论文输入</div>',
                 unsafe_allow_html=True)
-    input_mode = st.radio("输入方式", ["论文标题", "上传PDF"], key="input_mode")
+    input_mode = st.radio("输入方式", ["论文标题", "上传PDF", "官方仓库预设"], key="input_mode")
     if input_mode == "论文标题":
         st.session_state.paper_title = st.text_input(
             "论文标题", value=st.session_state.paper_title,
             placeholder="输入论文标题...", key="paper_title_input")
-    else:
+    elif input_mode == "上传PDF":
         uploaded_file = st.file_uploader(
             "上传PDF文件", type=["pdf"], key="pdf_uploader",
             help="点击 Upload 选择本地 PDF，或将 PDF 拖入上传区域")
@@ -191,6 +192,17 @@ def render_paper_input():
         else:
             st.success(f"已上传：{uploaded_file.name}"
                        f"（{format_size(uploaded_file.size)}）")
+    else:
+        st.selectbox("真实论文实验", list(PROFILE_LABELS),
+                     format_func=lambda key: PROFILE_LABELS[key], key="experiment_profile")
+        st.caption(PAPER_TITLE)
+        st.markdown("[论文](https://arxiv.org/abs/2205.13504) · "
+                    "[作者代码](https://github.com/cure-lab/LTSF-Linear)")
+        st.checkbox("仅准备代码、数据和命令（不训练）", key="repository_prepare_only")
+        st.checkbox("使用真实多 Agent 分析论文、仓库和环境", value=True, key="repository_llm_review")
+        st.checkbox("允许 API 分析本次指标、轮数和核验状态摘要", key="repository_result_review")
+        st.caption("完整分析流程需要真实 API；关闭分析选项可直接执行作者实验。"
+                   "使用本地 CPU，首次训练会安装隔离依赖；默认执行完整作者训练协议。")
 
 
 # ========== 侧边栏 ==========
@@ -275,6 +287,12 @@ with st.sidebar:
     input_mode = st.session_state.input_mode
     uploaded_file = (st.session_state.get("pdf_uploader")
                      if input_mode == "上传PDF" else None)
+    experiment_profile = (st.session_state.get("experiment_profile")
+                          if input_mode == "官方仓库预设" else None)
+    requires_api = not experiment_profile or (
+        bool(st.session_state.get("repository_llm_review"))
+        and not bool(st.session_state.get("repository_prepare_only")))
+
 
     # 语料对照层（可选）：选择真实论文作为轻量锚点
     st.markdown('<div class="sidebar-section-label"><span>02</span> 语料对照 <em>可选</em></div>',
@@ -409,6 +427,10 @@ with tab1:
     progress = completed / len(names) if names else 0
     st.progress(progress, text=f"整体进度: {completed}/{len(names)}")
 
+    if snap and snap.get("execution_output"):
+        with st.expander("官方仓库实时输出（最近16000字符，完整日志保存在运行目录）", expanded=True):
+            st.code(snap["execution_output"], language="text")
+
     # 运行结果展示
     if st.session_state.result:
         result = st.session_state.result
@@ -432,7 +454,17 @@ with tab1:
                       f"{optimization.get('budget', 0)}")
 
         if result.get("state") == "COMPLETED":
-            st.success("🎉 复现流程成功完成！")
+            validation = data.get("validation") or {}
+            if validation.get("result_level") == "failed":
+                st.error("实验未通过：" + validation.get("reason", "查看报告和执行日志"))
+            elif validation.get("status") == "not_reproduced":
+                st.warning("完整实验已运行，论文数值验收未通过：" + validation.get("reason", "查看指标差异"))
+            elif validation.get("status") in {"prepared", "inconclusive", "smoke_passed"}:
+                st.info(validation.get("reason", "流程已结束，请查看实验结论"))
+            elif validation.get("is_reproduced") is True:
+                st.success("🎉 完整实验已完成，论文数值验收通过！")
+            else:
+                st.info("流水线已结束，请查看报告中的复现结论。")
         elif result.get("state") == "ERROR":
             st.error(f"❌ 流程出错: {result.get('error', '未知错误')}")
 
@@ -877,10 +909,14 @@ def _new_progress_file() -> str:
 # 启动按钮处理：后台线程执行流水线，主线程立即返回并轮询进度
 if start_btn:
     pt = st.session_state.paper_title.strip() if input_mode == "论文标题" else ""
-    if not pt and not uploaded_file:
+    if experiment_profile and st.session_state.mock_mode:
+        st.sidebar.error("官方仓库预设需要关闭 Mock 模式，才能执行真实论文代码。")
+    elif experiment_profile and st.session_state.use_docker:
+        st.sidebar.error("本轮官方仓库预设仅支持本地 CPU；请关闭 Docker 开关后运行。")
+    elif not experiment_profile and not pt and not uploaded_file:
         st.sidebar.error("请先上传PDF文件" if input_mode == "上传PDF"
                          else "请先输入论文标题")
-    elif not st.session_state.mock_mode and config_missing(base_url, model_name):
+    elif requires_api and not st.session_state.mock_mode and config_missing(base_url, model_name):
         st.error("真实模式缺少 LLM 配置（"
                  + "、".join(config_missing(base_url, model_name))
                  + "）。请在侧边栏填写，或设置环境变量 "
@@ -889,7 +925,7 @@ if start_btn:
         # 真实模式且未填 API Key：多数云端端点（DeepSeek/OpenAI 等）会返回
         # 401，且流水线会把错误文本当 LLM 输出继续跑，表象类似「没反应」。
         # 此处不阻断（部分自建端点无需鉴权），但给出明确预警。
-        if (not st.session_state.mock_mode
+        if (requires_api and not st.session_state.mock_mode
                 and not (api_key.strip()
                          or os.environ.get("LLM_API_KEY", "").strip())):
             st.warning("⚠️ 未填写 API Key：如果上游服务需要鉴权"
@@ -909,6 +945,13 @@ if start_btn:
             progress_file,
             paper_title=pt, pdf_path=tmp_pdf,
             corpus_paper=corpus_paper,
+            experiment_profile=experiment_profile,
+            prepare_only=(bool(st.session_state.get("repository_prepare_only"))
+                          if experiment_profile else False),
+            use_llm_review=(bool(st.session_state.get("repository_llm_review"))
+                            if experiment_profile else False),
+            allow_result_summary_review=(bool(st.session_state.get("repository_result_review"))
+                                         if experiment_profile else False),
             model_name=model_name, base_url=base_url,
             api_key=api_key,
             mock_mode=st.session_state.mock_mode,

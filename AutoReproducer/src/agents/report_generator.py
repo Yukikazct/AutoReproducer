@@ -4,6 +4,7 @@
 验证结果（指标对比） / 智能优化（UCB 尝试记录） / 验证闭环 / 审计与预算统计。
 """
 from datetime import datetime
+import json
 import re
 from src.base_agent import BaseAgent
 from src.metric_keys import norm_metric_key
@@ -68,6 +69,288 @@ def _disk_usage_lines(usage):
     return lines
 
 
+def _analysis_sources(data):
+    sources = {}
+    for key in ("repository_analysis", "result_analysis"):
+        for source in (data.get(key) or {}).get("sources") or []:
+            if not isinstance(source, dict):
+                continue
+            source_id, locator, url = (source.get(field) for field in ("source_id", "locator", "url"))
+            if all(isinstance(value, str) for value in (source_id, locator, url)):
+                sources[(source_id, locator)] = url
+    return sources
+
+
+def _analysis_evidence_lines(analysis, sources):
+    """Render only exact (source ID, locator) matches as public source links."""
+    evidence = analysis.get("evidence") or {}
+    if not isinstance(evidence, dict) or not evidence:
+        return []
+    lines = ["", "**原文依据**", ""]
+    for claim, refs in evidence.items():
+        if not isinstance(refs, list):
+            continue
+        for ref in refs:
+            if not isinstance(ref, dict):
+                continue
+            source_id, locator = _txt(ref.get("source_id")), _txt(ref.get("locator"))
+            label = _markdown_text(source_id + " · " + locator)
+            url = sources.get((source_id, locator))
+            if isinstance(url, str) and re.fullmatch(r"https://[^\s<>]+", url):
+                citation = f"[{label}](<{url}>)"
+            else:
+                citation = label + "（引用定位未匹配来源清单）"
+            lines += [f"- **{_markdown_text(_txt(claim))}**: {citation}", ""]
+            lines += ["> " + _markdown_text(line) for line in _txt(ref.get("quote")).splitlines()]
+            lines.append("")
+    return lines
+
+
+def _analysis_stage_lines(analysis):
+    stages = analysis.get("stages") or []
+    lines = [f"- **真实调用数**: {analysis.get('calls', 0)}",
+             "", "| Agent | 已尝试 | 返回完成 | 证据接受 | 实际调用数 | Tokens |",
+             "|------|--------|----------|----------|------------|--------|"]
+    labels = {"reader": "PaperReader", "finder": "ResourceFinder", "builder": "EnvBuilder",
+              "verifier": "Verifier", "result_validator": "ResultValidator"}
+    for stage in stages:
+        if not isinstance(stage, dict):
+            continue
+        name = _txt(stage.get("name"))
+        states = ["是" if stage.get(field) is True else "否" for field in ("attempted", "completed", "accepted")]
+        usage = stage.get("usage") or {}
+        tokens = usage.get("total_tokens", "未返回") if isinstance(usage, dict) else "未返回"
+        cells = [labels.get(name, name), *states, _txt(stage.get("calls", 0)), _txt(tokens)]
+        lines.append("| " + " | ".join(_markdown_text(cell) for cell in cells) + " |")
+    return lines + [""]
+
+
+def _analysis_rejection_lines(analysis, sources):
+    """Show typed, sanitized rejection details without presenting them as facts."""
+    labels = {"reader": "PaperReader", "finder": "ResourceFinder", "builder": "EnvBuilder",
+              "verifier": "Verifier", "result_validator": "ResultValidator"}
+    lines = []
+    for stage in analysis.get("stages") or []:
+        if not isinstance(stage, dict) or stage.get("accepted") is True:
+            continue
+        diagnostics = stage.get("rejection_diagnostics")
+        if not isinstance(diagnostics, dict) or not diagnostics:
+            continue
+        name = _txt(stage.get("name"))
+        attempt = stage.get("attempt")
+        suffix = f"（第 {attempt} 次）" if type(attempt) is int and attempt > 0 else ""
+        lines += ["#### " + _markdown_text(labels.get(name, name)) + "：分析未接受" + suffix, ""]
+        if stage.get("reason"):
+            lines.append("- **本地核验拒绝原因**: " + _markdown_text(_txt(stage["reason"])))
+        if isinstance(diagnostics.get("status"), str):
+            lines.append("- **模型返回状态**: " + _markdown_text(diagnostics["status"]))
+        if isinstance(diagnostics.get("pass"), bool):
+            lines.append("- **模型自查结论**: " + ("通过" if diagnostics["pass"] else "未通过"))
+        reviewed = diagnostics.get("reviewed_stages")
+        if isinstance(reviewed, list):
+            selected = [_markdown_text(name) for name in reviewed if isinstance(name, str)]
+            if selected:
+                lines.append("- **模型审查对象**: " + ", ".join(selected))
+        checks = diagnostics.get("checks")
+        if isinstance(checks, dict):
+            selected = [(key, value) for key, value in checks.items() if isinstance(value, bool)]
+            if selected:
+                lines += ["", "| 审查项 | 模型自查 |", "|--------|----------|"]
+                for key, value in selected:
+                    lines.append("| " + _markdown_text(_txt(key)) + " | " + ("通过" if value else "未通过") + " |")
+                lines.append("")
+        issues = diagnostics.get("issues")
+        if isinstance(issues, list):
+            selected = [issue for issue in issues if isinstance(issue, str) and issue.strip()]
+            if selected:
+                lines += ["", "**模型问题说明**", ""]
+                lines += ["- " + _markdown_text(issue) for issue in selected]
+        lines += _analysis_evidence_lines(diagnostics, sources)
+        lines += ["", "> 以上为未被接受的分析诊断；原文引用保留供复核，不代表训练或数值复现结论。", ""]
+    return lines
+
+
+def _provenance_sources(references, sources):
+    """Render deterministic source origins, linking only registered locators."""
+    if not isinstance(references, list):
+        return ""
+    labels = {"paper_text": "论文原文", "author_script": "作者实验脚本",
+              "author_code_setting_or_default": "作者代码设置或默认值",
+              "author_statement": "作者公开说明", "author_source": "作者公开源码",
+              "public_source": "公开来源"}
+    rendered = []
+    for ref in references:
+        if not isinstance(ref, dict):
+            continue
+        source_id, locator = ref.get("source_id"), ref.get("locator")
+        if not isinstance(source_id, str) or not isinstance(locator, str):
+            continue
+        origin = ref.get("origin")
+        origin = labels.get(origin, _txt(origin, "来源类型未标注")) if isinstance(origin, str) else "来源类型未标注"
+        label = _markdown_text(origin + " · " + source_id + " · " + locator)
+        url = sources.get((source_id, locator))
+        if isinstance(url, str) and re.fullmatch(r"https://[^\s<>]+", url):
+            rendered.append(f"[{label}](<{url}>)")
+        else:
+            rendered.append(label + "（引用定位未匹配来源清单）")
+    return "；".join(rendered)
+
+
+def _reader_source_context_lines(reader, sources):
+    provenance = reader.get("protocol_provenance")
+    lines = []
+    if isinstance(provenance, dict):
+        context_rows = []
+        for field, item in provenance.items():
+            if not isinstance(item, dict):
+                continue
+            context = _provenance_sources(item.get("context_sources"), sources)
+            if context:
+                context_rows.append("| " + _markdown_text(_txt(field)) + " | " + context + " |")
+        if context_rows:
+            lines += ["", "**补充来源上下文**", "",
+                      "这些引用提供背景；参数数值的依据列在参数表中。", "",
+                      "| 字段 | 上下文来源 |", "|------|------------|", *context_rows, ""]
+    context = reader.get("reference_context")
+    if not isinstance(context, dict) or not context:
+        return lines
+    labels = {"method": "方法", "dataset": "数据集", "features": "特征模式",
+              "input_length": "输入长度", "forecast_horizon": "预测长度", "scope": "实验范围"}
+    lines += ["", "**论文表格定位（本地确定性选择）**", "",
+              "来自已核验协议与公开引用的定位元数据；本次运行证据另行记录。", "",
+              "| 定位项 | 值 |", "|--------|----|"]
+    for key, label in labels.items():
+        if key in context:
+            lines.append("| " + label + " | " + _markdown_text(_txt(context[key])) + " |")
+    metric_columns = context.get("metric_columns")
+    if isinstance(metric_columns, dict):
+        for metric in ("mse", "mae"):
+            if isinstance(metric_columns.get(metric), str):
+                lines.append("| " + metric.upper() + " 列 | " + _markdown_text(metric_columns[metric]) + " |")
+    lines.append("")
+    evidence = {field: context[field] for field in ("table_headers", "table_row_evidence")
+                if isinstance(context.get(field), list)}
+    lines += _analysis_evidence_lines({"evidence": evidence}, sources)
+    return lines
+
+
+def _repository_analysis_lines(data):
+    analysis = data.get("repository_analysis") or {}
+    if not analysis:
+        return []
+    sources = _analysis_sources(data)
+    state = "通过" if analysis.get("status") == "accepted" else "未完成或未通过"
+    lines = ["### 公开来源多 Agent 分析", "",
+             f"- **分析状态**: {state}",
+             f"- **模型**: {_markdown_text(_txt(analysis.get('model')))}",
+             "- **输入范围**: 真实公开论文摘录与固定作者源码；本阶段未发送训练结果。"]
+    lines += _analysis_stage_lines(analysis)
+    if (analysis.get("gate") or {}).get("reason"):
+        lines += ["- **分析未通过原因**: " + _markdown_text(_txt(analysis["gate"]["reason"])), ""]
+    lines += _analysis_rejection_lines(analysis, sources)
+    analyses = analysis.get("analyses") or {}
+    reader = analyses.get("reader") or {}
+    if reader:
+        provenance = reader.get("protocol_provenance")
+        provenance = provenance if isinstance(provenance, dict) else {}
+        lines += ["#### PaperReader：选定实验协议", "",
+                  "| 参数 | 抽取值 | 数值依据 |" if provenance else "| 参数 | 抽取值 |",
+                  "|------|--------|----------|" if provenance else "|------|--------|"]
+        for name, value in (reader.get("protocol") or {}).items():
+            row = f"| {_markdown_text(_txt(name))} | {_markdown_text(_txt(value))} |"
+            if provenance:
+                item = provenance.get("protocol." + name)
+                refs = item.get("value_sources") if isinstance(item, dict) else []
+                row += " " + (_provenance_sources(refs, sources) or "未记录") + " |"
+            lines.append(row)
+        lines += ["", "- **论文参考指标**: " + _markdown_text(_txt(reader.get("reference_metrics")))]
+        metric_rows = []
+        for name, value in (reader.get("reference_metrics") or {}).items():
+            item = provenance.get("reference_metrics." + name)
+            if isinstance(item, dict):
+                origin = _provenance_sources(item.get("value_sources"), sources)
+                if origin:
+                    metric_rows.append("| " + _markdown_text(_txt(name)) + " | "
+                                       + _markdown_text(_txt(value)) + " | " + origin + " |")
+        if metric_rows:
+            lines += ["", "| 参考指标 | 数值 | 数值依据 |", "|----------|------|----------|", *metric_rows, ""]
+        lines += _reader_source_context_lines(reader, sources)
+        lines += _analysis_evidence_lines(reader, sources)
+    finder = analyses.get("finder") or {}
+    if finder:
+        lines += ["#### ResourceFinder：作者源码入口", "",
+                  "| 职责 | 固定源码路径 |", "|------|--------------|"]
+        for name, value in (finder.get("entrypoints") or {}).items():
+            lines.append(f"| {_markdown_text(_txt(name))} | {_markdown_text(_txt(value))} |")
+        lines += _analysis_evidence_lines(finder, sources)
+    builder = analyses.get("builder") or {}
+    if builder:
+        lines += ["#### EnvBuilder：原始依赖与兼容解释", "",
+                  "- **作者原始依赖**: " + _markdown_text(", ".join(_txt(value) for value in builder.get("original_requirements") or [])),
+                  "- **兼容解释**: " + _markdown_text(_txt(builder.get("compatibility_note"))),
+                  "- **兼容候选状态**: 未执行；执行环境仍由冻结预设确定。"]
+        if builder.get("original_requirements_basis") == "documented_author_setup_not_verified_runtime":
+            lines.append("- **原始依赖证据范围**: 作者声明的安装清单；未核实论文实验当时实际安装的环境。")
+        if builder.get("changes_algorithm_role") == "constraint_on_unexecuted_proposals":
+            lines.append("- **算法变更约束**: 兼容候选应保留冻结算法；这是对未执行建议的约束，不提供运行核验证据。")
+        for proposal in builder.get("compatibility_proposals") or []:
+            if isinstance(proposal, dict):
+                lines.append("  - " + _markdown_text(_txt(proposal.get("package"))
+                             + _txt(proposal.get("suggested_constraint")) + ": " + _txt(proposal.get("reason"))))
+        lines += _analysis_evidence_lines(builder, sources)
+    verifier = analyses.get("verifier") or {}
+    if verifier:
+        lines += ["#### Verifier：独立准备条件审查", "",
+                  f"- **准备条件审查**: {'通过' if verifier.get('pass') is True else '未通过'}",
+                  "- **审查对象**: PaperReader、ResourceFinder、EnvBuilder 的公开事实及一致性；最终数值结论由本地确定性核验给出。"]
+        for name, accepted in (verifier.get("checks") or {}).items():
+            lines.append("  - " + _markdown_text(_txt(name)) + ": " + ("通过" if accepted is True else "未通过"))
+        for issue in verifier.get("issues") or []:
+            lines.append("  - " + _markdown_text(_txt(issue)))
+        lines += _analysis_evidence_lines(verifier, sources)
+    lines += ["", "> 分析范围与实验范围均为选定的 DLinear / ETTh1 336→96 多变量实验，不代表论文全部实验。", ""]
+    return lines
+
+
+def _result_analysis_lines(data):
+    analysis = data.get("result_analysis") or {}
+    status = data.get("analysis_status")
+    if not analysis and not status:
+        return []
+    states = {"completed": "已完成", "public_readiness_accepted": "公开准备条件已通过；未执行结果摘要解释",
+              "result_analysis_failed": "结果摘要解释失败", "failed": "LLM 分析失败"}
+    lines = ["### LLM 分析状态与结果摘要解释", "",
+             "- **LLM 分析状态**: " + states.get(status, _txt(status, "未记录")),
+             "- **结论职责**: API 分析状态与训练、协议核验、独立指标复算分别记录；API 解释失败不会覆盖已完成实验的确定性结论。"]
+    if analysis:
+        lines += ["- **结果解释输入范围**: 用户授权的 MSE、MAE、已完成轮数、协议核验与独立复算状态摘要；参考依据为公开来源。"]
+        lines += _analysis_stage_lines(analysis)
+        accepted = (analysis.get("analyses") or {}).get("result_validator") or analysis
+        if analysis.get("status") == "accepted":
+            lines += ["**结果解释**", "", _markdown_text(_txt(accepted.get("summary"))), ""]
+            differences = accepted.get("differences") or []
+            if differences:
+                lines += ["| 指标 | 论文值 | 实际值 | 绝对差值 | 相对差异 |",
+                          "|------|--------|--------|----------|----------|"]
+                for item in differences:
+                    if isinstance(item, dict):
+                        cells = [_txt(item.get(key)) for key in ("metric", "paper_value", "actual_value", "absolute_difference")]
+                        cells.append(_fmt(item.get("relative_difference"), ".2%"))
+                        lines.append("| " + " | ".join(_markdown_text(cell) for cell in cells) + " |")
+                lines.append("")
+                for item in differences:
+                    if isinstance(item, dict) and item.get("explanation"):
+                        lines.append("- " + _markdown_text(_txt(item.get("metric")) + ": " + _txt(item["explanation"])))
+            for limitation in accepted.get("limitations") or []:
+                lines.append("- **解释局限**: " + _markdown_text(_txt(limitation)))
+            lines += _analysis_evidence_lines(accepted, _analysis_sources(data))
+        elif (analysis.get("gate") or {}).get("reason"):
+            lines.append("- **API 解释失败原因**: " + _markdown_text(_txt(analysis["gate"]["reason"])))
+    if data.get("analysis_error"):
+        lines.append("- **分析诊断**: " + _markdown_text(_txt(data["analysis_error"])))
+    return lines + [""]
+
+
 # 报告内代码与执行输出**全文内嵌**，不设展示上限。
 # 此前是截断到 6000/6000/3000 字符 + 一句「完整内容见 *_execution.txt 附件」，
 # 但报告本身才是用户真正在读的东西：实测一次 10627 字符的输出被砍到 6000，
@@ -129,11 +412,32 @@ class ReportGeneratorAgent(BaseAgent):
                 lines.append(f"  - {u}")
         lines.append("")
 
+        repository = data.get("repository") or {}
+        spec = data.get("experiment_spec") or {}
+        if spec:
+            lines += ["### 官方仓库实验来源",
+                      f"- **预设**: {spec.get('label', spec.get('id', ''))}",
+                      f"- **论文版本/参考位置**: {paper_info.get('reference_source', '')}",
+                      f"- **固定源码版本**: `{repository.get('resolved_sha', '未获取')}`",
+                      f"- **实验定义SHA-256**: `{data.get('spec_sha256', '')}`",
+                      f"- **独立运行目录**: `{data.get('run_dir', '')}`",
+                      f"- **参数**: {spec.get('parameters', {})}"]
+            dataset = data.get("dataset_provenance") or {}
+            if dataset:
+                lines += [f"- **真实数据SHA-256**: `{dataset.get('sha256', '')}`",
+                          f"- **数据切分**: {dataset.get('split', '')}"]
+            lines += [f"- **协议说明**: {(spec.get('validation') or {}).get('note', '')}", ""]
+            lines += [f"- **作者协议来源**: {(spec.get('validation') or {}).get('aggregation_source', '')}",
+                      f"- **实现版本说明**: {(spec.get('validation') or {}).get('implementation_note', '')}", ""]
+        lines += _repository_analysis_lines(data)
+
         # 3. 环境配置 + 依赖诊断
         lines += ["## 3. 环境配置",
                   f"- **Python版本**: {env_config.get('python_version', 'N/A')}",
                   f"- **依赖数**: "
                   f"{len(_txt(env_config.get('requirements_txt')).splitlines())}"]
+        if env_config.get("note"):
+            lines.append(f"- **环境适配**: {env_config['note']}")
         disk_usage = (execution.get("final") or {}).get("disk_usage") or env_config.get("disk_usage")
         lines += _disk_usage_lines(disk_usage)
         if env_config.get("dependency_corpus"):
@@ -167,8 +471,11 @@ class ReportGeneratorAgent(BaseAgent):
             lines.append("")
 
         # 4. 代码执行（smoke + full）
-        lines += ["## 4. 代码执行",
-                  f"- **代码长度**: {len(_txt(execution.get('code')))} 字符"]
+        lines += ["## 4. 代码执行"]
+        if execution.get("mode") == "repository":
+            lines.append("- **执行对象**: 固定版本完整官方仓库（多文件）")
+        else:
+            lines.append(f"- **代码长度**: {len(_txt(execution.get('code')))} 字符")
         # 清洗记录：清洗层碰过代码就必须让人看见——丢掉疑似代码行是"结果可能
         # 已被洗残"的信号，静默吞掉正是此前"代码不完整却查不出来"的成因。
         sstats = execution.get("sanitize_stats") or {}
@@ -186,7 +493,9 @@ class ReportGeneratorAgent(BaseAgent):
         best_effort = bool(execution.get("best_effort"))
         if execution.get("not_runnable"):
             # 只剩两道真门（语法错误 / 危险调用）会走到这里
-            lines.append("- **执行状态**: ⚠️ 未运行（代码未通过执行前检查）")
+            lines.append("- **执行状态**: ⚠️ 未运行" +
+                         ("（仓库实验尚未执行）" if execution.get("mode") == "repository" else
+                          "（代码未通过执行前检查）"))
             lines.append(f"- **未运行原因**: {execution.get('reason', 'N/A')}")
         else:
             state = "✅ 成功" if final.get("success") else "❌ 失败"
@@ -211,6 +520,14 @@ class ReportGeneratorAgent(BaseAgent):
             lines.append(
                 f"  - {st.get('stage')}: {'✅ 通过' if st_ok else '❌ 失败'} "
                 f"(退出码 {st.get('exit_code')})")
+        if execution.get("mode") == "repository":
+            lines += ["", "### 官方仓库执行命令", ""]
+            steps = stages or (data.get("execution_plan") or {}).get("steps", [])
+            for step in steps:
+                lines += [f"- **{step.get('id', step.get('stage', '步骤'))}** · cwd: `{step.get('cwd', '.')}`",
+                          "```json", json.dumps(step.get("argv", []), ensure_ascii=False), "```"]
+                if step.get("stdout_path"):
+                    lines.append(f"- 完整日志: `{step['stdout_path']}`")
         artifacts = final.get("artifacts") or []
         if artifacts:
             lines += ["", "### 运行生成的图片", ""]
@@ -258,15 +575,22 @@ class ReportGeneratorAgent(BaseAgent):
             state_text = "❌ 无法核验（最终指标无效）"
         elif validation.get("status") == "smoke_passed":
             state_text = "⚠️ 仅冒烟通过（尚未完成论文数值核验）"
+        elif validation.get("status") == "prepared":
+            state_text = "⏳ 已准备（尚未执行训练）"
+        elif validation.get("status") == "analysis_failed":
+            state_text = "⏳ 未进入训练（公开协议分析未通过）"
+        elif validation.get("status") == "inconclusive":
+            state_text = "⚠️ 参考实验已完成（实验协议仍待核验）"
         elif validation.get("is_reproduced"):
-            state_text = "✅ 论文数值核验通过"
+            state_text = ("✅ 选定论文实验数值复现通过" if execution.get("mode") == "repository"
+                          else "✅ 论文数值核验通过")
         else:
             state_text = "❌ 失败"
         lines += ["## 5. 验证结果",
-                  f"- **复现状态**: {state_text}",
-                  f"- **置信度**: {_fmt(validation.get('confidence', 0.0))}",
-                  f"- **分析**: "
-                  f"{(validation.get('validation') or {}).get('analysis', '无')}"]
+                  f"- **复现状态**: {state_text}"]
+        if execution.get("mode") != "repository":
+            lines.append(f"- **置信度**: {_fmt(validation.get('confidence', 0.0))}")
+        lines.append(f"- **分析**: {(validation.get('validation') or {}).get('analysis', '无')}")
         # 判定原因与上面的"分析"往往是同一句话（analysis 由 reason 拼成），
         # 重复印一遍只是噪音——已包含在分析里就不再单列。
         reason = _txt(validation.get("reason")).strip()
@@ -281,7 +605,10 @@ class ReportGeneratorAgent(BaseAgent):
             lines.append(f"- **执行级别**: {execution_level}")
         if inner.get("verdict_source") == "deterministic":
             tolerance = inner.get("relative_tolerance", 0.05)
-            lines.append(f"- **判定依据**: 执行状态、必需指标完整性、显式单位及 {tolerance:.0%} 相对误差规则；模型仅解释偏差")
+            if execution.get("mode") == "repository":
+                lines.append(f"- **判定依据**: 完整执行协议、独立指标复算及项目事前约定的 {tolerance:.0%} 相对误差规则（非论文给出的阈值）；API 负责协议审查和授权范围内的结果解释，最终结论由确定性核验给出。")
+            else:
+                lines.append(f"- **判定依据**: 执行状态、必需指标完整性、显式单位及 {tolerance:.0%} 相对误差规则；模型仅解释偏差")
         # 逐项数值差异（"声明 X vs 实际 Y，相对差异 Z%"）——判定结论的依据，
         # 只给"成功/失败"而不给差异，用户无法判断判定是否合理。
         diffs = inner.get("differences") or []
@@ -331,6 +658,26 @@ class ReportGeneratorAgent(BaseAgent):
                          record.get("split") or "未标注", record.get("stage") or "未标注",
                          record.get("source")]
                 lines.append("| " + " | ".join(_markdown_text(_txt(c)) for c in cells) + " |")
+        protocol = execution.get("protocol_verification") or {}
+        independent = execution.get("independent_metrics") or {}
+        if protocol:
+            lines += ["", "### 完整实验核验",
+                      f"- **实际训练轮数**: {protocol.get('epochs_completed', '未知')}（最多10轮；保留作者早停）",
+                      f"- **协议核验**: {'通过' if protocol.get('pass') else '未通过'}"]
+            for check in protocol.get("checks", []):
+                if isinstance(check, dict):
+                    lines.append(f"  - {check.get('name', '')}: {'通过' if check.get('pass') else '未通过'}")
+            if independent:
+                lines += [f"- **独立指标复算**: {independent.get('reason', '')}",
+                          f"- **复算值**: {independent.get('metrics', {})}"]
+        api_analysis = data.get("llm_analysis") or {}
+        if api_analysis:
+            lines += ["", "### 真实 API 公开论文协议解析",
+                      f"- **模型**: {api_analysis.get('model', '')}",
+                      _txt(api_analysis.get("summary"))]
+            for limitation in api_analysis.get("limitations", []):
+                lines.append(f"- {_txt(limitation)}")
+        lines += _result_analysis_lines(data)
         lines.append("")
 
         # 6. 智能优化

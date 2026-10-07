@@ -157,6 +157,7 @@ def test_recheck_button_refreshes_probe(at_app):
 def test_mock_mode_skips_probe(at_app):
     make, probe = at_app
     at = make()
+    at.session_state["mock_mode"] = True
     at.run()
 
     assert not at.exception, at.exception

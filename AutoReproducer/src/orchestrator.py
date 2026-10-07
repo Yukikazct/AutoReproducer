@@ -47,6 +47,8 @@ class Orchestrator:
                  workspace_dir: Optional[str] = None,
                  resource_manager: Optional[ResourceManager] = None):
         self.state = "INIT"
+        self.mock_mode = mock_mode
+        self.on_event = None
         self.logger = logger or AuditLogger()
         self.llm = llm_client or LLMClient(mock_mode=mock_mode)
         # P1-⑫ 用量计量：把 LLM 调用的 token/耗时通过 hook 归入当前 plan
@@ -88,7 +90,7 @@ class Orchestrator:
         self.data: Dict[str, Any] = {}
         self.error: Optional[str] = None
 
-    def run(self, input_data: dict) -> dict:
+    def run(self, input_data: dict, on_event=None) -> dict:
         """执行完整的复现流程（复现 -> 验证 -> 优化 -> 报告）。
 
         input_data 支持:
@@ -97,6 +99,20 @@ class Orchestrator:
           - "code": 可选，外部提供的真实复现代码
           - "corpus_paper": 可选，PaperGuru-Benchmark 论文 id（语料对照层）
         """
+        self.on_event = on_event
+        self.state, self.error = "INIT", None
+        if input_data.get("experiment_profile"):
+            if self.mock_mode:
+                self.data = {}
+                self._fail("INIT", "官方仓库预设需要关闭Mock模式；不会用模拟结果冒充真实实验")
+            else:
+                from src.repository_reproduction import RepositoryReproduction
+                result = RepositoryReproduction(
+                    self.resource_manager.data_root, self.logger, self.use_docker,
+                    llm=self.llm).run(input_data, on_event=on_event)
+                self.state, self.data, self.error = result["state"], result["data"], result["error"]
+            self._emit_state(self.state, "", "error" if self.error else "success")
+            return self.get_result()
         self.logger.log("Orchestrator", "start_pipeline", "START",
                         "开始自动复现流水线", input_data)
 
@@ -106,6 +122,8 @@ class Orchestrator:
             "pdf_path": input_data.get("pdf_path", "") or "",
             "code": input_data.get("code", "") or "",
             "corpus_paper": input_data.get("corpus_paper"),
+            "preferred_repo_url": input_data.get("preferred_repo_url", ""),
+            "code_repo_url": input_data.get("code_repo_url", ""),
             "verifications": [],
             "fix_records": [],
         }
@@ -130,6 +148,7 @@ class Orchestrator:
 
         for state_name, agent in pipeline:
             self.state = state_name
+            self._emit_state(state_name, agent.name, "running")
             # P1-⑫ 用量计量：阶段级 plan（enter/exit 界定，失败也出栈）
             self.logger.begin_plan(state_name)
             self.logger.log("Orchestrator", f"enter_{state_name}", "RUNNING",
@@ -174,8 +193,10 @@ class Orchestrator:
                 self.logger.log("Orchestrator", f"exit_{state_name}", "SUCCESS",
                                 f"完成阶段: {state_name}")
                 self.logger.end_plan(state_name)
+                self._emit_state(state_name, agent.name, "success")
             except Exception as e:
                 self.logger.end_plan(state_name)
+                self._emit_state(state_name, agent.name, "error")
                 self._fail(state_name, str(e))
                 break
 
@@ -206,17 +227,23 @@ class Orchestrator:
                     "optimized": False,
                     "reason": self._optimization_skip_reason()}
 
+        if self.state != "ERROR":
+            self._emit_state(self.state, "Optimizer", "success" if self.data.get("optimization", {}).get("optimized") else "skipped")
+
         # 报告生成（合并复现 + 优化）
         if self.state != "ERROR":
             self.state = "GENERATE_REPORT"
+            self._emit_state(self.state, "ReportGenerator", "running")
             self.logger.begin_plan("GENERATE_REPORT")
             self.data["audit_stats"] = self.logger.get_stats()
             try:
                 self.data["report"] = self.agents["reporter"].run(self.data) \
                     .get("report", "")
                 self.logger.end_plan("GENERATE_REPORT")
+                self._emit_state(self.state, "ReportGenerator", "success")
             except Exception as e:
                 self.logger.end_plan("GENERATE_REPORT")
+                self._emit_state(self.state, "ReportGenerator", "error")
                 self._fail("GENERATE_REPORT", str(e))
 
         if self.state != "ERROR":
@@ -227,7 +254,12 @@ class Orchestrator:
             self.logger.log("Orchestrator", "finish_pipeline", "SUCCESS",
                             "流水线完成", self.data.get("audit_stats"))
 
+        self._emit_state(self.state, "", "error" if self.error else "success")
         return self.get_result()
+
+    def _emit_state(self, state, agent, status):
+        if self.on_event:
+            self.on_event({"type": "state", "state": state, "agent": agent, "status": status})
 
     # ---------------- 内部流程 ----------------
 
@@ -278,6 +310,9 @@ class Orchestrator:
         code_url = self._clean_ref(
             discovery.get("selected_repo")
             or resources.get("code_repo_url", ""))
+        # Mock demonstrations remain offline even for curated known titles.
+        if self.mock_mode:
+            code_url = ""
         pinned_revision = discovery.get("pinned_revision") or ""
         dataset_name = self._clean_ref(resources.get("dataset_url", ""))
         weights_ref = self._clean_ref(
@@ -369,6 +404,7 @@ class Orchestrator:
         self._accumulate_llm_calls(verif)
         self.data.setdefault("verifications", []).append(
             {"state": state_name, "agent": agent.name, **verif})
+        self._emit_state(state_name, "Verifier", "success" if verif.get("pass") else "waiting")
 
         if not verif.get("pass", False):
             self.logger.log("Verifier", state_name, "WARNING",

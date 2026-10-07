@@ -1,0 +1,324 @@
+"""Run a fixed repository command plan without rewriting its source files.
+
+This is a local, trusted-repository runner. Docker plans are rejected explicitly;
+the existing single-script Docker executor is not a repository sandbox.
+"""
+import codecs
+import json
+import math
+import os
+import platform
+import re
+import signal
+import subprocess
+import sys
+import time
+import uuid
+from pathlib import Path
+
+from src.agents.code_executor import CodeExecutorAgent, DEPS_CACHE_ROOT, reqs_digest
+from src.execution_artifacts import collect_images
+
+
+class RepositoryRunner:
+    def __init__(self, logger=None, executor=None):
+        # Dependency and environment helpers do not call the LLM.
+        self.executor = executor or CodeExecutorAgent(None, logger=logger)
+        self.logger = logger or self.executor.logger
+
+    @staticmethod
+    def _contained(root, relative, kind):
+        path = Path(relative)
+        if path.is_absolute() or ".." in path.parts:
+            raise ValueError(f"{kind} must be a relative path inside the workspace")
+        candidate = root / path
+        for part in (candidate, *candidate.parents):
+            if part == root.parent:
+                break
+            if part.is_symlink():
+                raise ValueError(f"{kind} contains a symlink: {relative}")
+        resolved = candidate.resolve(strict=True)
+        if not resolved.is_relative_to(root):
+            raise ValueError(f"{kind} escapes the workspace: {relative}")
+        return resolved
+
+    @staticmethod
+    def _check_tree(root):
+        for directory, dirs, files in os.walk(root, followlinks=False):
+            for name in dirs + files:
+                path = Path(directory) / name
+                if path.is_symlink():
+                    raise ValueError(f"repository symlinks are unsupported: {path.relative_to(root)}")
+
+    def _plan(self, root, steps):
+        if not isinstance(steps, list) or not steps:
+            raise ValueError("repository plan requires at least one step")
+        planned, identifiers = [], set()
+        for step in steps:
+            if not isinstance(step, dict):
+                raise ValueError("each repository step must be an object")
+            identifier = step.get("id", "")
+            if (not isinstance(identifier, str)
+                    or not re.fullmatch(r"[A-Za-z0-9_-]+", identifier)
+                    or identifier in identifiers):
+                raise ValueError("step ids must be unique safe file names")
+            identifiers.add(identifier)
+            argv = step.get("argv")
+            if (not isinstance(argv, list) or not argv
+                    or any(not isinstance(arg, str) or not arg or "\x00" in arg for arg in argv)):
+                raise ValueError(f"invalid argv for step {identifier}")
+            argv = list(argv)
+            python = argv[0] in {"python", "python3", sys.executable}
+            if python:
+                argv[0] = sys.executable
+            cwd = self._contained(root, step.get("cwd", "."), "cwd")
+            if not cwd.is_dir():
+                raise ValueError(f"cwd is not a directory: {cwd}")
+            if python:
+                # -c/-m are supported for import checks. Ordinary script paths
+                # must resolve inside the same repository, including nested cwd.
+                for arg in argv[1:]:
+                    if arg in {"-c", "-m"}:
+                        break
+                    if not arg.startswith("-"):
+                        script = self._contained(root, cwd.relative_to(root) / arg, "script")
+                        if not script.is_file():
+                            raise ValueError(f"script is not a file: {arg}")
+                        break
+            elif "/" in argv[0] or "\\" in argv[0]:
+                self._contained(root, cwd.relative_to(root) / argv[0], "executable")
+            timeout = step.get("timeout_s", 600)
+            if (isinstance(timeout, bool) or not isinstance(timeout, (int, float))
+                    or not math.isfinite(timeout) or timeout <= 0):
+                raise ValueError(f"invalid timeout_s for step {identifier}")
+            extra_env = step.get("env", {})
+            if (not isinstance(extra_env, dict)
+                    or any(not isinstance(k, str) or not k or "=" in k or "\x00" in k
+                           or not isinstance(v, str) or "\x00" in v
+                           for k, v in extra_env.items())):
+                raise ValueError(f"invalid environment for step {identifier}")
+            planned.append({"id": identifier, "argv": argv, "cwd": str(cwd),
+                            "timeout_s": float(timeout), "env": dict(extra_env)})
+        return planned
+
+    @staticmethod
+    def _kill_group(process):
+        if os.name == "posix":
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            except PermissionError:
+                # macOS can reject a group whose leader has already exited.
+                # Timeout termination happens while the supervisor is alive.
+                if process.poll() is None:
+                    process.kill()
+                    return "process-group cleanup was denied; only the direct process was terminated"
+        elif process.poll() is None:
+            # Windows does not expose killpg. taskkill /T terminates the
+            # supervisor's complete descendant tree, while it is still alive.
+            try:
+                killed = subprocess.run(
+                    ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                    capture_output=True, text=True, timeout=5, shell=False)
+                if killed.returncode != 0 and process.poll() is None:
+                    process.kill()
+                    return "process-tree cleanup failed: " + (killed.stderr or killed.stdout).strip()
+            except (OSError, subprocess.SubprocessError) as exc:
+                if process.poll() is None:
+                    process.kill()
+                return f"process-tree cleanup failed: {exc}"
+        return None
+
+    def _execute(self, root, step, run_dir, emit):
+        started = time.monotonic()
+        stdout_path = run_dir / f"{step['id']}.stdout.log"
+        stderr_path = run_dir / f"{step['id']}.stderr.log"
+        record = {k: step[k] for k in ("id", "argv", "cwd", "timeout_s")}
+        record.update(stage="full", executed=False, stdout_path=str(stdout_path),
+                      stderr_path=str(stderr_path))
+        emit({"type": "repository_step", "step_id": step["id"],
+              "status": "running", **record})
+        process, timed_out, group_killed = None, False, False
+        exit_code, diagnostic, cleanup_errors = -2, "", []
+        # Plot helpers live beside the logs, not inside the author repository.
+        environment = self.executor._exec_env(str(run_dir))
+        environment.update(step["env"])
+        # Entry points under examples/ or scripts/ still need the repository's
+        # top-level packages, rather than an unrelated installed namesake.
+        environment["PYTHONPATH"] = os.pathsep.join(
+            part for part in (str(root), environment.get("PYTHONPATH", "")) if part)
+        environment["PYTHONUNBUFFERED"] = "1"
+        supervisor = Path(__file__).with_name("sandbox_timeout.py")
+        command = [sys.executable, "-S", str(supervisor), "execution",
+                   str(step["timeout_s"] + 1.0), *step["argv"]]
+        try:
+            self._check_tree(root)
+            # Recheck cwd/script after earlier steps may have created files.
+            self._plan(root, [{**step, "cwd": str(Path(step["cwd"]).relative_to(root))}])
+            with stdout_path.open("wb") as out, stderr_path.open("wb") as err:
+                process = subprocess.Popen(command, cwd=step["cwd"], env=environment,
+                                           stdout=out, stderr=err, shell=False,
+                                           start_new_session=(os.name == "posix"))
+                record["executed"] = True
+                with stdout_path.open("rb") as out_tail, stderr_path.open("rb") as err_tail:
+                    tails = {"stdout": out_tail, "stderr": err_tail}
+                    decoders = {key: codecs.getincrementaldecoder("utf-8")("replace")
+                                for key in tails}
+
+                    def output(final=False):
+                        for stream, reader in tails.items():
+                            chunk = reader.read() if final else reader.read(65536)
+                            text = decoders[stream].decode(chunk, final=final)
+                            if text:
+                                emit({"type": "repository_output", "step_id": step["id"],
+                                      "stream": stream, "text": text})
+
+                    # The host owns the process group and acts before the
+                    # standalone supervisor's fallback deadline, while the
+                    # group leader is still alive (required on macOS).
+                    deadline = time.monotonic() + step["timeout_s"]
+                    while process.poll() is None:
+                        output()
+                        if time.monotonic() >= deadline:
+                            timed_out = True
+                            cleanup = self._kill_group(process)
+                            if cleanup:
+                                cleanup_errors.append(cleanup)
+                            group_killed = True
+                            break
+                        time.sleep(0.1)
+                    process.wait(timeout=5)
+                    # The supervisor kills the immediate child on timeout;
+                    # killing the process group also removes its descendants.
+                    if not group_killed:
+                        cleanup = self._kill_group(process)
+                        if cleanup:
+                            cleanup_errors.append(cleanup)
+                    output(final=True)
+                    exit_code = process.returncode
+        except (OSError, ValueError, subprocess.SubprocessError) as exc:
+            diagnostic = str(exc)
+        finally:
+            if process is not None:
+                if not group_killed:
+                    cleanup = self._kill_group(process)
+                    if cleanup:
+                        cleanup_errors.append(cleanup)
+                process.wait(timeout=5)
+        stdout = stdout_path.read_text(encoding="utf-8", errors="replace") if stdout_path.exists() else ""
+        raw_stderr = stderr_path.read_text(encoding="utf-8", errors="replace") if stderr_path.exists() else ""
+        stderr, phase = CodeExecutorAgent._decode_docker_phase(raw_stderr)
+        timed_out = timed_out or bool(phase.get("timeout"))
+        if timed_out:
+            exit_code = 124
+            diagnostic = f"repository step {step['id']} timed out after {step['timeout_s']:g}s"
+        if cleanup_errors:
+            diagnostic += ("; " if diagnostic else "") + "; ".join(cleanup_errors)
+            if exit_code == 0:
+                exit_code = -2
+        if diagnostic:
+            stderr += ("\n" if stderr and not stderr.endswith("\n") else "") + diagnostic + "\n"
+            with stderr_path.open("a", encoding="utf-8") as stream:
+                stream.write(diagnostic + "\n")
+        if not stdout_path.exists():
+            stdout_path.write_text("", encoding="utf-8")
+        record.update(success=exit_code == 0, exit_code=exit_code, stdout=stdout,
+                      stderr=stderr, timed_out=timed_out,
+                      elapsed_s=round(time.monotonic() - started, 3))
+        (run_dir / f"{step['id']}.json").write_text(
+            json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
+        emit({"type": "repository_step", "step_id": step["id"],
+              "status": "success" if record["success"] else "error", **record})
+        return record
+
+    def run(self, workspace, steps, env_config, use_docker=False, on_event=None):
+        """Execute sequential argv steps; stop on the first unsuccessful step.
+
+        Each run retains full logs and metadata in a unique sibling directory.
+        Event callbacks observe progress; observer failures cannot interrupt a
+        running process or overwrite its execution verdict.
+        """
+        attempts, warnings = [], []
+        result = {"mode": "repository", "success": False, "executed": False,
+                  "attempts": attempts, "stages": attempts, "steps": attempts,
+                  "artifacts": [], "artifact_warnings": warnings, "llm_calls": 0}
+
+        def emit(event):
+            if on_event is not None:
+                try:
+                    on_event(event)
+                except Exception as exc:
+                    warnings.append(f"progress callback failed: {exc}")
+
+        def reject(reason, code=-2):
+            result.update(not_runnable=True, reason=reason)
+            result["final"] = {"stage": "full", "success": False, "executed": False,
+                               "exit_code": code, "stdout": "", "stderr": reason}
+            return result
+
+        if use_docker:
+            return reject("repository Docker execution is unsupported; choose local mode", -3)
+        try:
+            supplied = Path(workspace)
+            if supplied.is_symlink():
+                raise ValueError("workspace must not be a symlink")
+            root = supplied.resolve(strict=True)
+            if not root.is_dir():
+                raise ValueError("workspace must be an existing directory")
+            self._check_tree(root)
+            planned = self._plan(root, steps)
+            records_root = root.parent / ".autorepro_repository_runs"
+            if records_root.is_symlink():
+                raise ValueError("execution records directory must not be a symlink")
+            records_root.mkdir(exist_ok=True)
+            run_dir = records_root / uuid.uuid4().hex
+            run_dir.mkdir()
+            result["run_dir"] = str(run_dir)
+            self.executor.env_config = dict(env_config or {})
+            # Native wheels cannot be shared across Python ABIs or machines.
+            runtime = f"{sys.implementation.cache_tag}-{sys.platform}-{platform.machine()}"
+            deps_root = DEPS_CACHE_ROOT / "repository" / runtime
+            self.executor.deps_cache_root = deps_root
+            self.executor._deps_dir = None
+            self.executor._heal_dirs.clear()
+            prepare_dir = run_dir / "environment_prepare"
+            prepare_dir.mkdir()
+            deps_error = self.executor._ensure_local_deps(str(prepare_dir))
+            # The legacy helper's process-cache fast path does not set the
+            # dependency directory on a newly constructed executor.
+            requirements = self.executor.env_config.get("requirements_txt", "")
+            if not requirements:
+                requirements = "\n".join(self.executor.env_config.get("required_packages", []) or [])
+            if not deps_error and requirements and not self.executor._deps_dir:
+                cached_deps = deps_root / reqs_digest(requirements)
+                if (cached_deps / ".ready").is_file():
+                    self.executor._deps_dir = str(cached_deps)
+            result["environment"] = {"python": sys.version, "executable": sys.executable,
+                                     "platform": sys.platform,
+                                     "dependencies_path": self.executor._deps_dir,
+                                     "requirements_txt": self.executor.env_config.get("requirements_txt", ""),
+                                     "preparation_path": str(prepare_dir)}
+            (run_dir / "environment.json").write_text(
+                json.dumps(result["environment"], ensure_ascii=False, indent=2), encoding="utf-8")
+            if deps_error:
+                return reject(deps_error, -4)
+            for step in planned:
+                record = self._execute(root, step, run_dir, emit)
+                attempts.append(record)
+                result["executed"] = result["executed"] or record["executed"]
+                if not record["success"]:
+                    break
+            result["success"] = len(attempts) == len(planned) and all(s["success"] for s in attempts)
+            result["final"] = dict(attempts[-1])
+            result["effective_env_config"] = self.executor.env_config
+            try:
+                collected = collect_images(str(root), "full", getattr(self.logger, "session_id", ""))
+                result["artifacts"] = collected["artifacts"]
+                warnings.extend(collected.get("artifact_warnings", []))
+            except (ImportError, OSError, ValueError) as exc:
+                warnings.append(f"image collection failed: {exc}")
+            result["final"]["artifacts"] = result["artifacts"]
+            return result
+        except (OSError, ValueError, TypeError) as exc:
+            return reject(str(exc))

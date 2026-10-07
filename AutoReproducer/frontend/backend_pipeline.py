@@ -7,13 +7,14 @@ run_pipeline_core()，把每个阶段的进度事件实时追加写入进度文�
 
 事件类型：
   state    -> {"type": "state", "state": <FSM状态>, "agent": <显示名>,
-               "status": "running"|"success"|"error"|"waiting"}
+               "phase_id": <本轮阶段ID>, "status": <执行状态>}
+  pipeline_plan -> {"type": "pipeline_plan", "stages": <有序阶段列表>}
   log      -> {"type": "log", "log": <审计日志条目>}
   done     -> {"type": "done", "result": <完整流水线结果>}
   error    -> {"type": "error", "error": <后台线程捕获的异常消息>}
 
 read_snapshot() 聚合以上事件为前端可直接渲染的视图：
-  {state, agent_status, logs, result, done, error, running, updated_at}
+  {state, agent_status, pipeline_stages, logs, result, done, error, running, updated_at}
 """
 import json
 import os
@@ -75,6 +76,7 @@ class ProgressStore:
             "state": "INIT", "agent_status": {}, "logs": [],
             "result": None, "done": False, "error": None,
             "running": True, "updated_at": "",
+            "execution_output": "", "repository_step": "",
         }
         if not p.exists():
             return view
@@ -100,6 +102,10 @@ class ProgressStore:
                 lg = ev.get("log")
                 if isinstance(lg, dict):
                     view["logs"].append(lg)
+            elif etype == "repository_step":
+                view["repository_step"] = ev.get("step_id", "")
+            elif etype == "repository_output":
+                view["execution_output"] = (view["execution_output"] + ev.get("text", ""))[-16000:]
             elif etype == "done":
                 view["done"] = True
                 view["running"] = False
@@ -126,10 +132,15 @@ def run_pipeline_core(progress_path: str,
                       paper_title: str = "", pdf_path: str = "",
                       corpus_paper: Optional[str] = None,
                       model_name: str = "", base_url: str = "",
-                      api_key: str = "", mock_mode: bool = True,
+                      api_key: str = "", mock_mode: bool = False,
                       max_trials: int = 10,
                       use_docker: bool = False,
-                      workspace_dir: Optional[str] = None) -> Dict[str, Any]:
+                      workspace_dir: Optional[str] = None,
+                      experiment_profile: Optional[str] = None,
+                      use_llm_review: bool = False,
+                      allow_result_summary_review: bool = False,
+                      prepare_only: bool = False,
+                      offline: bool = False) -> Dict[str, Any]:
     """后台执行完整复现流水线（复现 -> 验证 -> 优化 -> 报告）。
 
     与前端解耦：不触碰 st.session_state，进度实时写入 progress_path；
@@ -175,122 +186,47 @@ def run_pipeline_core(progress_path: str,
                                 use_docker=use_docker,
                                 workspace_dir=workspace_dir)
 
-    data = {
-        "paper_title": paper_title,
-        "pdf_path": pdf_path,
-        "corpus_paper": corpus_paper,
-    }
+    display_names = {"PaperReader": "📖 PaperReader", "ResourceFinder": "🔍 ResourceFinder",
+                     "EnvBuilder": "🔧 EnvBuilder", "CodeExecutor": "⚡ CodeExecutor",
+                     "ResultValidator": "✅ ResultValidator", "Optimizer": OPTIMIZER_NAME,
+                     "ReportGenerator": REPORTER_NAME, "Verifier": VERIFIER_NAME}
 
-    for stage_name, display_name, agent_key in AGENTS:
-        _set_current(stage_name)
-        _emit_state(store, stage_name, display_name, "running")
-        agent = orchestrator.agents[agent_key]
-        try:
-            result = agent.run(data)
-
-            if stage_name == "READ_PAPER":
-                data["paper_info"] = result.get("paper_info", {})
-                data["raw_text"] = result.get("raw_text", "")
-            elif stage_name == "FIND_RESOURCES":
-                data["resources"] = result.get("resources", {})
-            elif stage_name == "BUILD_ENV":
-                data["env_config"] = result.get("env_config", {})
-            elif stage_name == "EXECUTE_CODE":
-                data["execution"] = result
-                if result.get("effective_env_config"):
-                    data["env_config"] = result["effective_env_config"]
-            elif stage_name == "VALIDATE":
-                data["validation"] = result
-
-            # Prompt-Free 验证（与前端旧逻辑一致）
-            verif = orchestrator.agents["verifier"].run({
-                "agent_name": agent.name,
-                "system_prompt": getattr(agent, "system_prompt", "") or agent.name,
-                "output": result,
-            })
-            data.setdefault("verifications", []).append(
-                {"state": stage_name, "agent": agent.name, **verif})
-
-            data["total_llm_calls"] = data.get("total_llm_calls", 0) + \
-                int(result.get("llm_calls", 0) or 0) + \
-                int(verif.get("llm_calls", 0) or 0)
-            logger.add_llm_calls(int(result.get("llm_calls", 0) or 0) + int(verif.get("llm_calls", 0) or 0))
-
-            _emit_state(store, stage_name, display_name, "success")
-            _emit_new_logs()
-        except Exception as e:
-            error_msg = f"{stage_name} 阶段异常: {e}"
-            logger.log(stage_name, "run", "ERROR", f"异常: {e}")
-            _emit_state(store, stage_name, display_name, "error")
-            _set_current("ERROR")
-            _emit_new_logs()
-            break
-
-    _emit_state(store, _current(), VERIFIER_NAME, "success")
-
-    # 优化阶段：仅在复现成功后触发
-    if _current() != "ERROR":
-        if data.get("validation", {}).get("is_reproduced"):
-            _set_current("OPTIMIZING")
-            _emit_state(store, "OPTIMIZING", OPTIMIZER_NAME, "running")
-            try:
-                data["optimization"] = orchestrator.agents["optimizer"].run(data)
-                _set_current("OPTIMIZED")
-                _emit_state(store, "OPTIMIZED", OPTIMIZER_NAME, "success")
-            except Exception as e:
-                error_msg = f"优化阶段异常: {e}"
-                logger.log(OPTIMIZER_NAME, "optimize", "ERROR", f"异常: {e}")
-                _set_current("ERROR")
-                _emit_state(store, "ERROR", OPTIMIZER_NAME, "error")
-        else:
-            validation = data.get("validation", {}) or {}
-            if validation.get("status") == "not_runnable":
-                reason = ("代码未能运行，无法优化（"
-                          f"{validation.get('reason', '未运行')}）")
-            elif validation.get("status") == "best_effort":
-                reason = ("代码为尽力而为的占位实现（论文信息不足），"
-                          "无法作为优化基线")
-            elif validation.get("status") == "no_reference_metrics":
-                reason = "论文未声明参考指标数值，无法确认复现基线，跳过优化"
-            elif validation.get("status") in {"execution_failed", "execution_incomplete", "invalid_metrics"}:
-                reason = f"执行或指标证据未通过核验，跳过优化（{validation.get('reason', '证据无效')}）"
-            elif validation.get("status") == "smoke_passed":
-                reason = "仅冒烟通过，尚无完整实验基线，跳过优化"
-            else:
-                reason = "复现未成功,跳过优化"
-            data["optimization"] = {"optimized": False, "reason": reason}
-            _emit_state(store, _current(), OPTIMIZER_NAME, "waiting")
+    def _on_event(event):
+        if event.get("type") == "state":
+            _set_current(event["state"])
+            store.emit({**event, "agent": display_names.get(event.get("agent"), event.get("agent", ""))})
+        elif event.get("type") in {"repository_step", "repository_output"}:
+            store.emit(event)
+        elif event.get("type") == "pipeline_plan":
+            store.emit({**event, "stages": [
+                {**stage, "agent": display_names.get(stage.get("agent"), stage.get("agent", ""))}
+                for stage in event.get("stages", [])]})
         _emit_new_logs()
 
-    # 报告生成（合并复现 + 优化）
-    if _current() != "ERROR":
-        _set_current("GENERATE_REPORT")
-        _emit_state(store, "GENERATE_REPORT", REPORTER_NAME, "running")
-        # 在报告生成前注入审计统计，确保报告能展示
-        data["audit_stats"] = logger.get_stats()
-        try:
-            data["report"] = orchestrator.agents["reporter"].run(data) \
-                .get("report", "")
-            _emit_state(store, "GENERATE_REPORT", REPORTER_NAME, "success")
-        except Exception as e:
-            error_msg = f"报告生成阶段异常: {e}"
-            logger.log(REPORTER_NAME, "generate_report", "ERROR", f"异常: {e}")
-            _set_current("ERROR")
-            _emit_state(store, "ERROR", REPORTER_NAME, "error")
-        _emit_new_logs()
-
-    if _current() != "ERROR":
-        _set_current("COMPLETED")
-        data["audit_stats"] = logger.get_stats()
-        logger.log("Orchestrator", "finish_pipeline", "SUCCESS",
-                   "流水线完成", data.get("audit_stats"))
+    try:
+        outcome = orchestrator.run({
+            "paper_title": paper_title, "pdf_path": pdf_path,
+            "corpus_paper": corpus_paper, "experiment_profile": experiment_profile,
+            "prepare_only": prepare_only, "offline": offline,
+            "use_llm_review": use_llm_review,
+            "allow_result_summary_review": allow_result_summary_review,
+        }, on_event=_on_event)
+        data = outcome["data"]
+        error_msg = outcome.get("error")
+        _set_current(outcome["state"])
+    except Exception as exc:
+        error_msg = f"流水线异常: {exc}"
+        logger.log("Orchestrator", "run", "ERROR", error_msg)
+        data = getattr(orchestrator, "data", {})
+        _set_current("ERROR")
+    _emit_new_logs()
 
 # 报告落盘（供历史记录与下载）
     report_path = ""
     report_text = data.get("report", "")
     if report_text:
         try:
-            reports_dir = Path("data/reports")
+            reports_dir = Path(__file__).resolve().parents[1] / "data" / "reports"
             reports_dir.mkdir(parents=True, exist_ok=True)
             # 使用流水线 session_id 作为文件名时间戳，与 ledger 文件名保持一致
             ts = logger.session_id
@@ -322,6 +258,7 @@ def run_pipeline_core(progress_path: str,
             report_text += (f"\n\n---\n\n> 📎 **完整执行输出附件**: "
                             f"`{attach_file.name}`（同一目录下，未被截断）\n")
             report_file.write_text(report_text, encoding="utf-8")
+            data["report"] = report_text
         except Exception:
             pass  # 落盘失败不阻断主流程
 
@@ -331,7 +268,7 @@ def run_pipeline_core(progress_path: str,
     logger.log_experiment(
         "FINISH", "流水线终止",
         inputs={"paper_title": paper_title},
-        outputs={},
+        outputs={"title": (data.get("paper_info") or {}).get("title") or paper_title},
         result={"state": _current(),
                 "duration_sec": stats["duration_sec"],
                 "llm_calls": stats["llm_calls"]})
@@ -353,10 +290,15 @@ def run_pipeline_background(progress_path: str, *,
                             paper_title: str = "", pdf_path: str = "",
                             corpus_paper: Optional[str] = None,
                             model_name: str = "", base_url: str = "",
-                            api_key: str = "", mock_mode: bool = True,
+                            api_key: str = "", mock_mode: bool = False,
                             max_trials: int = 10,
                             use_docker: bool = False,
                             workspace_dir: Optional[str] = None,
+                            experiment_profile: Optional[str] = None,
+                            use_llm_review: bool = False,
+                            allow_result_summary_review: bool = False,
+                                  prepare_only: bool = False,
+                            offline: bool = False,
                             cleanup_pdf: bool = True,
                             on_done=None) -> threading.Thread:
     """启动后台线程执行流水线；返回守护线程句柄。
@@ -372,7 +314,9 @@ def run_pipeline_background(progress_path: str, *,
                 corpus_paper=corpus_paper, model_name=model_name,
                 base_url=base_url, api_key=api_key, mock_mode=mock_mode,
                 max_trials=max_trials, use_docker=use_docker,
-                workspace_dir=workspace_dir)
+                workspace_dir=workspace_dir, experiment_profile=experiment_profile,
+                prepare_only=prepare_only, offline=offline, use_llm_review=use_llm_review,
+                allow_result_summary_review=allow_result_summary_review)
             if on_done:
                 try:
                     on_done(result)
