@@ -298,6 +298,9 @@ def run_pipeline_core(progress_path: str,
             # 去除非法字符
             paper_title_safe = "".join(c for c in paper_title_safe if c.isalnum() or c in (" ", "-", "_")).strip().replace(" ", "_")
             report_file = reports_dir / f"{paper_title_safe}_{ts}.md"
+            from src.agents.report_generator import ReportGeneratorAgent
+            data["report_path"] = str(report_file.resolve())
+            report_text = ReportGeneratorAgent(logger).run(data, report_path=report_file)["report"]
             report_file.write_text(report_text, encoding="utf-8")
             report_path = str(report_file)
 

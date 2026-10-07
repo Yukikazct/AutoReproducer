@@ -9,7 +9,7 @@ from src.base_agent import BaseAgent
 from src.metric_keys import norm_metric_key
 from src.runtime_metrics import metric_unit
 from src.storage_usage import format_bytes
-from src.execution_artifacts import image_data_url
+from src.execution_artifacts import default_report_path, markdown_image_target
 
 
 def _fmt(value, spec: str = ".2f", default: float = 0.0) -> str:
@@ -82,18 +82,19 @@ class ReportGeneratorAgent(BaseAgent):
     def __init__(self, logger=None):
         super().__init__("ReportGenerator", logger)
 
-    def run(self, input_data: dict) -> dict:
+    def run(self, input_data: dict, *, report_path=None) -> dict:
         """生成完整复现报告（含优化与审计信息）。"""
         self.log("generate_report", "START", "开始生成复现报告", input_data)
 
-        report = self._build_report(input_data)
+        report = self._build_report(input_data, report_path=report_path)
 
         self.log("generate_report", "SUCCESS",
                  f"报告生成完成 ({len(report)} 字符)",
                  {"report_length": len(report)})
         return {"report": report, "report_length": len(report)}
 
-    def _build_report(self, data: dict) -> str:
+    def _build_report(self, data: dict, *, report_path=None) -> str:
+        report_path = report_path or data.get("report_path") or default_report_path()
         paper_info = data.get("paper_info", {}) or {}
         resources = data.get("resources", {}) or {}
         execution = data.get("execution", {}) or {}
@@ -216,7 +217,7 @@ class ReportGeneratorAgent(BaseAgent):
             for index, artifact in enumerate(artifacts, 1):
                 name = _txt(artifact.get("name"), f"图 {index}")
                 name = _markdown_text(name)
-                url = image_data_url(artifact)
+                url = markdown_image_target(artifact, report_path)
                 if url:
                     # Use a fixed alt label so sandbox filenames cannot inject Markdown.
                     lines += [f"**图 {index}**：{name}", "",

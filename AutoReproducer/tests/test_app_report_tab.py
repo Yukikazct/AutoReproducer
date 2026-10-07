@@ -124,3 +124,35 @@ def test_server_restart_does_not_resume_unfinished_job(tmp_path, monkeypatch):
     assert not app.exception
     assert app.session_state.progress_file is None
     assert app.session_state.result is None
+
+
+def test_saved_report_figures_are_rendered_as_native_images(tmp_path, monkeypatch):
+    import hashlib
+    from PIL import Image
+    from streamlit.testing.v1 import AppTest
+    from src import execution_artifacts
+    from src.agents.report_generator import ReportGeneratorAgent
+
+    monkeypatch.setattr(hm, "get_project_data_dir", lambda: tmp_path)
+    root = tmp_path / "collected"
+    root.mkdir()
+    monkeypatch.setattr(execution_artifacts, "ARTIFACT_ROOT", root)
+    image = root / "forecast.png"
+    Image.new("RGB", (30, 20), "orange").save(image)
+    artifact = {"name": "test_forecast.png", "path": str(image),
+                "sha256": hashlib.sha256(image.read_bytes()).hexdigest(), "bytes": image.stat().st_size}
+    report_path = tmp_path / "report.md"
+    report = ReportGeneratorAgent()._build_report({
+        "execution": {"final": {"success": True, "artifacts": [artifact]}},
+    }, report_path=report_path)
+    report_path.write_text(report)
+    app = AppTest.from_file(APP_PATH, default_timeout=120)
+    app.session_state["result"] = {
+        "state": "COMPLETED", "report_path": str(report_path), "data": {"report": report},
+    }
+    app.run()
+    assert not app.exception
+    assert len(app.image) == 1
+    assert app.image[0].captions == ["运行结果图 1"]
+    assert not any("无法读取" in warning.value for warning in app.warning)
+    assert any("报告和图片" in button.label for button in app.get("download_button"))

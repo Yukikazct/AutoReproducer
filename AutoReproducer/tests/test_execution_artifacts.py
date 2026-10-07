@@ -1,6 +1,8 @@
-"""Real plot lifecycle, sandbox file boundaries, and self-contained reports."""
-import base64
+"""Real plot lifecycle, file boundaries, and portable Markdown image bundles."""
 from pathlib import Path
+import re
+import shutil
+from urllib.parse import unquote
 from unittest.mock import Mock
 
 import pytest
@@ -17,7 +19,7 @@ def isolated_artifacts(tmp_path, monkeypatch):
     monkeypatch.setattr(artifacts, "ARTIFACT_ROOT", tmp_path / "reports" / "artifacts")
 
 
-def test_real_chinese_plot_survives_workspace_cleanup_and_embeds_in_report():
+def test_real_chinese_plot_survives_workspace_cleanup_and_links_in_report(tmp_path):
     pytest.importorskip("matplotlib")
     executor = CodeExecutorAgent(LLMClient(mock_mode=True), logger=Mock(), mock_mode=True)
     code = """import os
@@ -44,11 +46,15 @@ print('WORKDIR=' + os.getcwd())
     assert not Path(workdir).exists()
     image = Path(final["artifacts"][0]["path"])
     assert image.exists()
-    report = ReportGeneratorAgent(logger=Mock())._build_report({"execution": result})
+    report_path = tmp_path / "reports" / "report.md"
+    report = ReportGeneratorAgent(logger=Mock())._build_report(
+        {"execution": result}, report_path=report_path)
     assert "### 运行生成的图片" in report
     assert "plots/气温.png" in report
-    encoded = report.split("data:image/png;base64,", 1)[1].split(")", 1)[0]
-    assert base64.b64decode(encoded) == image.read_bytes()
+    target = re.search(r"!\[运行结果图 1\]\(([^)]+)\)", report).group(1)
+    assert "data:image" not in report
+    assert artifacts.verified_report_image_bytes(target, report_path) == image.read_bytes()
+    assert (report_path.parent / unquote(target)).is_file()
     assert code in report
 
 
@@ -129,3 +135,144 @@ def test_session_cleanup_includes_retained_figures(tmp_path, monkeypatch):
     removed, _ = history.delete_session(sid)
     assert removed == 1
     assert not image.exists()
+
+
+def _collected_image(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    Image.new("RGB", (12, 12), "blue").save(workspace / "plot.png")
+    return artifacts.collect_images(str(workspace), "full")["artifacts"][0]
+
+
+@pytest.mark.parametrize("destination", [
+    "data/runs/repository_run/report.md",
+    "data/reports/Paper_20261007.md",
+])
+def test_each_report_location_has_a_relative_portable_image_bundle(tmp_path, destination):
+    artifact = _collected_image(tmp_path)
+    original = Path(artifact["path"]).read_bytes()
+    report_path = tmp_path / destination
+    report = ReportGeneratorAgent(logger=Mock()).run(
+        {"execution": {"final": {"artifacts": [artifact]}}},
+        report_path=report_path)["report"]
+    target = re.search(r"!\[运行结果图 1\]\(([^)]+)\)", report).group(1)
+    expected = f"{report_path.stem}_assets/{artifact['sha256']}.png"
+    assert target == expected
+    assert "data:image" not in report
+    assert not Path(target).is_absolute()
+    assert (report_path.parent / target).read_bytes() == original
+    assert artifacts.verified_image_bytes(artifact) == original
+    report_path.write_text(report, encoding="utf-8")
+
+    moved = tmp_path / "moved"
+    moved.mkdir()
+    shutil.copy(report_path, moved / report_path.name)
+    shutil.copytree(report_path.parent / f"{report_path.stem}_assets",
+                    moved / f"{report_path.stem}_assets")
+    Path(artifact["path"]).unlink()
+    assert artifacts.verified_report_image_bytes(target, moved / report_path.name) == original
+
+
+def test_relative_report_path_and_unicode_image_target_ignore_cwd(tmp_path, monkeypatch):
+    artifact = _collected_image(tmp_path)
+    project_root = tmp_path / "project"
+    monkeypatch.setattr(artifacts, "PROJECT_ROOT", project_root)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    report_path = "data/reports/中文 report [1].md"
+    target = artifacts.markdown_image_target(artifact, report_path)
+    assert target.startswith("%E4%B8%AD%E6%96%87%20report%20%5B1%5D_assets/")
+    assert artifacts.verified_report_image_bytes(target, report_path) == Path(artifact["path"]).read_bytes()
+    assert (project_root / "data" / "reports" / unquote(target)).is_file()
+    assert not (elsewhere / "data").exists()
+
+
+def test_report_default_path_and_data_field_ignore_cwd(tmp_path, monkeypatch):
+    artifact = _collected_image(tmp_path)
+    project_root = tmp_path / "project"
+    monkeypatch.setattr(artifacts, "PROJECT_ROOT", project_root)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    data = {"execution": {"final": {"artifacts": [artifact]}}}
+    generator = ReportGeneratorAgent(logger=Mock())
+    report = generator._build_report(data)
+    target = re.search(r"!\[运行结果图 1\]\(([^)]+)\)", report).group(1)
+    assert artifacts.default_report_path() == project_root / "data" / "reports" / "report.md"
+    assert artifacts.verified_report_image_bytes(target, artifacts.default_report_path())
+    assert not (elsewhere / "data").exists()
+
+    other_path = tmp_path / "other" / "different.md"
+    report = generator._build_report({**data, "report_path": str(other_path)})
+    assert "different_assets/" in report
+    assert artifacts.verified_report_image_bytes(
+        re.search(r"!\[运行结果图 1\]\(([^)]+)\)", report).group(1), other_path)
+
+
+def test_report_images_reject_source_changes_and_repair_changed_copies(tmp_path):
+    artifact = _collected_image(tmp_path)
+    report_path = tmp_path / "output" / "report.md"
+    original = Path(artifact["path"]).read_bytes()
+    target = artifacts.markdown_image_target(artifact, report_path)
+    saved = report_path.parent / target
+    saved.write_bytes(b"changed report image")
+    assert artifacts.verified_report_image_bytes(target, report_path) is None
+    assert artifacts.markdown_image_target(artifact, report_path) == target
+    assert saved.read_bytes() == original
+    Path(artifact["path"]).write_bytes(b"changed source image")
+    assert artifacts.verified_image_bytes(artifact) is None
+    assert artifacts.markdown_image_target(artifact, report_path) == ""
+    # A report bundle remains readable independently of its source run.
+    assert artifacts.verified_report_image_bytes(target, report_path) == original
+
+
+@pytest.mark.parametrize("target", [
+    "../secret.png", "%2e%2e/secret.png", "/tmp/secret.png",
+    "report_assets/../../secret.png", "report_assets/not-a-hash.png",
+    "data:image/png;base64,AA==", "https://example.test/secret.png",
+])
+def test_report_image_reader_rejects_unsafe_targets(tmp_path, target):
+    assert artifacts.verified_report_image_bytes(target, tmp_path / "report.md") is None
+
+
+def test_report_image_helpers_reject_asset_directory_symlinks(tmp_path):
+    artifact = _collected_image(tmp_path)
+    report_path = tmp_path / "output" / "report.md"
+    report_path.parent.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    name = f"{artifact['sha256']}.png"
+    (outside / name).write_bytes(Path(artifact["path"]).read_bytes())
+    (report_path.parent / "report_assets").symlink_to(outside, target_is_directory=True)
+    assert artifacts.markdown_image_target(artifact, report_path) == ""
+    assert artifacts.verified_report_image_bytes(f"report_assets/{name}", report_path) is None
+
+
+def test_report_image_helpers_reject_symlink_files_and_oversized_images(tmp_path, monkeypatch):
+    artifact = _collected_image(tmp_path)
+    report_path = tmp_path / "output" / "report.md"
+    target = artifacts.markdown_image_target(artifact, report_path)
+    saved = report_path.parent / target
+    original = Path(artifact["path"])
+    saved.unlink()
+    saved.symlink_to(original)
+    assert artifacts.markdown_image_target(artifact, report_path) == ""
+    assert artifacts.verified_report_image_bytes(target, report_path) is None
+    saved.unlink()
+    target = artifacts.markdown_image_target(artifact, report_path)
+    monkeypatch.setattr(artifacts, "MAX_IMAGE_BYTES", original.stat().st_size - 1)
+    assert artifacts.verified_image_bytes(artifact) is None
+    assert artifacts.markdown_image_target(artifact, report_path) == ""
+    assert artifacts.verified_report_image_bytes(target, report_path) is None
+
+
+def test_report_marks_unavailable_images_without_embedding_unverified_paths(tmp_path):
+    artifact = _collected_image(tmp_path)
+    Path(artifact["path"]).write_bytes(b"tampered")
+    report = ReportGeneratorAgent(logger=Mock())._build_report(
+        {"execution": {"final": {"artifacts": [artifact]}}},
+        report_path=tmp_path / "report.md")
+    assert "图片文件可能已被清理" in report
+    assert "![运行结果图" not in report
+    assert artifact["path"] not in report

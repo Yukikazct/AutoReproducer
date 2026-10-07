@@ -24,6 +24,7 @@ from src.llm.llm_client import LLMClient
 from src.audit.audit_logger import AuditLogger
 from src.base_agent import BaseAgent
 from src.corpus import list_papers
+from frontend.report_renderer import render_report, build_report_bundle
 from frontend.llm_config import (
     CONNECT_TEST_TIMEOUT,
     resolve_llm_config,
@@ -442,7 +443,9 @@ with tab2:
         report = st.session_state.result["data"]["report"]
         # 深色 IDE 面板渲染已回滚（见 CHANGELOG [2026.09.20-12]）：
         # 面板在真实浏览器里代码不可见，改回原生 Markdown 渲染。
-        st.markdown(report)
+        result = st.session_state.result
+        report_path = result.get("report_path") or result["data"].get("report_path")
+        render_report(report, report_path, st_module=st)
     else:
         st.markdown('<div class="empty-state"><span>▤</span><div class="empty-title">报告将在这里生成</div><p>在左侧提交论文并启动复现，完成后即可查看实验报告。</p></div>', unsafe_allow_html=True)
 
@@ -557,6 +560,14 @@ with tab5:
                 mime="text/markdown",
                 use_container_width=True,
             )
+
+            try:
+                bundle = build_report_bundle(report_content, rp)
+                st.download_button("⬇️ 下载报告和图片（ZIP）", data=bundle,
+                                   file_name=Path(rp).stem + ".zip", mime="application/zip",
+                                   use_container_width=True)
+            except ValueError as exc:
+                st.warning(str(exc))
 
 # -- 存储仪表板 --
     # -- 资源下载/安装监控 --
