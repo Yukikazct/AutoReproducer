@@ -36,6 +36,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
+from urllib.parse import urlsplit
 from src.base_agent import BaseAgent
 from src.llm.llm_client import LLMClient
 from src.agents.env_builder import PIP_INDEX_URL, PIP_FIND_LINKS
@@ -59,9 +60,64 @@ LOCAL_PIP_TIMEOUT = 300
 # （对齐 ScholarAgent coder.py 的 MAX_SELF_CORRECTIONS=3）
 MAX_PIP_SELF_HEAL = 3
 # 进程内依赖安装结果缓存：依赖清单文本 -> ""(已就绪) 或 失败诊断文本。
-# smoke/full/多次优化重跑共用一个进程，只对同一清单安装一次；
-# 失败也缓存，避免反复重装浪费时间。
+# 成功以对应目录的.ready为准；失败保留诊断，但下一次运行允许重新尝试。
 _INSTALLED_DEPS: Dict[str, str] = {}
+_DEFAULT_PUBLIC_PIP_INDEX = "https://pypi.tuna.tsinghua.edu.cn/simple"
+_DEFAULT_PUBLIC_FIND_LINKS = "https://mirrors.aliyun.com/pytorch-wheels/cpu/"
+_OFFICIAL_PIP_INDEX = "https://pypi.org/simple"
+
+
+def _safe_install_diagnostic(value) -> str:
+    """Keep pip errors useful without persisting URL credentials or tokens.
+
+    URLs may carry secrets in userinfo, query strings, or path segments. Keep
+    only their scheme/host (except the fixed public package-index URLs).
+    """
+    text = str(value or "")
+
+    def safe_url(match):
+        url = match.group(0)
+        if url in {_DEFAULT_PUBLIC_PIP_INDEX, _DEFAULT_PUBLIC_FIND_LINKS, _OFFICIAL_PIP_INDEX}:
+            return url
+        try:
+            parsed = urlsplit(url)
+            host = parsed.hostname or "redacted-host"
+            return f"{parsed.scheme}://{host}/[URL details removed]"
+        except ValueError:
+            return "[URL removed]"
+
+    text = re.sub(r"https?://[^\s<>\"']+", safe_url, text, flags=re.I)
+    text = re.sub(
+        r"(?i)(\b(?:authorization|(?:access[_-]?)?token|password|api[_-]?key)\s*[:=]\s*)"
+        r"(?:Bearer\s+|Basic\s+)?[^\s,;]+", r"\1[REDACTED]", text)
+    return text
+
+
+def _public_mirror_failure(detail: str, timed_out: bool = False) -> bool:
+    """Retry source availability failures; dependency/build failures stay failed."""
+    lowered = detail.lower()
+    semantic_errors = ("resolutionimpossible", "conflicting dependencies", "cannot install",
+                       "could not build wheels", "failed building wheel", "requires a different python",
+                       "subprocess-exited-with-error")
+    if any(hint in lowered for hint in semantic_errors):
+        return False
+    hints = ("from versions: none", "no matching distribution found", "could not fetch url",
+             "connectionerror", "connection error", "connection refused", "connection reset",
+             "newconnectionerror", "nameresolutionerror", "temporary failure in name resolution",
+             "network is unreachable", "max retries exceeded", "proxyerror", "sslerror",
+             "certificate_verify_failed", "readtimeouterror", "connecttimeout", "timed out",
+             "http error 403", "http error 429", "http error 502", "http error 503", "http error 504")
+    return timed_out or any(hint in lowered for hint in hints)
+
+
+def _allow_official_pip_fallback(requirements: str) -> bool:
+    # Explicit private indexes/links and requirements-file source options must
+    # retain the user's routing policy. Only the application's public defaults
+    # (including an explicitly disabled default find-links) may fall back.
+    return (PIP_INDEX_URL.rstrip("/") == _DEFAULT_PUBLIC_PIP_INDEX
+            and PIP_FIND_LINKS in {"", _DEFAULT_PUBLIC_FIND_LINKS}
+            and not re.search(r"(?m)^\s*(?:-i\b|--(?:extra-)?index-url\b|"
+                              r"-f\b|--find-links\b|--no-index\b)", requirements))
 
 # ---- P1-⑪ Docker 沙箱加固参数（镜像白名单 + cap-drop + 只读 + 非 root + 限额） ----
 # 镜像白名单前缀（逗号分隔，可用 AUTOREPRO_DOCKER_IMAGE_ALLOWLIST 覆盖）：
@@ -1437,9 +1493,9 @@ class CodeExecutorAgent(BaseAgent):
         依赖来源与 Docker 路径一致：优先 env_config.requirements_txt，
         否则回退 required_packages。安装走 `pip install --target`
         （国内镜像 + find-links，与 EnvBuilder 同源），目标目录
-        data/deps/<依赖清单 sha1[:16]>/；成功/失败均缓存到进程级
-        _INSTALLED_DEPS + 磁盘 .ready 就绪标记，避免 smoke/full/优化
-        重跑重复安装，同一依赖清单跨论文全局只装一次（L0 热缓存去重）。
+        data/deps/<依赖清单 sha1[:16]>/；成功按当前缓存根的 .ready 复用，
+        失败记录诊断但不阻止下一次运行重试。默认公共镜像不可用时最多
+        再尝试一次官方 PyPI，保留同一份版本约束。
         mock_mode=True 时跳过真实安装（mock 演示不触网、不装大包）。
         """
         env_config = getattr(self, "env_config", None) or {}
@@ -1451,29 +1507,36 @@ class CodeExecutorAgent(BaseAgent):
         if not reqs:
             return None
 
-        key = reqs
+        deps_root = Path(getattr(self, "deps_cache_root", DEPS_CACHE_ROOT))
+        key = reqs if deps_root == DEPS_CACHE_ROOT else f"{deps_root.resolve()}\n{reqs}"
+        deps_dir = deps_root / reqs_digest(reqs)
+        ready_mark = deps_dir / _DEPS_READY_MARK
+        self._deps_dir = None
         resource_id = reqs_digest(reqs)
         self.resource_events.emit(
             "dependency", resource_id, "install", "running",
-            requirements=normalize_requirements(reqs))
-        if key in _INSTALLED_DEPS:
+            requirements=_safe_install_diagnostic(normalize_requirements(reqs)))
+        if key in _INSTALLED_DEPS and not _INSTALLED_DEPS[key] and (
+                self.mock_mode or ready_mark.is_file()):
+            if not self.mock_mode:
+                self._deps_dir = str(deps_dir)
+                touch_deps_meta(deps_dir)
             self.resource_events.emit(
                 "dependency", resource_id, "install", "cached",
                 detail="进程内依赖状态缓存命中")
-            return _INSTALLED_DEPS[key] or None
+            return None
+        if _INSTALLED_DEPS.get(key):
+            self.log("install_deps", "RUNNING", "上次依赖安装失败，允许本次运行重新尝试")
 
         req_file = os.path.join(workdir, "requirements.txt")
         with open(req_file, "w", encoding="utf-8") as f:
             f.write(reqs)
         self.log("install_deps", "RUNNING",
-                 f"按依赖清单安装环境依赖: {reqs[:120]}...")
+                 f"按依赖清单安装环境依赖: {_safe_install_diagnostic(reqs)[:120]}...")
 
         # ---- 隔离安装目录（对齐三层存储 L0 热缓存）----
         # 按**归一化**清单取哈希：清单写法差异（行序/空行/重复行）不再各存
         # 一份完整依赖（实测因此白占 53 MB）。
-        deps_dir = DEPS_CACHE_ROOT / reqs_digest(reqs)
-        ready_mark = deps_dir / _DEPS_READY_MARK
-
         if self.mock_mode:
             # mock 演示：不触网、不装大包，直接视为就绪
             self._deps_dir = None
@@ -1497,41 +1560,78 @@ class CodeExecutorAgent(BaseAgent):
                 path=str(deps_dir), bytes=self._path_bytes(deps_dir))
             return None
 
+        attempts = []
+        env_config["dependency_install_attempts"] = attempts
+        index, links = PIP_INDEX_URL, PIP_FIND_LINKS
+        fallback_allowed = _allow_official_pip_fallback(reqs)
         try:
             deps_dir.mkdir(parents=True, exist_ok=True)
-            cmd = [sys.executable, "-m", "pip", "install",
-                   "--disable-pip-version-check", "-q",
-                   "--no-user",
-                   "--target", str(deps_dir),
-                   "-i", PIP_INDEX_URL]
-            if PIP_FIND_LINKS:
-                cmd += ["--find-links", PIP_FIND_LINKS]
-            cmd += ["-r", req_file]
-            res = subprocess.run(cmd, capture_output=True, text=True,
-                                 encoding="utf-8", errors="replace",
-                                 env=self._pip_env(),
-                                 timeout=LOCAL_PIP_TIMEOUT)
-            if res.returncode == 0:
-                ready_mark.write_text("ok\n", encoding="utf-8")
-                self._deps_dir = str(deps_dir)
-                _INSTALLED_DEPS[key] = ""
-                _write_deps_meta(deps_dir, "reqs", requirements=reqs)
-                self.log("install_deps", "SUCCESS",
-                         f"隔离依赖安装完成: {deps_dir.name}")
-                self.resource_events.emit(
-                    "dependency", resource_id, "install", "succeeded",
-                    path=str(deps_dir), bytes=self._path_bytes(deps_dir))
-                return None
-            detail = (res.stderr or res.stdout or "").strip()[-800:]
-            _INSTALLED_DEPS[key] = (
-                f"依赖安装失败(exit={res.returncode}), 无法在本地环境执行: "
-                f"{detail}\n依赖清单: {reqs[:200]}...")
-        except subprocess.TimeoutExpired:
-            _INSTALLED_DEPS[key] = (
-                f"依赖安装超时({LOCAL_PIP_TIMEOUT}s), 无法在本地环境执行: "
-                f"{reqs[:200]}...")
+            incomplete_target = any(deps_dir.iterdir())
+            for attempt in range(1, 3):
+                cmd = [sys.executable, "-m", "pip", "install",
+                       "--disable-pip-version-check", "-q", "--no-user",
+                       "--target", str(deps_dir), "-i", index]
+                # pip --target otherwise skips existing package directories,
+                # including files left by an interrupted earlier installation.
+                # --upgrade replaces those files under the same fixed pins.
+                if incomplete_target or attempt > 1:
+                    cmd += ["--upgrade"]
+                if links:
+                    cmd += ["--find-links", links]
+                cmd += ["-r", req_file]
+                timed_out, exit_code = False, None
+                self.log("install_deps", "RUNNING",
+                         f"第 {attempt} 轮依赖安装: {_safe_install_diagnostic(index)}")
+                try:
+                    res = subprocess.run(cmd, capture_output=True, text=True,
+                                         encoding="utf-8", errors="replace", env=self._pip_env(),
+                                         timeout=LOCAL_PIP_TIMEOUT)
+                    exit_code = res.returncode
+                    detail = "\n".join(s for s in (res.stdout or "", res.stderr or "") if s).strip()
+                except subprocess.TimeoutExpired as exc:
+                    timed_out = True
+                    captured = []
+                    for stream in (exc.stdout, exc.stderr):
+                        if isinstance(stream, bytes):
+                            stream = stream.decode("utf-8", "replace")
+                        if stream:
+                            captured.append(stream)
+                    detail = f"依赖安装超时({LOCAL_PIP_TIMEOUT}s)\n" + "\n".join(captured)
+                except Exception as exc:
+                    detail = f"依赖安装异常: {exc}"
+                safe_detail = _safe_install_diagnostic(detail)[-1600:]
+                attempts.append({"attempt": attempt, "index_url": _safe_install_diagnostic(index),
+                                 "success": exit_code == 0, "exit_code": exit_code,
+                                 "timed_out": timed_out, "diagnostic": safe_detail})
+                if exit_code == 0:
+                    ready_mark.write_text("ok\n", encoding="utf-8")
+                    self._deps_dir = str(deps_dir)
+                    _INSTALLED_DEPS[key] = ""
+                    _write_deps_meta(deps_dir, "reqs", requirements=reqs)
+                    self.log("install_deps", "SUCCESS",
+                             f"隔离依赖安装完成（第 {attempt} 轮）: {deps_dir.name}")
+                    self.resource_events.emit(
+                        "dependency", resource_id, "install", "succeeded",
+                        path=str(deps_dir), bytes=self._path_bytes(deps_dir), attempts=attempt)
+                    return None
+                if attempt == 1 and fallback_allowed and _public_mirror_failure(detail, timed_out):
+                    self.log("install_deps", "WARNING",
+                             "默认公共镜像不可用，保留固定依赖版本并回退官方 PyPI 一次",
+                             {"attempt": attempt, "diagnostic": safe_detail})
+                    index, links = _OFFICIAL_PIP_INDEX, ""
+                    continue
+                break
         except Exception as e:      # 连失败原因都拿不到（如 pip 自身异常）
-            _INSTALLED_DEPS[key] = f"依赖安装异常: {e}"
+            attempts.append({"attempt": len(attempts) + 1,
+                             "index_url": _safe_install_diagnostic(index),
+                             "success": False, "exit_code": None, "timed_out": False,
+                             "diagnostic": _safe_install_diagnostic(f"依赖安装异常: {e}")})
+        diagnostics = "\n".join(
+            f"第 {entry['attempt']} 轮（{entry['index_url']}, exit={entry['exit_code']}）: "
+            f"{entry['diagnostic']}" for entry in attempts)
+        _INSTALLED_DEPS[key] = (
+            f"依赖安装失败（已尝试 {len(attempts)} 轮），无法在本地环境执行:\n{diagnostics}"
+            f"\n依赖清单: {_safe_install_diagnostic(reqs)[:200]}...")
         self.log("install_deps", "ERROR", _INSTALLED_DEPS[key][:200])
         self.resource_events.emit(
             "dependency", resource_id, "install", "failed",
