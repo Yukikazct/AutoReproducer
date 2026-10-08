@@ -1,5 +1,6 @@
 """Run reviewed method adapters with preparation separate from timed execution."""
 import time
+import math
 import uuid
 from pathlib import Path
 
@@ -29,6 +30,10 @@ class MethodReproduction:
         mode = request.get("optimization_mode") or ("validate" if request.get("enable_optimization") else "off")
         if mode not in {"off", "suggest", "validate"}:
             raise ValueError("未知优化模式")
+        budget = request.get("budget_seconds",7200)
+        if mode == "validate" and (isinstance(budget,bool) or not isinstance(budget,(int,float))
+                                   or not math.isfinite(budget) or not 0 < budget <= 7200):
+            raise ValueError("优化预算必须在0至7200秒之间")
         if request.get("use_docker"):
             raise ValueError("方法预设需要本地执行")
         run_dir = self.root / "runs" / f"repository_{uuid.uuid4().hex}"
@@ -58,7 +63,12 @@ class MethodReproduction:
                        or (i == "method_advice" and mode == "off") or (i.startswith("review_") and not full_review) else "waiting"}
             for i, s, a, title in stages]})
         def event(identifier, status, reason=""):
-            _, state, agent, _ = next(s for s in stages if s[0] == identifier)
+            _, state, agent, title = next(s for s in stages if s[0] == identifier)
+            self.logger.log(agent,identifier,status.upper(),reason or title)
+            if status == "running":
+                self.logger.begin_plan(identifier)
+            else:
+                self.logger.end_plan(identifier)
             emit({"type": "state", "state": state, "agent": agent, "phase_id": identifier,
                   "status": status, "reason": reason})
         phase, error = "prepare_repository", None
@@ -66,7 +76,7 @@ class MethodReproduction:
         try:
             if mode == "validate" or full_review:
                 # Validation experiments have their own two-hour deadline.
-                baseline_deadline = started + 1200
+                baseline_deadline = started + min(1200,budget) if mode == "validate" else started + 1200
             else:
                 baseline_deadline = started + profile["budget"]["baseline_s"]
             # Fast runs never fetch sources or install dependencies on a cache miss.
@@ -130,11 +140,12 @@ class MethodReproduction:
                     if mode != "off":
                         phase = "method_advice"; event(phase, "running")
                         remaining = (started + profile["budget"]["total_s"] - time.monotonic() - 15) if mode == "suggest" and not full_review else 45
-                        data["optimization"] = suggest(self.llm, profile, data["validation"], sources, timeout_s=min(45, remaining))
-                        data["optimization"]["baseline_run_id"] = run_dir.name
                         if mode == "validate":
                             from src.method_optimization import validate_candidates
                             data["optimization"] = validate_candidates(self, profile, data, request, started, emit)
+                        else:
+                            data["optimization"] = suggest(self.llm, profile, data["validation"], sources, timeout_s=min(45, remaining))
+                            data["optimization"]["baseline_run_id"] = run_dir.name
                         event(phase, "success" if data["optimization"]["status"] not in {"advice_timeout", "advice_unavailable"} else "error", data["optimization"].get("reason", ""))
         except Exception as exc:
             error = str(exc)
@@ -153,9 +164,12 @@ class MethodReproduction:
         (run_dir / "report.md").write_text(data["report"], encoding="utf-8")
         data["run_elapsed_s"] = time.monotonic() - started
         data["quick_target"]["validated_on_this_run"] = bool(
-            not error and not (prepare_env or prepare_only or full_review) and mode == "suggest"
+            not error and profile["adapter_id"] == "siren" and not (prepare_env or prepare_only or full_review) and mode == "suggest"
             and data["run_elapsed_s"] <= 300 and data["validation"].get("quality_pass")
             and data["optimization"]["status"] == "suggested")
         write_json(run_dir / "result.json", {"data": data, "error": error})
         event("generate_report", "success")
+        self.logger.log_experiment("FINISH", "固定方法实验完成", outputs={"title": data["paper_title"]},
+                                   result={"state": "ERROR" if error else "COMPLETED", "run_dir": str(run_dir),
+                                           "duration_sec": data["run_elapsed_s"], "llm_calls": data["total_llm_calls"]})
         return {"state": "ERROR" if error else "COMPLETED", "data": data, "error": error}

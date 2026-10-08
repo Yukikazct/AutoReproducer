@@ -158,6 +158,8 @@ class SirenAdapter:
                 isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v)
                 for v in metrics["metrics"].values()):
             raise ValueError("缺少必需指标或指标无效")
+        if any(metrics["metrics"].get(k, 0) < 0 for k in ("mse", "mae", "rmse")):
+            raise ValueError("误差指标不能为负数")
         records = [{"name": k, "value": v, "unit": "dB" if k == "psnr" else "scalar",
                     "direction": "maximize" if k == "psnr" else "minimize", "split": split,
                     "stage": "eval", "seed": training["seed"], "source": f"artifacts/metrics_{split}.json",
