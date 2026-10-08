@@ -1,0 +1,3 @@
+-r requirements.txt
+# Run real local figure generation tests; no LLM credentials or training packages needed.
+matplotlib>=3.9,<4

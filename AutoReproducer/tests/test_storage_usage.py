@@ -154,14 +154,22 @@ def components(snapshot):
     return {item["key"]: item for item in snapshot["components"]}
 
 
-def test_real_execution_is_measured_before_temporary_workspace_cleanup():
+def test_real_execution_is_measured_before_temporary_workspace_cleanup(monkeypatch):
     code = "from pathlib import Path\nPath('payload.bin').write_bytes(b'x' * 4096)\nprint('done')\n"
     executor = CodeExecutorAgent(LLMClient(mock_mode=True), logger=Mock(), mock_mode=True)
+    script_sizes = []
+    original_run = executor._run_local_script
+
+    def record_script_size(script, *args, **kwargs):
+        script_sizes.append(Path(script).stat().st_size)
+        return original_run(script, *args, **kwargs)
+
+    monkeypatch.setattr(executor, "_run_local_script", record_script_size)
     result = executor.run({"code": code, "env_config": {"estimated_disk_gb": 99}})
     assert result["success"] is True
     measured = result["final"]["disk_usage"]
     workspace = components(measured)["workspace"]
-    assert workspace["bytes"] == len(result["code"].encode()) + 4096
+    assert workspace["bytes"] == script_sizes[-1] + 4096
     assert workspace["retained"] is False
     assert not Path(workspace["source"]).exists()
     assert result["effective_env_config"]["disk_usage"] == measured
@@ -204,7 +212,7 @@ def test_failed_execution_still_keeps_actual_workspace_measurement(tmp_path):
     code = "from pathlib import Path\nPath('partial.bin').write_bytes(b'x' * 99)\nraise RuntimeError('bad')\n"
     result = executor.execute_in_workspace(code, str(tmp_path), stage="full")
     assert result["success"] is False
-    assert components(result["disk_usage"])["workspace"]["bytes"] == len(code.encode()) + 99
+    assert components(result["disk_usage"])["workspace"]["bytes"] == (tmp_path / "run.py").stat().st_size + 99
 
 
 def test_old_model_estimate_is_not_displayed_as_measured_size():

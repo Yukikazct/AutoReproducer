@@ -171,7 +171,7 @@ def assert_call_delta(pipeline, result, expected):
     assert result["data"]["total_llm_calls"] == expected
     assert pipeline.logger.llm_calls == expected
     assert result["data"]["audit_stats"]["llm_calls"] == expected
-    saved = json.loads((Path(result["data"]["run_dir"]) / "result.json").read_text())
+    saved = json.loads((Path(result["data"]["run_dir"]) / "result.json").read_text(encoding="utf-8"))
     assert saved["data"]["total_llm_calls"] == expected
 
 
@@ -204,8 +204,8 @@ def test_preanalysis_gates_execution_and_authorized_result_review_shares_only_sm
     pipeline.review_mock.assert_called_once()
     assert_call_delta(pipeline, result, 5)
     run_dir = Path(result["data"]["run_dir"])
-    assert json.loads((run_dir / "repository_analysis.json").read_text())["status"] == "accepted"
-    assert json.loads((run_dir / "result_analysis.json").read_text())["status"] == "accepted"
+    assert json.loads((run_dir / "repository_analysis.json").read_text(encoding="utf-8"))["status"] == "accepted"
+    assert json.loads((run_dir / "result_analysis.json").read_text(encoding="utf-8"))["status"] == "accepted"
 
 
 def test_readiness_rejection_preserves_partial_analysis_and_never_executes(pipeline):
@@ -236,7 +236,7 @@ def test_readiness_rejection_preserves_partial_analysis_and_never_executes(pipel
     pipeline.review_mock.assert_not_called()
     assert_call_delta(pipeline, result, 2)  # Claimed stage metadata is not a counter.
     run_dir = Path(result["data"]["run_dir"])
-    assert json.loads((run_dir / "repository_analysis.json").read_text()) == partial
+    assert json.loads((run_dir / "repository_analysis.json").read_text(encoding="utf-8")) == partial
     assert (run_dir / "report.md").is_file()
 
 
@@ -265,8 +265,8 @@ def test_failed_result_explanation_preserves_deterministic_reproduction_and_coun
     pipeline.review_mock.assert_called_once()
     assert_call_delta(pipeline, result, 4 + attempted_result_calls)
     run_dir = Path(result["data"]["run_dir"])
-    assert json.loads((run_dir / "result_analysis.json").read_text()) == partial
-    assert json.loads((run_dir / "result.json").read_text())["data"]["validation"]["status"] == "reproduced"
+    assert json.loads((run_dir / "result_analysis.json").read_text(encoding="utf-8")) == partial
+    assert json.loads((run_dir / "result.json").read_text(encoding="utf-8"))["data"]["validation"]["status"] == "reproduced"
 
 
 def test_without_result_authorization_only_four_public_readiness_calls_are_made(pipeline):

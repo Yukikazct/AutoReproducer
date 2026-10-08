@@ -53,7 +53,7 @@ def experiment(tmp_path):
     for relative in files:
         path = root / relative
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(entry if relative == "run_longExp.py" else "# frozen author file\n")
+        path.write_text(entry if relative == "run_longExp.py" else "# frozen author file\n", encoding="utf-8")
     repository = {
         **profile["repository"], "resolved_sha": profile["repository"]["revision"],
         "path": str(root), "files": {relative: digest(root / relative) for relative in files},
@@ -160,7 +160,7 @@ def test_multiple_namespaces_cannot_mix_two_run_configurations(experiment):
 
 def test_seed_comes_from_verified_source_not_pythonhashseed_or_profile_only(experiment):
     entry = experiment["workspace"] / "run_longExp.py"
-    entry.write_text(entry.read_text().replace("fix_seed = 2021", "fix_seed = 2022"))
+    entry.write_text(entry.read_text(encoding="utf-8").replace("fix_seed = 2021", "fix_seed = 2022"), encoding="utf-8")
     # Even if a new snapshot honestly records the changed file, its seed must
     # still agree with the frozen author experiment.
     experiment["repository"]["files"]["run_longExp.py"] = digest(entry)
@@ -169,7 +169,7 @@ def test_seed_comes_from_verified_source_not_pythonhashseed_or_profile_only(expe
 
 def test_changed_evaluator_source_invalidates_protocol(experiment):
     metrics = experiment["workspace"] / "utils/metrics.py"
-    metrics.write_text("# replaced evaluation function\n")
+    metrics.write_text("# replaced evaluation function\n", encoding="utf-8")
     assert_failed(experiment, "fixed_source")
 
 

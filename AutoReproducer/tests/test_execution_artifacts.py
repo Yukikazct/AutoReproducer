@@ -68,7 +68,7 @@ def test_nested_images_collected_but_symlinks_and_invalid_images_skipped(tmp_pat
     Image.new("RGB", (12, 12), "red").save(outside / "secret.png")
     (workspace / "linked").symlink_to(outside, target_is_directory=True)
     (plots / "link.png").symlink_to(outside / "secret.png")
-    (plots / "fake.png").write_text("not an image")
+    (plots / "fake.png").write_text("not an image", encoding="utf-8")
     result = artifacts.collect_images(str(workspace), "full", "20261003_110111")
     assert [a["name"] for a in result["artifacts"]] == ["plots/real.png"]
     assert result["artifact_warnings"]
@@ -86,7 +86,7 @@ def test_docker_runtime_uses_writable_cache_and_noninteractive_backend(tmp_path)
     assert env["MPLCONFIGDIR"].startswith("/tmp/")
     assert env["MPLBACKEND"] == "Agg"
     assert env["PYTHONPATH"] == "/app/.autorepro_plot"
-    assert "addfont" in (tmp_path / ".autorepro_plot" / "sitecustomize.py").read_text()
+    assert "addfont" in (tmp_path / ".autorepro_plot" / "sitecustomize.py").read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize("font_setup", [

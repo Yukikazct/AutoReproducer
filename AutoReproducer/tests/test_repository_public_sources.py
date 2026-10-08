@@ -138,13 +138,13 @@ def test_packet_contains_actual_html_and_only_the_approved_export(public_workspa
     for source in packet["sources"]:
         if source["source_id"].startswith("repo_"):
             assert packet["repository"]["revision"] in source["url"]
-            assert source["text"] == (public_workspace[0] / source["locator"].split("#")[0]).read_text()
+            assert source["text"] == (public_workspace[0] / source["locator"].split("#")[0]).read_text(encoding="utf-8")
     assert builder.manifest_path.is_file()
 
 
 def test_manifest_records_document_section_and_source_hashes(public_workspace, paper_html, tmp_path):
     builder, packet, _ = build(tmp_path, paper_html, public_workspace)
-    manifest = json.loads(builder.manifest_path.read_text())
+    manifest = json.loads(builder.manifest_path.read_text(encoding="utf-8"))
     assert manifest["paper"]["url"] == PAPER_URL
     assert manifest["paper"]["sha256"] == digest(paper_html)
     assert manifest["paper"]["bytes"] == len(paper_html)
@@ -180,7 +180,7 @@ def test_verified_local_seed_then_offline_cache_never_uses_transport(public_work
     assert second == first
     forbidden_transport.assert_not_called()
     assert (builder.cache_dir / "paper.html").read_bytes() == paper_html
-    assert json.loads((builder.cache_dir / "paper_manifest.json").read_text())["origin"] == "verified_local_public_document"
+    assert json.loads((builder.cache_dir / "paper_manifest.json").read_text(encoding="utf-8"))["origin"] == "verified_local_public_document"
 
 
 def test_offline_missing_cache_fails_without_transport(public_workspace, tmp_path):
@@ -197,14 +197,14 @@ def test_cache_tampering_is_rejected_not_replaced_by_a_download(public_workspace
     builder, _, transport = build(tmp_path, paper_html, public_workspace)
     transport.reset_mock()
     path = builder.cache_dir / "paper_manifest.json"
-    metadata = json.loads(path.read_text())
+    metadata = json.loads(path.read_text(encoding="utf-8"))
     if tamper == "document":
         (builder.cache_dir / "paper.html").write_bytes(paper_html + b"tampered")
     elif tamper == "missing_manifest":
         path.unlink()
     else:
         metadata[{"url": "url", "hash": "sha256", "bytes": "bytes"}[tamper]] = "tampered"
-        path.write_text(json.dumps(metadata))
+        path.write_text(json.dumps(metadata), encoding="utf-8")
     with pytest.raises(ValueError, match="缓存"):
         builder.build_packet(*public_workspace, offline=False)
     transport.assert_not_called()
@@ -230,7 +230,7 @@ def test_every_allowed_file_must_match_snapshot(public_workspace, tmp_path, tamp
     root, snapshot, profile = public_workspace
     relative = "models/DLinear.py"
     if tamper == "changed":
-        (root / relative).write_text("LOCAL_SECRET_MODIFICATION")
+        (root / relative).write_text("LOCAL_SECRET_MODIFICATION", encoding="utf-8")
     elif tamper == "missing_file":
         (root / relative).unlink()
     elif tamper == "missing_hash":
@@ -370,7 +370,7 @@ def test_author_comments_are_complete_original_bodies_with_only_public_packet_fi
         assert source["locator"] == f"#issuecomment-{manifest['id']}"
         assert source["url"] == AUTHOR_COMMENTS[manifest["id"]]["html_url"]
         assert manifest["sha256"] == digest(documents[manifest["url"]])
-        assert json.loads((builder.cache_dir / f"issuecomment-{manifest['id']}.manifest.json").read_text()) == manifest
+        assert json.loads((builder.cache_dir / f"issuecomment-{manifest['id']}.manifest.json").read_text(encoding="utf-8")) == manifest
     assert transport.call_count == 2  # Linked images/URLs never trigger requests.
 
 
@@ -413,7 +413,7 @@ def test_author_comment_cache_tampering_is_rejected_without_online_replacement(t
     builder = RepositoryPublicSources(tmp_path / "cache", transport=transport)
     builder.cache_author_comments(offline=True, comment_paths=seed_comments(tmp_path))
     metadata_path = builder.cache_dir / "issuecomment-1331937601.manifest.json"
-    metadata = json.loads(metadata_path.read_text())
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
     if tamper == "body":
         document_path = builder.cache_dir / "issuecomment-1331937601.json"
         document_path.write_bytes(comment_document(1331937601, body="changed public body"))
@@ -421,7 +421,7 @@ def test_author_comment_cache_tampering_is_rejected_without_online_replacement(t
         metadata_path.unlink()
     else:
         metadata[{"url": "url", "hash": "sha256", "bytes": "bytes"}[tamper]] = "tampered"
-        metadata_path.write_text(json.dumps(metadata))
+        metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
     with pytest.raises(ValueError, match="缓存"):
         builder.cache_author_comments(offline=False)
     transport.assert_not_called()

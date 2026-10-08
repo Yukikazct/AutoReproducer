@@ -57,12 +57,22 @@ streamlit run app.py
 ## 运行测试
 
 ```bash
+# 安装完整测试依赖（包含真实图片生成测试所需的 matplotlib）
+python -m pip install -r requirements-test.txt
+
 # 完整测试套件（无需真实 LLM API；真实实验记录另行保存）
 python -m pytest tests/ -v
+
+# Windows 也验证 UTF-8 模式；测试文件读写显式指定 UTF-8
+python -X utf8 -m pytest tests/ -q
 
 # 只看端到端集成用例
 python -m pytest tests/ -v -k TestEndToEnd
 ```
+
+GitHub Actions 在 Windows/Linux 与 Python 3.11/3.12 上运行回归；Windows
+同时检查系统默认编码和 UTF-8 模式。测试使用模拟 API、小型本地程序与临时缓存，
+不需要真实模型密钥或启动论文训练。缺少 matplotlib 的本地环境会明确跳过绘图用例。
 
 ## 当前核心流程（复现 → 验证 → 报告）
 

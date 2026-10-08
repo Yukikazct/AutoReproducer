@@ -53,8 +53,8 @@ def test_multiple_files_import_and_nested_cwd_are_preserved(runner, tmp_path):
     assert (repo / "requirements.txt").read_text(encoding="utf-8") == "author-original==1\n"
     assert not (repo / "run.py").exists()
     assert not (repo / ".autorepro_plot").exists()
-    assert Path(result["final"]["stdout_path"]).read_text() == result["final"]["stdout"]
-    record = json.loads((Path(result["run_dir"]) / "train.json").read_text())
+    assert Path(result["final"]["stdout_path"]).read_text(encoding="utf-8") == result["final"]["stdout"]
+    record = json.loads((Path(result["run_dir"]) / "train.json").read_text(encoding="utf-8"))
     assert record["exit_code"] == 0
     assert record["elapsed_s"] > 0
     assert [e["status"] for e in events if e["type"] == "repository_step"] == ["running", "success"]
@@ -77,16 +77,16 @@ def test_failure_stops_later_steps_and_retains_full_logs(runner, tmp_path):
     assert len(result["final"]["stdout"]) == 70001
     assert "DETAIL" in result["final"]["stderr"]
     assert not (tmp_path / "should_not_exist").exists()
-    assert Path(result["final"]["stdout_path"]).read_text() == result["final"]["stdout"]
+    assert Path(result["final"]["stdout_path"]).read_text(encoding="utf-8") == result["final"]["stdout"]
 
 
 def test_nested_entry_point_can_import_repository_root_packages(runner, tmp_path):
     package = tmp_path / "repository_local_model"
     package.mkdir()
-    (package / "__init__.py").write_text("VALUE = 123\n")
+    (package / "__init__.py").write_text("VALUE = 123\n", encoding="utf-8")
     examples = tmp_path / "examples"
     examples.mkdir()
-    (examples / "demo.py").write_text("from repository_local_model import VALUE\nprint(VALUE)\n")
+    (examples / "demo.py").write_text("from repository_local_model import VALUE\nprint(VALUE)\n", encoding="utf-8")
     result = runner.run(tmp_path, [step("nested_entry", "examples/demo.py")], {})
     assert result["success"] is True
     assert result["final"]["stdout"] == "123\n"
@@ -124,7 +124,7 @@ def test_script_escape_and_external_symlink_are_rejected(runner, tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
     script = tmp_path / "outside.py"
-    script.write_text("print('BAD')")
+    script.write_text("print('BAD')", encoding="utf-8")
     result = runner.run(repo, [step("escape", "../outside.py")], {})
     assert result["not_runnable"] is True
     (repo / "linked.py").symlink_to(script)

@@ -145,7 +145,7 @@ def test_saved_report_figures_are_rendered_as_native_images(tmp_path, monkeypatc
     report = ReportGeneratorAgent()._build_report({
         "execution": {"final": {"success": True, "artifacts": [artifact]}},
     }, report_path=report_path)
-    report_path.write_text(report)
+    report_path.write_text(report, encoding="utf-8")
     app = AppTest.from_file(APP_PATH, default_timeout=120)
     app.session_state["result"] = {
         "state": "COMPLETED", "report_path": str(report_path), "data": {"report": report},

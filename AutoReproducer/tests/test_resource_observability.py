@@ -11,7 +11,7 @@ def test_dataset_download_emits_event_and_inventory(tmp_path, monkeypatch):
 
     assert result["state"] == "smoke-synth"
     event_file = tmp_path / "data" / "resource_events.jsonl"
-    events = [json.loads(line) for line in event_file.read_text().splitlines()]
+    events = [json.loads(line) for line in event_file.read_text(encoding="utf-8").splitlines()]
     assert [event["state"] for event in events] == ["running", "succeeded"]
     assert events[-1]["resource_type"] == "dataset"
 

@@ -107,7 +107,7 @@ def test_repo_skips_noise_dirs_and_big_files(tmp_path):
     _write(tmp_path, "node_modules/requirements.txt", "node_pkg")
     big = tmp_path / "env/data/requirements.txt"
     big.parent.mkdir(parents=True, exist_ok=True)
-    big.write_text("big_pkg")
+    big.write_text("big_pkg", encoding="utf-8")
     deps = detect_repo_dependencies(str(tmp_path))
     assert deps == ["numpy>=1.24"]
 

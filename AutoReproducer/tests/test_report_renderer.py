@@ -28,7 +28,7 @@ def saved_report(tmp_path, monkeypatch):
     data = {"execution": {"final": {"success": True, "exit_code": 0, "artifacts": [artifact],
                                     "stdout": "last_line_of_real_execution"}}}
     text = ReportGeneratorAgent()._build_report(data, report_path=report_path)
-    report_path.write_text(text)
+    report_path.write_text(text, encoding="utf-8")
     return report_path, text, source
 
 
@@ -53,7 +53,7 @@ def test_report_bundle_remains_readable_after_moving_and_removing_original_image
     original.unlink()
     shutil.rmtree(path.parent)
     st = Mock()
-    render_report((elsewhere / path.name).read_text(), elsewhere / path.name, st_module=st)
+    render_report((elsewhere / path.name).read_text(encoding="utf-8"), elsewhere / path.name, st_module=st)
     st.image.assert_called_once()
     st.warning.assert_not_called()
 

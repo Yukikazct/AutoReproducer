@@ -45,7 +45,7 @@ def install_responses(monkeypatch, responses):
         assert cmd[1:4] == ["-m", "pip", "install"], "tests may only invoke mocked pip"
         index = cmd[cmd.index("-i") + 1]
         req_file = Path(cmd[cmd.index("-r") + 1])
-        calls.append({"cmd": cmd, "index": index, "requirements": req_file.read_text(),
+        calls.append({"cmd": cmd, "index": index, "requirements": req_file.read_text(encoding="utf-8"),
                       "kwargs": kwargs})
         response = responses[len(calls) - 1]
         if isinstance(response, Exception):

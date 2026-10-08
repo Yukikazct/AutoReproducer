@@ -50,6 +50,10 @@ def directory_usage(path, key, label, *, exclude=(), shared=False, retained=True
                         continue
                     try:
                         info = entry.stat(follow_symlinks=False)
+                        # Windows DirEntry.stat() may omit the file ID; os.stat()
+                        # obtains it so distinct hardlink names share one identity.
+                        if not info.st_ino:
+                            info = os.stat(entry.path, follow_symlinks=False)
                         if stat.S_ISDIR(info.st_mode):
                             pending.append(Path(entry.path))
                         elif stat.S_ISREG(info.st_mode):

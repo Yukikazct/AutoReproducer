@@ -456,7 +456,7 @@ def test_resolve_docker_cmd_via_env(monkeypatch, tmp_path):
     """DOCKER_PATH 环境变量指向真实文件时优先返回该路径。"""
     from src.base_agent import BaseAgent
     fake = tmp_path / "docker-cli.exe"
-    fake.write_text("")  # 只需存在
+    fake.write_text("", encoding="utf-8")  # 只需存在
     monkeypatch.setenv("DOCKER_PATH", str(fake))
     assert BaseAgent._resolve_docker_cmd() == str(fake)
 

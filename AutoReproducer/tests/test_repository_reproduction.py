@@ -383,7 +383,7 @@ def test_repository_api_transport_sends_only_public_protocol_and_keeps_local_evi
     assert "existing author figure warning" in actual_execution["artifact_warnings"]
     assert "independent figure warning" in actual_execution["artifact_warnings"]
     run_dir = Path(result["data"]["run_dir"])
-    assert json.loads((run_dir / "llm_analysis.json").read_text())["input_scope"] == "public_paper_only"
+    assert json.loads((run_dir / "llm_analysis.json").read_text(encoding="utf-8"))["input_scope"] == "public_paper_only"
 
 
 def tar_bytes(files, *, extra_member=None):
@@ -432,9 +432,9 @@ def test_export_uses_fixed_commit_archive_and_leaves_dirty_cache_untouched(tmp_p
     profile = get_profile("dlinear_etth1_smoke")
     root = tmp_path / "data"
     source = legacy_repository(root)
-    (source / "run_longExp.py").write_text("# uncommitted local edit\n")
+    (source / "run_longExp.py").write_text("# uncommitted local edit\n", encoding="utf-8")
     (source / "results").mkdir()
-    (source / "results" / "metrics.json").write_text('{"mse": 0.001}')
+    (source / "results" / "metrics.json").write_text('{"mse": 0.001}', encoding="utf-8")
     (source / "checkpoint.pth").write_bytes(b"old checkpoint")
     files = required_source_files(profile)
     archive = tar_bytes(files)
@@ -445,7 +445,7 @@ def test_export_uses_fixed_commit_archive_and_leaves_dirty_cache_untouched(tmp_p
     assert not (destination / ".git").exists()
     assert not (destination / "results").exists()
     assert not (destination / "checkpoint.pth").exists()
-    assert (source / "run_longExp.py").read_text() == "# uncommitted local edit\n"
+    assert (source / "run_longExp.py").read_text(encoding="utf-8") == "# uncommitted local edit\n"
     assert (source / "results" / "metrics.json").is_file()
     assert snapshot["resolved_sha"] == profile["repository"]["revision"]
     assert snapshot["archive_sha256"] == hashlib.sha256(archive).hexdigest()
@@ -612,7 +612,7 @@ def test_shared_orchestrator_prepare_only_never_installs_runs_or_calls_llm(tmp_p
     assert (run_dir / "repo").is_dir()
     for name in ["experiment_spec.json", "repository.json", "dataset.json", "execution_plan.json", "environment.json", "result.json", "report.md"]:
         assert (run_dir / name).is_file(), name
-    stored = json.loads((run_dir / "experiment_spec.json").read_text())
+    stored = json.loads((run_dir / "experiment_spec.json").read_text(encoding="utf-8"))
     assert stored["sha256"] == reproduction.spec_digest(stored["spec"])
     assert not (run_dir / "metrics.json").exists()
     assert not any(event.get("state") == "EXECUTE_CODE" for event in events)
