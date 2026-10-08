@@ -1,5 +1,6 @@
 """Deterministic preparation and validation for reviewed method experiments."""
 import hashlib
+import ast
 import json
 import math
 import shutil
@@ -93,6 +94,8 @@ class SirenAdapter:
                   "'modules':{m.__name__:str(Path(m.__file__).resolve()) for m in (torch,numpy,scipy,PIL,matplotlib)}}; ")
         if device == "cuda":
             probe += "p['torchvision']=torchvision.__version__; p['modules']['torchvision']=str(Path(torchvision.__file__).resolve()); "
+        if profile["adapter_id"] == "neural_ode":
+            probe += "import torchdiffeq; p['author_package']=str(Path(torchdiffeq.__file__).resolve()); "
         probe += "Path('import_provenance.json').write_text(json.dumps(p),encoding='utf-8'); print(json.dumps(p))"
         steps = [{"id": "import_check", "argv": ["python", "-c", probe], "timeout_s": 60}]
         if train:
@@ -120,6 +123,9 @@ class SirenAdapter:
                 imported["torch"] != "2.5.1+cu121" or imported["cuda"] != "12.1"
                 or imported.get("torchvision") != "0.20.1+cu121"):
             raise ValueError("CUDA 运行环境与冻结版本不一致")
+        if profile["adapter_id"] == "neural_ode" and (imported["torch"] != "2.5.1+cpu"
+                or Path(imported.get("author_package", "")).resolve() != (root / "torchdiffeq/__init__.py").resolve()):
+            raise ValueError("Neural ODE 未从固定作者仓库与 CPU 环境导入")
 
     def verify(self, profile, execution, workspace, snapshot, manifest, spec_hash, split="fit"):
         from src.repository_reproduction import execution_succeeded
@@ -165,3 +171,40 @@ class SirenAdapter:
                 "metrics_comparison": {"paper": {}, "actual": metrics["metrics"]}, "metric_records": records,
                 "training_summary": {"initial_loss": training["losses"][0], "final_loss": training["losses"][-1],
                     "steps_completed": training["steps_completed"], "training_elapsed_s": training["training_elapsed_s"]}}
+
+
+class NeuralODEAdapter(SirenAdapter):
+    runtime = "neural_ode_runtime.py"
+    evaluator = "evaluate_neural_ode.py"
+
+    def prepare_dataset(self, root, profile, workspace, *, offline=False):
+        content = json.dumps(profile["dataset"], sort_keys=True, separators=(",", ":")).encode()
+        path = Path(workspace) / "dataset_definition.json"
+        path.write_bytes(content)
+        return {**profile["dataset"], "path": str(path.resolve()), "sha256": hashlib.sha256(content).hexdigest(), "verified": True}
+
+    def materialize(self, workspace, profile, spec_hash):
+        root = Path(workspace)
+        raw = (root / "examples/ode_demo.py").read_bytes().replace(b"\r\n", b"\n")
+        if hashlib.sha256(raw).hexdigest() != profile["source_sha256"]:
+            raise ValueError("固定 Neural ODE 源码校验失败")
+        source = raw.decode("utf-8")
+        node = next(n for n in ast.parse(source).body if isinstance(n, ast.ClassDef) and n.name == "ODEFunc")
+        (root / "author_model.py").write_text("import torch\nfrom torch import nn\n\n" + ast.get_source_segment(source,node) + "\n",encoding="utf-8")
+        return self._write_runtime(root,profile,spec_hash,["author_model.py","dataset_definition.json"])
+
+    def public_sources(self, workspace, profile):
+        source = (Path(workspace) / "examples/ode_demo.py").read_text(encoding="utf-8")
+        return [{"source_id": "author_ode_demo", "url": profile["paper"]["reference_source"],
+                 "locator": "examples/ode_demo.py", "content": source}]
+
+    def verify(self, *args, **kwargs):
+        result = super().verify(*args, **kwargs)
+        training = read_json(Path(args[2]) / "artifacts/training.json")
+        result["training_summary"].update({k: training[k] for k in ("initial_fit_mae","nfe_training","nfe_evaluation")})
+        if kwargs.get("split", "fit") == "fit":
+            quality = result["metrics_comparison"]["actual"]["mae"] < training["initial_fit_mae"]
+            result["quality_pass"] = quality
+            if not quality:
+                result.update(status="quality_target_not_met", result_level="experiment_completed")
+        return result

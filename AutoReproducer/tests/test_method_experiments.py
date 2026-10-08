@@ -127,3 +127,15 @@ def test_siren_fixed_contract_has_no_paper_reference():
     assert p["parameters"]["sidelength"] == 256
     assert p["parameters"]["hidden_layers"] == 3
     assert p["budget"] == {"total_s": 300, "baseline_s": 240, "advice_s": 45}
+
+
+def test_neural_ode_registers_its_own_frozen_protocol():
+    from src.method_adapters import NeuralODEAdapter
+    p = method_profile("neural_ode_spiral")
+    assert isinstance(get_adapter(p), NeuralODEAdapter)
+    assert p["parameters"]["steps"] == 2000
+    assert p["parameters"]["solver"] == "dopri5"
+    assert p["parameters"]["batch_time"] == 10
+    assert p["parameters"]["learning_rate"] == .001
+    assert p["dataset"]["kind"] == "analytic"
+    assert p["paper"]["metrics"] == {}

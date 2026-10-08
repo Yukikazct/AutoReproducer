@@ -3,12 +3,9 @@ from typing import Protocol
 
 
 class ExperimentAdapter(Protocol):
+    """Shared preparation boundary. Domain-specific evidence gates stay separate."""
     def required_files(self, profile): ...
     def prepare_dataset(self, root, profile, workspace, *, offline=False): ...
-    def metric_records(self, execution, spec_hash): ...
-    def verify_protocol(self, profile, execution, workspace, snapshot, dataset): ...
-    def recompute_metrics(self, execution, workspace, dataset, records): ...
-    def validate(self, profile, execution, records, error=""): ...
 
 
 class DLinearAdapter:
@@ -53,6 +50,9 @@ def get_adapter(profile) -> ExperimentAdapter:
     if name == "siren":
         from src.method_adapters import SirenAdapter
         return SirenAdapter()
+    if name == "neural_ode":
+        from src.method_adapters import NeuralODEAdapter
+        return NeuralODEAdapter()
     if name not in _ADAPTERS:
         raise ValueError(f"未注册的论文适配器: {name}")
     return _ADAPTERS[name]()
