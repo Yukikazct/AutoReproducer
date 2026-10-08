@@ -1,0 +1,56 @@
+{
+  "date": "2026-10-08",
+  "hardware": "RTX 4060 Laptop GPU 8GB",
+  "platform": "Windows Python 3.11",
+  "preparation_excluded": true,
+  "runs": [
+    {
+      "run_id": "repository_40d042b874f64105876ccc0020f8f340",
+      "elapsed_s": 28.84400000000005,
+      "baseline_elapsed_s": 23.985000000000582,
+      "metrics": {
+        "mse": 0.00018356706324762262,
+        "psnr": 37.36205239981245
+      },
+      "protocol_pass": true,
+      "independent_metrics_pass": true,
+      "real_api_calls": 1,
+      "advice_status": "suggested",
+      "model": "deepseek-chat",
+      "spec_sha256": "28edb0ca6686a8d158bf0be4d5d746cbdadf7131724c969892c2f6de92a3280b",
+      "source_revision": "4df34baee3f0f9c8f351630992c1fe1f69114b5f"
+    },
+    {
+      "run_id": "repository_d3fe395c1c3941129285777e49239bf8",
+      "elapsed_s": 28.39100000000053,
+      "baseline_elapsed_s": 23.938000000000102,
+      "metrics": {
+        "mse": 0.00018356706324762262,
+        "psnr": 37.36205239981245
+      },
+      "protocol_pass": true,
+      "independent_metrics_pass": true,
+      "real_api_calls": 1,
+      "advice_status": "suggested",
+      "model": "deepseek-chat",
+      "spec_sha256": "28edb0ca6686a8d158bf0be4d5d746cbdadf7131724c969892c2f6de92a3280b",
+      "source_revision": "4df34baee3f0f9c8f351630992c1fe1f69114b5f"
+    },
+    {
+      "run_id": "repository_53f3cb8258574604889e572c08664ae0",
+      "elapsed_s": 28.5,
+      "baseline_elapsed_s": 24.217999999999847,
+      "metrics": {
+        "mse": 0.00018356706324762262,
+        "psnr": 37.36205239981245
+      },
+      "protocol_pass": true,
+      "independent_metrics_pass": true,
+      "real_api_calls": 1,
+      "advice_status": "suggested",
+      "model": "deepseek-chat",
+      "spec_sha256": "28edb0ca6686a8d158bf0be4d5d746cbdadf7131724c969892c2f6de92a3280b",
+      "source_revision": "4df34baee3f0f9c8f351630992c1fe1f69114b5f"
+    }
+  ]
+}

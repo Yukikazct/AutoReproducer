@@ -1,5 +1,6 @@
 """Reviewed, fixed experiments; these plans never come from generated shell text."""
 from copy import deepcopy
+from src.method_profiles import METHOD_LABELS, method_profile
 
 PAPER_TITLE = "Are Transformers Effective for Time Series Forecasting?"
 REPO_URL = "https://github.com/cure-lab/LTSF-Linear"
@@ -13,9 +14,12 @@ PROFILE_LABELS = {
     "dlinear_etth1_reference": "DLinear · ETTh1 · 完整实验（作者训练协议）",
     "dlinear_etth1_smoke": "DLinear · ETTh1 · 快速诊断（1轮）",
 }
+PROFILE_LABELS.update(METHOD_LABELS)
 
 
 def get_profile(profile_id):
+    if profile_id in METHOD_LABELS:
+        return method_profile(profile_id)
     if profile_id not in PROFILE_LABELS:
         raise ValueError(f"未适配的论文预设: {profile_id}")
     smoke = profile_id == "dlinear_etth1_smoke"

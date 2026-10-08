@@ -418,9 +418,9 @@ class CodeExecutorAgent(BaseAgent):
                             getattr(self, "deps_cache_root", DEPS_CACHE_ROOT)))
 
     @contextmanager
-    def dependency_scope(self):
+    def dependency_scope(self, *, timeout=None):
         """Keep installed packages alive throughout preparation and execution."""
-        with cache_guard(self._dependency_lock_root()):
+        with cache_guard(self._dependency_lock_root(), timeout=timeout):
             try:
                 yield
             finally:

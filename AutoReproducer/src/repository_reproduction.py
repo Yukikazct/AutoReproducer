@@ -314,6 +314,10 @@ class RepositoryReproduction:
         self.llm = llm
 
     def run(self, input_data, on_event=None):
+        if get_profile(input_data["experiment_profile"]).get("adapter_id") in {"siren", "neural_ode"}:
+            from src.method_reproduction import MethodReproduction
+            return MethodReproduction(self.root, self.logger, self.runner, self.llm).run(
+                {**input_data, "use_docker": self.use_docker}, on_event)
         from src.agents.report_generator import ReportGeneratorAgent
         from src.repository_runner import RepositoryRunner
         data = {"verifications": [], "fix_records": [], "total_llm_calls": 0}

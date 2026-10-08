@@ -50,6 +50,9 @@ _ADAPTERS = {"dlinear": DLinearAdapter}
 
 def get_adapter(profile) -> ExperimentAdapter:
     name = profile.get("adapter_id", "dlinear")
+    if name == "siren":
+        from src.method_adapters import SirenAdapter
+        return SirenAdapter()
     if name not in _ADAPTERS:
         raise ValueError(f"未注册的论文适配器: {name}")
     return _ADAPTERS[name]()

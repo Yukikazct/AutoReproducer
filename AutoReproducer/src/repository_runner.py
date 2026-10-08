@@ -29,6 +29,11 @@ class RepositoryRunner:
         self.logger = logger or self.executor.logger
 
     @staticmethod
+    def cached_environment(env_config):
+        runtime = f"{sys.implementation.cache_tag}-{sys.platform}-{platform.machine()}"
+        return DEPS_CACHE_ROOT / "repository" / runtime / reqs_digest(env_config["requirements_txt"])
+
+    @staticmethod
     def _contained(root, relative, kind):
         return workspace_path(root, relative, kind, must_exist=True)
 
@@ -277,8 +282,15 @@ class RepositoryRunner:
             self.executor._heal_dirs.clear()
             prepare_dir = run_dir / "environment_prepare"
             prepare_dir.mkdir()
-            with self.executor.dependency_scope():
-                deps_error = self.executor._ensure_local_deps(str(prepare_dir))
+            with self.executor.dependency_scope(timeout=self.executor.env_config.get("cache_lock_timeout_s")):
+                if self.executor.env_config.get("require_prepared"):
+                    cached = self.cached_environment(self.executor.env_config)
+                    if not (cached / ".ready").is_file():
+                        return reject("实验环境尚未准备，请先准备实验环境；本次未安装或训练", -4)
+                    self.executor._deps_dir = str(cached)
+                    deps_error = None
+                else:
+                    deps_error = self.executor._ensure_local_deps(str(prepare_dir))
                 # The legacy helper's process-cache fast path does not set the
                 # dependency directory on a newly constructed executor.
                 requirements = self.executor.env_config.get("requirements_txt", "")
@@ -298,6 +310,12 @@ class RepositoryRunner:
                 if deps_error:
                     return reject(deps_error, -4)
                 for step in planned:
+                    deadline = self.executor.env_config.get("deadline_monotonic")
+                    if deadline is not None:
+                        remaining = deadline - time.monotonic() - 2
+                        if remaining <= 0:
+                            return reject("实验总时间预算耗尽", 124)
+                        step = {**step, "timeout_s": min(step["timeout_s"], remaining)}
                     record = self._execute(root, step, run_dir, emit)
                     attempts.append(record)
                     result["executed"] = result["executed"] or record["executed"]

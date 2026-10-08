@@ -238,6 +238,10 @@ def run_pipeline_core(progress_path: str,
                       use_llm_review: bool = False,
                       allow_result_summary_review: bool = False,
                       enable_optimization: bool = False,
+                      prepare_environment: bool = False,
+                      optimization_mode: str = "off",
+                      max_candidates: int = 3,
+                      budget_seconds: int = 7200,
                       prepare_only: bool = False,
                       offline: bool = False) -> Dict[str, Any]:
     """后台执行完整复现流水线（复现 -> 验证 -> 优化 -> 报告）。
@@ -310,6 +314,8 @@ def run_pipeline_core(progress_path: str,
             "use_llm_review": use_llm_review,
             "allow_result_summary_review": allow_result_summary_review,
             "enable_optimization": enable_optimization,
+            "prepare_environment": prepare_environment, "optimization_mode": optimization_mode,
+            "max_candidates": max_candidates, "budget_seconds": budget_seconds,
         }, on_event=_on_event)
         data = outcome["data"]
         error_msg = outcome.get("error")
@@ -398,6 +404,10 @@ def run_pipeline_background(progress_path: str, *,
                             use_llm_review: bool = False,
                             allow_result_summary_review: bool = False,
                             enable_optimization: bool = False,
+                            prepare_environment: bool = False,
+                            optimization_mode: str = "off",
+                            max_candidates: int = 3,
+                            budget_seconds: int = 7200,
                             prepare_only: bool = False,
                             offline: bool = False,
                             cleanup_pdf: bool = True,
@@ -418,7 +428,8 @@ def run_pipeline_background(progress_path: str, *,
                 workspace_dir=workspace_dir, experiment_profile=experiment_profile,
                 prepare_only=prepare_only, offline=offline, use_llm_review=use_llm_review,
                 allow_result_summary_review=allow_result_summary_review,
-                enable_optimization=enable_optimization)
+                enable_optimization=enable_optimization, prepare_environment=prepare_environment,
+                optimization_mode=optimization_mode, max_candidates=max_candidates, budget_seconds=budget_seconds)
             if on_done:
                 try:
                     on_done(result)

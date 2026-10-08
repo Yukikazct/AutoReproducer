@@ -24,7 +24,7 @@ from src.llm.llm_client import LLMClient
 from src.audit.audit_logger import AuditLogger
 from src.base_agent import BaseAgent
 from src.corpus import list_papers
-from src.repository_profiles import PROFILE_LABELS, PAPER_TITLE
+from src.repository_profiles import PROFILE_LABELS, PAPER_TITLE, get_profile
 from frontend.report_renderer import render_report, build_report_bundle
 from frontend.llm_config import (
     CONNECT_TEST_TIMEOUT,
@@ -193,9 +193,22 @@ def render_paper_input():
     else:
         st.selectbox("真实论文实验", list(PROFILE_LABELS),
                      format_func=lambda key: PROFILE_LABELS[key], key="experiment_profile")
-        st.caption(PAPER_TITLE)
-        st.markdown("[论文](https://arxiv.org/abs/2205.13504) · "
-                    "[作者代码](https://github.com/cure-lab/LTSF-Linear)")
+        selected = get_profile(st.session_state.experiment_profile)
+        st.caption(selected["paper"]["title"])
+        st.markdown(f"[论文]({selected['paper']['url']}) · [作者代码]({selected['repository']['url']})")
+        if selected.get("adapter_id") in {"siren", "neural_ode"}:
+            st.selectbox("实验操作", ["运行实验", "准备实验环境", "仅准备源码和命令"], key="method_action")
+            st.selectbox("智能优化", ["off", "suggest", "validate"], index=1,
+                         format_func=lambda value: {"off": "关闭", "suggest": "真实基线 + 智能建议", "validate": "真实训练验证建议（长任务）"}[value],
+                         key="method_optimization")
+            st.checkbox("运行前进行在线论文与代码分析（完整模式）", value=False, key="method_llm_review")
+            if st.session_state.method_optimization == "validate":
+                st.number_input("最多候选数", min_value=1, max_value=3, value=3, key="method_max_candidates")
+                st.number_input("本篇训练预算（分钟）", min_value=1, max_value=120, value=120, key="method_budget_minutes")
+            st.caption("先选择“准备实验环境”并运行一次；准备完成后再运行实验。"
+                       "快速档目标为五分钟，建议尚未实测有效；验证建议使用独立长任务预算。"
+                       "智能建议会把指标与训练摘要交给已配置的 API。")
+            return
         st.checkbox("仅准备代码、数据和命令（不训练）", key="repository_prepare_only")
         st.checkbox("使用真实多 Agent 分析论文、仓库和环境", value=True, key="repository_llm_review")
         st.checkbox("允许 API 分析本次指标、轮数和核验状态摘要", key="repository_result_review")
@@ -287,9 +300,13 @@ with st.sidebar:
                      if input_mode == "上传PDF" else None)
     experiment_profile = (st.session_state.get("experiment_profile")
                           if input_mode == "官方仓库预设" else None)
+    method_selected = bool(experiment_profile and get_profile(experiment_profile).get("adapter_id") in {"siren", "neural_ode"})
     requires_api = not experiment_profile or (
         bool(st.session_state.get("repository_llm_review"))
         and not bool(st.session_state.get("repository_prepare_only")))
+    if method_selected:
+        requires_api = st.session_state.get("method_action") == "运行实验" and (
+            st.session_state.get("method_optimization", "off") != "off" or st.session_state.get("method_llm_review", False))
 
     # 语料对照层（可选）：选择真实论文作为轻量锚点
     st.markdown('<div class="sidebar-section-label"><span>02</span> 语料对照 <em>可选</em></div>',
@@ -945,10 +962,14 @@ if start_btn:
             paper_title=pt, pdf_path=tmp_pdf,
             corpus_paper=corpus_paper,
             experiment_profile=experiment_profile,
-            prepare_only=(bool(st.session_state.get("repository_prepare_only"))
-                          if experiment_profile else False),
-            use_llm_review=(bool(st.session_state.get("repository_llm_review"))
-                            if experiment_profile else False),
+            prepare_only=(st.session_state.get("method_action") == "仅准备源码和命令" if method_selected else
+                          bool(st.session_state.get("repository_prepare_only")) if experiment_profile else False),
+            prepare_environment=method_selected and st.session_state.get("method_action") == "准备实验环境",
+            optimization_mode=st.session_state.get("method_optimization", "off") if method_selected else "off",
+            max_candidates=int(st.session_state.get("method_max_candidates", 3)),
+            budget_seconds=int(st.session_state.get("method_budget_minutes", 120)) * 60,
+            use_llm_review=(bool(st.session_state.get("method_llm_review")) if method_selected else
+                            bool(st.session_state.get("repository_llm_review")) if experiment_profile else False),
             allow_result_summary_review=(bool(st.session_state.get("repository_result_review"))
                                          if experiment_profile else False),
             model_name=model_name, base_url=base_url,

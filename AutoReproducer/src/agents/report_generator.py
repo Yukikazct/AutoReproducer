@@ -678,11 +678,40 @@ class ReportGeneratorAgent(BaseAgent):
             for limitation in api_analysis.get("limitations", []):
                 lines.append(f"- {_txt(limitation)}")
         lines += _result_analysis_lines(data)
+        if spec.get("adapter_id") in {"siren", "neural_ode"}:
+            lines += ["", "### 方法实验范围与耗时",
+                      f"- **实验状态**: {validation.get('status', '尚未执行')}",
+                      "- **结论范围**: 官方方法实验；没有对应论文表格数值验收，不宣称整篇论文数值复现。",
+                      f"- **基线耗时**: {_fmt(data.get('baseline_elapsed_s'), '.2f')} 秒",
+                      f"- **本次累计耗时**: {_fmt(data.get('run_elapsed_s'), '.2f')} 秒（首次环境准备另计）",
+                      f"- **协议/独立复算**: {validation.get('protocol_pass', False)} / {validation.get('independent_metrics_pass', False)}"]
         lines.append("")
 
         # 6. 智能优化
         lines += ["## 6. 智能优化"]
-        if not optimization.get("optimized"):
+        if optimization.get("mode") in {"suggest", "validate"}:
+            lines += [f"- **状态**: {_markdown_text(_txt(optimization.get('status')))}",
+                      f"- **说明**: {_markdown_text(_txt(optimization.get('reason')))}",
+                      f"- **已验证提升**: {'是' if optimization.get('optimized') else '否'}"]
+            for index, suggestion in enumerate(optimization.get("suggestions", []), 1):
+                lines += ["", f"### 建议 {index}（尚未验证）",
+                          f"- **参数**: {suggestion['parameter']}：{suggestion['baseline_value']} → {suggestion['value']}"]
+                for key, label in (("hypothesis", "假设"), ("expected_effect", "预期效果"),
+                                   ("cost", "成本"), ("validation_plan", "验证方法")):
+                    lines.append(f"- **{label}**: {_markdown_text(suggestion[key])}")
+                for evidence in suggestion.get("evidence", []):
+                    lines += [f"- **依据**: [{evidence['source_id']}]({evidence['url']}) · {evidence['locator']}",
+                              "", "> " + _markdown_text(evidence["quote"]).replace("\n", "\n> ")]
+            if optimization.get("trials"):
+                lines += ["", "### 真实候选记录", "", "| 候选 | 状态 | 验证指标 | 耗时（秒） |",
+                          "|---|---|---|---|"]
+                for trial in optimization["trials"]:
+                    lines.append("| " + " | ".join(_markdown_text(_txt(trial.get(k))) for k in
+                                 ("candidate", "status", "metrics", "elapsed_s")) + " |")
+            if optimization.get("confirmation"):
+                lines += ["", "### 两种子留出确认", "", "```json",
+                          json.dumps(optimization["confirmation"], ensure_ascii=False, indent=2), "```"]
+        elif not optimization.get("optimized"):
             lines.append(f"- **优化状态**: 未触发("
                          f"{optimization.get('reason', '复现未成功或未运行优化')})")
         else:
