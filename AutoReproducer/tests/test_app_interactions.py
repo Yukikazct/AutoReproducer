@@ -143,3 +143,56 @@ def test_numerical_mismatch_is_not_presented_as_reproduction_success(app, tmp_pa
     assert not app.exception
     assert any("论文数值验收未通过" in notice.value for notice in app.warning)
     assert not any("复现流程成功完成" in notice.value for notice in app.success)
+
+
+def test_running_task_rejects_reset_even_for_a_stale_button_event(app, tmp_path, monkeypatch):
+    start = Mock()
+    monkeypatch.setattr(pipeline, "run_pipeline_background", start)
+    progress = tmp_path / "active.jsonl"
+    pipeline.ProgressStore(str(progress)).emit({
+        "type": "state", "state": "EXECUTE_CODE", "agent": "CodeExecutor", "status": "running"})
+    app.session_state["progress_file"] = str(progress)
+    app.run()
+    assert app.session_state["running"] is True
+    assert next(b for b in app.sidebar.button if "开始复现" in b.label).disabled
+    reset = next(b for b in app.sidebar.button if "重置" in b.label)
+    assert reset.disabled
+    assert any("任务结束后可重置" in caption.value for caption in app.sidebar.caption)
+    # Inject an already-delivered event; recent AppTest versions block disabled clicks.
+    import streamlit as st
+    original_button = st.button
+
+    def stale_button(label, *args, **kwargs):
+        clicked = original_button(label, *args, **kwargs)
+        return True if "重置" in label else clicked
+
+    monkeypatch.setattr(st, "button", stale_button)
+    app.run()
+    assert not app.exception
+    assert app.session_state["running"] is True
+    assert app.session_state["progress_file"] == str(progress)
+    assert app.session_state["current_state"] == "EXECUTE_CODE"
+    start.assert_not_called()
+
+
+@pytest.mark.parametrize("terminal", ["COMPLETED", "ERROR"])
+def test_terminal_task_can_reset_and_start_again(app, tmp_path, monkeypatch, terminal):
+    start = Mock()
+    monkeypatch.setattr(pipeline, "run_pipeline_background", start)
+    progress = tmp_path / "finished.jsonl"
+    pipeline.ProgressStore(str(progress)).emit({
+        "type": "done", "result": {"state": terminal, "data": {}}})
+    app.session_state["progress_file"] = str(progress)
+    app.session_state["running"] = True
+    app.run()
+    reset = next(b for b in app.sidebar.button if "重置" in b.label)
+    assert not reset.disabled
+    reset.click().run()
+    assert app.session_state["progress_file"] is None
+    assert app.session_state["result"] is None
+    assert app.session_state["current_state"] == "INIT"
+    app.sidebar.toggle[0].set_value(True).run()
+    app.sidebar.text_input(key="paper_title_input").set_value("Restart test").run()
+    next(b for b in app.sidebar.button if "开始复现" in b.label).click().run()
+    assert not app.exception
+    start.assert_called_once()

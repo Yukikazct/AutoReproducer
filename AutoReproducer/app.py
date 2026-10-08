@@ -310,7 +310,10 @@ with st.sidebar:
                               use_container_width=True,
                               disabled=st.session_state.running)
     with col2:
-        reset_btn = st.button("🔄 重置", use_container_width=True)
+        reset_btn = st.button("🔄 重置", use_container_width=True,
+                              disabled=st.session_state.running)
+        if st.session_state.running:
+            st.caption("任务结束后可重置")
 
     # 系统状态
     st.markdown("---")
@@ -955,7 +958,7 @@ if start_btn:
         st.rerun()
 
 # 重置按钮处理
-if reset_btn:
+if reset_btn and not st.session_state.running:
     st.session_state.orchestrator = None
     st.session_state.result = None
     st.session_state.running = False
