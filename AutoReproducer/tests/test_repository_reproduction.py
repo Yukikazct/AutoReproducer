@@ -471,16 +471,23 @@ def test_offline_repository_rejects_mismatched_source_or_commit(tmp_path, monkey
     assert all(call[0][0] != "archive" for call in calls)
 
 
-@pytest.mark.parametrize("unsafe_name", ["../outside.py", "/absolute.py", ".git/config"])
+@pytest.mark.parametrize("unsafe_name", [
+    "../outside.py", "/absolute.py", r"\absolute.py", "C:relative.py",
+    r"C:\absolute.py", r"\\server\share\file.py", r"nested\..\outside.py",
+    ".git/config", ".GIT/config", "nested/file:stream",
+])
 def test_archive_paths_cannot_escape_or_copy_git_metadata(tmp_path, monkeypatch, unsafe_name):
     profile = get_profile("dlinear_etth1_smoke")
     root = tmp_path / "data"
     source = legacy_repository(root)
-    files = {unsafe_name: b"forbidden"}
-    files.update(required_source_files(profile))
+    files = {**required_source_files(profile), unsafe_name: b"forbidden"}
     fake_git(monkeypatch, source, profile, tar_bytes(files))
+    write = Mock(side_effect=AssertionError("Invalid archive must not write any file"))
+    monkeypatch.setattr(Path, "write_bytes", write)
     with pytest.raises(ValueError, match="越界"):
         reproduction.export_repository(root, profile, tmp_path / "repo", offline=True)
+    write.assert_not_called()
+    assert not (tmp_path / "repo").exists()
     assert not (tmp_path / "outside.py").exists()
     assert not (tmp_path / "repo" / ".git").exists()
 

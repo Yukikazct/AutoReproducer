@@ -92,13 +92,32 @@ def test_nested_entry_point_can_import_repository_root_packages(runner, tmp_path
     assert result["final"]["stdout"] == "123\n"
 
 
-@pytest.mark.parametrize("cwd", ["..", "../outside", "/tmp"])
+@pytest.mark.parametrize("cwd", [
+    "..", "../outside", "/tmp", r"\tmp", "C:relative", r"C:\tmp",
+    r"\\server\share", r"nested\..\outside",
+])
 def test_cwd_escape_is_rejected_before_any_command(runner, tmp_path, cwd):
     result = runner.run(tmp_path, [step("escape", "-c", "print('BAD')", cwd=cwd)], {})
     assert result["success"] is False
     assert result["executed"] is False
     assert result["attempts"] == []
     assert "relative path" in result["reason"]
+
+
+@pytest.mark.parametrize("entry", [
+    "/absolute.py", r"\absolute.py", "C:relative.py", r"C:\absolute.py",
+    r"\\server\share\script.py", r"nested\..\outside.py",
+])
+@pytest.mark.parametrize("python_script", [True, False])
+def test_entry_path_rejected_before_preparation_or_process(runner, tmp_path, monkeypatch, entry, python_script):
+    launch = Mock(side_effect=AssertionError("Unsafe entry must not launch a process"))
+    monkeypatch.setattr(runner_module.subprocess, "Popen", launch)
+    plan = {"id": "unsafe", "argv": ["python", entry] if python_script else [entry]}
+    result = runner.run(tmp_path, [plan], {})
+    assert result["executed"] is False
+    assert "relative path" in result["reason"]
+    runner.executor._ensure_local_deps.assert_not_called()
+    launch.assert_not_called()
 
 
 def test_script_escape_and_external_symlink_are_rejected(runner, tmp_path):

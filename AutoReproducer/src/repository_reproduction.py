@@ -20,6 +20,7 @@ import uuid
 from pathlib import Path
 
 from src.repository_profiles import get_profile
+from src.safety.paths import workspace_path
 
 
 def write_json(path, value):
@@ -97,14 +98,21 @@ def export_repository(data_root, profile, destination, *, offline=False):
             except OSError:
                 pass  # Another request may have populated the same immutable key.
     archive = _git(source, "archive", "--format=tar", revision, binary=True)
-    dest.mkdir(parents=True, exist_ok=False)
     files = {}
     with tarfile.open(fileobj=io.BytesIO(archive), mode="r:") as tar:
-        for member in tar.getmembers():
-            rel = Path(member.name)
-            target = dest / rel
-            if rel.is_absolute() or ".." in rel.parts or ".git" in rel.parts:
-                raise ValueError("仓库归档包含越界路径")
+        members = tar.getmembers()
+        # Validate the entire archive before creating any extracted files.
+        for member in members:
+            try:
+                workspace_path(dest, member.name, "archive", forbid_git=True)
+            except ValueError as exc:
+                raise ValueError("仓库归档包含越界路径") from exc
+            if not (member.isdir() or member.isfile()):
+                raise ValueError(f"首版仓库执行不支持symlink/submodule: {member.name}")
+        dest.mkdir(parents=True, exist_ok=False)
+        for member in members:
+            # Recheck immediately before writing; earlier entries may exist now.
+            target = workspace_path(dest, member.name, "archive", forbid_git=True)
             if member.isdir():
                 target.mkdir(parents=True, exist_ok=True)
             elif member.isfile():
@@ -112,8 +120,6 @@ def export_repository(data_root, profile, destination, *, offline=False):
                 payload = tar.extractfile(member).read()
                 target.write_bytes(payload)
                 files[member.name] = hashlib.sha256(payload).hexdigest()
-            else:
-                raise ValueError(f"首版仓库执行不支持symlink/submodule: {member.name}")
     for path in ["run_longExp.py", *profile["repository_map"].values()]:
         if not (dest / path).is_file():
             raise RuntimeError(f"固定仓库缺少必需入口: {path}")

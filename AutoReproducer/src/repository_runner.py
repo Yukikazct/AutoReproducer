@@ -18,6 +18,7 @@ from pathlib import Path
 
 from src.agents.code_executor import CodeExecutorAgent, DEPS_CACHE_ROOT, reqs_digest
 from src.execution_artifacts import collect_images
+from src.safety.paths import is_link, relative_path, workspace_path
 
 
 class RepositoryRunner:
@@ -28,26 +29,14 @@ class RepositoryRunner:
 
     @staticmethod
     def _contained(root, relative, kind):
-        path = Path(relative)
-        if path.is_absolute() or ".." in path.parts:
-            raise ValueError(f"{kind} must be a relative path inside the workspace")
-        candidate = root / path
-        for part in (candidate, *candidate.parents):
-            if part == root.parent:
-                break
-            if part.is_symlink():
-                raise ValueError(f"{kind} contains a symlink: {relative}")
-        resolved = candidate.resolve(strict=True)
-        if not resolved.is_relative_to(root):
-            raise ValueError(f"{kind} escapes the workspace: {relative}")
-        return resolved
+        return workspace_path(root, relative, kind, must_exist=True)
 
     @staticmethod
     def _check_tree(root):
         for directory, dirs, files in os.walk(root, followlinks=False):
             for name in dirs + files:
                 path = Path(directory) / name
-                if path.is_symlink():
+                if is_link(path):
                     raise ValueError(f"repository symlinks are unsupported: {path.relative_to(root)}")
 
     def _plan(self, root, steps):
@@ -81,12 +70,14 @@ class RepositoryRunner:
                     if arg in {"-c", "-m"}:
                         break
                     if not arg.startswith("-"):
-                        script = self._contained(root, cwd.relative_to(root) / arg, "script")
+                        script = self._contained(root, cwd.relative_to(root) / relative_path(arg, "script"), "script")
                         if not script.is_file():
                             raise ValueError(f"script is not a file: {arg}")
                         break
-            elif "/" in argv[0] or "\\" in argv[0]:
-                self._contained(root, cwd.relative_to(root) / argv[0], "executable")
+            else:
+                executable = relative_path(argv[0], "executable")
+                if "/" in argv[0] or "\\" in argv[0]:
+                    self._contained(root, cwd.relative_to(root) / executable, "executable")
             timeout = step.get("timeout_s", 600)
             if (isinstance(timeout, bool) or not isinstance(timeout, (int, float))
                     or not math.isfinite(timeout) or timeout <= 0):
