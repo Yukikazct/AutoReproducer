@@ -33,6 +33,7 @@ import tempfile
 import time
 import hashlib
 import json
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -46,6 +47,7 @@ from src.agents.dependency_resolver import (
 from src.resource_events import ResourceEventLogger
 from src.execution_artifacts import prepare_plot_runtime, collect_images, FONT_PATH
 from src.storage_usage import directory_usage, docker_image_usage, disk_usage_snapshot, unmeasured_disk_usage
+from src.dependency_cache import cache_guard, DependencyCacheBusy
 
 LOCAL_TIMEOUT_SMOKE = 10
 LOCAL_TIMEOUT_FULL = 60
@@ -201,7 +203,8 @@ def _deps_meta_path(deps_dir: Path) -> Path:
 def read_deps_meta(deps_dir: Path) -> Dict:
     """读隔离目录元数据；缺失/损坏时返回 {}（调用方回退到目录 mtime）。"""
     try:
-        return json.loads(_deps_meta_path(deps_dir).read_text(encoding="utf-8"))
+        value = json.loads(_deps_meta_path(deps_dir).read_text(encoding="utf-8"))
+        return value if isinstance(value, dict) else {}
     except (OSError, ValueError):
         return {}
 
@@ -409,6 +412,24 @@ class CodeExecutorAgent(BaseAgent):
         # 全部注入 PYTHONPATH，与依赖清单目录不互相污染。
         self._heal_dirs: set = set()
         self.resource_events = ResourceEventLogger()
+
+    def _dependency_lock_root(self):
+        return Path(getattr(self, "deps_lock_root",
+                            getattr(self, "deps_cache_root", DEPS_CACHE_ROOT)))
+
+    @contextmanager
+    def dependency_scope(self):
+        """Keep installed packages alive throughout preparation and execution."""
+        with cache_guard(self._dependency_lock_root()):
+            try:
+                yield
+            finally:
+                paths = set(self._heal_dirs)
+                if self._deps_dir:
+                    paths.add(self._deps_dir)
+                for path in paths:
+                    if (Path(path) / _DEPS_READY_MARK).is_file():
+                        touch_deps_meta(Path(path))
 
     @staticmethod
     def _diagnose_execution_error(result: Dict) -> Dict:
@@ -1268,6 +1289,16 @@ class CodeExecutorAgent(BaseAgent):
 
     def _execute_code_local(self, code: str, stage: str,
                             workdir: Optional[str] = None) -> Dict:
+        try:
+            with self.dependency_scope():
+                return self._execute_code_local_locked(code, stage, workdir)
+        except DependencyCacheBusy as exc:
+            return {"success": False, "executed": False, "stdout": "",
+                    "stderr": str(exc), "exit_code": -4, "deps_prepared": False,
+                    "disk_usage": unmeasured_disk_usage()}
+
+    def _execute_code_local_locked(self, code: str, stage: str,
+                                   workdir: Optional[str] = None) -> Dict:
         """在本地执行代码：临时目录（不指定 workdir）或目标目录执行。
 
         执行前按 env_config 依赖清单自动安装依赖（_ensure_local_deps），
@@ -1440,6 +1471,13 @@ class CodeExecutorAgent(BaseAgent):
         return env
 
     def _heal_install_local(self, module: str) -> Optional[str]:
+        try:
+            with self.dependency_scope():
+                return self._heal_install_local_locked(module)
+        except DependencyCacheBusy as exc:
+            return str(exc)
+
+    def _heal_install_local_locked(self, module: str) -> Optional[str]:
         """把缺失模块对应 PyPI 包隔离安装到 data/deps/heal-<module>/。
 
         None 表示成功（含 mock 模式短路与磁盘 ready 复用）；
@@ -1451,7 +1489,7 @@ class CodeExecutorAgent(BaseAgent):
             # mock 演示：不触网、不装大包，视为就绪
             self._deps_dir == self._deps_dir  # noqa: B015 保持无副作用
             return None
-        heal_dir = DEPS_CACHE_ROOT / f"heal-{module}"
+        heal_dir = self._dependency_lock_root() / f"heal-{module}"
         ready_mark = heal_dir / _DEPS_READY_MARK
         if ready_mark.is_file():
             self._heal_dirs.add(str(heal_dir))
@@ -1488,6 +1526,13 @@ class CodeExecutorAgent(BaseAgent):
             return f"自愈安装异常: {e}"
 
     def _ensure_local_deps(self, workdir: str) -> Optional[str]:
+        try:
+            with self.dependency_scope():
+                return self._ensure_local_deps_locked(workdir)
+        except DependencyCacheBusy as exc:
+            return str(exc)
+
+    def _ensure_local_deps_locked(self, workdir: str) -> Optional[str]:
         """确保本地执行环境已安装论文依赖；None 表示就绪，否则返回诊断文本。
 
         依赖来源与 Docker 路径一致：优先 env_config.requirements_txt，

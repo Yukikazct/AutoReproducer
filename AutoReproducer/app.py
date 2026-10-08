@@ -698,9 +698,11 @@ with tab5:
                          use_container_width=True,
                          help="依赖缓存每次命中都会刷新「最后使用」时间；"
                               "无元数据的旧目录按目录修改时间判断"):
-                n, freed = cleanup_deps_cache(keep_days=deps_keep)
+                skipped = []
+                n, freed = cleanup_deps_cache(keep_days=deps_keep, on_skip=skipped.append)
                 st.session_state["_hist_flash"] = (
-                    f"已清理 {n} 个冷依赖目录，释放 {format_size(freed)}")
+                    f"已清理 {n} 个冷依赖目录，释放 {format_size(freed)}"
+                    + ("；" + "；".join(skipped) if skipped else ""))
                 st.rerun()
 
             picked_deps = st.multiselect(
@@ -714,10 +716,12 @@ with tab5:
                          type="secondary",
                          disabled=not picked_deps or not confirm_deps):
                 with st.spinner("正在删除..."):
-                    n, freed = delete_deps_cache(picked_deps)
+                    skipped = []
+                    n, freed = delete_deps_cache(picked_deps, on_skip=skipped.append)
                 st.session_state["_reset_confirm_keys"] = ["confirm_deps_del"]
                 st.session_state["_hist_flash"] = (
-                    f"已删除 {n} 个依赖目录，释放 {format_size(freed)}")
+                    f"已删除 {n} 个依赖目录，释放 {format_size(freed)}"
+                    + ("；" + "；".join(skipped) if skipped else ""))
                 st.rerun()
         else:
             st.caption("暂无依赖缓存。")

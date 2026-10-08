@@ -5,6 +5,7 @@
 """
 import functools
 import json
+import logging
 import os
 import re
 import shutil
@@ -12,6 +13,9 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+from src.dependency_cache import cache_guard, DependencyCacheBusy
+from src.safety.paths import is_link, workspace_path
 
 
 def get_project_data_dir() -> Path:
@@ -413,6 +417,22 @@ def _dir_size(path: Path) -> Tuple[int, int]:
     return files, total
 
 
+def _dependency_directories(root):
+    """Only environment leaves are selectable; namespace directories never are."""
+    for path in sorted(root.iterdir()):
+        if not path.is_dir() or is_link(path) or path.name.startswith("."):
+            continue
+        if path.name != "repository":
+            yield path
+            continue
+        for runtime in sorted(path.iterdir()):
+            if not runtime.is_dir() or is_link(runtime) or runtime.name.startswith("."):
+                continue
+            for environment in sorted(runtime.iterdir()):
+                if environment.is_dir() and not is_link(environment) and not environment.name.startswith("."):
+                    yield environment
+
+
 def list_deps_cache() -> List[Dict[str, Any]]:
     """列出依赖缓存里每个隔离安装目录。
 
@@ -421,7 +441,7 @@ def list_deps_cache() -> List[Dict[str, Any]]:
     但会随论文数量无限增长，所以需要一个看得见、删得掉的入口。
 
     每个条目：
-      name        目录名（哈希 / heal-<模块>）
+      name        相对缓存根的环境路径（哈希 / heal-<模块> / repository/<runtime>/<哈希>）
       bytes/files 占用
       kind        reqs | heal | legacy（无 meta.json 的旧目录）
       packages    装了哪些包（取 *.dist-info 名字）
@@ -432,19 +452,26 @@ def list_deps_cache() -> List[Dict[str, Any]]:
     items: List[Dict[str, Any]] = []
     if not root.is_dir():
         return items
-    for p in sorted(root.iterdir()):
-        if not p.is_dir():
+    for p in _dependency_directories(root):
+        try:
+            name = p.relative_to(root).as_posix()
+            p = workspace_path(root, name, "dependency cache", must_exist=True)
+        except (OSError, ValueError):
             continue
         meta = {}
         try:
             meta = json.loads((p / _DEPS_META_NAME).read_text(encoding="utf-8"))
+            if not isinstance(meta, dict):
+                meta = {}
         except (OSError, ValueError):
             pass
-        files, size = _dir_size(p)
-        mtime = datetime.fromtimestamp(p.stat().st_mtime).isoformat(
-            timespec="seconds")
+        try:
+            files, size = _dir_size(p)
+            mtime = datetime.fromtimestamp(p.stat().st_mtime).isoformat(timespec="seconds")
+        except OSError:
+            continue  # A concurrent cleanup may have removed the displayed item.
         items.append({
-            "name": p.name,
+            "name": name,
             "path": str(p),
             "bytes": size,
             "files": files,
@@ -461,47 +488,63 @@ def list_deps_cache() -> List[Dict[str, Any]]:
     return sorted(items, key=lambda i: i["last_used"], reverse=True)
 
 
-def delete_deps_cache(names: List[str]) -> Tuple[int, int]:
-    """按目录名删除依赖缓存目录，返回 (删除目录数, 释放字节数)。
-
-    只接受 data/deps 下的**直接子目录名**（拒绝含路径分隔符的输入，
-    避免越界删除）；目录不存在则跳过。删掉后该依赖下次执行会重新安装。
-    """
+def _delete_deps_cache(names=None, *, keep_days=None, on_skip=None):
     root = _deps_root()
-    removed = 0
-    freed = 0
-    for name in dict.fromkeys(names or []):
-        if not name or Path(name).name != name:
-            continue
-        target = root / name
-        if not target.is_dir():
-            continue
-        _, size = _dir_size(target)
-        try:
-            shutil.rmtree(target)
-            removed += 1
-            freed += size
-        except OSError:
-            pass
+    if not root.is_dir():
+        return 0, 0
+    removed, freed = 0, 0
+
+    def skipped(message):
+        logging.getLogger(__name__).info(message)
+        if on_skip is not None:
+            on_skip(message)
+
+    selected = set(names or [])
+    cutoff = datetime.now().astimezone() - timedelta(days=keep_days) if keep_days is not None else None
+    try:
+        with cache_guard(root, cleanup=True):
+            # Discover again under the same lock used by installers and runners.
+            for item in list_deps_cache():
+                if cutoff is None and item["name"] not in selected:
+                    continue
+                if cutoff is not None:
+                    try:
+                        used = datetime.fromisoformat(item["last_used"]).astimezone()
+                    except (ValueError, TypeError):
+                        continue
+                    if used >= cutoff:
+                        continue
+                try:
+                    target = workspace_path(root, item["name"], "dependency cache", must_exist=True)
+                    _, size = _dir_size(target)
+                    # Do not trust an earlier UI inventory or a rewritten symlink.
+                    target = workspace_path(root, item["name"], "dependency cache", must_exist=True)
+                    shutil.rmtree(target)
+                    removed += 1
+                    freed += size
+                except (OSError, ValueError) as exc:
+                    skipped(f"依赖缓存 {item['name']} 未删除: {exc}")
+    except DependencyCacheBusy as exc:
+        skipped(str(exc))
     return removed, freed
 
 
-def cleanup_deps_cache(keep_days: int = 30) -> Tuple[int, int]:
+def delete_deps_cache(names: List[str], *, on_skip=None) -> Tuple[int, int]:
+    """Delete only discovered environment IDs; busy caches are left intact.
+
+    Existing direct-directory IDs remain valid. Nested IDs must exactly match
+    an environment returned by list_deps_cache(), never a namespace or root.
+    """
+    return _delete_deps_cache(names, on_skip=on_skip)
+
+
+def cleanup_deps_cache(keep_days: int = 30, *, on_skip=None) -> Tuple[int, int]:
     """清理超过 keep_days 天未使用过的依赖缓存目录。
 
     冷热以 meta.json 的 last_used 为准（每次命中缓存都会刷新），
     没有 meta.json 的旧目录回退到目录 mtime。返回 (删除目录数, 释放字节数)。
     """
-    cutoff = datetime.now() - timedelta(days=keep_days)
-    stale: List[str] = []
-    for item in list_deps_cache():
-        try:
-            used = datetime.fromisoformat(item["last_used"])
-        except ValueError:
-            continue
-        if used < cutoff:
-            stale.append(item["name"])
-    return delete_deps_cache(stale)
+    return _delete_deps_cache(keep_days=keep_days, on_skip=on_skip)
 
 
 def list_resource_events(limit: int = 500) -> List[Dict[str, Any]]:

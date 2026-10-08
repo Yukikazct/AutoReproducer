@@ -19,6 +19,7 @@ from pathlib import Path
 from src.agents.code_executor import CodeExecutorAgent, DEPS_CACHE_ROOT, reqs_digest
 from src.execution_artifacts import collect_images
 from src.safety.paths import is_link, relative_path, workspace_path
+from src.dependency_cache import DependencyCacheBusy
 
 
 class RepositoryRunner:
@@ -271,45 +272,49 @@ class RepositoryRunner:
             runtime = f"{sys.implementation.cache_tag}-{sys.platform}-{platform.machine()}"
             deps_root = DEPS_CACHE_ROOT / "repository" / runtime
             self.executor.deps_cache_root = deps_root
+            self.executor.deps_lock_root = DEPS_CACHE_ROOT
             self.executor._deps_dir = None
             self.executor._heal_dirs.clear()
             prepare_dir = run_dir / "environment_prepare"
             prepare_dir.mkdir()
-            deps_error = self.executor._ensure_local_deps(str(prepare_dir))
-            # The legacy helper's process-cache fast path does not set the
-            # dependency directory on a newly constructed executor.
-            requirements = self.executor.env_config.get("requirements_txt", "")
-            if not requirements:
-                requirements = "\n".join(self.executor.env_config.get("required_packages", []) or [])
-            if not deps_error and requirements and not self.executor._deps_dir:
-                cached_deps = deps_root / reqs_digest(requirements)
-                if (cached_deps / ".ready").is_file():
-                    self.executor._deps_dir = str(cached_deps)
-            result["environment"] = {"python": sys.version, "executable": sys.executable,
-                                     "platform": sys.platform,
-                                     "dependencies_path": self.executor._deps_dir,
-                                     "requirements_txt": self.executor.env_config.get("requirements_txt", ""),
-                                     "preparation_path": str(prepare_dir)}
-            (run_dir / "environment.json").write_text(
-                json.dumps(result["environment"], ensure_ascii=False, indent=2), encoding="utf-8")
-            if deps_error:
-                return reject(deps_error, -4)
-            for step in planned:
-                record = self._execute(root, step, run_dir, emit)
-                attempts.append(record)
-                result["executed"] = result["executed"] or record["executed"]
-                if not record["success"]:
-                    break
-            result["success"] = len(attempts) == len(planned) and all(s["success"] for s in attempts)
-            result["final"] = dict(attempts[-1])
-            result["effective_env_config"] = self.executor.env_config
-            try:
-                collected = collect_images(str(root), "full", getattr(self.logger, "session_id", ""))
-                result["artifacts"] = collected["artifacts"]
-                warnings.extend(collected.get("artifact_warnings", []))
-            except (ImportError, OSError, ValueError) as exc:
-                warnings.append(f"image collection failed: {exc}")
-            result["final"]["artifacts"] = result["artifacts"]
-            return result
+            with self.executor.dependency_scope():
+                deps_error = self.executor._ensure_local_deps(str(prepare_dir))
+                # The legacy helper's process-cache fast path does not set the
+                # dependency directory on a newly constructed executor.
+                requirements = self.executor.env_config.get("requirements_txt", "")
+                if not requirements:
+                    requirements = "\n".join(self.executor.env_config.get("required_packages", []) or [])
+                if not deps_error and requirements and not self.executor._deps_dir:
+                    cached_deps = deps_root / reqs_digest(requirements)
+                    if (cached_deps / ".ready").is_file():
+                        self.executor._deps_dir = str(cached_deps)
+                result["environment"] = {"python": sys.version, "executable": sys.executable,
+                                         "platform": sys.platform,
+                                         "dependencies_path": self.executor._deps_dir,
+                                         "requirements_txt": self.executor.env_config.get("requirements_txt", ""),
+                                         "preparation_path": str(prepare_dir)}
+                (run_dir / "environment.json").write_text(
+                    json.dumps(result["environment"], ensure_ascii=False, indent=2), encoding="utf-8")
+                if deps_error:
+                    return reject(deps_error, -4)
+                for step in planned:
+                    record = self._execute(root, step, run_dir, emit)
+                    attempts.append(record)
+                    result["executed"] = result["executed"] or record["executed"]
+                    if not record["success"]:
+                        break
+                result["success"] = len(attempts) == len(planned) and all(s["success"] for s in attempts)
+                result["final"] = dict(attempts[-1])
+                result["effective_env_config"] = self.executor.env_config
+                try:
+                    collected = collect_images(str(root), "full", getattr(self.logger, "session_id", ""))
+                    result["artifacts"] = collected["artifacts"]
+                    warnings.extend(collected.get("artifact_warnings", []))
+                except (ImportError, OSError, ValueError) as exc:
+                    warnings.append(f"image collection failed: {exc}")
+                result["final"]["artifacts"] = result["artifacts"]
+                return result
+        except DependencyCacheBusy as exc:
+            return reject(str(exc), -4)
         except (OSError, ValueError, TypeError) as exc:
             return reject(str(exc))

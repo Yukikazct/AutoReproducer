@@ -191,6 +191,20 @@ def test_deps_cache_panel_lists_entries(at_with_deps, tmp_path):
     assert "2 个目录" in _captions(at_with_deps)
 
 
+def test_busy_dependency_cleanup_explains_skip_and_preserves_selection(at_with_deps, tmp_path):
+    from src.dependency_cache import cache_guard
+
+    app = at_with_deps
+    app.multiselect(key="deps_del_pick").set_value([DEPS_COLD]).run()
+    app.checkbox(key="confirm_deps_del").set_value(True).run()
+    with cache_guard(tmp_path / "deps"):
+        app.button(key="deps_del_btn").click().run()
+    assert not app.exception
+    assert (tmp_path / "deps" / DEPS_COLD).is_dir()
+    assert any("缓存正在使用" in notice.value for notice in app.success)
+    assert app.checkbox(key="confirm_deps_del").value is False
+
+
 def test_deps_cache_delete_requires_pick_and_confirmation(at_with_deps, tmp_path):
     """未选目录/未勾确认时不可删；确认后才删得掉，且确认框自动复位。"""
     app = at_with_deps
