@@ -20,6 +20,7 @@ import uuid
 from pathlib import Path
 
 from src.repository_profiles import get_profile
+from src.repository_adapters import get_adapter
 from src.safety.paths import workspace_path
 
 
@@ -120,8 +121,8 @@ def export_repository(data_root, profile, destination, *, offline=False):
                 payload = tar.extractfile(member).read()
                 target.write_bytes(payload)
                 files[member.name] = hashlib.sha256(payload).hexdigest()
-    for path in ["run_longExp.py", *profile["repository_map"].values()]:
-        if not (dest / path).is_file():
+    for path in get_adapter(profile).required_files(profile):
+        if not workspace_path(dest, path, "required file", forbid_git=True).is_file():
             raise RuntimeError(f"固定仓库缺少必需入口: {path}")
     if (dest / ".gitmodules").exists():
         raise RuntimeError("首版尚不支持submodule仓库")
@@ -401,6 +402,7 @@ class RepositoryReproduction:
         try:
             profile = phase("READ_PAPER", "PaperReader", lambda: get_profile(input_data["experiment_profile"]),
                             "select_experiment")
+            adapter = get_adapter(profile)
             data.update(paper_title=profile["paper"]["title"], paper_info=profile["paper"],
                         experiment_spec=profile, spec_sha256=spec_digest(profile))
             prepare_only = bool(input_data.get("prepare_only"))
@@ -434,7 +436,7 @@ class RepositoryReproduction:
                 snapshot = export_repository(self.root, profile, run_dir / "repo", offline=offline)
                 data["repository"] = snapshot
                 write_json(run_dir / "repository.json", snapshot)
-                dataset = prepare_dataset(self.root, profile, run_dir / "repo", offline=offline)
+                dataset = adapter.prepare_dataset(self.root, profile, run_dir / "repo", offline=offline)
                 data["dataset_provenance"] = dataset
                 write_json(run_dir / "dataset.json", dataset)
                 data["resources"] = {"code_repo_url": snapshot["url"], "dataset_url": dataset["url"],
@@ -467,13 +469,13 @@ class RepositoryReproduction:
                     from src.repository_analysis import RepositoryAnalysis, RepositoryAnalysisError
                     from src.repository_public_sources import RepositoryPublicSources
                     require_real_llm()
-                    sources = RepositoryPublicSources(self.root / "public_source_cache" / "dlinear-2205.13504v3")
+                    sources = adapter.public_sources(self.root)
                     public_packet = phase("READ_PAPER", "SourceLoader", lambda: sources.build_packet(
                         snapshot["path"], snapshot, profile, offline=offline), "load_public_sources")
                     data["public_source_manifest"] = str(sources.manifest_path)
                     write_json(run_dir / "public_sources.json", public_packet)
                     try:
-                        data["repository_analysis"] = RepositoryAnalysis(self.llm, self.logger, max_repairs=1).run(
+                        data["repository_analysis"] = adapter.analysis(self.llm, self.logger, max_repairs=1).run(
                             public_packet, profile, on_stage=analysis_event)
                     except RepositoryAnalysisError as exc:
                         data["repository_analysis"] = exc.result
@@ -494,15 +496,15 @@ class RepositoryReproduction:
                 execution.setdefault("final", {})["artifacts"] = execution["artifacts"]
                 records, metric_error = [], ""
                 try:
-                    records = dlinear_metric_records(execution, data["spec_sha256"])
+                    records = adapter.metric_records(execution, data["spec_sha256"])
                 except ValueError as exc:
                     metric_error = str(exc)
                 if not metric_error and profile["validation"]["level"] == "reference":
                     from src.repository_validation import verify_dlinear_protocol
                     def verify_local_execution():
-                        execution["protocol_verification"] = verify_dlinear_protocol(
+                        execution["protocol_verification"] = adapter.verify_protocol(
                             profile, execution, snapshot["path"], snapshot, data["dataset_provenance"])
-                        execution["independent_metrics"] = recompute_dlinear_metrics(
+                        execution["independent_metrics"] = adapter.recompute_metrics(
                             execution, snapshot["path"], data["dataset_provenance"], records)
                         passed = (execution["protocol_verification"].get("pass") is True and
                                   execution["independent_metrics"].get("pass") is True)
@@ -525,7 +527,7 @@ class RepositoryReproduction:
                     emit({"type": "state", "state": "VALIDATE", "agent": "Verifier",
                           "phase_id": "verify_protocol", "status": "blocked",
                           "reason": "无法解析有效最终指标，本地核验未执行"})
-                data["validation"] = phase("VALIDATE", "ResultValidator", lambda: validate_repository(
+                data["validation"] = phase("VALIDATE", "ResultValidator", lambda: adapter.validate(
                     profile, execution, records, metric_error), "validate_metrics")
                 write_json(run_dir / "metrics.json", {"records": records, "error": metric_error,
                                                      "spec_sha256": data["spec_sha256"]})
@@ -539,7 +541,7 @@ class RepositoryReproduction:
                         from src.repository_analysis import RepositoryAnalysis, RepositoryAnalysisError
                         try:
                             data["result_analysis"] = phase("VALIDATE", "ResultValidator", lambda:
-                                RepositoryAnalysis(self.llm, self.logger).review_result_summary(
+                                adapter.analysis(self.llm, self.logger).review_result_summary(
                                     summary, public_packet, profile, on_stage=analysis_event), "review_result_summary")
                             data["analysis_status"] = "completed"
                         except RepositoryAnalysisError as exc:
