@@ -33,6 +33,8 @@ def main(argv=None):
         parser.error("--budget-seconds must be between 1 and 7200")
     if args.prepare_environment and args.profile.startswith("dlinear"):
         parser.error("--prepare-environment is available for method experiment profiles")
+    if args.optimization != "off" and args.profile.startswith("dlinear"):
+        parser.error("DLinear preserves the author protocol; parameter optimization is available for SIREN and Neural ODE")
     if args.result_review and not args.llm_review:
         parser.error("--result-review requires --llm-review")
 

@@ -318,6 +318,8 @@ class RepositoryReproduction:
             from src.method_reproduction import MethodReproduction
             return MethodReproduction(self.root, self.logger, self.runner, self.llm).run(
                 {**input_data, "use_docker": self.use_docker}, on_event)
+        if input_data.get("prepare_environment"):
+            raise ValueError("本预设不支持独立准备完整环境；请选择方法实验预设或仅准备源码")
         from src.agents.report_generator import ReportGeneratorAgent
         from src.repository_runner import RepositoryRunner
         data = {"verifications": [], "fix_records": [], "total_llm_calls": 0}

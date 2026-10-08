@@ -577,6 +577,12 @@ class ReportGeneratorAgent(BaseAgent):
             state_text = "⚠️ 仅冒烟通过（尚未完成论文数值核验）"
         elif validation.get("status") == "prepared":
             state_text = "⏳ 已准备（尚未执行训练）"
+        elif validation.get("status") == "environment_prepared":
+            state_text = "✅ 实验环境已准备（尚未训练）"
+        elif validation.get("status") == "method_experiment_completed":
+            state_text = "✅ 官方方法实验完成（不判定整篇论文数值复现）"
+        elif validation.get("status") == "quality_target_not_met":
+            state_text = "⚠️ 方法实验已运行，工程效果门槛未达到"
         elif validation.get("status") == "analysis_failed":
             state_text = "⏳ 未进入训练（公开协议分析未通过）"
         elif validation.get("status") == "inconclusive":
@@ -685,6 +691,10 @@ class ReportGeneratorAgent(BaseAgent):
                       f"- **基线耗时**: {_fmt(data.get('baseline_elapsed_s'), '.2f')} 秒",
                       f"- **本次累计耗时**: {_fmt(data.get('run_elapsed_s'), '.2f')} 秒（首次环境准备另计）",
                       f"- **协议/独立复算**: {validation.get('protocol_pass', False)} / {validation.get('independent_metrics_pass', False)}"]
+            for review in (data.get("method_analysis") or {}).get("reviews", []):
+                lines += ["", f"### 在线来源分析：{review['role']}", _markdown_text(review["summary"])]
+                for evidence in review["evidence"]:
+                    lines += ["", f"> {_markdown_text(evidence['source_id'])}: " + _markdown_text(evidence["quote"]).replace("\n", "\n> ")]
         lines.append("")
 
         # 6. 智能优化
@@ -694,7 +704,9 @@ class ReportGeneratorAgent(BaseAgent):
                       f"- **说明**: {_markdown_text(_txt(optimization.get('reason')))}",
                       f"- **已验证提升**: {'是' if optimization.get('optimized') else '否'}"]
             for index, suggestion in enumerate(optimization.get("suggestions", []), 1):
-                lines += ["", f"### 建议 {index}（尚未验证）",
+                suggestion_status = {"untested": "尚未验证", "tested": "已完成候选试验", "failed": "试验失败",
+                                     "validated_gain": "两种子留出确认通过"}.get(suggestion.get("status"), "尚未验证")
+                lines += ["", f"### 建议 {index}（{suggestion_status}）",
                           f"- **参数**: {suggestion['parameter']}：{suggestion['baseline_value']} → {suggestion['value']}"]
                 for key, label in (("hypothesis", "假设"), ("expected_effect", "预期效果"),
                                    ("cost", "成本"), ("validation_plan", "验证方法")):
@@ -711,6 +723,10 @@ class ReportGeneratorAgent(BaseAgent):
             if optimization.get("confirmation"):
                 lines += ["", "### 两种子留出确认", "", "```json",
                           json.dumps(optimization["confirmation"], ensure_ascii=False, indent=2), "```"]
+            if optimization.get("mode") == "validate":
+                lines += ["", "- **优化评估范围**: 固定验证集选优后，仅对选定候选做两个种子的留出确认；与官方全图/全轨迹拟合指标分别报告。",
+                          f"- **优化协议基线**: {optimization.get('baseline', {})}",
+                          f"- **已用预算**: {_fmt(optimization.get('budget_used_s'), '.2f')} / {optimization.get('budget_seconds', 7200)} 秒"]
         elif not optimization.get("optimized"):
             lines.append(f"- **优化状态**: 未触发("
                          f"{optimization.get('reason', '复现未成功或未运行优化')})")

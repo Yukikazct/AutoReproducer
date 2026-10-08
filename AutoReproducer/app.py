@@ -291,7 +291,7 @@ with st.sidebar:
     # 预留可选入口；当前版本不执行优化，也不消耗优化预算。
     st.session_state.enable_optimization = False
     st.checkbox("启用智能优化（预留）", key="enable_optimization", disabled=True)
-    st.caption("智能优化暂未开放，当前只执行复现、核验和报告生成。")
+    st.caption("通用流程暂不执行优化；SIREN 与 Neural ODE 预设提供真实建议和参数验证选项。")
 
     # 论文输入
     render_paper_input()
@@ -476,8 +476,22 @@ with tab1:
                 st.error("实验未通过：" + validation.get("reason", "查看报告和执行日志"))
             elif validation.get("status") == "not_reproduced":
                 st.warning("完整实验已运行，论文数值验收未通过：" + validation.get("reason", "查看指标差异"))
-            elif validation.get("status") in {"prepared", "inconclusive", "smoke_passed"}:
+            elif validation.get("status") in {"prepared", "environment_prepared", "inconclusive", "smoke_passed"}:
                 st.info(validation.get("reason", "流程已结束，请查看实验结论"))
+            elif validation.get("status") == "method_experiment_completed":
+                st.success("官方方法实验已完成，协议与独立指标核验通过。")
+                st.caption("本结论限于选定方法实验，不代表整篇论文数值复现。")
+                for metric in validation.get("metric_records", []):
+                    st.metric(f"{metric['name'].upper()} · {metric['split']}", f"{metric['value']:.6f} {metric.get('unit','')}")
+                optimization = data.get("optimization") or {}
+                if optimization.get("status") == "validated_gain" and optimization.get("optimized"):
+                    st.success("选定候选已通过两个随机种子的留出确认，详细数值见优化报告。")
+                elif optimization.get("status") == "suggested":
+                    st.info("智能建议已生成，尚未通过训练验证。")
+                elif optimization.get("mode") in {"suggest", "validate"}:
+                    st.info(optimization.get("reason", "请查看优化记录"))
+            elif validation.get("status") == "quality_target_not_met":
+                st.warning("方法实验已运行，但未达到预设工程效果门槛。")
             elif validation.get("is_reproduced") is True:
                 st.success("🎉 完整实验已完成，论文数值验收通过！")
             else:
@@ -574,7 +588,7 @@ stateDiagram-v2
         {"状态": "ERROR", "说明": "出错状态，可重试", "Agent": "—"},
     ]
     st.table(state_data)
-    st.caption("智能优化为预留可选接口，当前未启用；上图展示当前主流程。详细阶段以流水线状态为准。")
+    st.caption("上图展示通用主流程；方法预设可在核验后进入智能建议或参数验证阶段，详细阶段以实际流水线为准。")
 
 
 # ===== Tab 5: 历史记录 =====

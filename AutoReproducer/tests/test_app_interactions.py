@@ -98,6 +98,35 @@ def test_repository_preset_starts_without_llm_configuration(app, monkeypatch):
     assert not app.error
 
 
+def test_method_environment_preparation_does_not_require_api(app, monkeypatch):
+    start = Mock()
+    monkeypatch.setattr(pipeline, "run_pipeline_background", start)
+    app.sidebar.toggle[0].set_value(False).run()
+    app.sidebar.radio(key="input_mode").set_value("官方仓库预设").run()
+    app.sidebar.selectbox(key="experiment_profile").set_value("siren_camera_quick").run()
+    app.sidebar.selectbox(key="method_action").set_value("准备实验环境").run()
+    app.sidebar.text_input(key="llm_base_url").set_value("").run()
+    app.sidebar.text_input(key="llm_model").set_value("").run()
+    next(b for b in app.sidebar.button if "开始复现" in b.label).click().run()
+    assert not app.exception
+    start.assert_called_once()
+    kwargs = start.call_args.kwargs
+    assert kwargs["experiment_profile"] == "siren_camera_quick"
+    assert kwargs["prepare_environment"] is True
+    assert kwargs["prepare_only"] is False
+    assert kwargs["use_llm_review"] is False
+
+
+def test_method_success_is_not_paper_table_reproduction(app):
+    app.session_state["result"] = {"state": "COMPLETED", "data": {"validation": {
+        "status": "method_experiment_completed", "is_reproduced": None, "metric_records": [
+            {"name": "psnr", "value": 37.36, "unit": "dB", "split": "fit"}]}}}
+    app.run()
+    assert not app.exception
+    assert any("官方方法实验已完成" in item.value for item in app.success)
+    assert not any("论文数值验收通过" in item.value for item in app.success)
+
+
 def test_repository_preset_docker_is_explicitly_rejected(app, monkeypatch):
     start = Mock()
     monkeypatch.setattr(pipeline, "run_pipeline_background", start)
