@@ -21,11 +21,16 @@ from pathlib import Path
 
 from src.repository_profiles import get_profile
 from src.repository_adapters import get_adapter
+from src.execution_plan import build_plan, plan_step_ids
 from src.safety.paths import workspace_path
 
 
 def write_json(path, value):
     Path(path).write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def read_json(path):
+    return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
 def sha256_file(path):
@@ -195,7 +200,10 @@ def dlinear_metric_records(execution, spec_hash):
 def execution_succeeded(execution):
     final = execution.get("final") or {}
     steps = execution.get("steps") or execution.get("stages") or []
-    return bool(execution.get("success") and final.get("exit_code") == 0
+    # A blocked step is a failed verdict even if every attempt that ran succeeded;
+    # metrics from a partially executed plan must never reach the paper comparison.
+    return bool(execution.get("success") and not execution.get("skipped")
+                and final.get("exit_code") == 0
                 and all(step.get("success") is True and step.get("exit_code") == 0
                         and not step.get("timed_out") and not step.get("cancelled")
                         for step in steps if step.get("required") is not False))
@@ -454,10 +462,22 @@ class RepositoryReproduction:
             def plan_environment():
                 if sys.version_info[:2] not in {(3, 11), (3, 12)}:
                     raise RuntimeError("DLinear兼容预设目前支持Python 3.11/3.12，请切换解释器后重试")
-                plan = {"profile": profile["id"], "workspace": snapshot["path"],
-                        "spec_sha256": data["spec_sha256"], "steps": profile["steps"]}
+                plan = build_plan(mode="repository", profile=profile["id"],
+                                  spec_sha256=data["spec_sha256"], workspace=snapshot["path"],
+                                  repository={"url": snapshot.get("url", ""),
+                                              "revision": snapshot.get("resolved_sha")
+                                              or snapshot.get("revision", "")},
+                                  dataset={"name": profile["dataset"]["name"],
+                                           "sha256": profile["dataset"]["sha256"]},
+                                  steps=profile["steps"])
                 data["execution_plan"] = plan
                 write_json(run_dir / "execution_plan.json", plan)
+                # The plan on disk must describe exactly the steps that run; a write
+                # that failed or a rewritten file cannot silently change the verdict.
+                stored = read_json(run_dir / "execution_plan.json")
+                if plan_step_ids(stored.get("steps")) != plan_step_ids(plan["steps"]) or \
+                        stored.get("spec_sha256") != plan["spec_sha256"]:
+                    raise RuntimeError("落盘执行计划与本次执行步骤不一致")
                 environment = {**profile["environment"], "python_version": platform.python_version(),
                                "platform": platform.platform(), "interpreter": sys.executable}
                 data["env_config"] = environment

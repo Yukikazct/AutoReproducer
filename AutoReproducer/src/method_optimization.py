@@ -138,7 +138,7 @@ class Study:
         profile, workspace = record["profile"], Path(record["workspace"])
         env = {**profile["environment"], "require_prepared": True, "cache_lock_timeout_s": 0,
                "deadline_monotonic": min(self.deadline,time.monotonic()+120)}
-        holdout = {"label": label, "status": "running"}
+        holdout = {"label": label, "status": "running", "study_sha256": self.contract_hash}
         write_json(workspace.parent / "holdout.json", holdout)
         try:
             execution = self.service.runner.run(workspace,[self.adapter.evaluation_step(profile,"holdout")],env,on_event=self.emit)
@@ -179,6 +179,8 @@ def _validate_candidates(service, profile, data, request, started, emit):
               "status": "running", "trials": [], "suggestions": [], "confirmation": [], "confirmation_training": [],
               "study_sha256": study.contract_hash, "baseline_run_id": Path(data["run_dir"]).name,
               "budget_seconds": budget, "max_candidates": max_candidates, "reason": "优化实验进行中，尚未完成候选确认"}
+    # The caller retains the same object even when cancellation unwinds this stack.
+    data["optimization"] = result
     def checkpoint(phase=None, label=None):
         if phase is not None:
             result.update(active_phase=phase, active_trial=label)
@@ -214,6 +216,8 @@ def _validate_candidates(service, profile, data, request, started, emit):
                          baseline_provenance={"baseline_run_id": Path(data["run_dir"]).name,
                             "trial_label": baseline["label"], "spec_sha256": baseline.get("spec_sha256"),
                             "study_sha256": study.contract_hash})
+        write_json(Path(data["run_dir"]) / "advice.json", advice)
+        result["advice_path"] = "advice.json"
         result.update({key: advice[key] for key in ("suggestions","calls","model","usage","advice_context","advice_history") if key in advice})
         checkpoint()
         if advice["status"] != "suggested":

@@ -26,6 +26,8 @@ def study_harness(tmp_path,monkeypatch):
     state={"candidate_value":31.,"holdout_candidate":30.2,"remaining":7200}
     class FakeStudy:
         def __init__(self,*args):
+            self.profile=deepcopy(args[1]); self.profile["parameters"]["protocol"]="pixel_holdout"
+            self.contract={"pixel_split_seed":1729,"pixel_fractions":[.8,.1,.1]}
             self.metric="psnr"; self.direction=1; self.contract_hash="frozen";self.selection_closed=False
             self.profile=deepcopy(args[1]);self.contract={"base_profile":self.profile}
         def remaining(self): return state["remaining"]
@@ -107,7 +109,7 @@ def test_advice_consuming_candidate_budget_preserves_baseline_and_explains_stop(
 
 
 @pytest.mark.parametrize('label', ['baseline_2021','candidate_1_2021','baseline_2022','candidate_2022',
-                                  'holdout_candidate_1_2021','holdout_candidate_2022'])
+                                  'holdout_baseline_2022','holdout_candidate_1_2021','holdout_candidate_2022'])
 @pytest.mark.parametrize('exception', [KeyboardInterrupt, SystemExit])
 def test_cancellation_persists_running_phase_and_completed_evidence(study_harness,label,exception):
     run,state,events=study_harness
@@ -121,6 +123,11 @@ def test_cancellation_persists_running_phase_and_completed_evidence(study_harnes
     if label=='candidate_2022':
         assert saved['trials'][0]['status']=='completed'
         assert saved['confirmation_training'][0]['status']=='completed'
+    if label=='holdout_baseline_2022':
+        assert [row['seed'] for row in saved['confirmation']]==[2021,2022]
+        assert saved['confirmation'][0]['status']=='completed'
+        assert saved['confirmation'][1]['status']=='interrupted'
+        assert 'candidate' not in saved['confirmation'][1]
     if label=='holdout_candidate_2022':
         assert saved['confirmation'][0]['status']=='completed'
         assert saved['confirmation'][0]['pass']

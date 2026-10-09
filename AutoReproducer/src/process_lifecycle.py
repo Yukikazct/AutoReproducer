@@ -19,7 +19,10 @@ def termination_signals():
     if threading.current_thread() is threading.main_thread():
         def interrupt(signum, frame):
             raise KeyboardInterrupt(f"termination signal {signum}")
-        for name in ("SIGTERM", "SIGBREAK"):
+        # SIGINT/SIGHUP are registered here as well so that a CLI run unwinds the
+        # same cancellation path no matter which signal arrived; signals absent on
+        # this platform (SIGHUP on Windows) resolve to None and are skipped.
+        for name in ("SIGINT", "SIGTERM", "SIGHUP", "SIGBREAK"):
             sig = getattr(signal, name, None)
             if sig is not None:
                 previous[sig] = signal.signal(sig, interrupt)

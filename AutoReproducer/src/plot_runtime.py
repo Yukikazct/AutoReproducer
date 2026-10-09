@@ -6,6 +6,9 @@ and rendering use the same glyphs. Font size and other Text settings survive.
 This file must not import project modules: the sandbox only receives this file.
 """
 import os
+import sys
+import importlib.abc
+import importlib.machinery
 
 
 def _has_cjk(text):
@@ -48,4 +51,32 @@ def install_font_fallback():
     Text._get_layout = layout_with_cjk_font
 
 
-install_font_fallback()
+class _FontLoader:
+    def __init__(self, original):
+        self.original = original
+
+    def create_module(self, spec):
+        return self.original.create_module(spec)
+
+    def exec_module(self, module):
+        self.original.exec_module(module)
+        install_font_fallback()
+
+
+class _FontFinder(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname != "matplotlib.text":
+            return None
+        spec = importlib.machinery.PathFinder.find_spec(fullname, path, target)
+        if spec is not None and hasattr(spec.loader, "exec_module"):
+            spec.loader = _FontLoader(spec.loader)
+            sys.meta_path.remove(self)
+        return spec
+
+
+# Ordinary Python programs must not pay for importing matplotlib or scanning all
+# system fonts. Install the fallback only when a program actually imports Text.
+if "matplotlib.text" in sys.modules:
+    install_font_fallback()
+elif os.path.isfile(os.environ.get("AUTOREPRO_FONT_PATH", "")):
+    sys.meta_path.insert(0, _FontFinder())

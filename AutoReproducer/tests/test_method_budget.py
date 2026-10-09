@@ -71,7 +71,8 @@ def test_preflight_only_rejects_real_validate_runs_with_invalid_budget(tmp_path,
 @pytest.mark.parametrize("budget", [2400, None])
 def test_preparation_does_not_use_optimization_budget(tmp_path, monkeypatch, prepare_flag, budget):
     adapter = SimpleNamespace(prepare_dataset=Mock(return_value={}), materialize=Mock(return_value={}),
-                              public_sources=Mock(return_value=[]), steps=Mock(return_value=[]),
+                              public_sources=Mock(return_value=[]),
+                              steps=Mock(return_value=[{"id": "train", "argv": ["python", "-c", "print(1)"]}]),
                               verify_environment=Mock())
     monkeypatch.setattr("src.method_reproduction.get_adapter", lambda profile: adapter)
     monkeypatch.setattr("src.repository_reproduction.export_repository",

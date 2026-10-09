@@ -254,7 +254,7 @@ def test_nested_snapshot_hash_entries_are_supported(public_workspace, paper_html
 
 
 @pytest.mark.parametrize("outside", [True, False])
-def test_symlink_source_is_rejected_even_when_hash_matches(public_workspace, tmp_path, outside):
+def test_symlink_source_is_rejected_even_when_hash_matches(public_workspace, tmp_path, outside, require_symlinks):
     root, snapshot, profile = public_workspace
     relative = "models/DLinear.py"
     target = tmp_path / "outside.py" if outside else root / "inside.py"
@@ -267,7 +267,7 @@ def test_symlink_source_is_rejected_even_when_hash_matches(public_workspace, tmp
         builder.build_packet(root, snapshot, profile, offline=False)
 
 
-def test_symlink_parent_directory_is_rejected(public_workspace, tmp_path):
+def test_symlink_parent_directory_is_rejected(public_workspace, tmp_path, require_symlinks):
     root, snapshot, profile = public_workspace
     original = root / "exp"
     moved = root / "linked_exp"

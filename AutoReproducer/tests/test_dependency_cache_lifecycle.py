@@ -165,7 +165,7 @@ def test_concurrent_installers_wait_for_ready_and_install_once(root, tmp_path, m
 
     @contextmanager
     def observed_guard(path, **kwargs):
-        if threading.current_thread().name.endswith("_1"):
+        if installing.is_set():
             waiting.set()
         with original_guard(path, **kwargs):
             yield

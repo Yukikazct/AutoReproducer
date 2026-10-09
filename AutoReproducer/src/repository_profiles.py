@@ -56,9 +56,13 @@ def get_profile(profile_id):
         },
         "steps": [
             {"id": "import_check", "kind": "check", "cwd": ".", "timeout_s": 90,
+             "depends_on": [],
              "argv": ["python", "-c", "import sys,platform,torch,numpy,pandas,sklearn,matplotlib; from exp.exp_main import Exp_Main; import models.DLinear; print({'python':sys.version,'platform':platform.platform(),'torch':torch.__version__,'numpy':numpy.__version__,'pandas':pandas.__version__,'sklearn':sklearn.__version__,'matplotlib':matplotlib.__version__})"]},
-            {"id": "train_and_eval", "kind": "run", "argv": argv, "cwd": ".",
+            {"id": "train_and_eval", "kind": "train", "argv": argv, "cwd": ".",
              "timeout_s": 600 if smoke else 1800,
+             "depends_on": ["import_check"],
+             # Author output directory names contain the run timestamp, hence the glob.
+             "artifacts": [{"path": "results/*/checkpoint.pth"}, {"path": "results/*/pred.npy"}],
              "env": {"CUDA_VISIBLE_DEVICES": "", "OMP_NUM_THREADS": "2",
                      "MKL_NUM_THREADS": "2", "MPLBACKEND": "Agg", "PYTHONHASHSEED": "2021"}},
         ],

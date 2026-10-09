@@ -109,6 +109,9 @@ streamlit run app.py
 
 ## 运行测试
 
+macOS、Windows 和 Linux 的通用运行稳定性说明见 [跨平台运行与中断恢复](docs/cross_platform_runtime.md)。
+CI 配置覆盖三个系统与 Python 3.11/3.12；Windows 另跑 UTF-8 模式。真实论文训练与 API 验收独立于这些回归测试。
+
 ```bash
 # 安装完整测试依赖（包含真实图片生成测试所需的 matplotlib）
 python -m pip install -r requirements-test.txt

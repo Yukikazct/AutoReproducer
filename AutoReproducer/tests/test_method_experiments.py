@@ -44,6 +44,40 @@ def test_valid_advice_remains_untested():
     assert items[0]["baseline_value"] == .0001
 
 
+@pytest.mark.parametrize("profile_id", ["siren_camera_quick", "neural_ode_spiral"])
+def test_advice_prompt_uses_actual_split_without_holdout_scores(monkeypatch, tmp_path, profile_id):
+    from src.method_optimization import Study
+    profile = method_profile(profile_id)
+    study = Study(SimpleNamespace(), profile, tmp_path, time.monotonic(), 7200, lambda e: None)
+    llm = SimpleNamespace(mock_mode=False, base_url="https://example.org", model="test")
+    validation = {"metrics_comparison": {"actual": {"psnr": 31., "mse": .001} if study.metric == "psnr"
+                                         else {"mae": .3, "rmse": .4}},
+                  "metric_records": [{"split": "validation"}],
+                  "training_summary": {"steps_completed": 500, "holdout_score": 999.},
+                  "protocol_pass": True, "independent_metrics_pass": True,
+                  "holdout": {"mae": 999.}}
+    captured = {}
+    raw = json.dumps({"suggestions": [{**advice(), "value": .0002 if study.metric == "psnr" else .003}]})
+    def request(client, prompt, timeout):
+        captured["context"] = json.loads(prompt.split("\n", 1)[1])
+        return {"response": raw, "calls": 1}
+    monkeypatch.setattr("src.method_advice.request_text", request)
+    result = suggest(llm, study.profile, validation, SOURCES, study_spec=study.contract, baseline_run_id="run/trials/baseline")
+    context = captured["context"]
+    evaluation = context["measured_summary"]["evaluation"]
+    assert context["parameters"]["protocol"] == study.profile["parameters"]["protocol"]
+    assert evaluation["metric_split"] == "validation"
+    assert evaluation["baseline_run_id"] == "run/trials/baseline"
+    assert "999" not in json.dumps(context)
+    if study.metric == "psnr":
+        assert evaluation["pixel_fractions"] == [.8,.1,.1]
+        assert evaluation["pixel_split_seed"] == 1729
+    else:
+        assert evaluation["validation_initials"] == [[1.5,0.],[0.,1.5]]
+    assert result["raw_response"] == raw
+    assert result["request_context"]["parameters"]["protocol"] != "official_fit"
+
+
 def test_advice_timeout_is_bounded_and_does_not_claim_gain(monkeypatch):
     llm = SimpleNamespace(mock_mode=False, base_url="https://example.org", model="test", api_key="private", call_count=0)
     def timeout(*args, **kwargs):

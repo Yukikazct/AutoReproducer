@@ -392,6 +392,8 @@ class ReportGeneratorAgent(BaseAgent):
                  f"**生成时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
                  f"**工具**: AutoReproducer v0.2.0",
                  ""]
+        if data.get("interrupted"):
+            lines += ["> **本次任务已中断。** 已完成的基线及试验记录保留，未完成部分不构成成功结论。", ""]
 
         # 1. 论文信息
         lines += ["## 1. 论文信息",
@@ -501,7 +503,7 @@ class ReportGeneratorAgent(BaseAgent):
         elif execution.get("mode") == "repository" and execution.get("executed") is False:
             lines.append("- **执行状态**: ⏳ 未运行（训练尚未开始）")
         else:
-            state = "✅ 成功" if final.get("success") else "❌ 失败"
+            state = "⏹ 已中断" if final.get("cancelled") else "✅ 成功" if final.get("success") else "❌ 失败"
             if best_effort:
                 state += "（尽力而为：论文信息不足）"
             lines.append(f"- **执行状态**: {state}")
@@ -531,6 +533,21 @@ class ReportGeneratorAgent(BaseAgent):
                           "```json", json.dumps(step.get("argv", []), ensure_ascii=False), "```"]
                 if step.get("stdout_path"):
                     lines.append(f"- 完整日志: `{step['stdout_path']}`")
+            skipped = execution.get("skipped") or []
+            if skipped:
+                # 被前置条件挡住的步骤不会进 attempts，上面的命令列表里因此只剩
+                # 真正跑过的那些。不写出来，报告会被读成"这几个不必跑"。
+                lines += ["", "### 未执行的步骤", ""]
+                for item in skipped:
+                    if item.get("not_run") == "interrupted":
+                        why = "任务已中断"
+                    elif item.get("not_run") == "missing_requirement":
+                        why = f"缺少前置产物 `{_txt(item.get('requirement'), '未知')}`"
+                    else:
+                        why = ("前置步骤 "
+                               + _markdown_text(_txt(item.get("blocked_by"), "失败")) + " 未通过")
+                    lines.append(f"- **{_markdown_text(_txt(item.get('id'), '步骤'))}**：未执行（{why}）")
+                lines += ["", "> 被挡住的步骤按失败计入结论，不代表它可选。", ""]
         artifacts = final.get("artifacts") or []
         if artifacts:
             lines += ["", "### 运行生成的图片", ""]

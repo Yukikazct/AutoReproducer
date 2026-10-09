@@ -1,11 +1,14 @@
 """Run reviewed method adapters with preparation separate from timed execution."""
 import time
 import uuid
+import os
 from pathlib import Path
 
+from filelock import FileLock
 from src.dependency_cache import cache_guard
 from src.method_adapters import write_json, read_json, digest
 from src.method_budget import MAX_OPTIMIZATION_SECONDS, optimization_budget_error
+from src.execution_plan import build_plan, plan_step_ids
 from src.repository_adapters import get_adapter
 from src.repository_profiles import get_profile
 from src.repository_runner import RepositoryRunner
@@ -20,13 +23,9 @@ class MethodReproduction:
 
     @termination_signals()
     def run(self, request, on_event=None):
-        from src.repository_reproduction import export_repository, spec_digest
-        from src.agents.report_generator import ReportGeneratorAgent
-        from src.method_advice import suggest
-        started = time.monotonic()
-        emit = on_event or (lambda e: None)
-        profile = get_profile(request["experiment_profile"])
-        adapter = get_adapter(profile)
+        from src.run_lifecycle import cancellation_signals
+        # Reject impossible requests and recover abandoned studies before this run
+        # claims any record, so a refused request leaves no run directory behind.
         prepare_only, prepare_env = bool(request.get("prepare_only")), bool(request.get("prepare_environment"))
         if prepare_only and prepare_env:
             raise ValueError("仅准备源码与准备完整环境不能同时选择")
@@ -43,6 +42,36 @@ class MethodReproduction:
         recover_interrupted_optimizations(self.root / "runs")
         run_dir = self.root / "runs" / f"repository_{uuid.uuid4().hex}"
         run_dir.mkdir(parents=True)
+        status = {"status": "running", "pid": os.getpid(), "started_at": time.time()}
+        with FileLock(str(run_dir / ".run.lock")), cancellation_signals():
+            write_json(run_dir / "run_status.json", status)
+            try:
+                result = self._run(request, on_event, run_dir)
+                status.update(status="interrupted" if result["data"].get("interrupted") else
+                              "failed" if result.get("error") else "completed")
+                return result
+            except KeyboardInterrupt:
+                status.update(status="interrupted", reason="实验已中断")
+                raise
+            except Exception:
+                status.update(status="failed", reason="运行未能正常生成报告")
+                raise
+            finally:
+                status["finished_at"] = time.time()
+                write_json(run_dir / "run_status.json", status)
+
+    def _run(self, request, on_event, run_dir):
+        from src.repository_reproduction import export_repository, spec_digest
+        from src.agents.report_generator import ReportGeneratorAgent
+        from src.method_advice import suggest
+        started = time.monotonic()
+        emit = on_event or (lambda e: None)
+        profile = get_profile(request["experiment_profile"])
+        adapter = get_adapter(profile)
+        # run() validated this request and created the run directory before _run.
+        prepare_only, prepare_env = bool(request.get("prepare_only")), bool(request.get("prepare_environment"))
+        mode = request.get("optimization_mode") or ("validate" if request.get("enable_optimization") else "off")
+        budget = request.get("budget_seconds", MAX_OPTIMIZATION_SECONDS)
         workspace = run_dir / "repo"
         spec_hash = spec_digest(profile)
         data = {"run_dir": str(run_dir.resolve()), "report_path": str((run_dir / "report.md").resolve()),
@@ -102,8 +131,20 @@ class MethodReproduction:
             env = {**profile["environment"], "cache_lock_timeout_s": 0}
             if not (prepare_only or prepare_env):
                 env.update(require_prepared=True, deadline_monotonic=baseline_deadline)
-            data["execution_plan"] = {"steps": steps, "workspace": snapshot["path"], "spec_sha256": spec_hash}
-            write_json(run_dir / "execution_plan.json", data["execution_plan"])
+            plan = build_plan(mode="repository", profile=profile["id"], spec_sha256=spec_hash,
+                              workspace=snapshot["path"],
+                              repository={"url": snapshot.get("url", ""),
+                                          "revision": snapshot.get("resolved_sha", "")},
+                              dataset={"name": profile["dataset"].get("name", ""),
+                                       "sha256": profile["dataset"].get("sha256", "")},
+                              limits=profile["budget"], steps=steps)
+            data["execution_plan"] = plan
+            write_json(run_dir / "execution_plan.json", plan)
+            # What lands on disk must describe exactly the steps about to run, so a
+            # failed or rewritten plan file cannot change the executed experiment.
+            stored = read_json(run_dir / "execution_plan.json")
+            if plan_step_ids(stored.get("steps")) != plan_step_ids(plan["steps"]):
+                raise RuntimeError("落盘执行计划与本次执行步骤不一致")
             if prepare_only:
                 data["execution"] = {"mode": "repository", "executed": False, "not_runnable": True}
                 data["validation"] = {"status": "prepared", "result_level": "prepared", "is_reproduced": None,
@@ -162,6 +203,8 @@ class MethodReproduction:
         except (KeyboardInterrupt, SystemExit) as exc:
             # Preserve a verified baseline and the study's partial evidence,
             # while keeping the whole run explicitly incomplete.
+            # run_status.json / recover_run classify an interrupted run from this flag.
+            data["interrupted"] = True
             optimization_path = run_dir / "optimization.json"
             if optimization_path.is_file():
                 data["optimization"] = read_json(optimization_path)

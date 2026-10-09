@@ -58,7 +58,7 @@ print('WORKDIR=' + os.getcwd())
     assert code in report
 
 
-def test_nested_images_collected_but_symlinks_and_invalid_images_skipped(tmp_path):
+def test_nested_images_collected_but_symlinks_and_invalid_images_skipped(tmp_path, require_symlinks):
     workspace = tmp_path / "workspace"
     plots = workspace / "plots"
     plots.mkdir(parents=True)
@@ -236,7 +236,7 @@ def test_report_image_reader_rejects_unsafe_targets(tmp_path, target):
     assert artifacts.verified_report_image_bytes(target, tmp_path / "report.md") is None
 
 
-def test_report_image_helpers_reject_asset_directory_symlinks(tmp_path):
+def test_report_image_helpers_reject_asset_directory_symlinks(tmp_path, require_symlinks):
     artifact = _collected_image(tmp_path)
     report_path = tmp_path / "output" / "report.md"
     report_path.parent.mkdir()
@@ -249,7 +249,7 @@ def test_report_image_helpers_reject_asset_directory_symlinks(tmp_path):
     assert artifacts.verified_report_image_bytes(f"report_assets/{name}", report_path) is None
 
 
-def test_report_image_helpers_reject_symlink_files_and_oversized_images(tmp_path, monkeypatch):
+def test_report_image_helpers_reject_symlink_files_and_oversized_images(tmp_path, monkeypatch, require_symlinks):
     artifact = _collected_image(tmp_path)
     report_path = tmp_path / "output" / "report.md"
     target = artifacts.markdown_image_target(artifact, report_path)

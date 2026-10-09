@@ -18,7 +18,8 @@ SOURCE = {"source_id": "author", "content": "official model and optimizer",
 @pytest.fixture
 def method_run(tmp_path, monkeypatch):
     adapter = SimpleNamespace(prepare_dataset=Mock(return_value={}), materialize=Mock(return_value={}),
-        public_sources=Mock(return_value=[SOURCE]), steps=Mock(return_value=[]),
+        public_sources=Mock(return_value=[SOURCE]),
+        steps=Mock(return_value=[{"id": "train", "argv": ["python", "-c", "print(1)"]}]),
         verify=Mock(return_value={"status": "method_experiment_completed", "is_reproduced": None}))
     monkeypatch.setattr("src.method_reproduction.get_adapter", lambda profile: adapter)
     def export(root, profile, workspace, **kwargs):
