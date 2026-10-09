@@ -47,4 +47,19 @@ python scripts/reproduce_repository.py --profile siren_camera_quick --offline --
 python scripts/reproduce_repository.py --profile neural_ode_spiral --offline --optimization validate --max-candidates 3 --budget-seconds 7200
 ```
 
-每次命令创建新实验；本次实测数值与时间不保证在其他硬件逐位相同。回归测试和远端 CI 的最终结果将在完成后记入本页。
+每次命令创建新实验；本次实测数值与时间不保证在其他硬件逐位相同。
+
+## 工程回归与交付状态
+
+最终使用本机 Python 3.11.9 直接启动测试，绘图库等测试依赖从本任务专用目录加载，不修改系统安装。两套完整回归均覆盖真实图表、Windows 会话退出、主进程强杀、候选和确认中断及缓存锁恢复：
+
+| 模式 | 结果 | 耗时 |
+|---|---|---:|
+| Windows 默认区域编码，`PYTHONUTF8=0` | 1312 passed，1 skipped | 255.22 秒 |
+| Windows UTF-8，`-X utf8` | 1312 passed，1 skipped | 254.91 秒 |
+
+唯一跳过项是 POSIX SIGTERM 测试，不适用于 Windows；两套各有一条既有 PyPDF2 弃用警告。JUnit 记录保存在本机 `data/reports/regression_20261009_final_locale.xml` 与 `regression_20261009_final_utf8.xml`。
+
+额外使用本机标准 Python 3.12 创建独立虚拟环境，核验启动器及实际解释器均属于同一 Job；此项进程归属检查不等于 Python 3.12 全量回归。Microsoft Store 虚拟环境的实际拒绝路径也已检查，确认依赖安装与训练均未启动。
+
+代码与记录仅保存在本地，未推送或创建 PR。Windows/Linux × Python 3.11/3.12 远端 CI 尚未执行；先交由本地测试，后续再继续该项验收。不能将本机结果当作远端矩阵通过。

@@ -10,7 +10,7 @@
 | SIREN 方法实验 | 10 月 8 日在 Windows RTX 4060 CUDA 上完成三次快速档；全图拟合 PSNR 37.362052 dB，见 [快速档记录](siren_quick_result.md) |
 | Neural ODE 方法实验 | 10 月 8 日在 Windows CPU 上完成 2000 次迭代和独立轨迹评价；MAE 0.4700458448，见 [实验记录](neural_ode_result.md) |
 | 有限参数优化 | 已实现 `off`、`suggest`、`validate`；SIREN 历史运行完成两种子留出确认，Neural ODE 历史运行在确认阶段中断，详见 [10 月 8 日检查点](implementation_checkpoint_20261008.md) |
-| 10 月 9 日续作 | 完成 SIREN 四阶段真实在线分析和 Neural ODE 两种子留出确认；Neural ODE 第二种子未改善，保留 `tested_no_gain` 结论，见 [续跑验收](resumed_validation_20261009.md)；中断修复的最终回归进行中 |
+| 10 月 9 日续作 | 完成 SIREN 四阶段真实在线分析和 Neural ODE 两种子留出确认；Neural ODE 第二种子未改善，保留 `tested_no_gain` 结论；Windows 默认编码/UTF-8 各 1312 项通过、1 项平台跳过，远端矩阵尚未运行，见 [续跑验收](resumed_validation_20261009.md) |
 
 SIREN 与 Neural ODE 的官方示例记录均为 `method_experiment_completed`、`is_reproduced=null`，不宣称论文全部实验或表格数值复现。10 月 8 日 Neural ODE 的 `interrupted`、`optimized=False` 记录及原始建议继续保留；新命令创建独立运行，不把后续更正伪装成原调用结果。
 
