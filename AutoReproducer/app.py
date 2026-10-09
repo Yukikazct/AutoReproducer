@@ -941,7 +941,7 @@ if start_btn:
     if experiment_profile and st.session_state.mock_mode:
         st.sidebar.error("官方仓库预设需要关闭 Mock 模式，才能执行真实论文代码。")
     elif experiment_profile and st.session_state.use_docker:
-        st.sidebar.error("本轮官方仓库预设仅支持本地 CPU；请关闭 Docker 开关后运行。")
+        st.sidebar.error("本轮官方仓库预设使用本地执行；请关闭 Docker 开关后运行。")
     elif not experiment_profile and not pt and not uploaded_file:
         st.sidebar.error("请先上传PDF文件" if input_mode == "上传PDF"
                          else "请先输入论文标题")

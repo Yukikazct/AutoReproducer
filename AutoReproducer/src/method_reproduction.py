@@ -9,6 +9,8 @@ from src.method_adapters import write_json, read_json, digest
 from src.repository_adapters import get_adapter
 from src.repository_profiles import get_profile
 from src.repository_runner import RepositoryRunner
+from src.process_lifecycle import termination_signals
+from src.optimization_recovery import recover_interrupted_optimizations, persist_interrupted_run
 
 
 class MethodReproduction:
@@ -16,6 +18,7 @@ class MethodReproduction:
         self.root, self.logger = Path(root), logger
         self.runner, self.llm = runner or RepositoryRunner(logger=logger), llm
 
+    @termination_signals()
     def run(self, request, on_event=None):
         from src.repository_reproduction import export_repository, spec_digest
         from src.agents.report_generator import ReportGeneratorAgent
@@ -36,6 +39,7 @@ class MethodReproduction:
             raise ValueError("优化预算必须在0至7200秒之间")
         if request.get("use_docker"):
             raise ValueError("方法预设需要本地执行")
+        recover_interrupted_optimizations(self.root / "runs")
         run_dir = self.root / "runs" / f"repository_{uuid.uuid4().hex}"
         run_dir.mkdir(parents=True)
         workspace = run_dir / "repo"
@@ -147,6 +151,25 @@ class MethodReproduction:
                             data["optimization"] = suggest(self.llm, profile, data["validation"], sources, timeout_s=min(45, remaining))
                             data["optimization"]["baseline_run_id"] = run_dir.name
                         event(phase, "success" if data["optimization"]["status"] not in {"advice_timeout", "advice_unavailable"} else "error", data["optimization"].get("reason", ""))
+        except (KeyboardInterrupt, SystemExit) as exc:
+            # Preserve a verified baseline and the study's partial evidence,
+            # while keeping the whole run explicitly incomplete.
+            optimization_path = run_dir / "optimization.json"
+            if optimization_path.is_file():
+                data["optimization"] = read_json(optimization_path)
+            elif mode != "off" and not (prepare_only or prepare_env):
+                data["optimization"].update(status="interrupted", requested=True,
+                                            reason="运行已中断，尚未完成建议或优化确认")
+                write_json(optimization_path, data["optimization"])
+            if getattr(exc, "execution", None) is not None and phase != "method_advice":
+                data["execution"] = exc.execution
+            data.setdefault("validation", {"status": "interrupted", "result_level": "failed",
+                            "is_reproduced": None, "optimization_eligible": False, "reason": "实验已中断"})
+            data["run_elapsed_s"] = time.monotonic() - started
+            data["total_llm_calls"] = (self.llm.get_call_count() if self.llm else 0) - before_calls
+            persist_interrupted_run(run_dir, "实验已中断，已有记录已保存", data=data)
+            event(phase, "error", "实验已中断，已有记录已保存")
+            raise
         except Exception as exc:
             error = str(exc)
             data["validation"] = {"status": "execution_failed", "result_level": "failed", "is_reproduced": None,

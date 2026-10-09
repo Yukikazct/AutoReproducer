@@ -136,7 +136,7 @@ def test_repository_preset_docker_is_explicitly_rejected(app, monkeypatch):
     next(b for b in app.sidebar.button if "开始复现" in b.label).click().run()
     assert not app.exception
     start.assert_not_called()
-    assert any("仅支持本地 CPU" in error.value for error in app.sidebar.error)
+    assert any("使用本地执行" in error.value for error in app.sidebar.error)
 
 
 @pytest.mark.parametrize("terminal", ["COMPLETED", "ERROR"])

@@ -224,6 +224,50 @@ def test_windows_timeout_uses_process_tree_termination(monkeypatch):
     process.kill.assert_not_called()
 
 
+@pytest.mark.skipif(os.name!='nt',reason='Windows Store AppExecutionAlias venvs')
+def test_store_alias_venv_is_rejected_before_environment_or_training(runner,tmp_path,monkeypatch):
+    import src.process_lifecycle as lifecycle
+    environment=tmp_path/'venv'
+    executable=environment/'Scripts'/'python.exe'
+    executable.parent.mkdir(parents=True)
+    home=tmp_path/'store-alias'
+    (environment/'pyvenv.cfg').write_text(f'home = {home}\n',encoding='utf-8')
+    monkeypatch.setattr(lifecycle,'sys',SimpleNamespace(executable=str(executable)))
+    monkeypatch.setattr(lifecycle,'_is_app_execution_alias',lambda path:path==home/'python.exe')
+    launch=Mock(side_effect=AssertionError('unsupported interpreter must not launch'))
+    monkeypatch.setattr(runner_module.subprocess,'Popen',launch)
+    result=runner.run(tmp_path,[step('blocked','-c',"print('BAD')")],{})
+    assert result['not_runnable'] and not result['executed']
+    assert 'Windows Store' in result['reason'] and 'python.org' in result['reason']
+    runner.executor._ensure_local_deps.assert_not_called()
+    launch.assert_not_called()
+
+
+@pytest.mark.parametrize('exception',[KeyboardInterrupt,SystemExit])
+def test_cancellation_stops_descendants_persists_logs_and_releases_cache(runner,tmp_path,exception):
+    from src.dependency_cache import cache_guard
+    descendant="import time;from pathlib import Path;time.sleep(1);Path('escaped_child').touch()"
+    code=("import subprocess,sys,time;"
+          f"subprocess.Popen([sys.executable,'-c',{descendant!r}]);"
+          "print('CANCEL_READY',flush=True);time.sleep(30)")
+    def cancel(event):
+        if event.get('type')=='repository_output' and 'CANCEL_READY' in event.get('text',''):
+            raise exception('user cancellation')
+    with pytest.raises(exception) as caught:
+        runner.run(tmp_path,[step('cancel','-c',code,timeout=30)],{},on_event=cancel)
+    execution=caught.value.execution
+    assert execution['status']=='interrupted' and execution['cancelled']
+    assert execution['final']['exit_code']==130
+    assert execution['final']['timed_out'] is False
+    assert 'CANCEL_READY' in execution['final']['stdout']
+    saved=json.loads((Path(execution['run_dir'])/'cancel.json').read_text(encoding='utf-8'))
+    assert saved['cancelled'] and not saved['success']
+    with cache_guard(runner.executor.deps_lock_root,cleanup=True,timeout=0):
+        pass
+    time.sleep(1.1)
+    assert not (tmp_path/'escaped_child').exists()
+
+
 def test_actual_dependency_and_environment_helpers_need_no_pip_for_empty_plan_deps(tmp_path):
     runner = RepositoryRunner(executor=CodeExecutorAgent(None, logger=Mock()))
     result = runner.run(tmp_path, [step("actual_env", "-c", "print('REAL_ENV_OK')", timeout=5)], {})

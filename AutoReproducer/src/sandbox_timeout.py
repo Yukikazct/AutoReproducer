@@ -1,7 +1,9 @@
 """Standalone supervisor copied into Docker; requires only the standard library."""
 import json
+import os
 import subprocess
 import sys
+import time
 
 MARKER = "AUTOREPRO_PHASE_RESULT:"
 
@@ -9,6 +11,13 @@ MARKER = "AUTOREPRO_PHASE_RESULT:"
 def main(argv=None):
     phase, seconds, *command = list(sys.argv[1:] if argv is None else argv)
     limit = float(seconds)
+    if command[:1] == ["--start-gate"]:
+        gate, command = command[1], command[2:]
+        deadline = time.monotonic() + 10
+        while not os.path.exists(gate):
+            if time.monotonic() >= deadline:
+                return 125
+            time.sleep(.01)
     try:
         result = subprocess.run(command, timeout=limit)
         code = result.returncode

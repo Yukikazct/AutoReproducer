@@ -1,18 +1,30 @@
 # AutoReproducer：基于 GitHub 多文件仓库的论文复现实施方案
 
-原始检查日期：2026-10-03，检查版本：de0fa6a。进展更新：2026-10-07。DLinear单项论文实验已真实复现通过，Neural ODE与通用仓库扩展仍是后续计划。
+原始检查日期：2026-10-03，检查版本：de0fa6a。进展更新：2026-10-09。DLinear 单项论文实验已真实复现通过；SIREN 与 Neural ODE 已适配并完成真实方法实验。陌生仓库通用化和自动多文件修复仍是后续方向。
 
-本文保留原始审查和后续实施方案，并记录现已交付的DLinear完整实验。2026-10-07新运行已通过生产网页后台入口完成四阶段公开分析、固定作者仓库的ETTh1多变量336→96训练/test、独立协议与指标复算和允许的结果摘要解释；没有fork、提交或推送代码。
+本文同时保存历史审查与当前进展。第 1.1 节及第 3、4、6、7、8 节中的设计和验收清单源于 10 月 3 日原计划，属于实施依据，不代表所有建议仍未完成，也不表示通用能力已全部交付。当前预设、真实证据和重跑方式以本页更新及 [README](../README.md) 为准。
+
+| 截至 10 月 9 日的范围 | 当前证据与边界 |
+|---|---|
+| DLinear 论文选定实验 | 10 月 7 日完成四阶段公开分析、完整作者训练、独立核验与结果解释；见下方历史记录 |
+| SIREN 方法实验 | 10 月 8 日在 Windows RTX 4060 CUDA 上完成三次快速档；全图拟合 PSNR 37.362052 dB，见 [快速档记录](siren_quick_result.md) |
+| Neural ODE 方法实验 | 10 月 8 日在 Windows CPU 上完成 2000 次迭代和独立轨迹评价；MAE 0.4700458448，见 [实验记录](neural_ode_result.md) |
+| 有限参数优化 | 已实现 `off`、`suggest`、`validate`；SIREN 历史运行完成两种子留出确认，Neural ODE 历史运行在确认阶段中断，详见 [10 月 8 日检查点](implementation_checkpoint_20261008.md) |
+| 10 月 9 日续作 | 完成 SIREN 四阶段真实在线分析和 Neural ODE 两种子留出确认；Neural ODE 第二种子未改善，保留 `tested_no_gain` 结论，见 [续跑验收](resumed_validation_20261009.md)；中断修复的最终回归进行中 |
+
+SIREN 与 Neural ODE 的官方示例记录均为 `method_experiment_completed`、`is_reproduced=null`，不宣称论文全部实验或表格数值复现。10 月 8 日 Neural ODE 的 `interrupted`、`optimized=False` 记录及原始建议继续保留；新命令创建独立运行，不把后续更正伪装成原调用结果。
+
+以下 DLinear 记录来自 2026-10-07：当时已通过生产网页后台入口完成四阶段公开分析、固定作者仓库的 ETTh1 多变量 336→96 训练/test、独立协议与指标复算和允许的结果摘要解释；该批次没有 fork、提交或推送代码。
 
 > 新已验证结果：`repository_e9408141e3dd44319e854bbdf4a70c0c`使用默认`dlinear_etth1_reference`，按作者最多10轮/patience 3协议在第7轮早停；MSE 0.3841443955898285、MAE 0.40471312403678894，相对Table 2的0.375/0.399偏差2.44%/1.43%，通过项目事前5%相对容差（非论文阈值）。16个公开来源、113份固定源码、真实数据、运行协议和独立复算均通过；deepseek-chat四阶段各1次、结果摘要解释1次，共5次真实API调用、零修正重试。数值状态`reproduced`与分析状态`completed`分别记录，结论仅覆盖该一个实验。详见[新完整报告](../data/runs/repository_e9408141e3dd44319e854bbdf4a70c0c/report.md)、[报告与图片ZIP](../data/runs/repository_e9408141e3dd44319e854bbdf4a70c0c/report_with_figures.zip)、[结果记录](dlinear_reproduction_result.md)及[重跑步骤](dlinear_testing.md)。
 
 旧运行`repository_66efc14890e34cb196a07a7d2bcb78fe`的[单次公开协议API基线报告](../data/runs/repository_66efc14890e34cb196a07a7d2bcb78fe/report.md)保留；新运行重新训练得到相同指标和第7轮早停结果。前期多Agent引用/映射/环境说明被拒绝的记录保留为真实诊断，不将它们写成通过或跳过门控。
 
-## 1. 检查结论与本轮目标
+## 1. 原始检查结论与当前目标
 
 2026-10-03原始审查定位的断点是单文件执行没有贯通“论文→仓库→实验入口→多文件执行→论文指标”。2026-10-07已通过`repository_profiles.py`、`repository_reproduction.py`、`repository_runner.py`、`repository_validation.py`接通DLinear纵向链路，网页与CLI共用`Orchestrator.run`。下表保留原始问题作为通用化改造依据，不代表这些断点仍全部存在于DLinear路径。
 
-下一版本的最小交付定义为：用户选择论文预设或输入 PDF + 已知 GitHub URL，系统获取固定版本的完整仓库，在独立工作区按实验计划准备数据、训练、评估，展示真实日志、曲线、指标和来源。支持两篇已适配论文；陌生仓库先产出候选计划，不能直接宣称普遍支持。
+当前已交付三种固定方法/论文预设的独立工作区、环境准备、训练、评估、日志、图表和来源记录。下一步先完成本轮中断处理、优化协议与跨平台回归验收，再推进 PDF + 已知 GitHub URL 的通用候选计划；不能由三个固定案例直接宣称普遍支持陌生仓库。
 
 ### 1.1 原始检查发现的问题（2026-10-03）
 
@@ -31,7 +43,7 @@
 ### 1.2 实测记录
 
 - Python 3.12.2，执行现有 tests：**691 passed，1 skipped，1 warning**。首次受限运行有 6 个本地 HTTP 测试服务器绑定端口错误；允许回环端口后全量重跑得到上述结果。
-- 上述为2026-10-03测试基线。2026-10-07较早批次完整套件为 **913 passed，4 skipped，1 warning**（PyPDF2旧依赖弃用），后续网页/仓库/CLI相关 **70项针对性检查通过**，`git diff --check`通过；这些是保留的历史工程检查。新的四阶段加结果解释共5次真实API、作者训练与独立复算另见本页新运行证据，不能将历史913项作为新批次完整测试数。Neural ODE尚未在本轮训练。
+- 上述为2026-10-03测试基线。2026-10-07较早批次完整套件为 **913 passed，4 skipped，1 warning**（PyPDF2旧依赖弃用），后续网页/仓库/CLI相关 **70项针对性检查通过**，`git diff --check`通过；这些是保留的历史工程检查。四阶段加结果解释共5次真实API、作者训练与独立复算另见本页 DLinear 证据，不能将历史913项作为新批次完整测试数。该 10 月 7 日批次未训练 Neural ODE，后续方法实验已于 10 月 8 日另行完成。
 - 新多Agent批次的最终完整回归为 **1138 passed，4 skipped，1 warning**（PyPDF2弃用警告）。该工程回归与新运行的真实API、作者训练和独立指标核验分别记录。
 - 额外诊断得到以下反例，记录在 [validator_probes_20261003.json](review/validator_probes_20261003.json)：
   - loss: 1.2e-4 被解析为 1.2。
@@ -40,29 +52,30 @@
   - MSE 声明 0.5、实际 50，被通用百分比归一化误判一致。
   - 使用固定返回 match=true 的测试 LLM 时，退出码 1 但已打印匹配 accuracy 的失败运行，最终可被判 reproduced。这个反例验证了确定性门控缺口，不是对真实 LLM 输出概率的推断。
 
-## 2. 两篇具体的 Demo 论文
+## 2. 当前三个固定案例
 
-| 项目 | 第一篇：DLinear | 第二篇：Neural ODE |
-|---|---|---|
-| 论文 | [Are Transformers Effective for Time Series Forecasting?](https://arxiv.org/abs/2205.13504) | [Neural Ordinary Differential Equations](https://arxiv.org/abs/1806.07366) |
-| 作者仓库 | [cure-lab/LTSF-Linear](https://github.com/cure-lab/LTSF-Linear) | [rtqichen/torchdiffeq](https://github.com/rtqichen/torchdiffeq) |
-| 本轮范围 | DLinear 在 ETTh1 的一个预测配置 | 官方二维螺旋 ODE 拟合示例 |
-| 入口 | run_longExp.py；参数参考 scripts/EXP-LongForecasting/Linear/etth1.sh | examples/ode_demo.py |
-| 多文件调用 | exp → models → layers / data_provider / utils | examples → torchdiffeq 包 → 内部 ODE 求解器 |
-| 数据 | ETTh1，约 2.6 MB，官方时间切分 | 示例通过已知微分方程生成轨迹，无外部数据下载 |
-| 展示 | 真实值/预测值曲线、MSE、MAE、训练过程 | 真实/学习轨迹、相图、向量场、误差曲线 |
-| 可声称的结论 | 已完成作者完整训练、协议核验与独立指标复算；ETTh1 336→96选定实验数值复现通过 | 待适配：官方示例与方法行为复现；不等价于论文全部实验或表格复现 |
+| 项目 | DLinear | Neural ODE | SIREN |
+|---|---|---|---|
+| 论文 | [Are Transformers Effective for Time Series Forecasting?](https://arxiv.org/abs/2205.13504) | [Neural Ordinary Differential Equations](https://arxiv.org/abs/1806.07366) | [Implicit Neural Representations with Periodic Activation Functions](https://arxiv.org/abs/2006.09661) |
+| 作者仓库 | [cure-lab/LTSF-Linear](https://github.com/cure-lab/LTSF-Linear) | [rtqichen/torchdiffeq](https://github.com/rtqichen/torchdiffeq) | [vsitzmann/siren](https://github.com/vsitzmann/siren) |
+| 实验范围 | ETTh1 多变量 336→96 | 官方二维螺旋 ODE 拟合，2000 次迭代 | 官方图像拟合，256×256、500 步 |
+| 作者实现 | run_longExp.py 及 models/data_provider/utils | 从 examples/ode_demo.py 提取原始 ODEFunc，调用完整 torchdiffeq 包 | 从固定 explore_siren.ipynb 逐字提取原始 Siren 模型 |
+| 数据 | 真实 ETTh1，官方时间切分 | 通过已知微分方程生成轨迹 | 固定哈希 cameraman 图片 |
+| 设备 | CPU | CPU | NVIDIA CUDA 12.1 |
+| 展示 | 真实值/预测值曲线、MSE、MAE | 轨迹、相图、向量场、MAE/RMSE | 原图、重建图、误差图、MSE/PSNR |
+| 可声称的结论 | 选定论文实验数值复现通过 | 已完成官方方法实验，无论文表格数值结论 | 已完成官方方法实验，无论文表格数值结论 |
 
-选择依据：DLinear 已有本地历史产物；Neural ODE 官方示例输入简单、天然可视化，源码会在没有 CUDA 时选择 CPU。两者都可检验完整仓库执行能力。运行时长须在目标机器实测，不能把“支持 CPU”理解为已保证几分钟收敛。
+三者通过共享编排器、执行器与实验适配接口运行。Neural ODE 预设明确固定 CPU，SIREN 明确要求 CUDA；不会根据可用设备静默更改协议。运行时长须在目标机器实测，SIREN 快速档的已准备环境计时不能当作首次安装预算。
 
 已核实的版本来源：
 
 - DLinear 历史缓存 commit：0c113668a3b88c4c4ee586b8c5ec3e539c4de5a6。
 - torchdiffeq 本次 GitHub 查询的 master commit：657943acefa826ef04c025ebeb1ff5e9d60dc268。运行前按此 SHA 获取并再校验入口文件；本次查看的是查询当时的 master 示例。
+- SIREN 固定 commit：4df34baee3f0f9c8f351630992c1fe1f69114b5f；模型来源 notebook 与数据文件分别核验 SHA-256。
 - DLinear 历史报告 data/reports/dlinear_cache_verified.md 记录 1 epoch、seq_len=96、pred_len=96，MSE≈0.4090、MAE≈0.4168；这是历史冒烟记录，不能当作本次重跑结果或论文目标。
 - 原始审查时历史experiment_profile/execution_plan未贯通主线；本轮已重新接入固定预设、完整仓库执行和证据判定。旧单次API完整基线来自`repository_66efc14890e34cb196a07a7d2bcb78fe`，新四阶段加结果解释的完整结果来自`repository_e9408141e3dd44319e854bbdf4a70c0c`；历史1轮数据保留为旧冒烟记录。
 
-## 3. 从 GitHub fork 到固定版本工作区
+## 3. 原计划：从 GitHub fork 到固定版本工作区
 
 **Fork 用来保存你自己的修改和实验分支；clone 用来获取真正执行的完整文件。**自动复现公开仓库不强制要求先 fork。系统应同时支持直接上游 URL 与用户 fork URL；不在每次运行时重复 fork。
 
@@ -114,7 +127,7 @@ data/
 
 repo-key 由规范化 URL 生成；run-id 使用 UUID 或时间戳加随机后缀。工作副本排除 .git 凭据和缓存大文件；数据用只读挂载。首次可用复制工作区实现，失败时丢弃本轮副本，避免修改共享缓存。Git submodule / LFS 如果被入口依赖，单独固定版本并准备；首版未支持时返回明确原因。
 
-## 4. 如何“根据论文一步步复现”
+## 4. 原计划：如何“根据论文一步步复现”
 
 ### 第一步：把论文目标写成可核验的实验定义
 
@@ -186,7 +199,7 @@ repo-key 由规范化 URL 生成；run-id 使用 UUID 或时间戳加随机后�
 ### 第四步：准备适配平台的依赖和真实数据
 
 - 修改 EnvBuilder：优先处理 requirements、pyproject、environment 文件，生成可追溯环境。环境缓存键至少含源码依赖 hash、Python 版本、OS/架构、CPU/CUDA 类型。
-- DLinear原始requirements为torch==1.9.0、README为Python 3.6.9。本轮实际通过Python 3.12.2/macOS ARM64/CPU兼容环境：torch 2.5.1、numpy 1.26.4、pandas 2.2.3、scikit-learn 1.5.2、matplotlib 3.9.2，来源与偏差已记录。当前预设固定CPU；Windows CUDA建议在WSL2中准备匹配环境并另行适配验证，不会自动使用显卡，也不能承诺逐位相同指标。
+- DLinear原始requirements为torch==1.9.0、README为Python 3.6.9。10 月 7 日实际通过Python 3.12.2/macOS ARM64/CPU兼容环境：torch 2.5.1、numpy 1.26.4、pandas 2.2.3、scikit-learn 1.5.2、matplotlib 3.9.2，来源与偏差已记录。DLinear 与 Neural ODE 预设固定 CPU；10 月 8 日新增的 SIREN 已在 Windows CUDA 12.1 上完成真实运行，各预设按自己的依赖与设备协议准备，不承诺跨平台逐位相同指标。
 - torchdiffeq 的 setup.py 声明 torch>=1.5.0、scipy>=1.4.0；示例另用 numpy，可视化用 matplotlib。应安装工作区中的项目源码，使 examples 导入这一版本的本地包。
 - 数据缓存必须记录下载来源、SHA-256、大小和切分信息。下载失败返回 data_unavailable；仓库复现模式不自动用合成数据替代真实 ETTh1。
 - 安装、下载允许网络；正式实验优先在准备好的容器中执行，固定资源与超时。复用现有 Docker 加固和依赖准备能力，但要扩展为挂载整个仓库。
@@ -253,7 +266,7 @@ report = reporter.render(spec, execution, validation)
 
 依据实际证据展示结论：当前DLinear固定单项已通过完整协议和数值核验；缺参考数值的其他实验仍只能显示证据不足。任何必要步骤exit_code非零均不得判reproduced。LLM解析公开协议和解释偏差，不覆盖确定性判定；PaperGuru reproduction_score不能替代论文性能指标。
 
-## 5. 两篇论文的具体执行清单
+## 5. 已适配案例的执行与证据
 
 ### 5.1 DLinear：已完成第一个纵向闭环
 
@@ -268,29 +281,41 @@ report = reporter.render(spec, execution, validation)
 7. 实际Namespace、固定113份源码、数据SHA、8209/2785/2785窗口、完整训练与唯一checkpoint/预测数组均通过独立协议核验。预测数组shape为(2785,96,7)，独立重建真实测试标签并复算指标，与作者日志在1e-6内一致；报告包含两张真实实验图。
 8. 保留原入口seed 2021；[作者明确论文只跑一个seed](https://github.com/cure-lab/LTSF-Linear/issues/33#issuecomment-1331937601)，无需将其他消融的多次实验规则套入本项。
 9. 新运行由PaperReader、ResourceFinder、EnvBuilder、Verifier读取16个真实公开来源，逐项引用论文/作者script/default；四阶段各1次且零修正，全部通过后才执行官方训练。允许后ResultValidator用1次API解释MSE/MAE、完成轮数和核验状态摘要，共5次；本地指标与确定性判定不由API替代。原始日志、`repository_analysis.json`、`result_analysis.json`、协议核验与独立指标复算分别落盘；旧单次API基线保留。
-10. 网页默认真实模式，官方预设使用本地CPU而不依赖Docker；CLI重跑使用 `--llm-review --analysis-mode multi_agent --result-review`。四阶段可各修正最多一次，报告以真实客户端差量统计调用，不承诺每次都是5次。报告图片存同目录相对companion资产，分享用报告图片ZIP。完整重跑步骤见[dlinear_testing.md](dlinear_testing.md)。
+10. 网页默认真实模式，DLinear 预设使用本地CPU而不依赖Docker；CLI重跑使用 `--llm-review --analysis-mode multi_agent --result-review`。四阶段可各修正最多一次，报告以真实客户端差量统计调用，不承诺每次都是5次。报告图片存同目录相对companion资产，分享用报告图片ZIP。完整重跑步骤见[dlinear_testing.md](dlinear_testing.md)。
 
-验收已通过：网页/CLI执行官方`run_longExp.py`和跨文件导入，可追溯源码与数据SHA、实际参数、完整协议、独立复算及结果。结论仅为DLinear/ETTh1 336→96选定实验数值复现；Neural ODE、多文件自动修复与陌生仓库通用化仍须后续实现。
+验收已通过：网页/CLI执行官方`run_longExp.py`和跨文件导入，可追溯源码与数据SHA、实际参数、完整协议、独立复算及结果。结论仅为DLinear/ETTh1 336→96选定实验数值复现；多文件自动修复与陌生仓库通用化仍须后续实现。
 
-### 5.2 Neural ODE：验证第二个仓库可以复用同一执行器
+### 5.2 Neural ODE：已完成官方方法实验
 
-1. 获取上文固定 SHA，安装完整 torchdiffeq 工作副本，准备 torch、scipy、numpy、matplotlib。
-2. 先执行一个最小真实步骤（以下是作者现有 CLI，可在已准备环境的仓库根目录运行）：
+`neural_ode_spiral` 已接入 `MethodReproduction` 和共享 `RepositoryRunner`，从固定作者源文件提取原始 `ODEFunc` 并执行完整 torchdiffeq 包。冻结 2000 次迭代、1000 个时间点、RMSprop 学习率 0.001、batch_time=10、batch_size=20、dopri5 和项目种子 2021；现代兼容环境为 PyTorch 2.5.1+cpu。
 
-```bash
-CUDA_VISIBLE_DEVICES="" MPLBACKEND=Agg python examples/ode_demo.py \
-  --niters 20 --data_size 100 --batch_time 10 --batch_size 10 --test_freq 10
+10 月 8 日运行 `repository_63937713d8f74cce897e57f092729935` 完成真实训练、轨迹与图表导出、双精度 SciPy DOP853 独立评价及一次真实 API 建议。轨迹 MAE 为 0.4700458448，RMSE 为 0.5628648218；该轨迹也用于采样训练片段，因此报告称“轨迹拟合误差”，不称“测试泛化精度”。见 [完整方法实验记录](neural_ode_result.md)。
+
+```powershell
+python scripts/reproduce_repository.py --profile neural_ode_spiral --prepare-environment
+python scripts/reproduce_repository.py --profile neural_ode_spiral --offline --optimization suggest
+python scripts/reproduce_repository.py --profile neural_ode_spiral --offline --optimization validate --max-candidates 3 --budget-seconds 7200
 ```
 
-3. Demo 拟合预设可从 200 次迭代开始校准；参考作者默认是 2000 次、data_size=1000。若短跑没有收敛，延长训练并记录预算，不能仅挑选好看的 seed。
-4. 图像输出加 --viz，并用 MPLBACKEND=Agg；收集 png/ 目录下本次生成的图。首次适配验证无 GUI 容器下保存行为。
-5. 原示例没有 seed 参数；增加一个有限的复现补丁，固定 Python/NumPy/PyTorch 种子，并额外导出初始误差、最终误差、轨迹数组和 JSON。保持网络、优化器、求解器与目标方程不变。
-6. 作者 Total Loss 是全条轨迹上的平均绝对误差，这条轨迹也用于采样训练片段；它不是独立留出测试。报告标为“轨迹拟合误差”，不要写“测试泛化精度”。
-7. smoke 验证退出成功、loss 有限、产物齐全；方法演示验证轨迹拟合效果与相图。工程误差阈值在预实验之后事前固定，标注自定义标准；没有论文对应数值就不给 reproduced 标签。
+`suggest` 提供尚未验证的建议；`validate` 使用独立新增初值验证和留出协议。10 月 8 日优化运行 `repository_5eb1e232c85947f5b7b36b21f484fcf3` 已完成三个候选比较并选定 batch_time=20，但第二种子候选训练中断，留出确认未完成。该运行继续保留 `interrupted`、`optimized=False`，不以验证集改善宣称优化有效；详情见 [原检查点](implementation_checkpoint_20261008.md)。[10 月 9 日独立重跑](resumed_validation_20261009.md)已完成第二种子和留出确认；第二种子留出误差增加，故记录 `tested_no_gain`，未认定稳定提升。
 
-验收：无需改主编排器，新增第二个预设与产物解析器即可运行；保留整个 torchdiffeq 包的执行路径。此示例证明多文件执行器可复用，不证明支持所有论文。
+### 5.3 SIREN：已完成 CUDA 快速档与独立优化实验
 
-## 6. 对当前项目的具体改造位置
+`siren_camera_quick` 从固定 `explore_siren.ipynb` 逐字提取模型，保留作者 256 宽度、3 个隐藏层、频率 30、Adam 学习率 0.0001、500 步及 256×256 图像。Windows/NVIDIA CUDA 12.1 环境准备后，10 月 8 日三次独立全图拟合加真实建议的总耗时为 28.844 / 28.391 / 28.500 秒，PSNR 均为 37.362052 dB；见 [快速档记录](siren_quick_result.md)。
+
+```powershell
+python scripts/reproduce_repository.py --profile siren_camera_quick --prepare-environment
+python scripts/reproduce_repository.py --profile siren_camera_quick --offline --optimization suggest
+python scripts/reproduce_repository.py --profile siren_camera_quick --offline --optimization validate --max-candidates 3 --budget-seconds 7200
+```
+
+优化协议另以种子 1729 划分 80%/10%/10% 训练、验证、留出像素，冻结候选后才确认两个训练种子的留出 PSNR；门槛为各提升至少 0.1 dB。10 月 8 日已有真实 `validated_gain` 测量，但当时 LLM 建议的协议说明存在 [#24](https://github.com/Yukikazct/AutoReproducer/issues/24) 问题，原建议和独立测量分别保留，不能把修正后的解释冒充原响应。训练 MSE 为 [-1,1] 尺度，评价 MSE/PSNR 为 [0,1] 尺度，报告解释必须区分。
+
+两种方法预设的运行产物保存在本机 `data/runs/`；`off` 不调用建议 API，`suggest`/`validate` 使用真实配置。四阶段公开来源分析由 `--llm-review` 单独开启，不能把仅一次建议 API 的历史记录写成四阶段验收。
+
+## 6. 原计划中的改造位置与当前映射
+
+下表保留原拟议文件布局。实际已交付的共享模块位于 `src/repository_runner.py`、`src/repository_adapters.py`；方法预设位于 `src/method_profiles.py`、`src/method_adapters.py`、`src/method_reproduction.py`、`src/method_advice.py` 和 `src/method_optimization.py`，并非下表所有 `src/reproduction/` 文件均已存在。通用 Inspector/Planner 和自动多文件修复仍属扩展设计。
 
 | 文件/模块 | 具体改动 | 完成判据 |
 |---|---|---|
@@ -312,7 +337,7 @@ CUDA_VISIBLE_DEVICES="" MPLBACKEND=Agg python examples/ode_demo.py \
 
 首版配置使用 JSON 可不增加依赖；若选 YAML，需将 PyYAML 显式加入项目依赖。
 
-## 7. 按依赖推进的实施顺序
+## 7. 原计划中的实施顺序（2026-10-03）
 
 以下按一名开发者、已有 Docker/开发环境估算 **10–12 个工作日**；不含网络受阻、环境迁移和长时间参考训练。每阶段先达成验收，再进入后续工作。
 
@@ -332,7 +357,7 @@ CUDA_VISIBLE_DEVICES="" MPLBACKEND=Agg python examples/ode_demo.py \
 
 A 阶段可以先通过人工命令完成；B 阶段的验证修复与执行器联调同时推进。不要在真实案例跑通之前新增搜索算法或扩展很多 Agent。
 
-## 8. Demo 验收清单
+## 8. 原计划中的 Demo 验收清单
 
 ### 必须通过的工程检查
 
@@ -352,18 +377,19 @@ A 阶段可以先通过人工命令完成；B 阶段的验证修复与执行器�
 - 记录真实调用次数、token、运行时间与超时预算；最多 20 次 LLM 调用/任务作为初始 Demo 配置，并在调用边界强制停止。当前各 Agent 共享客户端累计计数的差量逻辑需核对，避免重复累计。
 - reference 结果若未达到论文指标，交付可解释的差异报告仍有价值；不将其改称“成功复现”。
 
-## 9. Demo 之后再扩展
+## 9. 当前优化范围与后续扩展
 
-第一版先保留已有优化代码，但真实演示不开自动优化。两篇复现稳定后，再选择一个主指标，用真实测量的基线、相同数据切分和冻结评估器做多文件优化。
+10 月 3 日“首版不开优化”的约束已完成其阶段目的。当前 SIREN/Neural ODE 接入有限单参数搜索：真实测量基线、冻结协议和评估器、验证集选优、候选冻结、两种子留出确认。它不修改作者模型代码，也不等于通用多文件优化或 BeamUCT 主流程已接通。
 
-届时还需修正 Optimizer 对所有结果使用 baseline * (1 + reward) 的处理：MSE 等越小越好的指标不能用同一公式还原结果，实际测量值应直接来自执行器。之后再接入 holdout、TrialLedger 和 BeamUCT，评估它们是否在同等预算下提升成功率。
+当前方法搜索直接消费执行器的实测指标，SIREN 使用越大越好的 PSNR，Neural ODE 使用越小越好的 MAE；确认门槛分别为 0.1 dB 和 1% 相对下降。通用旧 Optimizer 的奖励换算、TrialLedger 和 BeamUCT 集成仍需独立审查和验证，不能套用方法预设的验收结果。
 
-下一阶段最有价值的指标是：新增第三个仓库需要修改多少核心代码、成功完成多少个事前定义的实验、失败定位耗时，以及从干净环境重放的成功率。
+当前优先完成 #23/#24 修复后的真实重跑与平台回归，保留历史中断和原始建议证据。后续衡量新增仓库所需核心改动、完成的事前定义实验数、失败定位耗时及干净环境重放成功率。
 
 ## 10. 本次检查资料
 
 - [测试记录](review/pytest_20261003.txt)
 - [验证器反例](review/validator_probes_20261003.json)
+- [SIREN 快速档](siren_quick_result.md)、[Neural ODE 方法实验](neural_ode_result.md)、[10 月 8 日检查点与中断记录](implementation_checkpoint_20261008.md)
 - [DLinear 作者仓库](https://github.com/cure-lab/LTSF-Linear)、[ETTh1 作者脚本](https://github.com/cure-lab/LTSF-Linear/blob/0c113668a3b88c4c4ee586b8c5ec3e539c4de5a6/scripts/EXP-LongForecasting/Linear/etth1.sh)
 - [Neural ODE 作者仓库](https://github.com/rtqichen/torchdiffeq)、[官方示例](https://github.com/rtqichen/torchdiffeq/blob/657943acefa826ef04c025ebeb1ff5e9d60dc268/examples/ode_demo.py)
 - 本地原始方案：项目根目录 AutoReproducer-项目方案.pdf；历史实验：data/reports/dlinear_cache_verified.md、reports/pinn_reproduction.md。后者是 PINN 冒烟记录，未证明论文量级的数值复现。

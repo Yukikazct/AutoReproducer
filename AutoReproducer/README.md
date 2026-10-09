@@ -2,13 +2,62 @@
 
 基于多智能体协作的论文自动复现与优化系统
 
+## 当前可运行实验（2026-10-09）
+
+网页“官方仓库预设”和命令行共用真实执行流程。当前支持以下固定案例，运行前关闭 Mock 与 Docker：
+
+| 预设 | 实验与设备 | 已有证据 |
+|---|---|---|
+| `dlinear_etth1_reference` | ETTh1 多变量 336→96，CPU | 选定论文实验数值复现通过，详见下节 |
+| `siren_camera_quick` | cameraman 256×256、500 步，NVIDIA CUDA 12.1 | Windows RTX 4060 上完成全图拟合、独立评价和真实 API 建议；[10 月 8 日快速档记录](docs/siren_quick_result.md) |
+| `neural_ode_spiral` | 官方二维螺旋示例、2000 次迭代，CPU | 完成轨迹拟合、独立 SciPy 评价和真实 API 建议；[10 月 8 日方法实验记录](docs/neural_ode_result.md) |
+
+SIREN 与 Neural ODE 的结果为 `method_experiment_completed`、`is_reproduced=null`：完成作者方法实验，不代表论文全部基准或表格数值复现。SIREN 五分钟目标从已准备环境开始计时，首次下载和安装不计入；换设备或网络后需重新实测。
+
+这两个方法预设支持三种优化模式：
+
+| 模式 | 行为 | 结论范围 |
+|---|---|---|
+| `off`（默认） | 完整训练与独立评价 | 无需建议 API；保留真实基线与图表 |
+| `suggest` | 基线后调用真实 API，生成最多 3 条有作者来源的单参数建议 | 建议尚未训练验证，`optimized=False` |
+| `validate` | 独立优化协议重训基线，按验证集选择候选，再做两种子留出确认 | 只有两种子均达到事前门槛才标记 `validated_gain`；最多 3 个候选，总预算不超过 7200 秒 |
+
+优化扩展中的 SIREN 使用固定 80%/10%/10% 训练、验证和留出像素；Neural ODE 使用新增初值轨迹验证。选优只看验证集，冻结候选后才打开留出评估，不把这些指标混称为官方全图或全轨迹拟合结果。DLinear 保留作者协议，不开放参数优化。已有 [10 月 8 日检查点](docs/implementation_checkpoint_20261008.md)保留 SIREN 优化测量和 Neural ODE 中断记录；[10 月 9 日续跑](docs/resumed_validation_20261009.md)已完成 SIREN 四阶段在线分析及 Neural ODE 两种子留出确认；后者第二种子未达提升门槛，结论为 `tested_no_gain`、`optimized=False`。
+
+从 `AutoReproducer/` 目录运行，先准备对应环境，再选择模式：
+
+```powershell
+# 准备源码、数据、隔离依赖和设备；此阶段不训练
+python scripts/reproduce_repository.py --profile siren_camera_quick --prepare-environment
+python scripts/reproduce_repository.py --profile neural_ode_spiral --prepare-environment
+
+# 真实基线，无需 API
+python scripts/reproduce_repository.py --profile siren_camera_quick --offline --optimization off
+
+# 真实基线与建议：从 LLM_API_KEY 读取密钥，交互终端未配置时隐藏输入
+python scripts/reproduce_repository.py --profile siren_camera_quick --offline --optimization suggest
+python scripts/reproduce_repository.py --profile neural_ode_spiral --offline --optimization suggest
+
+# 独立候选训练与两种子留出确认；每次命令创建新实验
+python scripts/reproduce_repository.py --profile neural_ode_spiral --offline --optimization validate --max-candidates 3 --budget-seconds 7200
+
+# 可选：在训练前增加四阶段真实 API 公开来源分析
+python scripts/reproduce_repository.py --profile siren_camera_quick --offline --llm-review --optimization suggest
+```
+
+`--prepare-only` 只准备源码、数据与执行计划，不安装环境；`--prepare-environment` 还会安装依赖并检查设备。正式方法实验只复用已准备缓存，缺失即失败。`--offline` 约束源码与数据获取，启用建议或在线分析时仍会访问 API。网页对应“准备实验环境”与“运行实验”，运行结果和原始建议记录保存在本机 `data/runs/<运行编号>/`，不随 Git 分发。
+
+运行中优化状态为 `running`；正常取消保存 `interrupted` 记录及已有实验结果。Windows 的训练进程受 Job 管理，关闭启动会话（含 `py` 启动器）或强杀主 Python 后会清理训练后代。强杀后，下次方法实验自动识别失去运行锁的未完成记录，也可运行 `python scripts/recover_interrupted_optimizations.py`，为结果与报告补记中断；这不会续训或改写已完成指标。POSIX 的正常 SIGTERM 会清理进程组；SIGKILL 后孤儿训练可能持续至超时，不能将记录恢复视为立即终止所有后代。
+
+Windows 支持直接运行 Python 和标准 CPython 虚拟环境。Microsoft Store Python 创建的虚拟环境会经系统代理派生脱离 Job 的进程，因此仓库实验会在执行前拒绝该配置；需要虚拟环境时，请使用 [python.org 的 Windows 安装版](https://www.python.org/downloads/windows/)创建。程序不修改现有虚拟环境配置。
+
 ## DLinear 官方仓库复现（2026-10-07：真实 4 + 1 多 Agent 流程通过）
 
 网页默认真实模式。“输入方式 → 官方仓库预设”默认执行 DLinear 的 ETTh1 多变量 **336→96 完整作者实验**：固定源码和真实数据，按最多 10 轮、patience 3 的官方协议训练、加载验证集最优 checkpoint，再测试和独立复算指标。保持 Mock 与 Docker 关闭，使用本地 CPU。默认勾选“使用真实多 Agent 分析论文、仓库和环境”；自行勾选“允许 API 分析本次指标、轮数和核验状态摘要”后，训练后再执行结果解释。取消分析选项时，作者训练本身无需 LLM API。
 
 新运行 `repository_e9408141e3dd44319e854bbdf4a70c0c` 通过生产网页后台入口完成：PaperReader、ResourceFinder、EnvBuilder、Verifier 读取 **16 个真实公开来源**，四阶段各 **1** 次调用且一次通过；训练后 ResultValidator 对已允许的数值摘要调用 **1** 次。真实 `deepseek-chat` API 合计 **5 次、零修正重试**，客户端与审计计数一致。报告分别标注论文原文、作者脚本和代码设置/默认值，作者依赖声明不冒充已核实的原始运行环境。
 
-本次重新训练在第 **7** 轮触发作者早停，最终 **MSE 0.3841444、MAE 0.4047131**，相对论文 Table 2 的 0.375/0.399 分别差 **2.44%/1.43%**，均进入项目事前设置的 **5% 相对容差**。113 个固定源码文件、数据 SHA、实际训练协议、预测产物和独立指标复算均通过，最终状态 `reproduced`、`analysis_status=completed`。该容差是项目验收规则，不是论文阈值；API 解释不覆盖确定性数值判定。结论只覆盖上述一个实验，仓库预设保留作者方案，不执行自动模型优化。
+本次重新训练在第 **7** 轮触发作者早停，最终 **MSE 0.3841444、MAE 0.4047131**，相对论文 Table 2 的 0.375/0.399 分别差 **2.44%/1.43%**，均进入项目事前设置的 **5% 相对容差**。113 个固定源码文件、数据 SHA、实际训练协议、预测产物和独立指标复算均通过，最终状态 `reproduced`、`analysis_status=completed`。该容差是项目验收规则，不是论文阈值；API 解释不覆盖确定性数值判定。结论只覆盖上述一个实验，DLinear 预设保留作者方案，不执行自动模型优化。
 
 查看[新完整报告](data/runs/repository_e9408141e3dd44319e854bbdf4a70c0c/report.md)、[最终结果](data/runs/repository_e9408141e3dd44319e854bbdf4a70c0c/result.json)、[四阶段分析](data/runs/repository_e9408141e3dd44319e854bbdf4a70c0c/repository_analysis.json)、[结果解释](data/runs/repository_e9408141e3dd44319e854bbdf4a70c0c/result_analysis.json)及[报告和图片 ZIP](data/runs/repository_e9408141e3dd44319e854bbdf4a70c0c/report_with_figures.zip)。旧版单次 API 基线的[原始报告](data/runs/repository_66efc14890e34cb196a07a7d2bcb78fe/report.md)仍保留，新运行的指标与第 7 轮早停结果相同。完整对照见[复现结果](docs/dlinear_reproduction_result.md)。
 
@@ -20,7 +69,7 @@ python scripts/reproduce_repository.py --profile dlinear_etth1_reference --offli
 python scripts/reproduce_repository.py --profile dlinear_etth1_reference --offline --llm-review --analysis-mode multi_agent --result-review
 ```
 
-当前固定预设使用本地 CPU，依赖缓存按 Python ABI、OS 和架构隔离。Windows/NVIDIA CUDA 训练需另行适配和验证，建议在 WSL2 中准备对应 PyTorch/CUDA 环境；本次实测平台为 macOS ARM64。框架和硬件变化可能影响结果，不保证重跑得到逐位相同数值。
+DLinear 与 Neural ODE 预设使用本地 CPU；SIREN 已适配 Windows/NVIDIA CUDA 并完成上述本机实验。依赖缓存按 Python ABI、OS、架构和依赖清单隔离；本节 DLinear 历史实测平台为 macOS ARM64。框架和硬件变化可能影响结果，不保证重跑得到逐位相同数值。
 
 Markdown 图片使用同目录的 `<report_stem>_assets/` 相对资产目录。分享时使用网页“⬇️ 下载报告和图片（ZIP）”并保留解压后的目录结构；只复制 `.md` 无法携带图片。预分析拒绝会保留原文诊断并停止训练；每阶段最多一次修正，其他运行的实际调用数可能与本次 5 次不同。
 
@@ -76,7 +125,7 @@ GitHub Actions 在 Windows/Linux 与 Python 3.11/3.12 上运行回归；Windows
 
 ## 当前核心流程（复现 → 验证 → 报告）
 
-智能优化目前仅保留可选接口，暂不开发或执行。网页入口禁用，`enable_optimization` 默认 `False`；即使调用方传入 `True`，也返回 `not_implemented`、`optimized=False`，不触发模拟优化、补丁或重训。下方优化相关模块保留供后续开发，不参与当前复现流水线。
+SIREN 与 Neural ODE 已接入上方三种优化模式，使用有限参数候选和真实训练评估。通用论文流程的旧优化开关仍是预留接口，DLinear 也不做参数优化；UCB/BeamUCT 等既有模块不参与当前方法实验的候选选择。
 
 **1 个编排器 + 8 个专职 Agent：**
 
@@ -88,14 +137,14 @@ GitHub Actions 在 Windows/Linux 与 Python 3.11/3.12 上运行回归；Windows
 | ⚡ CodeExecutor | 在本地或 Docker 沙箱中运行代码 |
 | ✅ ResultValidator | 比对论文声明值与运行结果 |
 | 🛡️ Verifier | Prompt-Free 质量验证（复用各 Agent 系统提示词） |
-| 🧪 Optimizer | 预留接口，当前跳过 |
+| 🧪 Optimizer | 方法预设的来源建议、有限参数试验与两种子确认；通用流程仍预留 |
 | 📝 ReportGenerator | 生成 Markdown 复现报告 |
 
 **状态机流转：**
 
 ```
 INIT → READ_PAPER → FIND_RESOURCES → BUILD_ENV → EXECUTE_CODE → VALIDATE
-  → GENERATE_REPORT → COMPLETED
+  → [方法预设可选：建议 / 候选训练与确认] → GENERATE_REPORT → COMPLETED
 ```
 
 网页根据有序执行阶段显示进度，Agent 名称只是负责人。同一 Verifier 的训练前预审和训练后本地核验分别记录，重试复用对应阶段，错误终止后未执行的阶段明确标注。阶段完成比例不代表论文数值验收通过；验收结论以 `validation` 为准。官方仓库实时输出使用 240 像素高的滚动窗口，完整日志仍保存于运行目录。
@@ -107,7 +156,7 @@ INIT → READ_PAPER → FIND_RESOURCES → BUILD_ENV → EXECUTE_CODE → VALIDA
 ## 核心创新点
 
 1. **真实实验与确定性核验** — 完整执行后分别检查协议、独立指标复算和数值验收
-2. **优化接口预留** — UCB 等既有模块保留，当前生产流程不调用
+2. **有限参数优化** — 方法预设使用冻结验证协议和两种子留出确认；UCB 等既有模块仍保留供后续开发
 3. **Prompt-Free 双层验证** — 复用各 Agent 系统提示词作为质量标准，无需额外验证提示词
 4. **可审计完整实验追踪** — 所有步骤的输入输出 / 决策依据写入 `data/logs/` JSONL，
    实验账本（Ledger）写入 `data/experiment_ledger/`，支持 `replay()` 按时间轴回放
@@ -217,7 +266,7 @@ python scripts/resource_cli.py quota-check --size-gb 1.5   # 下载前预检
 
 ## 两种模式
 
-- **真实模式**（网页默认）— 配置 **OpenAI 兼容的远程 LLM API** 执行分析；官方仓库预设也可关闭分析选项后直接训练。本地 CPU 不依赖 Docker。
+- **真实模式**（网页默认）— 配置 **OpenAI 兼容的远程 LLM API** 执行分析；官方仓库预设也可关闭分析与优化选项后直接训练。预设按固定配置使用本地 CPU 或 CUDA，不依赖 Docker。
 - **Mock 模式**（手动开启）— 无需 LLM API / Docker，演示通用流程；官方仓库预设要求真实模式。
 
 > **安全提示**：真实模式的代码执行分两种沙箱——**本地子进程**（默认，便捷但

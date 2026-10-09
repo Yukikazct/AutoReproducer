@@ -139,7 +139,7 @@ def test_local_use_prevents_same_thread_cleanup_and_refreshes_on_exit(root, tmp_
 
 
 def test_repository_scope_covers_steps_and_refreshes_nested_environment(root, tmp_path):
-    runtime = f"{sys.implementation.cache_tag}-{sys.platform}-{repository.platform.machine()}"
+    runtime = repository.runtime_fingerprint()
     reqs = "test-package==1"
     identifier = f"repository/{runtime}/{ce.reqs_digest(reqs)}"
     path = environment(root, identifier)
@@ -164,10 +164,10 @@ def test_concurrent_installers_wait_for_ready_and_install_once(root, tmp_path, m
     original_guard = ce.cache_guard
 
     @contextmanager
-    def observed_guard(path):
+    def observed_guard(path, **kwargs):
         if threading.current_thread().name.endswith("_1"):
             waiting.set()
-        with original_guard(path):
+        with original_guard(path, **kwargs):
             yield
 
     def pip(cmd, **kwargs):

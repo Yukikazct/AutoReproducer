@@ -12,8 +12,11 @@ from src.orchestrator import Orchestrator
 from src.repository_profiles import PROFILE_LABELS
 from src.llm.llm_client import LLMClient
 from frontend.llm_config import resolve_llm_config
+from src.process_lifecycle import termination_signals, watch_parent_session
 
 
+@watch_parent_session()
+@termination_signals()
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--profile", choices=list(PROFILE_LABELS), default="dlinear_etth1_reference")
@@ -67,4 +70,8 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except KeyboardInterrupt:
+        print("实验已中断，已有记录已保存。", file=sys.stderr, flush=True)
+        raise SystemExit(130)
