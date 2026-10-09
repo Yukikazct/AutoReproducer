@@ -6,6 +6,7 @@ from pathlib import Path
 
 from src.dependency_cache import cache_guard
 from src.method_adapters import write_json, read_json, digest
+from src.execution_plan import build_plan, plan_step_ids
 from src.repository_adapters import get_adapter
 from src.repository_profiles import get_profile
 from src.repository_runner import RepositoryRunner
@@ -97,8 +98,20 @@ class MethodReproduction:
             env = {**profile["environment"], "cache_lock_timeout_s": 0}
             if not (prepare_only or prepare_env):
                 env.update(require_prepared=True, deadline_monotonic=baseline_deadline)
-            data["execution_plan"] = {"steps": steps, "workspace": snapshot["path"], "spec_sha256": spec_hash}
-            write_json(run_dir / "execution_plan.json", data["execution_plan"])
+            plan = build_plan(mode="repository", profile=profile["id"], spec_sha256=spec_hash,
+                              workspace=snapshot["path"],
+                              repository={"url": snapshot.get("url", ""),
+                                          "revision": snapshot.get("resolved_sha", "")},
+                              dataset={"name": profile["dataset"].get("name", ""),
+                                       "sha256": profile["dataset"].get("sha256", "")},
+                              limits=profile["budget"], steps=steps)
+            data["execution_plan"] = plan
+            write_json(run_dir / "execution_plan.json", plan)
+            # What lands on disk must describe exactly the steps about to run, so a
+            # failed or rewritten plan file cannot change the executed experiment.
+            stored = read_json(run_dir / "execution_plan.json")
+            if plan_step_ids(stored.get("steps")) != plan_step_ids(plan["steps"]):
+                raise RuntimeError("落盘执行计划与本次执行步骤不一致")
             if prepare_only:
                 data["execution"] = {"mode": "repository", "executed": False, "not_runnable": True}
                 data["validation"] = {"status": "prepared", "result_level": "prepared", "is_reproduced": None,

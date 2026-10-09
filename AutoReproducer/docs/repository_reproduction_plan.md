@@ -140,21 +140,26 @@ repo-key 由规范化 URL 生成；run-id 使用 UUID 或时间戳加随机后�
 
 ### 第三步：产出命令计划，保持多文件结构
 
-新增 ExecutionPlanner。核心输出应从 code 字符串改为 ExecutionPlan，包含 repo_root、步骤顺序、argv、cwd、环境变量、超时、预期输出、数据挂载、前置步骤和解析器。
+执行计划由 `src/execution_plan.py` 的 `build_plan` 产出。核心输出已从 code 字符串改为 ExecutionPlan，包含 repo_root、步骤顺序、argv、cwd、环境变量、超时、步骤类型 kind、前置步骤 depends_on、前置产物 requires 与声明产物 artifacts。计划是冻结的 dict，绝不生成 shell 文本；审阅者按阅读顺序编写步骤，依赖只能指向更早的步骤，因而循环依赖不可表达。
 
-最小结构示例（协议草案，不是当前已有 API）：
+最小结构示例（与 `build_plan` 的输出逐字段对应；DLinear 预设走作者合并入口，只用前两步，
+`evaluate` 一步是拆分 train/eval 时的写法，SIREN 与 Neural ODE 预设即为该形态。验证级别与
+容差属于 `experiment_spec.json`，不在执行计划里）：
 
 ```json
 {
   "version": 1,
   "mode": "repository",
   "profile": "dlinear_etth1_reference",
+  "spec_sha256": "ab91d7f0860a09644ac5c20d5b64ca01188a1bf4a313d47cd4448323efd33b5d",
+  "workspace": "/workspace/repo",
+  "repo_root": "/workspace/repo",
   "repository": {
     "url": "https://github.com/cure-lab/LTSF-Linear.git",
     "revision": "0c113668a3b88c4c4ee586b8c5ec3e539c4de5a6"
   },
-  "workspace": "/workspace/repo",
-  "spec_path": "experiment_spec.json",
+  "dataset": {"name": "ETTh1", "sha256": "f244b507c20580401cd847ba5829a9f53a704e39ee57a59e5c50d39ef0016afa"},
+  "limits": {"repair_rounds": 2, "llm_calls": 20, "total_seconds": 2400},
   "steps": [
     {
       "id": "import_check",
@@ -166,22 +171,32 @@ repo-key 由规范化 URL 生成；run-id 使用 UUID 或时间戳加随机后�
     },
     {
       "id": "train_and_eval",
-      "kind": "run",
+      "kind": "train",
       "argv": ["python", "-u", "run_longExp.py", "--is_training", "1", "--model_id", "ETTh1_336_96", "--model", "DLinear", "--data", "ETTh1", "--root_path", "./dataset/", "--data_path", "ETTh1.csv", "--features", "M", "--seq_len", "336", "--pred_len", "96", "--enc_in", "7", "--train_epochs", "10", "--patience", "3", "--batch_size", "32", "--num_workers", "0", "--learning_rate", "0.005", "--itr", "1"],
       "cwd": ".",
       "env": {"CUDA_VISIBLE_DEVICES": "", "OMP_NUM_THREADS": "2", "MPLBACKEND": "Agg"},
       "depends_on": ["import_check"],
       "timeout_s": 1800,
-      "parser": "dlinear_final_test",
-      "expected_metrics": ["mse", "mae"]
+      "artifacts": [{"path": "results/*/checkpoint.pth"}, {"path": "results/*/pred.npy"}]
+    },
+    {
+      "id": "evaluate",
+      "kind": "eval",
+      "argv": ["python", "-u", "evaluate.py", "fit"],
+      "cwd": ".",
+      "depends_on": ["train_and_eval"],
+      "requires": [{"path": "results/ETTh1_336_96/checkpoint.pth"}],
+      "timeout_s": 90
     }
-  ],
-  "limits": {"repair_rounds": 2, "llm_calls": 20, "total_seconds": 2400},
-  "validation": {"level": "reference", "paper_match_required": true, "relative_tolerance": 0.05}
+  ]
 }
 ```
 
 依赖准备由 EnvBuilder 在这些步骤之前完成。训练和评估如果由作者入口一次完成，就保留该入口；若分 train.py / eval.py，就明确列出两个步骤及 checkpoint 传递。超时值是初始预算建议，需要在目标机器校准。
+
+`requires` 与 `artifacts` 的分工是刻意的：`artifacts` 是这一步跑完后顺带收集的证据，路径可以是通配（作者输出目录常含运行时间戳），匹配不到只记原因，绝不改变该步的结论；`requires` 是下一步启动前要确认存在的产物，必须是具体路径，缺失或为空即阻止该步执行。否则训练“成功退出却没写出 checkpoint”会被读成一次真实评分失败，而它的成因在训练那一步。
+
+执行采用线性停止：第一条必需步骤失败后，其后的步骤一律不启动，登记为 `skipped` 并写明 `blocked_by`。被挡住的步骤计入失败结论，报告里渲染成“未执行（因 X）”，不会因为它没跑就变成可选跳过。`required: false` 只用于 import 探测这类允许失败的步骤，它自身失败不阻断下游，但下游若被别的失败挡住仍算失败。
 
 ### 第四步：准备适配平台的依赖和真实数据
 
@@ -336,13 +351,17 @@ A 阶段可以先通过人工命令完成；B 阶段的验证修复与执行器�
 
 ### 必须通过的工程检查
 
-- 多文件 fixture：入口导入两个本地模块，读取相对配置，生成产物；路径含空格/中文仍能运行。
-- 支持分离 train/eval 步骤，checkpoint 缺失时停止；必需前置步骤失败时不能执行下游评估。
-- repo URL/revision 从前端传到底层；缓存版本或数据 SHA 不符时拒绝复用。
-- 对本次确认的五个验证反例添加回归测试；无指标、NaN/Inf、缺参考值、非零退出码不判成功。
-- 多文件补丁有一处不合法时全部不生效；训练失败后恢复上一个完整候选。
-- 超时/取消能终止当前进程组或容器，不继续启动下一步；保留中间日志和失败报告。
-- 同样的 ExperimentSpec 通过网页和脚本运行，得到相同状态与配置记录。
+括号内为当前覆盖该条的测试文件；标注「未覆盖」的条目尚未有测试。
+
+- 多文件 fixture：入口导入两个本地模块，读取相对配置，生成产物；路径含空格/中文仍能运行。（`test_repository_runner.py::test_multi_file_fixture_survives_spaces_and_chinese_in_paths`、`::test_multiple_files_import_and_nested_cwd_are_preserved`）
+- 支持分离 train/eval 步骤，checkpoint 缺失时停止；必需前置步骤失败时不能执行下游评估。（`test_execution_plan.py::test_method_profiles_split_train_and_eval_into_separate_steps`；`test_repository_runner.py::test_missing_prerequisite_product_blocks_the_consumer_even_after_success`、`::test_failed_prerequisite_blocks_downstream_steps_and_is_a_failed_verdict`、`::test_timeout_halts_dependent_steps`）
+- 仓库模式不自动回退为单文件生成：Orchestrator 早期分流、CodeExecutorAgent 硬拒仓库预设、报告把被挡步骤写为「未执行」，三层互不依赖。（`test_repository_no_fallback.py`）
+- 执行计划可落盘、可重放，字段与文档示例一致。（`test_execution_plan.py::test_the_documented_plan_example_is_buildable_by_the_real_validator`、`test_repository_runner.py::test_runner_accepts_a_validated_plan_dict_and_runs_it_in_authored_order`）
+- repo URL/revision 从前端传到底层；缓存版本或数据 SHA 不符时拒绝复用。（`test_repository_reproduction.py::test_export_uses_fixed_commit_archive_and_leaves_dirty_cache_untouched`、`::test_corrupt_download_never_populates_real_cache_or_synthetic_fallback`）
+- 对本次确认的五个验证反例添加回归测试；无指标、NaN/Inf、缺参考值、非零退出码不判成功。（`test_result_validation_gate.py`）
+- 多文件补丁有一处不合法时全部不生效；训练失败后恢复上一个完整候选。（未覆盖：第六步 RepositoryRepairer 尚未实现，本批未涉及修复循环）
+- 超时/取消能终止当前进程组或容器，不继续启动下一步；保留中间日志和失败报告。（`test_repository_runner.py::test_timeout_keeps_partial_logs_and_stops_descendants`、`::test_timeout_halts_dependent_steps`）
+- 同样的 ExperimentSpec 通过网页和脚本运行，得到相同状态与配置记录。（未覆盖：网页路径依赖 streamlit，当前环境未安装）
 
 ### 真实案例验收
 

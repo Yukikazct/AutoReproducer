@@ -5,6 +5,23 @@
 
 ---
 
+## [2026.10.09-1] - 2026-10-09（仓库执行计划与依赖阻断）
+
+- 新增 `src/execution_plan.py` 执行计划契约：逐步记录 argv、cwd、步骤类型 kind、超时、`depends_on` 前置步骤、`requires` 前置产物、`artifacts` 声明产物与 `required` 必需标志。步骤按阅读顺序校验，依赖只能指向更早的步骤，循环依赖无法表达，审阅者不必手工维护拓扑排序。计划为冻结 dict，落盘 `execution_plan.json` 后回读核对步骤一致。
+- RepositoryRunner 改为线性停止：第一条必需步骤失败后，其后步骤一律不启动，在结果与事件中登记为 `skipped` 并写明 `blocked_by`。被挡步骤计入失败结论，不会被读成"可选跳过"。
+- 新增前置产物门控：`requires` 指向的文件缺失或为空时，在启动前挡住该步骤。此前"训练成功退出却没写出 checkpoint"会表现为评估器内部的困惑失败，现在成因直接归于上游。
+- 新增证据留存：`artifacts` 声明产物按步骤复制到 `<run_dir>/artifacts/<步骤id>/` 并记录 sha256。产物路径可用通配（作者输出目录含运行时间戳）；收集失败只记原因，绝不改变该步骤结论。
+- 修复一处真实缺陷：单步复核原先把 `depends_on` 一并重新校验，而只看一步时依赖 id 必然缺失，导致任何带依赖的步骤都以退出码 −2 失败——修好前"前置失败停止下游"这条验收根本无法通过。
+- 仓库模式不回退单文件，由三层独立保障：Orchestrator 见 `experiment_profile` 直接分流到仓库复现并提前返回；`CodeExecutorAgent` 遇仓库预设抛 `RepositoryModeFallbackRejected`，绝不生成 run.py；报告把被挡步骤渲染为"未执行（因 X）"。
+- 报告新增"未执行的步骤"段落，区分"前置步骤未通过"与"缺少前置产物"，并注明被挡步骤按失败计入结论。
+- 三个真实预设（DLinear、SIREN、Neural ODE）的步骤均可构建成合法计划；SIREN/Neural ODE 的 train/eval 独立步骤与 checkpoint 门控已核验。依赖标注在 `steps()` 而非 `evaluation_step()`，保证留出评估单跑评估器时不出现悬空依赖。
+- 新增测试：`tests/test_execution_plan.py` 23 例、`tests/test_repository_no_fallback.py` 8 例（均为新增文件），`tests/test_repository_runner.py` 由 15 个测试函数增至 26 个（收集 46 例）。含路径含空格与中文的多文件 fixture（此前验收清单中无任何覆盖）、文档示例与真实校验器绑定、真实预设计划合法性。
+- 文档 §3.3 示例改为与 `build_plan` 输出逐字段对应（该示例可被真实校验器构建并由测试锁定），补充 `requires`/`artifacts` 分工与线性停止语义；§8 验收清单逐条标注覆盖测试，其中两项如实标注未覆盖：RepositoryRepairer 尚未实现、网页一致性依赖 streamlit。
+- 提交前回归：23 个执行/复现/方法/执行器/编排套件 **677 passed**。9 项失败为既有环境限制，已在 HEAD 独立 worktree 基线逐条比对确认：Windows 无符号链接权限（WinError 1314）8 项 + 依赖缓存并发计时竞态 1 项；streamlit 未安装，相关 UI 套件在本环境不可收集。
+- 本批次不覆盖：真实 DLinear/Neural ODE 重跑（仅离线 fixture）、修复循环 RepositoryRepairer、并行 DAG 调度、`limits.total_seconds` 强制（仅校验不执行）。
+
+---
+
 ## [2026.10.07-3] - 2026-10-07（阶段状态修复，优化接口预留）
 
 - 网页改为按实际执行阶段展示，训练前证据预审、作者完整实验、训练后本地核验、数值验收与 API 摘要解释各自独立；通用路径每步生成与质量核验也分别记录。修正重试清理旧错误，错误归属对应阶段，终止后未执行阶段显示未执行，切换任务不保留旧状态。

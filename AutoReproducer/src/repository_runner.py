@@ -4,6 +4,7 @@ This is a local, trusted-repository runner. Docker plans are rejected explicitly
 the existing single-script Docker executor is not a repository sandbox.
 """
 import codecs
+import hashlib
 import json
 import math
 import os
@@ -18,8 +19,12 @@ from pathlib import Path
 
 from src.agents.code_executor import CodeExecutorAgent, DEPS_CACHE_ROOT, reqs_digest
 from src.execution_artifacts import collect_images
+from src.execution_plan import declared_paths, plan_steps
 from src.safety.paths import is_link, relative_path, workspace_path
 from src.dependency_cache import DependencyCacheBusy
+
+# Evidence can be a model checkpoint; the report image budget is far too small.
+MAX_ARTIFACT_BYTES = 64 * 1024 * 1024
 
 
 class RepositoryRunner:
@@ -94,9 +99,72 @@ class RepositoryRunner:
                            or not isinstance(v, str) or "\x00" in v
                            for k, v in extra_env.items())):
                 raise ValueError(f"invalid environment for step {identifier}")
+            dependencies = step.get("depends_on", [])
+            if (not isinstance(dependencies, list)
+                    or any(not isinstance(dep, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", dep)
+                           for dep in dependencies) or len(set(dependencies)) != len(dependencies)
+                    or identifier in dependencies or not set(dependencies) <= identifiers):
+                raise ValueError(f"invalid depends_on for step {identifier}")
             planned.append({"id": identifier, "argv": argv, "cwd": str(cwd),
-                            "timeout_s": float(timeout), "env": dict(extra_env)})
+                            "timeout_s": float(timeout), "env": dict(extra_env),
+                            "kind": step.get("kind", "run"), "depends_on": list(dependencies),
+                            "requires": declared_paths(step.get("requires"), identifier,
+                                                       "requires", allow_glob=False),
+                            "artifacts": declared_paths(step.get("artifacts"), identifier,
+                                                        "artifacts", allow_glob=True),
+                            "required": step.get("required", True) is not False})
         return planned
+
+    def _capture(self, root, run_dir, step, emit):
+        """Copy declared evidence into the run directory, hashing what was found.
+
+        Collection failures never change a step's verdict: one mistyped glob must not
+        turn an experiment that genuinely ran into a reported failure.
+        """
+        captured = []
+        for declared in step["artifacts"]:
+            entry = {"path": declared["path"], "matched": False}
+            try:
+                pattern = relative_path(declared["path"], "artifact")
+                matches = sorted(path for path in root.glob(str(pattern)) if path.is_file())
+                # A matched file is only evidence if every directory above it is real.
+                matches = [path for path in matches
+                           if not any(is_link(root / part) for part in
+                                      path.parent.relative_to(root).parts)]
+                if not matches:
+                    entry["reason"] = "not found"
+                elif sum(path.stat().st_size for path in matches) > MAX_ARTIFACT_BYTES:
+                    entry["reason"] = "too large to copy"
+                else:
+                    entry["files"] = []
+                    for path in matches:
+                        relative = path.relative_to(root).as_posix()
+                        raw = path.read_bytes()
+                        destination = (run_dir / "artifacts" / step["id"] / relative)
+                        destination.parent.mkdir(parents=True, exist_ok=True)
+                        destination.write_bytes(raw)
+                        entry["files"].append({"path": relative, "bytes": len(raw),
+                                               "sha256": hashlib.sha256(raw).hexdigest(),
+                                               "captured_to": str(destination)})
+                    entry.update(matched=True,
+                                 bytes=sum(item["bytes"] for item in entry["files"]))
+                    emit({"type": "repository_artifact", "step_id": step["id"],
+                          "path": declared["path"], "files": entry["files"]})
+            except (OSError, ValueError) as exc:
+                entry["reason"] = str(exc)
+            captured.append(entry)
+        return captured
+
+    def _unmet_requirement(self, root, step):
+        """The first prerequisite path a step needs that no earlier step produced."""
+        for declared in step["requires"]:
+            try:
+                path = workspace_path(root, declared["path"], "requirement")
+            except ValueError as exc:
+                return f"{declared['path']} ({exc})"
+            if not path.is_file() or not path.stat().st_size:
+                return declared["path"]
+        return None
 
     @staticmethod
     def _kill_group(process):
@@ -131,7 +199,7 @@ class RepositoryRunner:
         started = time.monotonic()
         stdout_path = run_dir / f"{step['id']}.stdout.log"
         stderr_path = run_dir / f"{step['id']}.stderr.log"
-        record = {k: step[k] for k in ("id", "argv", "cwd", "timeout_s")}
+        record = {k: step[k] for k in ("id", "argv", "cwd", "timeout_s", "kind", "required")}
         record.update(stage="full", executed=False, stdout_path=str(stdout_path),
                       stderr_path=str(stderr_path))
         emit({"type": "repository_step", "step_id": step["id"],
@@ -151,8 +219,11 @@ class RepositoryRunner:
                    str(step["timeout_s"] + 1.0), *step["argv"]]
         try:
             self._check_tree(root)
-            # Recheck cwd/script after earlier steps may have created files.
-            self._plan(root, [{**step, "cwd": str(Path(step["cwd"]).relative_to(root))}])
+            # Recheck cwd/script after earlier steps may have created files. Only the
+            # on-disk fields are revalidated: depends_on names ids from the full list,
+            # and handed one step alone those ids are legitimately absent.
+            recheck = {key: value for key, value in step.items() if key != "depends_on"}
+            self._plan(root, [{**recheck, "cwd": str(Path(step["cwd"]).relative_to(root))}])
             with stdout_path.open("wb") as out, stderr_path.open("wb") as err:
                 process = subprocess.Popen(command, cwd=step["cwd"], env=environment,
                                            stdout=out, stderr=err, shell=False,
@@ -223,6 +294,9 @@ class RepositoryRunner:
         record.update(success=exit_code == 0, exit_code=exit_code, stdout=stdout,
                       stderr=stderr, timed_out=timed_out,
                       elapsed_s=round(time.monotonic() - started, 3))
+        # Declared evidence is captured whatever the verdict was; a failed step's
+        # partial output is often the thing a later diagnosis needs.
+        record["artifacts"] = self._capture(root, run_dir, step, emit) if step["artifacts"] else []
         (run_dir / f"{step['id']}.json").write_text(
             json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
         emit({"type": "repository_step", "step_id": step["id"],
@@ -230,15 +304,18 @@ class RepositoryRunner:
         return record
 
     def run(self, workspace, steps, env_config, use_docker=False, on_event=None):
-        """Execute sequential argv steps; stop on the first unsuccessful step.
+        """Execute the plan's argv steps in order; halt at the first required failure.
 
-        Each run retains full logs and metadata in a unique sibling directory.
+        Accepts either a validated ExecutionPlan or a bare reviewed step list.
+        Each run retains full logs, metadata and declared evidence in a unique
+        sibling directory, so a discarded workspace cannot erase what actually ran.
         Event callbacks observe progress; observer failures cannot interrupt a
         running process or overwrite its execution verdict.
         """
-        attempts, warnings = [], []
+        attempts, warnings, skipped = [], [], []
         result = {"mode": "repository", "success": False, "executed": False,
                   "attempts": attempts, "stages": attempts, "steps": attempts,
+                  "skipped": skipped, "step_artifacts": [],
                   "artifacts": [], "artifact_warnings": warnings, "llm_calls": 0}
 
         def emit(event):
@@ -264,7 +341,7 @@ class RepositoryRunner:
             if not root.is_dir():
                 raise ValueError("workspace must be an existing directory")
             self._check_tree(root)
-            planned = self._plan(root, steps)
+            planned = self._plan(root, plan_steps(steps))
             records_root = root.parent / ".autorepro_repository_runs"
             if records_root.is_symlink():
                 raise ValueError("execution records directory must not be a symlink")
@@ -309,7 +386,29 @@ class RepositoryRunner:
                     json.dumps(result["environment"], ensure_ascii=False, indent=2), encoding="utf-8")
                 if deps_error:
                     return reject(deps_error, -4)
+                # Linear halt: the first required failure stops everything after it.
+                # A dependency graph is unnecessary because reviewed plans schedule each
+                # step after its prerequisites; the authoring order is the running order.
+                halted = None
                 for step in planned:
+                    if halted is not None:
+                        skipped.append({"id": step["id"], "not_run": "prerequisite_failed",
+                                        "blocked_by": halted, "required": step["required"]})
+                        emit({"type": "repository_step", "step_id": step["id"], "status": "skipped",
+                              "not_run": "prerequisite_failed", "blocked_by": halted})
+                        continue
+                    # A prerequisite product can be absent even though every earlier step
+                    # succeeded. Stopping here keeps a missing checkpoint from surfacing as
+                    # a confusing failure deep inside the author's evaluator.
+                    unmet = self._unmet_requirement(root, step)
+                    if unmet is not None:
+                        skipped.append({"id": step["id"], "not_run": "missing_requirement",
+                                        "blocked_by": halted, "requirement": unmet,
+                                        "required": step["required"]})
+                        emit({"type": "repository_step", "step_id": step["id"], "status": "skipped",
+                              "not_run": "missing_requirement", "requirement": unmet})
+                        halted = step["id"]
+                        continue
                     deadline = self.executor.env_config.get("deadline_monotonic")
                     if deadline is not None:
                         remaining = deadline - time.monotonic() - 2
@@ -319,10 +418,18 @@ class RepositoryRunner:
                     record = self._execute(root, step, run_dir, emit)
                     attempts.append(record)
                     result["executed"] = result["executed"] or record["executed"]
-                    if not record["success"]:
-                        break
-                result["success"] = len(attempts) == len(planned) and all(s["success"] for s in attempts)
-                result["final"] = dict(attempts[-1])
+                    if not record["success"] and step["required"]:
+                        halted = step["id"]
+                # Every required step must have run and succeeded. A blocked step is a
+                # failed verdict, never a "skipped/optional" one; an optional step may
+                # fail on its own without dragging the experiment down.
+                result["success"] = (not skipped
+                                     and len(attempts) == len(planned)
+                                     and all(s["success"] or not s["required"]
+                                             for s in attempts))
+                result["final"] = dict(attempts[-1]) if attempts else {
+                    "stage": "full", "success": False, "executed": False, "exit_code": -2,
+                    "stdout": "", "stderr": "所有步骤因前置条件未满足而未执行", "artifacts": []}
                 result["effective_env_config"] = self.executor.env_config
                 try:
                     collected = collect_images(str(root), "full", getattr(self.logger, "session_id", ""))

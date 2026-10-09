@@ -97,10 +97,22 @@ class SirenAdapter:
         if profile["adapter_id"] == "neural_ode":
             probe += "import torchdiffeq; p['author_package']=str(Path(torchdiffeq.__file__).resolve()); "
         probe += "Path('import_provenance.json').write_text(json.dumps(p),encoding='utf-8'); print(json.dumps(p))"
-        steps = [{"id": "import_check", "argv": ["python", "-c", probe], "timeout_s": 60}]
+        steps = [{"id": "import_check", "kind": "check", "depends_on": [],
+                  "argv": ["python", "-c", probe], "timeout_s": 60}]
         if train:
-            steps.append({"id": "train", "argv": ["python", "-u", "run_experiment.py"], "timeout_s": 1200})
-            steps.append(self.evaluation_step(profile, split))
+            evaluate = self.evaluation_step(profile, split)
+            # Dependencies are attached here, not inside evaluation_step: holdout runs
+            # the evaluator alone, where a "train" prerequisite would be an unknown id.
+            evaluate.update(kind="eval", depends_on=["train"],
+                            requires=[{"path": "artifacts/checkpoint.pt"},
+                                      {"path": "artifacts/prediction.npy"}])
+            steps.append({"id": "train", "kind": "train", "depends_on": ["import_check"],
+                          "argv": ["python", "-u", "run_experiment.py"], "timeout_s": 1200,
+                          # The runtime writes these under artifacts/; evaluate loads them.
+                          "artifacts": [{"path": "artifacts/checkpoint.pt"},
+                                        {"path": "artifacts/prediction.npy"},
+                                        {"path": "artifacts/training.json"}]})
+            steps.append(evaluate)
         for step in steps:
             step["env"] = {"OMP_NUM_THREADS": "2", "MKL_NUM_THREADS": "2", "MPLBACKEND": "Agg",
                            "PYTHONHASHSEED": str(profile["parameters"]["seed"]), "CUBLAS_WORKSPACE_CONFIG": ":4096:8"}

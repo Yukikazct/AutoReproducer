@@ -40,6 +40,7 @@ from typing import Dict, List, Optional
 from urllib.parse import urlsplit
 from src.base_agent import BaseAgent
 from src.llm.llm_client import LLMClient
+from src.execution_plan import RepositoryModeFallbackRejected
 from src.agents.env_builder import PIP_INDEX_URL, PIP_FIND_LINKS
 from src.agents.dependency_resolver import (
     find_missing_module, python_package_for, align_runtime_requirements,
@@ -580,6 +581,11 @@ class CodeExecutorAgent(BaseAgent):
 
         input_data: {"paper_info", "env_config", "resources", "code"(可选)}
         """
+        # 仓库预设只能由 RepositoryRunner 跑整个仓库。单文件生成会丢掉多文件导入、
+        # 作者入口和 train/eval 拆分，所以这里硬失败，绝不静默降级成 run.py。
+        if input_data.get("experiment_profile"):
+            raise RepositoryModeFallbackRejected(
+                "仓库复现预设不得改走单文件生成；请使用 repository 执行链路")
         self.log("execute_code", "START", "开始执行代码", input_data)
 
         paper_info = input_data.get("paper_info", {}) or {}
