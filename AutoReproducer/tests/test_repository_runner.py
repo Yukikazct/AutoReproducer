@@ -59,9 +59,29 @@ def test_multiple_files_import_and_nested_cwd_are_preserved(runner, tmp_path):
     assert record["elapsed_s"] > 0
     assert [e["status"] for e in events if e["type"] == "repository_step"] == ["running", "success"]
     assert any(e["type"] == "repository_output" and "42" in e["text"] for e in events)
+    assert all(e["execution_id"] == Path(result["run_dir"]).name for e in events)
+    assert all(e["step_index"] == 1 and e["step_count"] == 1 for e in events)
     prepared = Path(runner.executor._ensure_local_deps.call_args.args[0])
     assert prepared.is_relative_to(Path(result["run_dir"]))
     assert prepared != repo
+
+
+def test_repeated_plans_have_distinct_ids_and_each_output_keeps_its_step(runner, tmp_path):
+    events = []
+    plan = [step("arbitrary_task", "-c", "print('FIRST')"),
+            step("anything_else", "-c", "import sys; print('SECOND', file=sys.stderr)")]
+    first = runner.run(tmp_path, plan, {}, on_event=events.append)
+    boundary = len(events)
+    second = runner.run(tmp_path, plan[:1], {}, on_event=events.append)
+    assert first["success"] and second["success"]
+    first_id, second_id = Path(first["run_dir"]).name, Path(second["run_dir"]).name
+    assert first_id != second_id
+    assert all(e["execution_id"] == first_id and e["step_count"] == 2 for e in events[:boundary])
+    assert all(e["execution_id"] == second_id and e["step_count"] == 1 for e in events[boundary:])
+    assert {(e["step_id"], e["step_index"]) for e in events[:boundary]} == {
+        ("arbitrary_task", 1), ("anything_else", 2)}
+    assert any(e["type"] == "repository_output" and e["step_index"] == 2
+               and e["stream"] == "stderr" and "SECOND" in e["text"] for e in events)
 
 
 def test_failure_stops_later_steps_and_retains_full_logs(runner, tmp_path):

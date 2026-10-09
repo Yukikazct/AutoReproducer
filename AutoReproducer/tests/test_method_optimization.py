@@ -47,6 +47,8 @@ def study_harness(tmp_path,monkeypatch):
             return state["holdout_candidate"] if label.startswith("candidate") else 30.
     monkeypatch.setattr("src.method_optimization.Study",FakeStudy)
     def advice(*args,**kwargs):
+        if "remaining_after_advice" in state:
+            state["remaining"] = state["remaining_after_advice"]
         return {"status":"suggested","suggestions":[{"parameter":"learning_rate","value":.0002,"status":"untested"}],"calls":1}
     monkeypatch.setattr("src.method_optimization.suggest",advice)
     def run():
@@ -83,9 +85,25 @@ def test_no_validation_improvement_never_opens_holdout(study_harness):
 
 def test_reserve_is_enforced_before_starting(study_harness):
     run,state,events=study_harness
-    state["remaining"]=2399
+    state["remaining"]=2349.4
     result=run()
     assert result["status"]=="budget_insufficient" and not events
+    assert "39.2 分钟" in result["reason"] and "预留 40 分钟" in result["reason"]
+    assert "基线结果已保留" in result["reason"] and "候选尚未完成全部验证" in result["reason"]
+
+
+def test_advice_consuming_candidate_budget_preserves_baseline_and_explains_stop(study_harness):
+    run,state,events=study_harness
+    state["remaining_after_advice"] = 2350
+    result=run()
+    assert result["status"] == "budget_insufficient" and not result["optimized"]
+    assert result["baseline"] == {"psnr": 30.}
+    assert events == [("train", "baseline_2021", 0)]
+    assert not result["trials"] and not result["confirmation"]
+    assert "39.2 分钟" in result["reason"] and "预留 40 分钟" in result["reason"]
+    assert "基线结果已保留" in result["reason"] and "候选尚未完成全部验证" in result["reason"]
+    saved=json.loads((state['run_dir']/'optimization.json').read_text(encoding='utf-8'))
+    assert saved["status"] == "budget_insufficient" and saved["reason"] == result["reason"]
 
 
 @pytest.mark.parametrize('label', ['baseline_2021','candidate_1_2021','baseline_2022','candidate_2022',

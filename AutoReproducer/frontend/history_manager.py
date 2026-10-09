@@ -162,7 +162,7 @@ def _extract_session_from_progress(path: Path) -> Optional[str]:
         return None
 
 
-def get_storage_stats() -> Dict[str, Any]:
+def get_storage_stats(*, _sizes=None) -> Dict[str, Any]:
     """各数据子目录的存储占用统计。"""
     base = get_project_data_dir()
     stats = {}
@@ -174,10 +174,14 @@ def get_storage_stats() -> Dict[str, Any]:
         if not d.exists():
             stats[sub] = {"files": 0, "bytes": 0}
             continue
-        files = list(d.glob("**/*"))
-        total_bytes = sum(f.stat().st_size for f in files if f.is_file())
-        stats[sub] = {"files": len([f for f in files if f.is_file()]),
-                      "bytes": total_bytes}
+        if _sizes is None:
+            files = list(d.glob("**/*"))
+            total_bytes = sum(f.stat().st_size for f in files if f.is_file())
+            stats[sub] = {"files": len([f for f in files if f.is_file()]),
+                          "bytes": total_bytes}
+        else:
+            count, total_bytes = _shared_dir_size(d, _sizes)
+            stats[sub] = {"files": count, "bytes": total_bytes}
         total += total_bytes
     stats["total"] = {"bytes": total}
     return stats
@@ -417,6 +421,34 @@ def _dir_size(path: Path) -> Tuple[int, int]:
     return files, total
 
 
+def _shared_dir_size(path: Path, sizes) -> Tuple[int, int]:
+    """Scan each directory once and retain child totals for this UI snapshot.
+
+    DirEntry reuses directory-entry metadata on Windows, avoiding repeated
+    Path.is_file/stat calls for every installed dependency. Like Path.rglob,
+    directory symlinks are not traversed; file symlinks keep their target size.
+    """
+    key = os.path.normcase(os.path.abspath(path))
+    if key in sizes:
+        return sizes[key]
+    count = total = 0
+    with os.scandir(path) as entries:
+        for entry in entries:
+            try:
+                if entry.is_dir(follow_symlinks=False):
+                    child_count, child_bytes = _shared_dir_size(Path(entry.path), sizes)
+                    count += child_count
+                    total += child_bytes
+                elif entry.is_file():
+                    count += 1
+                    total += entry.stat().st_size
+            except OSError:
+                # A concurrent install or cleanup can remove a displayed file.
+                continue
+    sizes[key] = (count, total)
+    return sizes[key]
+
+
 def _dependency_directories(root):
     """Only environment leaves are selectable; namespace directories never are."""
     for path in sorted(root.iterdir()):
@@ -433,7 +465,7 @@ def _dependency_directories(root):
                     yield environment
 
 
-def list_deps_cache() -> List[Dict[str, Any]]:
+def list_deps_cache(*, _sizes=None) -> List[Dict[str, Any]]:
     """列出依赖缓存里每个隔离安装目录。
 
     依赖缓存按「归一化后的依赖清单」哈希寻址，**跨论文跨会话共享**，因此
@@ -466,7 +498,7 @@ def list_deps_cache() -> List[Dict[str, Any]]:
         except (OSError, ValueError):
             pass
         try:
-            files, size = _dir_size(p)
+            files, size = _dir_size(p) if _sizes is None else _shared_dir_size(p, _sizes)
             mtime = datetime.fromtimestamp(p.stat().st_mtime).isoformat(timespec="seconds")
         except OSError:
             continue  # A concurrent cleanup may have removed the displayed item.
@@ -567,11 +599,11 @@ def list_resource_events(limit: int = 500) -> List[Dict[str, Any]]:
     return list(reversed(events))
 
 
-def list_resource_inventory() -> List[Dict[str, Any]]:
+def list_resource_inventory(*, deps_items=None, _sizes=None) -> List[Dict[str, Any]]:
     """从磁盘和 manifest 汇总依赖、数据集、代码和权重资源。"""
     base = get_project_data_dir()
     rows: List[Dict[str, Any]] = []
-    for item in list_deps_cache():
+    for item in list_deps_cache() if deps_items is None else deps_items:
         rows.append({
             "type": "dependency", "id": item["name"], "paper_id": "",
             "state": "ready" if (Path(item["path"]) / ".ready").is_file()
@@ -595,7 +627,7 @@ def list_resource_inventory() -> List[Dict[str, Any]]:
                 rows.append({
                     "type": kind, "id": f"{pid}:{kind}", "paper_id": pid,
                     "state": "present" if p.exists() else "missing",
-                    "bytes": _dir_size(p)[1] if p.is_dir()
+                    "bytes": (_dir_size(p) if _sizes is None else _shared_dir_size(p, _sizes))[1] if p.is_dir()
                     else (p.stat().st_size if p.is_file() else 0),
                     "last_used": manifest.get("created_at", ""),
                     "detail": manifest.get(
@@ -603,6 +635,20 @@ def list_resource_inventory() -> List[Dict[str, Any]]:
                         f"{kind}_url", ""),
                 })
     return rows
+
+
+def collect_storage_snapshot() -> Dict[str, Any]:
+    """Collect history-tab storage views with one shared in-memory size scan.
+
+    The caller controls refresh/invalidation. No disk cache is written. The
+    established storage categories are unchanged; external dependency roots
+    and manifest resources are scanned separately only when they are needed.
+    """
+    sizes = {}
+    storage = get_storage_stats(_sizes=sizes)
+    deps_items = list_deps_cache(_sizes=sizes)
+    inventory = list_resource_inventory(deps_items=deps_items, _sizes=sizes)
+    return {"storage": storage, "deps_items": deps_items, "inventory": inventory}
 
 
 def get_session_detail(session_id: str) -> Optional[Dict[str, Any]]:

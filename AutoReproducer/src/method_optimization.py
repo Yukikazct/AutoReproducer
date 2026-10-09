@@ -7,6 +7,8 @@ from filelock import FileLock
 
 from src.method_adapters import write_json, digest, RUNTIMES
 from src.method_advice import suggest
+from src.method_budget import (CONFIRMATION_RESERVE_SECONDS, MAX_OPTIMIZATION_SECONDS,
+                               optimization_budget_error)
 from src.repository_adapters import get_adapter
 from src.process_lifecycle import termination_signals
 
@@ -48,7 +50,7 @@ class Study:
                          "ode_validation_initials": [[1.5,0.],[0.,1.5]], "ode_holdout_initials": [[1.75,0.],[0.,1.75]],
                          "metric": self.metric, "min_delta": .1 if self.metric == "psnr" else .01,
                          "min_delta_unit": "dB" if self.metric == "psnr" else "relative_reduction",
-                         "budget_seconds": budget_s, "reserved_confirmation_s": 2400,
+                         "budget_seconds": budget_s, "reserved_confirmation_s": CONFIRMATION_RESERVE_SECONDS,
                          "runtime_sha256": digest(RUNTIMES / self.adapter.runtime),
                          "evaluator_sha256": digest(RUNTIMES / self.adapter.evaluator)}
         from src.repository_reproduction import spec_digest
@@ -166,11 +168,12 @@ def validate_candidates(service, profile, data, request, started, emit):
 
 
 def _validate_candidates(service, profile, data, request, started, emit):
-    max_candidates, budget = request.get("max_candidates",3), request.get("budget_seconds",7200)
+    max_candidates, budget = request.get("max_candidates",3), request.get("budget_seconds", MAX_OPTIMIZATION_SECONDS)
     if isinstance(max_candidates,bool) or not isinstance(max_candidates,int) or not 1 <= max_candidates <= 3:
         raise ValueError("候选数量必须为1至3")
-    if isinstance(budget,bool) or not isinstance(budget,(int,float)) or not math.isfinite(budget) or not 0 < budget <= 7200:
-        raise ValueError("优化预算必须在0至7200秒之间")
+    budget_error = optimization_budget_error(budget)
+    if budget_error:
+        raise ValueError(budget_error)
     study = Study(service,profile,data["run_dir"],started,budget,emit)
     result = {"mode": "validate", "optimized": False, "available": True, "requested": True,
               "status": "running", "trials": [], "suggestions": [], "confirmation": [], "confirmation_training": [],
@@ -182,6 +185,10 @@ def _validate_candidates(service, profile, data, request, started, emit):
         result["budget_used_s"] = time.monotonic()-started
         write_json(Path(data["run_dir"]) / "optimization.json",result)
     def finish(status, reason):
+        if status == "budget_insufficient":
+            reason = (f"{reason}；剩余预算 {max(0, study.remaining()) / 60:.1f} 分钟，"
+                      f"当前验证流程为确认阶段预留 {CONFIRMATION_RESERVE_SECONDS / 60:g} 分钟。"
+                      "已完成的基线结果已保留；候选尚未完成全部验证，不宣称已验证提升。")
         result.update(status=status,reason=reason)
         if status != "validated_gain":
             result["optimized"] = False
@@ -195,7 +202,7 @@ def _validate_candidates(service, profile, data, request, started, emit):
     try:
         if study.remaining() <= 0:
             raise TimeoutError("优化总时间预算耗尽")
-        if study.remaining() <= 2400:
+        if study.remaining() <= CONFIRMATION_RESERVE_SECONDS:
             raise InsufficientBudget("剩余预算不足以预留40分钟确认阶段")
         baseline = study.train("baseline_2021")
         if baseline["status"] != "completed":
@@ -216,7 +223,7 @@ def _validate_candidates(service, profile, data, request, started, emit):
         for index, candidate in enumerate(result["suggestions"][:max_candidates],1):
             if study.remaining() <= 0:
                 raise TimeoutError("优化总时间预算耗尽")
-            if study.remaining() <= 2400:
+            if study.remaining() <= CONFIRMATION_RESERVE_SECONDS:
                 break
             # Every attempted candidate counts, including failures.
             label = f"candidate_{index}_2021"
@@ -224,7 +231,7 @@ def _validate_candidates(service, profile, data, request, started, emit):
                        "run": f"trials/{label}", "status": "running"}
             result["trials"].append(summary)
             checkpoint("candidate_training", label)
-            trial = study.train(label,candidate=candidate,reserve_s=2400)
+            trial = study.train(label,candidate=candidate,reserve_s=CONFIRMATION_RESERVE_SECONDS)
             candidate["status"] = "tested" if trial["status"] == "completed" else "failed"
             summary.update(status=trial["status"], metrics=trial.get("metrics"),
                            elapsed_s=trial["elapsed_s"], error=trial.get("error",""))

@@ -7,6 +7,7 @@
 - 复现流水线后台线程执行，前端轮询进度文件实时展示当前阶段
   （OpenAI 兼容端点 / Key / 模型真实生效）。
 """
+import inspect
 import os
 import sys
 import tempfile
@@ -25,6 +26,7 @@ from src.audit.audit_logger import AuditLogger
 from src.base_agent import BaseAgent
 from src.corpus import list_papers
 from src.repository_profiles import PROFILE_LABELS, PAPER_TITLE, get_profile
+from src.method_budget import CONFIRMATION_RESERVE_SECONDS, optimization_budget_error
 from frontend.report_renderer import render_report, build_report_bundle
 from frontend.llm_config import (
     CONNECT_TEST_TIMEOUT,
@@ -38,13 +40,11 @@ from frontend.backend_pipeline import (
 )
 from frontend.history_manager import (
     list_sessions,
-    get_storage_stats,
+    collect_storage_snapshot,
     cleanup_runtime,
-    list_deps_cache,
     delete_deps_cache,
     cleanup_deps_cache,
     list_resource_events,
-    list_resource_inventory,
     format_size,
     get_session_detail,
     delete_session,
@@ -172,8 +172,9 @@ def render_llm_settings():
                        "（输入留空时回退环境变量）")
 
 
+@st.fragment
 def render_paper_input():
-    """输入方式切换与页面一起刷新，保持上传入口和启动按钮状态同步。"""
+    """只刷新论文输入；点击启动时主页面重新读取最新选项。"""
     st.markdown('<div class="sidebar-section-label"><span>01</span> 论文输入</div>',
                 unsafe_allow_html=True)
     input_mode = st.radio("输入方式", ["论文标题", "上传PDF", "官方仓库预设"], key="input_mode")
@@ -204,7 +205,16 @@ def render_paper_input():
             st.checkbox("运行前进行在线论文与代码分析（完整模式）", value=False, key="method_llm_review")
             if st.session_state.method_optimization == "validate":
                 st.number_input("最多候选数", min_value=1, max_value=3, value=3, key="method_max_candidates")
-                st.number_input("本篇训练预算（分钟）", min_value=1, max_value=120, value=120, key="method_budget_minutes")
+                minutes = st.number_input("本篇总预算（分钟）", min_value=1, max_value=120, value=120,
+                                          key="method_budget_minutes",
+                                          help="包含在线分析、基线、候选训练和最终确认；必须大于40分钟，建议120分钟。")
+                st.caption(f"总预算包含分析、基线与参数验证，其中固定预留"
+                           f"{CONFIRMATION_RESERVE_SECONDS // 60}分钟用于两种子确认。"
+                           "建议120分钟；这是耗时上限，提前完成不会等满。")
+                if st.session_state.method_action == "运行实验":
+                    budget_error = optimization_budget_error(minutes * 60)
+                    if budget_error:
+                        st.warning(budget_error)
             st.caption("先选择“准备实验环境”并运行一次；准备完成后再运行实验。"
                        "快速档目标为五分钟，建议尚未实测有效；验证建议使用独立长任务预算。"
                        "智能建议会把指标与训练摘要交给已配置的 API。")
@@ -340,6 +350,7 @@ with st.sidebar:
         "INIT": "⚪", "READ_PAPER": "📖", "FIND_RESOURCES": "🔍",
         "BUILD_ENV": "🔧", "EXECUTE_CODE": "⚡", "VALIDATE": "✅",
         "OPTIMIZING": "🧪", "OPTIMIZED": "🏆",
+        "OPTIMIZE": "🧪",
         "GENERATE_REPORT": "📝", "COMPLETED": "🎉", "ERROR": "❌",
     }
     st.markdown(
@@ -350,16 +361,120 @@ with st.sidebar:
         unsafe_allow_html=True)
 
 
+# ========== 事件处理 ==========
+def _save_uploaded_pdf(uploaded_file) -> str:
+    """将上传的 PDF 保存为临时文件，返回路径。"""
+    suffix = os.path.splitext(uploaded_file.name or "paper.pdf")[1] or ".pdf"
+    fd, tmp_path = tempfile.mkstemp(suffix=suffix, prefix="autorepro_paper_")
+    with os.fdopen(fd, "wb") as f:
+        f.write(uploaded_file.getvalue())
+    return tmp_path
+
+
+def _new_progress_file() -> str:
+    """创建本次复现的进度文件路径（data/runtime/progress_<毫秒>.jsonl）。"""
+    runtime_dir = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "data", "runtime")
+    os.makedirs(runtime_dir, exist_ok=True)
+    return os.path.join(runtime_dir,
+                        f"progress_{int(time.time() * 1000)}.jsonl")
+
+
+# 启动按钮处理：后台线程执行流水线，主线程立即返回并轮询进度
+if start_btn and not st.session_state.running:
+    pt = st.session_state.paper_title.strip() if input_mode == "论文标题" else ""
+    budget_error = (optimization_budget_error(st.session_state.get("method_budget_minutes", 120) * 60)
+                    if method_selected and st.session_state.get("method_action") == "运行实验"
+                    and st.session_state.get("method_optimization") == "validate" else "")
+    if experiment_profile and st.session_state.mock_mode:
+        st.sidebar.error("官方仓库预设需要关闭 Mock 模式，才能执行真实论文代码。")
+    elif experiment_profile and st.session_state.use_docker:
+        st.sidebar.error("本轮官方仓库预设使用本地执行；请关闭 Docker 开关后运行。")
+    elif not experiment_profile and not pt and not uploaded_file:
+        st.sidebar.error("请先上传PDF文件" if input_mode == "上传PDF"
+                         else "请先输入论文标题")
+    elif budget_error:
+        st.sidebar.error(budget_error)
+    elif requires_api and not st.session_state.mock_mode and config_missing(base_url, model_name):
+        st.error("真实模式缺少 LLM 配置（"
+                 + "、".join(config_missing(base_url, model_name))
+                 + "）。请在侧边栏填写，或设置环境变量 "
+                   "LLM_BASE_URL / LLM_MODEL 后重试。")
+    else:
+        # 真实模式且未填 API Key：多数云端端点（DeepSeek/OpenAI 等）会返回
+        # 401，且流水线会把错误文本当 LLM 输出继续跑，表象类似「没反应」。
+        # 此处不阻断（部分自建端点无需鉴权），但给出明确预警。
+        if (requires_api and not st.session_state.mock_mode
+                and not (api_key.strip()
+                         or os.environ.get("LLM_API_KEY", "").strip())):
+            st.warning("⚠️ 未填写 API Key：如果上游服务需要鉴权"
+                       "（如 DeepSeek/OpenAI），调用会返回 401 错误文本；"
+                       "建议先在侧边栏填写 Key 并点击「🔌 测试 AI 连接」验证。")
+        tmp_pdf = _save_uploaded_pdf(uploaded_file) if uploaded_file else ""
+        progress_file = _new_progress_file()
+        st.session_state.progress_file = progress_file
+        st.session_state.running = True
+        st.session_state.result = None
+        st.session_state.logs = []
+        st.session_state.agent_status = {}
+        st.session_state.pipeline_stages = []
+        st.session_state.current_state = "INIT"
+        st.session_state.pipeline_note = (
+            "复现流水线已在后台启动，进度实时刷新中…")
+        run_pipeline_background(
+            progress_file,
+            paper_title=pt, pdf_path=tmp_pdf,
+            corpus_paper=corpus_paper,
+            experiment_profile=experiment_profile,
+            prepare_only=(st.session_state.get("method_action") == "仅准备源码和命令" if method_selected else
+                          bool(st.session_state.get("repository_prepare_only")) if experiment_profile else False),
+            prepare_environment=method_selected and st.session_state.get("method_action") == "准备实验环境",
+            optimization_mode=st.session_state.get("method_optimization", "off") if method_selected else "off",
+            max_candidates=int(st.session_state.get("method_max_candidates", 3)),
+            budget_seconds=int(st.session_state.get("method_budget_minutes", 120)) * 60,
+            use_llm_review=(bool(st.session_state.get("method_llm_review")) if method_selected else
+                            bool(st.session_state.get("repository_llm_review")) if experiment_profile else False),
+            allow_result_summary_review=(bool(st.session_state.get("repository_result_review"))
+                                         if experiment_profile else False),
+            model_name=model_name, base_url=base_url,
+            api_key=api_key,
+            mock_mode=st.session_state.mock_mode,
+            enable_optimization=False,
+            use_docker=(not st.session_state.mock_mode
+                        and docker_available
+                        and st.session_state.use_docker),
+            cleanup_pdf=True)   # 临时 PDF 由后台线程负责删除
+        st.session_state.workspace_tabs = "📋 流水线状态"
+        st.rerun()
+
+# 重置按钮处理
+if reset_btn and not st.session_state.running:
+    st.session_state.orchestrator = None
+    st.session_state.result = None
+    st.session_state.running = False
+    st.session_state.logs = []
+    st.session_state.current_state = "INIT"
+    st.session_state.agent_status = {}
+    st.session_state.pipeline_stages = []
+    st.session_state.connection_result = None
+    st.session_state.progress_file = None
+    st.session_state.pipeline_note = None
+    st.rerun()
+
 # ========== 主界面 ==========
 _state_label = {
     "INIT": "等待开始", "READ_PAPER": "解析论文", "FIND_RESOURCES": "查找资源",
     "BUILD_ENV": "构建环境", "EXECUTE_CODE": "执行代码", "VALIDATE": "验证结果",
     "OPTIMIZING": "智能优化", "OPTIMIZED": "优化完成",
+    "OPTIMIZE": "参数优化中",
     "GENERATE_REPORT": "生成报告", "COMPLETED": "任务完成", "ERROR": "运行异常",
 }.get(st.session_state.current_state, "运行中")
-_hero_status = ("error" if st.session_state.current_state == "ERROR" else
+if st.session_state.running:
+    _state_label = "整体任务运行中"
+_hero_status = ("running" if st.session_state.running else
+                "error" if st.session_state.current_state == "ERROR" else
                 "success" if st.session_state.current_state == "COMPLETED" else
-                "running" if st.session_state.running else "idle")
+                "idle")
 st.markdown(f"""
 <div class="hero">
     <div class="hero-top">
@@ -382,10 +497,12 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# 标签页
+# 新版 Streamlit 支持按所选标签延迟执行；旧版保留显式加载入口。
+_lazy_tabs = "on_change" in inspect.signature(st.tabs).parameters
+_tab_options = {"key": "workspace_tabs", "on_change": "rerun"} if _lazy_tabs else {}
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "📋 流水线状态", "📄 复现报告", "📜 审计日志", "🔍 状态机", "📂 历史记录",
-])
+], **_tab_options)
 
 # ===== Tab 1: 流水线状态 =====
 with tab1:
@@ -408,10 +525,16 @@ with tab1:
                        "可刷新浏览器页面查看最新进度。")
 
     stages = st.session_state.pipeline_stages
+    execution_context = (snap or {}).get("execution_context") or {}
+    active_executions = (snap or {}).get("active_executions") or []
+    if st.session_state.running and stages:
+        st.info("整体任务仍在运行。单个阶段或步骤完成，不代表整个复现任务已结束。")
+        for context in active_executions:
+            st.caption("当前执行：" + context["label"])
     agent_cards = []
     for i, stage in enumerate(stages):
         status = stage.get("status", "waiting")
-        status_text = {"success": "已完成", "error": "出现错误",
+        status_text = {"success": "本阶段完成", "error": "出现错误",
                        "running": "进行中", "waiting": "等待中",
                        "skipped": "已跳过", "blocked": "未执行"}.get(status, "等待中")
         if status == "error" and stage.get("outcome") in {"rejected", "fail"}:
@@ -421,6 +544,10 @@ with tab1:
         status_class = status if status in {"success", "error", "running"} else "waiting"
         title = stage.get("title", stage.get("agent", "执行阶段"))
         desc = stage.get("description", "")
+        # Historical plans may call this role "complete training". Its actual
+        # responsibility is code execution, regardless of the paper or commands.
+        if stage.get("agent") in {"CodeExecutor", "⚡ CodeExecutor"}:
+            title = "代码执行"
         details = []
         if stage.get("attempt", 0) > 1:
             details.append(f"第 {stage['attempt']} 次尝试")
@@ -432,6 +559,9 @@ with tab1:
             details.append(outcome)
         if stage.get("reason"):
             details.append(str(stage["reason"]))
+        if status == "running":
+            details.extend("当前执行：" + context["label"] for context in active_executions
+                           if context.get("phase_id") == stage["id"])
         detail_text = escape(" · ".join(details)).replace("\r", "").replace("\n", "<br>")
         detail_html = f'<p>{detail_text}</p>' if details else ""
         # 连续 HTML 不插入空行，避免 Markdown 将后续卡片识别为缩进代码块。
@@ -449,10 +579,17 @@ with tab1:
         enabled_count = sum(stage.get("status") != "skipped" for stage in stages)
         progress = completed / enabled_count if enabled_count else 0
         st.progress(progress, text=f"阶段完成: {completed}/{enabled_count}（复现结论以数值验收为准）")
+        st.caption("上方仅按阶段计数，不代表耗时比例；执行轮数和步骤数以实际运行记录为准。")
     else:
-        st.info("启动后将按实际执行顺序显示阶段状态。智能优化接口预留，当前不参与执行。")
+        st.info("启动后将按实际执行顺序显示阶段状态。")
     if snap and snap.get("execution_output"):
-        with st.expander("官方仓库实时输出（最近16000字符，完整日志保存在运行目录）", expanded=True):
+        with st.expander("代码执行输出（最近16000字符）", expanded=True):
+            if execution_context:
+                context_status = {"running": "进行中", "success": "本步骤完成", "error": "失败",
+                                  "interrupted": "未正常结束"}.get(
+                    execution_context.get("status"), "")
+                st.caption(f"最近执行：{execution_context['label']} · {context_status}")
+            st.caption("日志中的计数只属于对应的执行步骤，不代表整个任务的完成进度。")
             with st.container(height=240):
                 st.text(snap["execution_output"])
 
@@ -479,13 +616,24 @@ with tab1:
             elif validation.get("status") in {"prepared", "environment_prepared", "inconclusive", "smoke_passed"}:
                 st.info(validation.get("reason", "流程已结束，请查看实验结论"))
             elif validation.get("status") == "method_experiment_completed":
-                st.success("官方方法实验已完成，协议与独立指标核验通过。")
+                optimization = data.get("optimization") or {}
+                st.success(("基线方法实验已完成" if optimization.get("mode") == "validate"
+                            else "官方方法实验已完成") + "，协议与独立指标核验通过。")
                 st.caption("本结论限于选定方法实验，不代表整篇论文数值复现。")
                 for metric in validation.get("metric_records", []):
                     st.metric(f"{metric['name'].upper()} · {metric['split']}", f"{metric['value']:.6f} {metric.get('unit','')}")
-                optimization = data.get("optimization") or {}
                 if optimization.get("status") == "validated_gain" and optimization.get("optimized"):
                     st.success("选定候选已通过两个随机种子的留出确认，详细数值见优化报告。")
+                elif optimization.get("status") in {"budget_insufficient", "budget_exhausted"}:
+                    st.warning("参数优化验证未完成：" + optimization.get("reason", "可用预算不足"))
+                    tried = len(optimization.get("trials", []))
+                    completed = sum(row.get("status") == "completed"
+                                    for row in optimization.get("trials", []))
+                    confirmed = sum(row.get("status") == "completed"
+                                    for row in optimization.get("confirmation", []))
+                    st.caption(f"候选训练：已尝试 {tried} 个、已完成 {completed} 个；"
+                               f"两种子留出确认：已完成 {confirmed}/2。上方指标来自基线，不能据此判断优化有效。")
+                    st.info("如需完成参数验证，请调整总预算（建议120分钟）后重新开始。预算是上限，不会强制运行到时限。")
                 elif optimization.get("status") == "suggested":
                     st.info("智能建议已生成，尚未通过训练验证。")
                 elif optimization.get("mode") in {"suggest", "validate"}:
@@ -592,7 +740,8 @@ stateDiagram-v2
 
 
 # ===== Tab 5: 历史记录 =====
-with tab5:
+def render_history():
+    """历史页按需加载，目录统计在本次会话中复用，刷新或清理后更新。"""
     st.markdown('<div class="section-heading"><div><span class="section-kicker">ARCHIVE & STORAGE</span><h2>复现历史与存储</h2><p>回顾已运行的会话，并管理实验产物与缓存。</p></div></div>', unsafe_allow_html=True)
 
     # 删除类操作的反馈：必须跨 rerun 传递。删除后紧跟 st.rerun()，
@@ -631,9 +780,14 @@ with tab5:
     with st.expander("📡 资源下载与安装监控", expanded=True):
         if st.button("🔄 刷新资源状态", key="resource_refresh",
                      use_container_width=True):
-            st.rerun()
+            st.session_state.pop("_history_storage", None)
+        if "_history_storage" not in st.session_state:
+            with st.spinner("正在统计历史资源与存储占用…"):
+                st.session_state._history_storage = collect_storage_snapshot()
+        snapshot = st.session_state._history_storage
+        st.caption("存储占用为上次统计结果；安装或训练后可点击刷新更新。")
         events = list_resource_events(limit=100)
-        inventory = list_resource_inventory()
+        inventory = snapshot["inventory"]
         running = [e for e in events if e.get("state") == "running"]
         if running:
             st.warning(f"当前有 {len(running)} 个资源操作进行中")
@@ -666,7 +820,7 @@ with tab5:
     # -- 存储仪表板 --
     st.markdown("#### 💾 存储占用")
     try:
-        storage = get_storage_stats()
+        storage = snapshot["storage"]
         cols = st.columns(3)
         metrics = [
             ("实验账本", "experiment_ledger"),
@@ -695,6 +849,7 @@ with tab5:
         if st.button("清理过期/终态 runtime 文件", use_container_width=True,
                      help="删除已结束复现（done/error）遗留的进度文件，以及超过保留天数的旧进度文件"):
             removed, freed = cleanup_runtime(keep_days=keep_days)
+            st.session_state.pop("_history_storage", None)
             st.session_state["_hist_flash"] = (
                 f"已删除 {removed} 个文件，释放 {format_size(freed)}")
             st.rerun()
@@ -706,7 +861,7 @@ with tab5:
                    "删掉后下次执行同一依赖要重新下载安装，因此不并入"
                    "「清空历史」；需要腾空间时才在这里单独清。")
         try:
-            deps_items = list_deps_cache()
+            deps_items = snapshot["deps_items"]
         except Exception as e:
             deps_items = []
             st.error(f"读取依赖缓存失败: {e}")
@@ -731,6 +886,7 @@ with tab5:
                               "无元数据的旧目录按目录修改时间判断"):
                 skipped = []
                 n, freed = cleanup_deps_cache(keep_days=deps_keep, on_skip=skipped.append)
+                st.session_state.pop("_history_storage", None)
                 st.session_state["_hist_flash"] = (
                     f"已清理 {n} 个冷依赖目录，释放 {format_size(freed)}"
                     + ("；" + "；".join(skipped) if skipped else ""))
@@ -749,6 +905,7 @@ with tab5:
                 with st.spinner("正在删除..."):
                     skipped = []
                     n, freed = delete_deps_cache(picked_deps, on_skip=skipped.append)
+                    st.session_state.pop("_history_storage", None)
                 st.session_state["_reset_confirm_keys"] = ["confirm_deps_del"]
                 st.session_state["_hist_flash"] = (
                     f"已删除 {n} 个依赖目录，释放 {format_size(freed)}"
@@ -766,6 +923,7 @@ with tab5:
                      type="secondary",
                      disabled=not confirm_clear):
             removed, freed = clear_sessions()
+            st.session_state.pop("_history_storage", None)
             st.session_state["_reset_confirm_keys"] = ["confirm_clear_all"]
             st.session_state["_hist_flash"] = (
                 f"已清空全部历史：删除 {removed} 个文件，"
@@ -881,6 +1039,7 @@ with tab5:
                                      type="secondary",
                                      disabled=not confirm_del):
                             removed, freed = delete_session(sid)
+                            st.session_state.pop("_history_storage", None)
                             st.session_state["_hist_flash"] = (
                                 f"已删除该会话 {removed} 个文件，"
                                 f"释放 {format_size(freed)}")
@@ -907,6 +1066,7 @@ with tab5:
                     with st.spinner("正在删除..."):
                         removed, freed = delete_sessions(
                             [s["session_id"] for s in selected])
+                    st.session_state.pop("_history_storage", None)
                     st.session_state["_reset_confirm_keys"] = ["confirm_batch_del"]
                     st.session_state["_hist_flash"] = (
                         f"已批量删除 {len(selected)} 个会话，共 {removed} 个文件，"
@@ -916,99 +1076,17 @@ with tab5:
         st.error(f"加载历史记录失败: {e}")
 
 
-# ========== 事件处理 ==========
-def _save_uploaded_pdf(uploaded_file) -> str:
-    """将上传的 PDF 保存为临时文件，返回路径。"""
-    suffix = os.path.splitext(uploaded_file.name or "paper.pdf")[1] or ".pdf"
-    fd, tmp_path = tempfile.mkstemp(suffix=suffix, prefix="autorepro_paper_")
-    with os.fdopen(fd, "wb") as f:
-        f.write(uploaded_file.getvalue())
-    return tmp_path
-
-
-def _new_progress_file() -> str:
-    """创建本次复现的进度文件路径（data/runtime/progress_<毫秒>.jsonl）。"""
-    runtime_dir = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "data", "runtime")
-    os.makedirs(runtime_dir, exist_ok=True)
-    return os.path.join(runtime_dir,
-                        f"progress_{int(time.time() * 1000)}.jsonl")
-
-
-# 启动按钮处理：后台线程执行流水线，主线程立即返回并轮询进度
-if start_btn:
-    pt = st.session_state.paper_title.strip() if input_mode == "论文标题" else ""
-    if experiment_profile and st.session_state.mock_mode:
-        st.sidebar.error("官方仓库预设需要关闭 Mock 模式，才能执行真实论文代码。")
-    elif experiment_profile and st.session_state.use_docker:
-        st.sidebar.error("本轮官方仓库预设使用本地执行；请关闭 Docker 开关后运行。")
-    elif not experiment_profile and not pt and not uploaded_file:
-        st.sidebar.error("请先上传PDF文件" if input_mode == "上传PDF"
-                         else "请先输入论文标题")
-    elif requires_api and not st.session_state.mock_mode and config_missing(base_url, model_name):
-        st.error("真实模式缺少 LLM 配置（"
-                 + "、".join(config_missing(base_url, model_name))
-                 + "）。请在侧边栏填写，或设置环境变量 "
-                   "LLM_BASE_URL / LLM_MODEL 后重试。")
+with tab5:
+    if _lazy_tabs:
+        if tab5.open:
+            render_history()
     else:
-        # 真实模式且未填 API Key：多数云端端点（DeepSeek/OpenAI 等）会返回
-        # 401，且流水线会把错误文本当 LLM 输出继续跑，表象类似「没反应」。
-        # 此处不阻断（部分自建端点无需鉴权），但给出明确预警。
-        if (requires_api and not st.session_state.mock_mode
-                and not (api_key.strip()
-                         or os.environ.get("LLM_API_KEY", "").strip())):
-            st.warning("⚠️ 未填写 API Key：如果上游服务需要鉴权"
-                       "（如 DeepSeek/OpenAI），调用会返回 401 错误文本；"
-                       "建议先在侧边栏填写 Key 并点击「🔌 测试 AI 连接」验证。")
-        tmp_pdf = _save_uploaded_pdf(uploaded_file) if uploaded_file else ""
-        progress_file = _new_progress_file()
-        st.session_state.progress_file = progress_file
-        st.session_state.running = True
-        st.session_state.result = None
-        st.session_state.logs = []
-        st.session_state.agent_status = {}
-        st.session_state.pipeline_stages = []
-        st.session_state.current_state = "INIT"
-        st.session_state.pipeline_note = (
-            "复现流水线已在后台启动，进度实时刷新中…")
-        run_pipeline_background(
-            progress_file,
-            paper_title=pt, pdf_path=tmp_pdf,
-            corpus_paper=corpus_paper,
-            experiment_profile=experiment_profile,
-            prepare_only=(st.session_state.get("method_action") == "仅准备源码和命令" if method_selected else
-                          bool(st.session_state.get("repository_prepare_only")) if experiment_profile else False),
-            prepare_environment=method_selected and st.session_state.get("method_action") == "准备实验环境",
-            optimization_mode=st.session_state.get("method_optimization", "off") if method_selected else "off",
-            max_candidates=int(st.session_state.get("method_max_candidates", 3)),
-            budget_seconds=int(st.session_state.get("method_budget_minutes", 120)) * 60,
-            use_llm_review=(bool(st.session_state.get("method_llm_review")) if method_selected else
-                            bool(st.session_state.get("repository_llm_review")) if experiment_profile else False),
-            allow_result_summary_review=(bool(st.session_state.get("repository_result_review"))
-                                         if experiment_profile else False),
-            model_name=model_name, base_url=base_url,
-            api_key=api_key,
-            mock_mode=st.session_state.mock_mode,
-            enable_optimization=False,
-            use_docker=(not st.session_state.mock_mode
-                        and docker_available
-                        and st.session_state.use_docker),
-            cleanup_pdf=True)   # 临时 PDF 由后台线程负责删除
-        st.rerun()
+        # 较早版本的标签切换不会通知后端，显式加载避免在首页扫描磁盘。
+        if st.button("加载历史与存储", key="history_load"):
+            st.session_state._history_loaded = True
+        if st.session_state.get("_history_loaded"):
+            render_history()
 
-# 重置按钮处理
-if reset_btn and not st.session_state.running:
-    st.session_state.orchestrator = None
-    st.session_state.result = None
-    st.session_state.running = False
-    st.session_state.logs = []
-    st.session_state.current_state = "INIT"
-    st.session_state.agent_status = {}
-    st.session_state.pipeline_stages = []
-    st.session_state.connection_result = None
-    st.session_state.progress_file = None
-    st.session_state.pipeline_note = None
-    st.rerun()
 
 # 底部信息
 st.markdown("""

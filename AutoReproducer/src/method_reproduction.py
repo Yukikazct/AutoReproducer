@@ -1,11 +1,11 @@
 """Run reviewed method adapters with preparation separate from timed execution."""
 import time
-import math
 import uuid
 from pathlib import Path
 
 from src.dependency_cache import cache_guard
 from src.method_adapters import write_json, read_json, digest
+from src.method_budget import MAX_OPTIMIZATION_SECONDS, optimization_budget_error
 from src.repository_adapters import get_adapter
 from src.repository_profiles import get_profile
 from src.repository_runner import RepositoryRunner
@@ -33,10 +33,11 @@ class MethodReproduction:
         mode = request.get("optimization_mode") or ("validate" if request.get("enable_optimization") else "off")
         if mode not in {"off", "suggest", "validate"}:
             raise ValueError("未知优化模式")
-        budget = request.get("budget_seconds",7200)
-        if mode == "validate" and (isinstance(budget,bool) or not isinstance(budget,(int,float))
-                                   or not math.isfinite(budget) or not 0 < budget <= 7200):
-            raise ValueError("优化预算必须在0至7200秒之间")
+        budget = request.get("budget_seconds", MAX_OPTIMIZATION_SECONDS)
+        if mode == "validate" and not (prepare_only or prepare_env):
+            budget_error = optimization_budget_error(budget)
+            if budget_error:
+                raise ValueError(budget_error)
         if request.get("use_docker"):
             raise ValueError("方法预设需要本地执行")
         recover_interrupted_optimizations(self.root / "runs")
@@ -53,7 +54,7 @@ class MethodReproduction:
         full_review = bool(request.get("use_llm_review")) and not (prepare_only or prepare_env)
         stages = [("prepare_repository", "FIND_RESOURCES", "ResourceFinder", "核验固定源码与数据"),
                   ("prepare_environment", "BUILD_ENV", "EnvBuilder", "准备或检查实验环境"),
-                  ("execute_repository", "EXECUTE_CODE", "CodeExecutor", "完整训练与独立评估"),
+                  ("execute_repository", "EXECUTE_CODE", "CodeExecutor", "代码执行"),
                   ("verify_protocol", "VALIDATE", "Verifier", "核验本次协议与产物"),
                   ("method_advice", "OPTIMIZE", "Optimizer", "智能建议与参数试验"),
                   ("generate_report", "GENERATE_REPORT", "ReportGenerator", "生成实验报告")]
@@ -78,7 +79,7 @@ class MethodReproduction:
         phase, error = "prepare_repository", None
         write_json(run_dir / "experiment_spec.json", {"spec": profile, "sha256": spec_hash})
         try:
-            if mode == "validate" or full_review:
+            if (mode == "validate" and not (prepare_only or prepare_env)) or full_review:
                 # Validation experiments have their own two-hour deadline.
                 baseline_deadline = started + min(1200,budget) if mode == "validate" else started + 1200
             else:
@@ -114,11 +115,17 @@ class MethodReproduction:
                     if full_review:
                         from src.method_advice import review_sources
                         phase = "review_reader"
+                        def review_stage(role, status):
+                            nonlocal phase
+                            phase = "review_" + role
+                            event(phase, status)
                         data["method_analysis"] = review_sources(self.llm, profile, sources,
-                            lambda role, status: event("review_" + role, status))
+                                                                 review_stage)
+                        write_json(run_dir / "method_analysis.json", data["method_analysis"])
                         data["analysis_status"] = "public_readiness_accepted"
                     phase = "execute_repository"; event(phase, "running")
-                execution = self.runner.run(workspace, steps, env, on_event=emit)
+                execution = self.runner.run(workspace, steps, env,
+                    on_event=lambda execution_event, phase_id=phase: emit({**execution_event, "phase_id": phase_id}))
                 data["execution"] = execution
                 # Only this run's generated artifacts qualify as experiment evidence.
                 execution["artifacts"] = [a for a in execution.get("artifacts", []) if a["name"].startswith("artifacts/")]
@@ -146,7 +153,8 @@ class MethodReproduction:
                         remaining = (started + profile["budget"]["total_s"] - time.monotonic() - 15) if mode == "suggest" and not full_review else 45
                         if mode == "validate":
                             from src.method_optimization import validate_candidates
-                            data["optimization"] = validate_candidates(self, profile, data, request, started, emit)
+                            data["optimization"] = validate_candidates(self, profile, data, request, started,
+                                lambda execution_event, phase_id=phase: emit({**execution_event, "phase_id": phase_id}))
                         else:
                             data["optimization"] = suggest(self.llm, profile, data["validation"], sources, timeout_s=min(45, remaining))
                             data["optimization"]["baseline_run_id"] = run_dir.name
@@ -172,7 +180,13 @@ class MethodReproduction:
             raise
         except Exception as exc:
             error = str(exc)
-            data["validation"] = {"status": "execution_failed", "result_level": "failed", "is_reproduced": None,
+            analysis = getattr(exc, "analysis", None)
+            if isinstance(analysis, dict):
+                data["method_analysis"] = analysis
+                data["analysis_status"] = "public_readiness_rejected"
+                write_json(run_dir / "method_analysis.json", analysis)
+            data["validation"] = {"status": "analysis_failed" if phase.startswith("review_") else "execution_failed",
+                                  "failure_phase": phase, "result_level": "failed", "is_reproduced": None,
                                   "optimization_eligible": False, "reason": error}
             data.setdefault("execution", {"mode": "repository", "executed": False, "success": False})
             event(phase, "error", error)

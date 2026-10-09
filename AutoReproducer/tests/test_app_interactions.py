@@ -10,6 +10,24 @@ import frontend.history_manager as history
 import frontend.llm_config as llm_config
 
 
+@pytest.fixture(autouse=True)
+def preserve_selected_tab_in_apptest(monkeypatch):
+    """Mirror browser tab state until AppTest supports tabs as stateful widgets."""
+    from streamlit.testing.v1.element_tree import ElementTree
+    from streamlit.runtime.state.common import user_key_from_element_id
+    original = ElementTree.get_widget_states
+    def with_tab_state(tree):
+        states = original(tree)
+        existing = {item.id for item in states.widgets}
+        for item in tree.session_state.get_widget_states():
+            if user_key_from_element_id(item.id) == "workspace_tabs" and item.id not in existing:
+                state = states.widgets.add()
+                state.CopyFrom(item)
+                state.string_value = tree.session_state["workspace_tabs"]
+        return states
+    monkeypatch.setattr(ElementTree, "get_widget_states", with_tab_state)
+
+
 @pytest.fixture
 def app(tmp_path, monkeypatch):
     monkeypatch.setattr(history, "get_project_data_dir", lambda: tmp_path)
@@ -17,6 +35,108 @@ def app(tmp_path, monkeypatch):
                            default_timeout=30)
     at.session_state["docker_probe"] = (True, None)
     return at.run()
+
+
+@pytest.fixture
+def history_scan_app(tmp_path, monkeypatch):
+    """Observe potentially expensive scans without touching real cached data."""
+    snapshot = Mock(return_value={"storage": {}, "deps_items": [], "inventory": []})
+    snapshot.list_sessions = Mock(return_value=[])
+    monkeypatch.setattr(history, "collect_storage_snapshot", snapshot)
+    monkeypatch.setattr(history, "list_sessions", snapshot.list_sessions)
+    monkeypatch.setattr(history, "get_project_data_dir", lambda: tmp_path)
+    at = AppTest.from_file(str(Path(__file__).parents[1] / "app.py"), default_timeout=30)
+    at.session_state["docker_probe"] = (True, None)
+    return at.run(), snapshot
+
+
+def _open_history(at):
+    load = next((button for button in at.button if button.key == "history_load"), None)
+    if load is not None:
+        load.click().run()
+    else:
+        # Stateful Streamlit tabs support programmatic selection through their
+        # public session key; AppTest does not yet expose a Tab.click method.
+        at.session_state["workspace_tabs"] = "📂 历史记录"
+        at.run()
+    assert not at.exception
+
+
+def test_hidden_history_does_not_scan_on_initial_render_or_input_switches(history_scan_app):
+    at, snapshot = history_scan_app
+    assert not at.exception
+    snapshot.assert_not_called()
+    snapshot.list_sessions.assert_not_called()
+    at.sidebar.radio(key="input_mode").set_value("上传PDF").run()
+    assert not at.exception
+    assert len(at.sidebar.get("file_uploader")) == 1
+    snapshot.assert_not_called()
+    snapshot.list_sessions.assert_not_called()
+    at.sidebar.radio(key="input_mode").set_value("官方仓库预设").run()
+    assert not at.exception
+    assert at.sidebar.selectbox(key="experiment_profile").value == "dlinear_etth1_reference"
+    snapshot.assert_not_called()
+    snapshot.list_sessions.assert_not_called()
+
+
+def test_history_loads_once_and_only_explicit_refresh_repeats_scan(history_scan_app):
+    at, snapshot = history_scan_app
+    _open_history(at)
+    snapshot.assert_called_once()
+    assert at.session_state["_history_storage"] == snapshot.return_value
+    at.run()
+    assert not at.exception
+    snapshot.assert_called_once()
+    if "workspace_tabs" in at.session_state:
+        at.session_state["workspace_tabs"] = "📋 流水线状态"
+        at.run()
+        assert not any(button.key == "resource_refresh" for button in at.button)
+        snapshot.assert_called_once()
+        _open_history(at)
+        snapshot.assert_called_once()
+    at.button(key="resource_refresh").click().run()
+    assert not at.exception
+    assert snapshot.call_count == 2
+
+
+def test_start_is_accepted_before_uncached_history_work(history_scan_app, monkeypatch):
+    at, snapshot = history_scan_app
+    at.sidebar.toggle[0].set_value(True).run()
+    at.sidebar.text_input(key="paper_title_input").set_value("Start promptly").run()
+    _open_history(at)
+    del at.session_state["_history_storage"]
+    order = []
+    snapshot.side_effect = lambda: order.append("scan") or snapshot.return_value
+    start = Mock(side_effect=lambda *args, **kwargs: order.append("start"))
+    monkeypatch.setattr(pipeline, "run_pipeline_background", start)
+    next(button for button in at.sidebar.button if "开始复现" in button.label).click().run()
+    assert not at.exception
+    start.assert_called_once()
+    assert order and order[0] == "start"
+    assert at.session_state["running"] is True
+
+
+def test_older_streamlit_requires_explicit_history_load(tmp_path, monkeypatch):
+    import streamlit as st
+    original_tabs = st.tabs
+    # An older public signature has no on_change, so selecting a visual tab
+    # alone cannot announce that it is open to the server.
+    def legacy_tabs(tabs, *, width="stretch"):
+        return original_tabs(tabs, width=width)
+    monkeypatch.setattr(st, "tabs", legacy_tabs)
+    monkeypatch.setattr(history, "get_project_data_dir", lambda: tmp_path)
+    snapshot = Mock(return_value={"storage": {}, "deps_items": [], "inventory": []})
+    monkeypatch.setattr(history, "collect_storage_snapshot", snapshot)
+    at = AppTest.from_file(str(Path(__file__).parents[1] / "app.py"), default_timeout=30)
+    at.session_state["docker_probe"] = (True, None)
+    at.run()
+    assert not at.exception
+    snapshot.assert_not_called()
+    at.button(key="history_load").click().run()
+    assert not at.exception
+    snapshot.assert_called_once()
+    at.run()
+    snapshot.assert_called_once()
 
 
 @pytest.mark.parametrize("ok,message", [

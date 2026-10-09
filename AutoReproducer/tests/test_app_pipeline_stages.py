@@ -84,6 +84,29 @@ def test_retry_clears_previous_error_and_final_check_error_stays_separate(app, t
     assert app.get("progress")[0].proto.value < 100
 
 
+def test_online_finder_rejection_only_colors_actual_failed_stage_red(app, tmp_path):
+    path = tmp_path / "online_review.jsonl"
+    store = ProgressStore(str(path))
+    store.emit({"type": "pipeline_plan", "stages": [
+        {"id": "review_reader", "agent": "PaperReader", "title": "论文方法分析", "status": "waiting"},
+        {"id": "review_finder", "agent": "ResourceFinder", "title": "资源核对", "status": "waiting"},
+        {"id": "review_builder", "agent": "EnvBuilder", "title": "依赖分析", "status": "waiting"},
+    ]})
+    stage(store, "review_reader", "PaperReader", "success", "READ_PAPER")
+    stage(store, "review_finder", "ResourceFinder", "running", "READ_PAPER")
+    stage(store, "review_finder", "ResourceFinder", "error", "READ_PAPER", reason="缺少入口映射")
+    store.emit({"type": "done", "result": {"state": "ERROR", "error": "缺少入口映射"}})
+    rows = load(app, path)
+    assert rows["review_reader"]["status"] == "success"
+    assert rows["review_finder"]["status"] == "error"
+    assert rows["review_builder"]["status"] == "blocked"
+    html = cards(app)
+    assert 'agent-success" data-stage-id="review_reader"' in html
+    assert 'agent-error" data-stage-id="review_finder"' in html
+    assert 'agent-waiting" data-stage-id="review_builder"' in html
+    assert html.count('agent-error" data-stage-id=') == 1
+
+
 def test_new_progress_does_not_inherit_previous_result_or_status(app, tmp_path):
     first = tmp_path / "previous.jsonl"
     store = ProgressStore(str(first))
@@ -117,3 +140,38 @@ def test_live_log_is_scrollable_and_optimization_entry_is_reserved(app, tmp_path
     option = app.sidebar.checkbox(key="enable_optimization")
     assert option.disabled is True and option.value is False
     assert not app.sidebar.slider
+
+
+def test_arbitrary_execution_steps_show_task_running_after_one_phase_finishes(app, tmp_path):
+    path = tmp_path / "arbitrary.jsonl"
+    store = ProgressStore(str(path))
+    store.emit({"type": "pipeline_plan", "stages": [
+        {"id": "first_phase", "title": "作者完整训练与测试", "agent": "CodeExecutor", "status": "waiting"},
+        {"id": "another_phase", "title": "额外计算", "agent": "CustomWorker", "status": "waiting"}]})
+    stage(store, "first_phase", "CodeExecutor", "success", "EXECUTE_CODE")
+    stage(store, "another_phase", "CustomWorker", "running", "CUSTOM")
+    identity = {"execution_id": "opaque-id", "step_id": "unknown_operation", "step_index": 2,
+                "phase_id": "another_phase"}
+    store.emit({"type": "execution_step", **identity, "status": "running"})
+    store.emit({"type": "execution_output", **identity, "text": "500/500 completed\n"})
+    load(app, path)
+    html = cards(app)
+    assert "作者完整训练与测试" not in html
+    assert "代码执行" in html and "本阶段完成" in html
+    assert "当前执行：代码执行 · 第 1 轮 · 步骤 2" in html
+    assert any("整体任务仍在运行" in notice.value for notice in app.info)
+    assert any("整体任务运行中" in item.value for item in app.markdown)
+    assert app.session_state.running is True
+    assert any("不代表耗时比例" in item.value for item in app.caption)
+    assert any("不代表整个任务" in item.value for item in app.caption)
+
+    store.emit({"type": "execution_step", **identity, "status": "success"})
+    stage(store, "another_phase", "CustomWorker", "success", "COMPLETED")
+    load(app, path)
+    assert app.session_state.running is True  # All stages alone cannot finish the task.
+    assert any("整体任务运行中" in item.value for item in app.markdown)
+    store.emit({"type": "done", "result": {"state": "COMPLETED", "data": {}}})
+    load(app, path)
+    assert app.session_state.running is False
+    assert not any("整体任务仍在运行" in notice.value for notice in app.info)
+    assert not any("当前执行：" in item.value for item in app.caption)

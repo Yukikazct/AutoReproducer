@@ -28,6 +28,36 @@ SID_RUNNING = "20260910_100000"
 SID_DONE = "20260911_000000"
 
 
+@pytest.fixture(autouse=True)
+def preserve_selected_tab_in_apptest(monkeypatch):
+    """AppTest 1.63 omits tab blocks from the browser's widget-state message."""
+    from streamlit.testing.v1.element_tree import ElementTree
+    from streamlit.runtime.state.common import user_key_from_element_id
+    original = ElementTree.get_widget_states
+    def with_tab_state(tree):
+        states = original(tree)
+        existing = {item.id for item in states.widgets}
+        for item in tree.session_state.get_widget_states():
+            if user_key_from_element_id(item.id) == "workspace_tabs" and item.id not in existing:
+                state = states.widgets.add()
+                state.CopyFrom(item)
+                state.string_value = tree.session_state["workspace_tabs"]
+        return states
+    monkeypatch.setattr(ElementTree, "get_widget_states", with_tab_state)
+
+
+def _open_history(app):
+    """Explicitly open the lazy history UI on new and older Streamlit versions."""
+    load = next((button for button in app.button if button.key == "history_load"), None)
+    if load is not None:
+        load.click().run()
+    else:
+        app.session_state["workspace_tabs"] = "📂 历史记录"
+        app.run()
+    assert not app.exception
+    return app
+
+
 def _mk_session(data_dir: Path, sid: str, title: str, state: str) -> None:
     """造一个最小可被 list_sessions 识别的会话（账本 + 日志 + 报告）。"""
     records = [{
@@ -65,7 +95,7 @@ def at(tmp_path, monkeypatch):
     from streamlit.testing.v1 import AppTest
     app = AppTest.from_file(APP_PATH, default_timeout=120)
     app.run()
-    return app
+    return _open_history(app)
 
 
 def _captions(app) -> str:
@@ -180,7 +210,7 @@ def at_with_deps(tmp_path, monkeypatch):
     from streamlit.testing.v1 import AppTest
     app = AppTest.from_file(APP_PATH, default_timeout=120)
     app.run()
-    return app
+    return _open_history(app)
 
 
 def test_deps_cache_panel_lists_entries(at_with_deps, tmp_path):
@@ -226,6 +256,8 @@ def test_deps_cache_delete_requires_pick_and_confirmation(at_with_deps, tmp_path
     assert (tmp_path / "deps" / DEPS_HOT).is_dir()            # 没选的不受牵连
     assert any("已删除 1 个依赖目录" in s.value for s in app.success)
     assert app.checkbox(key="confirm_deps_del").value is False
+    assert app.multiselect(key="deps_del_pick").options == [DEPS_HOT]
+    assert [item["name"] for item in app.session_state["_history_storage"]["deps_items"]] == [DEPS_HOT]
 
 
 def test_select_all_visible_only_checks_visible(at):

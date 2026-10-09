@@ -180,6 +180,32 @@ def test_terminal_progress_marks_unexecuted_phases_blocked(tmp_path, terminal):
     assert rows["generate_report"]["status"] == "success"
 
 
+@pytest.mark.parametrize("terminal", ["done", "error"])
+@pytest.mark.parametrize("explicit_failure", [False, True])
+def test_terminal_running_phase_is_not_mislabeled_unexecuted_or_a_second_failure(tmp_path, terminal, explicit_failure):
+    path = tmp_path / "unfinished.jsonl"
+    store = ProgressStore(str(path))
+    store.emit({"type": "pipeline_plan", "stages": [
+        {"id": "review_reader", "agent": "PaperReader", "status": "waiting"},
+        {"id": "review_finder", "agent": "ResourceFinder", "status": "waiting"},
+        {"id": "review_builder", "agent": "EnvBuilder", "status": "waiting"},
+    ]})
+    store.emit({"type": "state", "phase_id": "review_reader", "agent": "PaperReader",
+                "status": "error" if explicit_failure else "success", "reason": "recorded result"})
+    store.emit({"type": "state", "phase_id": "review_finder", "agent": "ResourceFinder", "status": "running"})
+    store.emit({"type": "done", "result": {"state": "ERROR"}} if terminal == "done" else
+               {"type": "error", "error": "unexpected termination"})
+    view = ProgressStore.read_snapshot(str(path))
+    rows = {row["id"]: row for row in view["pipeline_stages"]}
+    assert rows["review_finder"]["status"] == ("blocked" if explicit_failure else "error")
+    assert view["agent_status"]["ResourceFinder"] == rows["review_finder"]["status"]
+    assert "未正常结束" in rows["review_finder"]["reason"]
+    assert "未执行" not in rows["review_finder"]["reason"]
+    assert rows["review_builder"]["status"] == "blocked"
+    assert "未执行" in rows["review_builder"]["reason"]
+    assert sum(row["status"] == "error" for row in rows.values()) == 1
+
+
 def test_repository_progress_preserves_output_and_terminal(tmp_path):
     path = tmp_path / "p.jsonl"
     store = ProgressStore(str(path))

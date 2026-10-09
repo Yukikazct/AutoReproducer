@@ -134,6 +134,9 @@ class RepositoryRunner:
         stdout_path = run_dir / f"{step['id']}.stdout.log"
         stderr_path = run_dir / f"{step['id']}.stderr.log"
         record = {k: step[k] for k in ("id", "argv", "cwd", "timeout_s")}
+        identity = {"execution_id": run_dir.name,
+                    "step_index": step["step_index"], "step_count": step["step_count"]}
+        record.update(identity)
         record.update(stage="full", executed=False, stdout_path=str(stdout_path),
                       stderr_path=str(stderr_path))
         process, timed_out, group_killed = None, False, False
@@ -181,7 +184,7 @@ class RepositoryRunner:
                             text = decoders[stream].decode(chunk, final=final)
                             if text:
                                 emit({"type": "repository_output", "step_id": step["id"],
-                                      "stream": stream, "text": text})
+                                      "stream": stream, "text": text, **identity})
 
                     # The host owns the process group and acts before the
                     # standalone supervisor's fallback deadline, while the
@@ -337,7 +340,8 @@ class RepositoryRunner:
                     json.dumps(result["environment"], ensure_ascii=False, indent=2), encoding="utf-8")
                 if deps_error:
                     return reject(deps_error, -4)
-                for step in planned:
+                for index, step in enumerate(planned, 1):
+                    step = {**step, "step_index": index, "step_count": len(planned)}
                     deadline = self.executor.env_config.get("deadline_monotonic")
                     if deadline is not None:
                         remaining = deadline - time.monotonic() - 2

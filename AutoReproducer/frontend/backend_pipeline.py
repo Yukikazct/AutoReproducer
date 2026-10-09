@@ -77,6 +77,8 @@ class ProgressStore:
             "result": None, "done": False, "error": None,
             "running": True, "updated_at": "",
             "execution_output": "", "repository_step": "",
+            "execution_context": {}, "repository_step_label": "",
+            "active_executions": [],
             "pipeline_stages": [],
         }
         stages: Dict[str, Dict[str, Any]] = {}
@@ -84,6 +86,45 @@ class ProgressStore:
         legacy_latest: Dict[tuple, str] = {}
         has_plan = False
         legacy_repository = False
+        execution_numbers: Dict[str, int] = {}
+        executions: Dict[tuple, Dict[str, Any]] = {}
+        output_key = None
+        labeled_output = False
+
+        def execution_context(event: Dict[str, Any]) -> Dict[str, Any]:
+            identifier = event.get("execution_id")
+            identifier = identifier if isinstance(identifier, str) else ""
+            index = event.get("step_index")
+            index = index if type(index) is int and index > 0 else None
+            previous = executions.get((identifier, index if identifier else None), {})
+            step_id = event.get("step_id", previous.get("step_id", ""))
+            step_id = step_id if isinstance(step_id, str) else ""
+            count = event.get("step_count", previous.get("step_count"))
+            count = count if type(count) is int and count > 0 and (index is None or count >= index) else None
+            number = None
+            label = "代码执行"
+            if identifier:
+                number = execution_numbers.setdefault(identifier, len(execution_numbers) + 1)
+                label += f" · 第 {number} 轮"
+                if index is not None:
+                    label += f" · 步骤 {index}" + (f"/{count}" if count is not None else "")
+            elif step_id:
+                label += " · " + step_id
+            return {"execution_id": identifier, "round_number": number, "step_id": step_id,
+                    "step_index": index, "step_count": count, "label": label,
+                    "phase_id": event.get("phase_id", previous.get("phase_id", "")),
+                    "status": event.get("status", previous.get("status", ""))}
+
+        def output_boundary(context: Dict[str, Any]) -> None:
+            nonlocal output_key, labeled_output
+            identifier = context["execution_id"]
+            key = (identifier, context["step_index"] if identifier else context["step_id"])
+            # Pure legacy streams keep their original text. A mixed stream gets
+            # an explicit anonymous boundary instead of borrowing a newer ID.
+            if key != output_key and (identifier or labeled_output):
+                view["execution_output"] = (view["execution_output"] + f"\n── {context['label']} ──\n")[-16000:]
+            output_key = key
+            labeled_output = labeled_output or bool(identifier)
 
         def apply_stage(identifier: str, event: Dict[str, Any]) -> None:
             if identifier not in stages:
@@ -103,11 +144,19 @@ class ProgressStore:
                     row[key] = event[key]
 
         def finish_pending(reason: str, failed: bool) -> None:
+            known_failure = any(row["status"] == "error" for row in stages.values())
             for row in stages.values():
                 if row["status"] == "waiting":
                     row.update(status="blocked", reason=reason)
                 elif row["status"] == "running":
-                    row.update(status="error" if failed else "blocked", reason=reason)
+                    # A pipeline-level failure cannot identify a second failed
+                    # phase when an explicit phase error is already available.
+                    # Running also means it started, so never label it unexecuted.
+                    row.update(status="error" if failed and not known_failure else "blocked",
+                               reason="流水线已终止，本阶段未正常结束，未收到完成结果")
+                    agent = row.get("agent", "")
+                    if agent and view["agent_status"].get(agent) == "running":
+                        view["agent_status"][agent] = row["status"]
 
         if not p.exists():
             return view
@@ -184,12 +233,25 @@ class ProgressStore:
                 lg = ev.get("log")
                 if isinstance(lg, dict):
                     view["logs"].append(lg)
-            elif etype == "repository_step":
+            elif etype in {"repository_step", "execution_step"}:
+                if not view["running"]:
+                    continue  # A delayed worker cannot reopen a terminal pipeline.
                 view["repository_step"] = ev.get("step_id", "")
-                legacy_repository = True
-            elif etype == "repository_output":
+                context = execution_context(ev)
+                key = (context["execution_id"], context["step_index"] if context["execution_id"] else None)
+                executions[key] = context
+                if context["status"] == "running":
+                    output_boundary(context)
+                view["execution_context"] = context
+                view["repository_step_label"] = context["label"]
+                legacy_repository = legacy_repository or etype == "repository_step"
+            elif etype in {"repository_output", "execution_output"}:
                 # A bounded live viewport; complete streams remain in run logs/report.
-                view["execution_output"] = (view["execution_output"] + ev.get("text", ""))[-16000:]
+                context = execution_context(ev)
+                text = ev.get("text", "")
+                if text:
+                    output_boundary(context)
+                    view["execution_output"] = (view["execution_output"] + text)[-16000:]
             elif etype == "done":
                 view["done"] = True
                 view["running"] = False
@@ -208,6 +270,11 @@ class ProgressStore:
                 finish_pending("流水线异常终止，本阶段未执行", True)
             view["updated_at"] = ev.get("at", view["updated_at"])
         view["pipeline_stages"] = [stages[identifier] for identifier in stage_order]
+        if not view["running"]:
+            for context in executions.values():
+                if context["status"] == "running":
+                    context["status"] = "interrupted"
+        view["active_executions"] = [context for context in executions.values() if context["status"] == "running"]
         if not has_plan and legacy_repository:
             for row in view["pipeline_stages"]:
                 if row.get("agent", "").endswith("Verifier"):
@@ -298,7 +365,7 @@ def run_pipeline_core(progress_path: str,
         if event.get("type") == "state":
             _set_current(event["state"])
             store.emit({**event, "agent": display_names.get(event.get("agent"), event.get("agent", ""))})
-        elif event.get("type") in {"repository_step", "repository_output"}:
+        elif event.get("type") in {"repository_step", "repository_output", "execution_step", "execution_output"}:
             store.emit(event)
         elif event.get("type") == "pipeline_plan":
             store.emit({**event, "stages": [
