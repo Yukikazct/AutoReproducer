@@ -205,6 +205,7 @@ class RepositoryRunner:
         emit({"type": "repository_step", "step_id": step["id"],
               "status": "running", **record})
         process, timed_out, group_killed = None, False, False
+        interruption = None
         exit_code, diagnostic, cleanup_errors = -2, "", []
         # Plot helpers live beside the logs, not inside the author repository.
         environment = self.executor._exec_env(str(run_dir))
@@ -214,6 +215,7 @@ class RepositoryRunner:
         environment["PYTHONPATH"] = os.pathsep.join(
             part for part in (str(root), environment.get("PYTHONPATH", "")) if part)
         environment["PYTHONUNBUFFERED"] = "1"
+        environment["AUTOREPRO_PARENT_PID"] = str(os.getpid())
         supervisor = Path(__file__).with_name("sandbox_timeout.py")
         command = [sys.executable, "-S", str(supervisor), "execution",
                    str(step["timeout_s"] + 1.0), *step["argv"]]
@@ -227,7 +229,12 @@ class RepositoryRunner:
             with stdout_path.open("wb") as out, stderr_path.open("wb") as err:
                 process = subprocess.Popen(command, cwd=step["cwd"], env=environment,
                                            stdout=out, stderr=err, shell=False,
-                                           start_new_session=(os.name == "posix"))
+                                           start_new_session=(os.name == "posix"),
+                                           # Isolate Windows console Ctrl+C so only the
+                                           # driver cancels first; taskkill /T still
+                                           # needs the supervisor alive to find its tree.
+                                           creationflags=(subprocess.CREATE_NEW_PROCESS_GROUP
+                                                          if os.name == "nt" else 0))
                 record["executed"] = True
                 with stdout_path.open("rb") as out_tail, stderr_path.open("rb") as err_tail:
                     tails = {"stdout": out_tail, "stderr": err_tail}
@@ -265,6 +272,10 @@ class RepositoryRunner:
                             cleanup_errors.append(cleanup)
                     output(final=True)
                     exit_code = process.returncode
+        except KeyboardInterrupt as exc:
+            interruption = exc
+            diagnostic = f"repository step {step['id']} interrupted"
+            exit_code = 130
         except (OSError, ValueError, subprocess.SubprocessError) as exc:
             diagnostic = str(exc)
         finally:
@@ -293,6 +304,7 @@ class RepositoryRunner:
             stdout_path.write_text("", encoding="utf-8")
         record.update(success=exit_code == 0, exit_code=exit_code, stdout=stdout,
                       stderr=stderr, timed_out=timed_out,
+                      cancelled=interruption is not None,
                       elapsed_s=round(time.monotonic() - started, 3))
         # Declared evidence is captured whatever the verdict was; a failed step's
         # partial output is often the thing a later diagnosis needs.
@@ -301,6 +313,9 @@ class RepositoryRunner:
             json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
         emit({"type": "repository_step", "step_id": step["id"],
               "status": "success" if record["success"] else "error", **record})
+        if interruption is not None:
+            interruption.step_record = record
+            raise interruption
         return record
 
     def run(self, workspace, steps, env_config, use_docker=False, on_event=None):
@@ -390,7 +405,7 @@ class RepositoryRunner:
                 # A dependency graph is unnecessary because reviewed plans schedule each
                 # step after its prerequisites; the authoring order is the running order.
                 halted = None
-                for step in planned:
+                for step_index, step in enumerate(planned):
                     if halted is not None:
                         skipped.append({"id": step["id"], "not_run": "prerequisite_failed",
                                         "blocked_by": halted, "required": step["required"]})
@@ -415,7 +430,24 @@ class RepositoryRunner:
                         if remaining <= 0:
                             return reject("实验总时间预算耗尽", 124)
                         step = {**step, "timeout_s": min(step["timeout_s"], remaining)}
-                    record = self._execute(root, step, run_dir, emit)
+                    try:
+                        record = self._execute(root, step, run_dir, emit)
+                    except KeyboardInterrupt as exc:
+                        record = getattr(exc, "step_record", None)
+                        if record is not None:
+                            attempts.append(record)
+                        result.update(cancelled=True, success=False,
+                                      executed=any(item["executed"] for item in attempts),
+                                      final=record or {"success": False, "executed": False,
+                                                       "exit_code": 130, "cancelled": True,
+                                                       "stderr": "实验已中断", "stdout": ""})
+                        for later in planned[step_index+1:]:
+                            skipped.append({"id": later["id"], "not_run": "interrupted",
+                                            "blocked_by": step["id"], "required": later["required"]})
+                        from src.method_adapters import write_json
+                        write_json(run_dir / "execution.json", result)
+                        exc.execution = result
+                        raise
                     attempts.append(record)
                     result["executed"] = result["executed"] or record["executed"]
                     if not record["success"] and step["required"]:

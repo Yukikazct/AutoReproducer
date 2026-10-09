@@ -164,10 +164,10 @@ def test_concurrent_installers_wait_for_ready_and_install_once(root, tmp_path, m
     original_guard = ce.cache_guard
 
     @contextmanager
-    def observed_guard(path):
-        if threading.current_thread().name.endswith("_1"):
+    def observed_guard(path, **kwargs):
+        if installing.is_set():
             waiting.set()
-        with original_guard(path):
+        with original_guard(path, **kwargs):
             yield
 
     def pip(cmd, **kwargs):

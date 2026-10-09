@@ -2,8 +2,10 @@
 import time
 import math
 import uuid
+import os
 from pathlib import Path
 
+from filelock import FileLock
 from src.dependency_cache import cache_guard
 from src.method_adapters import write_json, read_json, digest
 from src.execution_plan import build_plan, plan_step_ids
@@ -18,6 +20,28 @@ class MethodReproduction:
         self.runner, self.llm = runner or RepositoryRunner(logger=logger), llm
 
     def run(self, request, on_event=None):
+        from src.run_lifecycle import cancellation_signals
+        run_dir = self.root / "runs" / f"repository_{uuid.uuid4().hex}"
+        run_dir.mkdir(parents=True)
+        status = {"status": "running", "pid": os.getpid(), "started_at": time.time()}
+        with FileLock(str(run_dir / ".run.lock")), cancellation_signals():
+            write_json(run_dir / "run_status.json", status)
+            try:
+                result = self._run(request, on_event, run_dir)
+                status.update(status="interrupted" if result["data"].get("interrupted") else
+                              "failed" if result.get("error") else "completed")
+                return result
+            except KeyboardInterrupt:
+                status.update(status="interrupted", reason="实验已中断")
+                raise
+            except Exception:
+                status.update(status="failed", reason="运行未能正常生成报告")
+                raise
+            finally:
+                status["finished_at"] = time.time()
+                write_json(run_dir / "run_status.json", status)
+
+    def _run(self, request, on_event, run_dir):
         from src.repository_reproduction import export_repository, spec_digest
         from src.agents.report_generator import ReportGeneratorAgent
         from src.method_advice import suggest
@@ -37,8 +61,6 @@ class MethodReproduction:
             raise ValueError("优化预算必须在0至7200秒之间")
         if request.get("use_docker"):
             raise ValueError("方法预设需要本地执行")
-        run_dir = self.root / "runs" / f"repository_{uuid.uuid4().hex}"
-        run_dir.mkdir(parents=True)
         workspace = run_dir / "repo"
         spec_hash = spec_digest(profile)
         data = {"run_dir": str(run_dir.resolve()), "report_path": str((run_dir / "report.md").resolve()),
@@ -160,6 +182,16 @@ class MethodReproduction:
                             data["optimization"] = suggest(self.llm, profile, data["validation"], sources, timeout_s=min(45, remaining))
                             data["optimization"]["baseline_run_id"] = run_dir.name
                         event(phase, "success" if data["optimization"]["status"] not in {"advice_timeout", "advice_unavailable"} else "error", data["optimization"].get("reason", ""))
+        except KeyboardInterrupt as exc:
+            error = "实验已中断；已完成的基线和试验记录已保留"
+            data["interrupted"] = True
+            if phase != "method_advice":
+                data["validation"] = {"status": "interrupted", "result_level": "failed",
+                                      "is_reproduced": None, "optimization_eligible": False, "reason": error}
+                if getattr(exc, "execution", None):
+                    data["execution"] = exc.execution
+            data["optimization"].update(status="interrupted", optimized=False, reason=error)
+            event(phase, "error", error)
         except Exception as exc:
             error = str(exc)
             data["validation"] = {"status": "execution_failed", "result_level": "failed", "is_reproduced": None,

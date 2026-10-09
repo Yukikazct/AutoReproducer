@@ -42,7 +42,7 @@ def test_mock_environment_no_longer_claims_fixed_three_gigabytes():
     assert "预估磁盘" not in report
 
 
-def test_actual_file_lengths_count_nested_files_once_and_skip_links(tmp_path):
+def test_actual_file_lengths_count_nested_files_once_and_skip_links(tmp_path, require_symlinks):
     root = tmp_path / "workspace"
     nested = root / "nested"
     nested.mkdir(parents=True)
@@ -67,7 +67,7 @@ def test_empty_directory_and_missing_directory_are_not_confused(tmp_path):
     assert missing["status"] == "not_measured" and missing["bytes"] is None
 
 
-def test_directory_symlink_is_not_followed(tmp_path):
+def test_directory_symlink_is_not_followed(tmp_path, require_symlinks):
     (tmp_path / "real").mkdir()
     (tmp_path / "real" / "payload").write_bytes(b"x" * 999)
     (tmp_path / "link").symlink_to(tmp_path / "real", target_is_directory=True)

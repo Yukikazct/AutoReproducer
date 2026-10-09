@@ -10,6 +10,7 @@ import os
 import sys
 import tempfile
 from pathlib import Path
+import pytest
 
 os.environ.setdefault(
     "AUTOREPRO_DEPS_ROOT",
@@ -25,3 +26,17 @@ os.environ.setdefault(
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
+
+
+@pytest.fixture(scope="session")
+def require_symlinks(tmp_path_factory):
+    """Windows without Developer Mode cannot create links; report that as unsupported."""
+    root = tmp_path_factory.mktemp("symlink_capability")
+    target = root / "target"
+    target.mkdir()
+    try:
+        (root / "link").symlink_to(target, target_is_directory=True)
+    except OSError as exc:
+        if getattr(exc, "winerror", None) == 1314:
+            pytest.skip("Windows 未授予创建符号链接权限（WinError 1314）；此项未验证")
+        raise

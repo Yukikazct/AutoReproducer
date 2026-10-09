@@ -121,7 +121,7 @@ def test_entry_path_rejected_before_preparation_or_process(runner, tmp_path, mon
     launch.assert_not_called()
 
 
-def test_script_escape_and_external_symlink_are_rejected(runner, tmp_path):
+def test_script_escape_and_external_symlink_are_rejected(runner, tmp_path, require_symlinks):
     repo = tmp_path / "repo"
     repo.mkdir()
     script = tmp_path / "outside.py"
@@ -135,9 +135,9 @@ def test_script_escape_and_external_symlink_are_rejected(runner, tmp_path):
     assert linked["executed"] is False
 
 
-def test_new_symlink_from_first_step_blocks_later_execution(runner, tmp_path):
+def test_new_symlink_from_first_step_blocks_later_execution(runner, tmp_path, require_symlinks):
     result = runner.run(tmp_path, [
-        step("make_link", "-c", "from pathlib import Path;Path('link').symlink_to('/tmp')"),
+        step("make_link", "-c", f"from pathlib import Path;Path('link').symlink_to({str(tmp_path.parent)!r},target_is_directory=True)"),
         step("blocked", "-c", "print('BAD')"),
     ], {})
     assert result["success"] is False
@@ -227,7 +227,8 @@ def test_windows_timeout_uses_process_tree_termination(monkeypatch):
 
 def test_actual_dependency_and_environment_helpers_need_no_pip_for_empty_plan_deps(tmp_path):
     runner = RepositoryRunner(executor=CodeExecutorAgent(None, logger=Mock()))
-    result = runner.run(tmp_path, [step("actual_env", "-c", "print('REAL_ENV_OK')", timeout=5)], {})
+    result = runner.run(tmp_path, [step("actual_env", "-c",
+        "import sys; assert 'matplotlib' not in sys.modules; print('REAL_ENV_OK')", timeout=5)], {})
     assert result["success"] is True
     assert result["final"]["stdout"] == "REAL_ENV_OK\n"
     assert not (tmp_path / "requirements.txt").exists()

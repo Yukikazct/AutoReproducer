@@ -26,10 +26,16 @@ def study_harness(tmp_path,monkeypatch):
     state={"candidate_value":31.,"holdout_candidate":30.2,"remaining":7200}
     class FakeStudy:
         def __init__(self,*args):
+            self.profile=deepcopy(args[1]); self.profile["parameters"]["protocol"]="pixel_holdout"
+            self.contract={"pixel_split_seed":1729,"pixel_fractions":[.8,.1,.1]}
             self.metric="psnr"; self.direction=1; self.contract_hash="frozen";self.selection_closed=False
         def remaining(self): return state["remaining"]
         def train(self,label,seed=2021,candidate=None,reserve_s=0):
             events.append(("train",label,reserve_s))
+            saved=json.loads((tmp_path/"optimization.json").read_text(encoding="utf-8"))
+            assert saved["status"]=="running"
+            if state.get("interrupt_at")==label:
+                raise KeyboardInterrupt()
             metrics={"psnr":state["candidate_value"] if candidate else 30.}
             return {"label":label,"candidate":candidate,"status":"completed","metrics":metrics,
                     "validation":{"metrics_comparison":{"actual":metrics}},"elapsed_s":.1}
@@ -37,6 +43,8 @@ def study_harness(tmp_path,monkeypatch):
             assert self.selection_closed
             assert any(e[1]=="candidate_2022" for e in events)
             events.append(("holdout",label))
+            if state.get("interrupt_at")==f"holdout:{label}":
+                raise KeyboardInterrupt()
             return state["holdout_candidate"] if label.startswith("candidate") else 30.
     monkeypatch.setattr("src.method_optimization.Study",FakeStudy)
     def advice(*args,**kwargs):
@@ -77,7 +85,28 @@ def test_reserve_is_enforced_before_starting(study_harness):
     run,state,events=study_harness
     state["remaining"]=2399
     result=run()
-    assert result["status"]=="budget_exhausted" and not events
+    assert result["status"]=="insufficient_budget" and not events
+
+
+def test_elapsed_budget_is_distinct_from_reserved_budget(study_harness):
+    run,state,events=study_harness
+    state["remaining"]=-1
+    assert run()["status"]=="budget_exhausted" and not events
+
+
+@pytest.mark.parametrize("phase", ["baseline_2021", "candidate_1_2021", "baseline_2022",
+                                  "candidate_2022", "holdout:baseline_2022"])
+def test_cancelled_study_preserves_completed_records(study_harness, tmp_path, phase):
+    run,state,events=study_harness
+    state["interrupt_at"]=phase
+    with pytest.raises(KeyboardInterrupt):
+        run()
+    saved=json.loads((tmp_path/"optimization.json").read_text(encoding="utf-8"))
+    assert saved["status"]=="interrupted" and saved["optimized"] is False
+    if "2022" in phase:
+        assert len(saved["trials"])==1 and saved["trials"][0]["status"]=="completed"
+    if phase=="holdout:baseline_2022":
+        assert len(saved["confirmation"])==1 and saved["confirmation"][0]["seed"]==2021
 
 
 def test_real_study_refuses_early_holdout(tmp_path):

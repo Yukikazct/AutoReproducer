@@ -391,6 +391,8 @@ class ReportGeneratorAgent(BaseAgent):
                  f"**生成时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
                  f"**工具**: AutoReproducer v0.2.0",
                  ""]
+        if data.get("interrupted"):
+            lines += ["> **本次任务已中断。** 已完成的基线及试验记录保留，未完成部分不构成成功结论。", ""]
 
         # 1. 论文信息
         lines += ["## 1. 论文信息",
@@ -498,7 +500,7 @@ class ReportGeneratorAgent(BaseAgent):
                           "（代码未通过执行前检查）"))
             lines.append(f"- **未运行原因**: {execution.get('reason', 'N/A')}")
         else:
-            state = "✅ 成功" if final.get("success") else "❌ 失败"
+            state = "⏹ 已中断" if final.get("cancelled") else "✅ 成功" if final.get("success") else "❌ 失败"
             if best_effort:
                 state += "（尽力而为：论文信息不足）"
             lines.append(f"- **执行状态**: {state}")
@@ -534,7 +536,9 @@ class ReportGeneratorAgent(BaseAgent):
                 # 真正跑过的那些。不写出来，报告会被读成"这几个不必跑"。
                 lines += ["", "### 未执行的步骤", ""]
                 for item in skipped:
-                    if item.get("not_run") == "missing_requirement":
+                    if item.get("not_run") == "interrupted":
+                        why = "任务已中断"
+                    elif item.get("not_run") == "missing_requirement":
                         why = f"缺少前置产物 `{_txt(item.get('requirement'), '未知')}`"
                     else:
                         why = ("前置步骤 "
