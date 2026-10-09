@@ -69,6 +69,13 @@ def supervised(command, limit, parent_pid):
 def main(argv=None):
     phase, seconds, *command = list(sys.argv[1:] if argv is None else argv)
     limit = float(seconds)
+    if command[:1] == ["--start-gate"]:
+        gate, command = command[1], command[2:]
+        deadline = time.monotonic() + 10
+        while not os.path.exists(gate):
+            if time.monotonic() >= deadline:
+                return 125
+            time.sleep(.01)
     try:
         owner = os.environ.get("AUTOREPRO_PARENT_PID")
         if owner and phase == "execution":

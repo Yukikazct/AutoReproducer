@@ -155,4 +155,13 @@ def test_saved_report_figures_are_rendered_as_native_images(tmp_path, monkeypatc
     assert len(app.image) == 1
     assert app.image[0].captions == ["运行结果图 1"]
     assert not any("无法读取" in warning.value for warning in app.warning)
+    # 下载入口位于按需加载的历史页，先进入该页再检查打包下载。
+    import inspect
+    import streamlit as st
+    if "on_change" in inspect.signature(st.tabs).parameters:
+        app.session_state["workspace_tabs"] = "📂 历史记录"
+        app.run()
+    else:
+        app.button(key="history_load").click().run()
+    assert not app.exception
     assert any("报告和图片" in button.label for button in app.get("download_button"))

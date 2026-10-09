@@ -139,7 +139,7 @@ def test_local_use_prevents_same_thread_cleanup_and_refreshes_on_exit(root, tmp_
 
 
 def test_repository_scope_covers_steps_and_refreshes_nested_environment(root, tmp_path):
-    runtime = f"{sys.implementation.cache_tag}-{sys.platform}-{repository.platform.machine()}"
+    runtime = repository.runtime_fingerprint()
     reqs = "test-package==1"
     identifier = f"repository/{runtime}/{ce.reqs_digest(reqs)}"
     path = environment(root, identifier)

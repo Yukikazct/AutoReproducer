@@ -60,9 +60,29 @@ def test_multiple_files_import_and_nested_cwd_are_preserved(runner, tmp_path):
     assert record["elapsed_s"] > 0
     assert [e["status"] for e in events if e["type"] == "repository_step"] == ["running", "success"]
     assert any(e["type"] == "repository_output" and "42" in e["text"] for e in events)
+    assert all(e["execution_id"] == Path(result["run_dir"]).name for e in events)
+    assert all(e["step_index"] == 1 and e["step_count"] == 1 for e in events)
     prepared = Path(runner.executor._ensure_local_deps.call_args.args[0])
     assert prepared.is_relative_to(Path(result["run_dir"]))
     assert prepared != repo
+
+
+def test_repeated_plans_have_distinct_ids_and_each_output_keeps_its_step(runner, tmp_path):
+    events = []
+    plan = [step("arbitrary_task", "-c", "print('FIRST')"),
+            step("anything_else", "-c", "import sys; print('SECOND', file=sys.stderr)")]
+    first = runner.run(tmp_path, plan, {}, on_event=events.append)
+    boundary = len(events)
+    second = runner.run(tmp_path, plan[:1], {}, on_event=events.append)
+    assert first["success"] and second["success"]
+    first_id, second_id = Path(first["run_dir"]).name, Path(second["run_dir"]).name
+    assert first_id != second_id
+    assert all(e["execution_id"] == first_id and e["step_count"] == 2 for e in events[:boundary])
+    assert all(e["execution_id"] == second_id and e["step_count"] == 1 for e in events[boundary:])
+    assert {(e["step_id"], e["step_index"]) for e in events[:boundary]} == {
+        ("arbitrary_task", 1), ("anything_else", 2)}
+    assert any(e["type"] == "repository_output" and e["step_index"] == 2
+               and e["stream"] == "stderr" and "SECOND" in e["text"] for e in events)
 
 
 def test_failure_stops_later_steps_and_retains_full_logs(runner, tmp_path):
@@ -223,6 +243,50 @@ def test_windows_timeout_uses_process_tree_termination(monkeypatch):
     assert termination.call_args.args[0] == ["taskkill", "/PID", "1234", "/T", "/F"]
     assert termination.call_args.kwargs["shell"] is False
     process.kill.assert_not_called()
+
+
+@pytest.mark.skipif(os.name!='nt',reason='Windows Store AppExecutionAlias venvs')
+def test_store_alias_venv_is_rejected_before_environment_or_training(runner,tmp_path,monkeypatch):
+    import src.process_lifecycle as lifecycle
+    environment=tmp_path/'venv'
+    executable=environment/'Scripts'/'python.exe'
+    executable.parent.mkdir(parents=True)
+    home=tmp_path/'store-alias'
+    (environment/'pyvenv.cfg').write_text(f'home = {home}\n',encoding='utf-8')
+    monkeypatch.setattr(lifecycle,'sys',SimpleNamespace(executable=str(executable)))
+    monkeypatch.setattr(lifecycle,'_is_app_execution_alias',lambda path:path==home/'python.exe')
+    launch=Mock(side_effect=AssertionError('unsupported interpreter must not launch'))
+    monkeypatch.setattr(runner_module.subprocess,'Popen',launch)
+    result=runner.run(tmp_path,[step('blocked','-c',"print('BAD')")],{})
+    assert result['not_runnable'] and not result['executed']
+    assert 'Windows Store' in result['reason'] and 'python.org' in result['reason']
+    runner.executor._ensure_local_deps.assert_not_called()
+    launch.assert_not_called()
+
+
+@pytest.mark.parametrize('exception',[KeyboardInterrupt,SystemExit])
+def test_cancellation_stops_descendants_persists_logs_and_releases_cache(runner,tmp_path,exception):
+    from src.dependency_cache import cache_guard
+    descendant="import time;from pathlib import Path;time.sleep(1);Path('escaped_child').touch()"
+    code=("import subprocess,sys,time;"
+          f"subprocess.Popen([sys.executable,'-c',{descendant!r}]);"
+          "print('CANCEL_READY',flush=True);time.sleep(30)")
+    def cancel(event):
+        if event.get('type')=='repository_output' and 'CANCEL_READY' in event.get('text',''):
+            raise exception('user cancellation')
+    with pytest.raises(exception) as caught:
+        runner.run(tmp_path,[step('cancel','-c',code,timeout=30)],{},on_event=cancel)
+    execution=caught.value.execution
+    assert execution['status']=='interrupted' and execution['cancelled']
+    assert execution['final']['exit_code']==130
+    assert execution['final']['timed_out'] is False
+    assert 'CANCEL_READY' in execution['final']['stdout']
+    saved=json.loads((Path(execution['run_dir'])/'cancel.json').read_text(encoding='utf-8'))
+    assert saved['cancelled'] and not saved['success']
+    with cache_guard(runner.executor.deps_lock_root,cleanup=True,timeout=0):
+        pass
+    time.sleep(1.1)
+    assert not (tmp_path/'escaped_child').exists()
 
 
 def test_actual_dependency_and_environment_helpers_need_no_pip_for_empty_plan_deps(tmp_path):

@@ -7,7 +7,7 @@
 - 仓库步骤取消时退出码为 `130`，`cancelled=true`、`timed_out=false`，保留已有 stdout/stderr 及声明产物；后续步骤标记为中断未执行。
 - 方法任务在命令行捕获 Ctrl+C、POSIX SIGTERM、Windows Ctrl+Break 及启动进程退出；正常取消生成带有中断标识的 `result.json`、`report.md` 和 `run_status.json`。网页后台线程不安装进程级信号处理器。
 - macOS/Linux 终止独立进程组；Windows 使用 `taskkill /T /F`。驱动突然退出时，独立监督进程检测持有者退出并终止实验进程树。
-- 优化记录使用 `running`、`interrupted`、`insufficient_budget`、`budget_exhausted` 等明确状态。预留确认预算不足不表示时间已经耗尽。中断后已完成基线和候选仍保留，但不据部分确认宣称优化有效。
+- 优化记录使用 `running`、`interrupted`、`budget_insufficient`、`budget_exhausted` 等明确状态。预留确认预算不足不表示时间已经耗尽。中断后已完成基线和候选仍保留，但不据部分确认宣称优化有效。
 - 依赖缓存仍按 Python ABI、系统和处理器架构隔离；运行期间持有缓存锁，取消后可重新获取锁。
 
 强制终止进程不能保证它在退出前生成报告。对此使用下面的显式恢复命令，不把未完成记录当成成功，也不自动续跑训练。

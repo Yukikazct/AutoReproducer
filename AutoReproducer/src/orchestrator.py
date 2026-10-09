@@ -88,6 +88,7 @@ class Orchestrator:
                                         max_trials=self.max_trials),
             "reporter": ReportGeneratorAgent(self.logger),
         }
+        self.agents["executor"].on_event = self._emit_execution_event
         self.data: Dict[str, Any] = {}
         self.error: Optional[str] = None
 
@@ -240,6 +241,10 @@ class Orchestrator:
 
         self._emit_state(self.state, "", "error" if self.error else "success")
         return self.get_result()
+
+    def _emit_execution_event(self, event):
+        if self.on_event and event.get("type") in {"execution_step", "execution_output"}:
+            self.on_event({**event, "phase_id": _MAIN_PHASE_IDS["EXECUTE_CODE"]})
 
     def _emit_state(self, state, agent, status, *, phase_id=None, attempt=None, reason=None, outcome=None):
         if self.on_event:

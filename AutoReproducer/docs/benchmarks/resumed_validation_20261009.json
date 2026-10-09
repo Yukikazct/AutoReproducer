@@ -1,0 +1,198 @@
+{
+  "date": "2026-10-09",
+  "platform": "Windows x64 / Python 3.11.9",
+  "runs": {
+    "siren_online": {
+      "run_id": "repository_7485b1a793704487b69b68b14ff0a05e",
+      "error": null,
+      "repository": {
+        "url": "https://github.com/vsitzmann/siren",
+        "revision": "4df34baee3f0f9c8f351630992c1fe1f69114b5f"
+      },
+      "spec_sha256": "202afe82e957be9545608fbc3b22a4d6d6dd77ae4b14faa4d90f92c5b4c712f9",
+      "elapsed_s": 37.53099999999904,
+      "llm_calls": 4,
+      "result_level": "method_experiment_completed",
+      "baseline_metrics": {
+        "mse": 0.00018356706324762262,
+        "psnr": 37.36205239981245
+      },
+      "protocol_pass": true,
+      "independent_metrics_pass": true,
+      "analysis": {
+        "status": "accepted",
+        "roles": [
+          "reader",
+          "finder",
+          "builder",
+          "verifier"
+        ]
+      }
+    },
+    "neural_ode_optimization": {
+      "run_id": "repository_8a04f219d3b44f4db8be053b9d4d0e69",
+      "error": null,
+      "repository": {
+        "url": "https://github.com/rtqichen/torchdiffeq",
+        "revision": "657943acefa826ef04c025ebeb1ff5e9d60dc268"
+      },
+      "spec_sha256": "1f601cc18b978369fb4571de7080899f301757b2783411b0e8a8765111d1805f",
+      "elapsed_s": 689.3600000000006,
+      "llm_calls": 1,
+      "result_level": "method_experiment_completed",
+      "baseline_metrics": {
+        "mae": 0.47004584478334305,
+        "rmse": 0.5628648218145448
+      },
+      "protocol_pass": true,
+      "independent_metrics_pass": true,
+      "optimization": {
+        "status": "tested_no_gain",
+        "optimized": false,
+        "study_sha256": "038a1310126e33ea4ef97b6bad079d25edfd6ac01a89d92cbc5c03e78160666f",
+        "baseline": {
+          "mae": 0.3432119691875281,
+          "rmse": 0.42518822093559017
+        },
+        "trials": [
+          {
+            "candidate": 1,
+            "parameter": "learning_rate",
+            "value": 0.0003,
+            "run": "trials/candidate_1_2021",
+            "status": "completed",
+            "metrics": {
+              "mae": 0.2690935735352671,
+              "rmse": 0.34151326670356097
+            },
+            "elapsed_s": 75.375,
+            "error": ""
+          },
+          {
+            "candidate": 2,
+            "parameter": "learning_rate",
+            "value": 0.003,
+            "run": "trials/candidate_2_2021",
+            "status": "completed",
+            "metrics": {
+              "mae": 0.47467228046202276,
+              "rmse": 0.5602617387547754
+            },
+            "elapsed_s": 93.03099999999904,
+            "error": ""
+          },
+          {
+            "candidate": 3,
+            "parameter": "batch_time",
+            "value": 20,
+            "run": "trials/candidate_3_2021",
+            "status": "completed",
+            "metrics": {
+              "mae": 0.025365210623746536,
+              "rmse": 0.03347284631315699
+            },
+            "elapsed_s": 119.86000000000058,
+            "error": ""
+          }
+        ],
+        "confirmation_training": [
+          {
+            "label": "baseline_2022",
+            "status": "completed",
+            "metrics": {
+              "mae": 0.041680022511085636,
+              "rmse": 0.05234309049511077
+            }
+          },
+          {
+            "label": "candidate_2022",
+            "status": "completed",
+            "metrics": {
+              "mae": 0.02580060088212665,
+              "rmse": 0.03417975713823702
+            }
+          }
+        ],
+        "confirmation": [
+          {
+            "seed": 2021,
+            "metric": "mae",
+            "status": "completed",
+            "baseline": 0.4148808465181155,
+            "candidate": 0.0791055636778825,
+            "pass": true
+          },
+          {
+            "seed": 2022,
+            "metric": "mae",
+            "status": "completed",
+            "baseline": 0.03927932412558591,
+            "candidate": 0.06129429970586811,
+            "pass": false
+          }
+        ],
+        "budget_seconds": 7200,
+        "budget_used_s": 689.344000000001,
+        "selected_candidate": {
+          "parameter": "batch_time",
+          "value": 20,
+          "baseline_value": 10
+        },
+        "advice_protocol": {
+          "protocol": "initial_condition_holdout",
+          "metric_split": "validation",
+          "scope": "optimization_extension",
+          "paper_table_reproduction": false,
+          "training_loss": {
+            "name": "mae",
+            "scale": "original ODE state coordinates",
+            "split": "train",
+            "initial_state": [
+              2.0,
+              0.0
+            ],
+            "sampling": "官方全轨迹上采样短时间窗口训练"
+          },
+          "evaluation_scale": {
+            "mae": "mean absolute error in original ODE state coordinates",
+            "rmse": "root mean squared error in original ODE state coordinates",
+            "reference": "independent SciPy DOP853 trajectories",
+            "time_range": [
+              0.0,
+              25.0
+            ],
+            "time_points": 1000
+          },
+          "validation_definition": "新增初值验证：训练轨迹之外的初值用于候选选择，属于项目优化扩展，不是官方全轨迹拟合指标",
+          "validation_initial_states": [
+            [
+              1.5,
+              0.0
+            ],
+            [
+              0.0,
+              1.5
+            ]
+          ],
+          "selection_split": "validation",
+          "confirmation_split": "holdout",
+          "holdout_policy": "候选冻结后才评估留出集；建议与选优均不得使用留出指标，确认后不继续调参",
+          "seeds": [
+            2021,
+            2022
+          ],
+          "selection_metric": "mae",
+          "confirmation_min_delta": 0.01,
+          "confirmation_min_delta_unit": "relative_reduction"
+        },
+        "advice_baseline_provenance": {
+          "baseline_run_id": "repository_8a04f219d3b44f4db8be053b9d4d0e69",
+          "trial_label": "baseline_2021",
+          "spec_sha256": "851e5ed7b9ecc0e0ec210dbe9353696904c0af97cb2d35e55a66382b52d6a9d5",
+          "study_sha256": "038a1310126e33ea4ef97b6bad079d25edfd6ac01a89d92cbc5c03e78160666f"
+        },
+        "original_advice_preserved": true
+      }
+    }
+  }
+}

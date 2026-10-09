@@ -215,9 +215,18 @@ class NeuralODEAdapter(SirenAdapter):
         return self._write_runtime(root,profile,spec_hash,["author_model.py","dataset_definition.json"])
 
     def public_sources(self, workspace, profile):
-        source = (Path(workspace) / "examples/ode_demo.py").read_text(encoding="utf-8")
-        return [{"source_id": "author_ode_demo", "url": profile["paper"]["reference_source"],
-                 "locator": "examples/ode_demo.py", "content": source}]
+        root = Path(workspace)
+        repository = profile["repository"]
+        pinned = f"{repository['url']}/blob/{repository['revision']}"
+        # These complete files are already part of the pinned source snapshot.
+        # The README links this spiral example to the paper and explains odeint;
+        # it is author documentation, not a substitute for the paper's full text.
+        entries = [("author_ode_demo", "examples/ode_demo.py", profile["paper"]["reference_source"]),
+                   ("author_ode_readme", "README.md", f"{pinned}/README.md"),
+                   ("author_ode_package_init", "torchdiffeq/__init__.py", f"{pinned}/torchdiffeq/__init__.py")]
+        return [{"source_id": identifier, "url": url, "locator": locator,
+                 "content": (root / locator).read_text(encoding="utf-8")}
+                for identifier, locator, url in entries]
 
     def verify(self, *args, **kwargs):
         result = super().verify(*args, **kwargs)

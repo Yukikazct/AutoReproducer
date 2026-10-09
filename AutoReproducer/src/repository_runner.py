@@ -22,6 +22,8 @@ from src.execution_artifacts import collect_images
 from src.execution_plan import declared_paths, plan_steps
 from src.safety.paths import is_link, relative_path, workspace_path
 from src.dependency_cache import DependencyCacheBusy
+from src.process_lifecycle import CREATE_SUSPENDED, ProcessJob, termination_signals, validate_windows_venv
+from src.runtime_platform import runtime_fingerprint
 
 # Evidence can be a model checkpoint; the report image budget is far too small.
 MAX_ARTIFACT_BYTES = 64 * 1024 * 1024
@@ -35,7 +37,7 @@ class RepositoryRunner:
 
     @staticmethod
     def cached_environment(env_config):
-        runtime = f"{sys.implementation.cache_tag}-{sys.platform}-{platform.machine()}"
+        runtime = runtime_fingerprint()
         return DEPS_CACHE_ROOT / "repository" / runtime / reqs_digest(env_config["requirements_txt"])
 
     @staticmethod
@@ -200,12 +202,13 @@ class RepositoryRunner:
         stdout_path = run_dir / f"{step['id']}.stdout.log"
         stderr_path = run_dir / f"{step['id']}.stderr.log"
         record = {k: step[k] for k in ("id", "argv", "cwd", "timeout_s", "kind", "required")}
+        identity = {"execution_id": run_dir.name,
+                    "step_index": step["step_index"], "step_count": step["step_count"]}
+        record.update(identity)
         record.update(stage="full", executed=False, stdout_path=str(stdout_path),
                       stderr_path=str(stderr_path))
-        emit({"type": "repository_step", "step_id": step["id"],
-              "status": "running", **record})
         process, timed_out, group_killed = None, False, False
-        interruption = None
+        interrupted, job = None, None
         exit_code, diagnostic, cleanup_errors = -2, "", []
         # Plot helpers live beside the logs, not inside the author repository.
         environment = self.executor._exec_env(str(run_dir))
@@ -219,7 +222,12 @@ class RepositoryRunner:
         supervisor = Path(__file__).with_name("sandbox_timeout.py")
         command = [sys.executable, "-S", str(supervisor), "execution",
                    str(step["timeout_s"] + 1.0), *step["argv"]]
+        gate = run_dir / f"{step['id']}.start"
+        if os.name == "nt":
+            command = command[:5] + ["--start-gate", str(gate)] + command[5:]
         try:
+            emit({"type": "repository_step", "step_id": step["id"],
+                  "status": "running", **record})
             self._check_tree(root)
             # Recheck cwd/script after earlier steps may have created files. Only the
             # on-disk fields are revalidated: depends_on names ids from the full list,
@@ -227,14 +235,20 @@ class RepositoryRunner:
             recheck = {key: value for key, value in step.items() if key != "depends_on"}
             self._plan(root, [{**recheck, "cwd": str(Path(step["cwd"]).relative_to(root))}])
             with stdout_path.open("wb") as out, stderr_path.open("wb") as err:
+                job = ProcessJob()
                 process = subprocess.Popen(command, cwd=step["cwd"], env=environment,
                                            stdout=out, stderr=err, shell=False,
                                            start_new_session=(os.name == "posix"),
-                                           # Isolate Windows console Ctrl+C so only the
-                                           # driver cancels first; taskkill /T still
-                                           # needs the supervisor alive to find its tree.
-                                           creationflags=(subprocess.CREATE_NEW_PROCESS_GROUP
-                                                          if os.name == "nt" else 0))
+                                           # Suspend first so the job object claims the
+                                           # supervisor before it can spawn descendants;
+                                           # NEW_PROCESS_GROUP isolates console Ctrl+C so
+                                           # only the driver cancels first, while the
+                                           # supervisor stays alive for tree cleanup.
+                                           creationflags=(subprocess.CREATE_NEW_PROCESS_GROUP | CREATE_SUSPENDED) if os.name == "nt" else 0)
+                job.assign(process)
+                job.resume(process)
+                if os.name == "nt":
+                    gate.touch()
                 record["executed"] = True
                 with stdout_path.open("rb") as out_tail, stderr_path.open("rb") as err_tail:
                     tails = {"stdout": out_tail, "stderr": err_tail}
@@ -247,7 +261,7 @@ class RepositoryRunner:
                             text = decoders[stream].decode(chunk, final=final)
                             if text:
                                 emit({"type": "repository_output", "step_id": step["id"],
-                                      "stream": stream, "text": text})
+                                      "stream": stream, "text": text, **identity})
 
                     # The host owns the process group and acts before the
                     # standalone supervisor's fallback deadline, while the
@@ -257,6 +271,7 @@ class RepositoryRunner:
                         output()
                         if time.monotonic() >= deadline:
                             timed_out = True
+                            job.close()
                             cleanup = self._kill_group(process)
                             if cleanup:
                                 cleanup_errors.append(cleanup)
@@ -272,24 +287,29 @@ class RepositoryRunner:
                             cleanup_errors.append(cleanup)
                     output(final=True)
                     exit_code = process.returncode
-        except KeyboardInterrupt as exc:
-            interruption = exc
+        except (KeyboardInterrupt, SystemExit) as exc:
+            interrupted = exc
             diagnostic = f"repository step {step['id']} interrupted"
-            exit_code = 130
         except (OSError, ValueError, subprocess.SubprocessError) as exc:
             diagnostic = str(exc)
         finally:
             if process is not None:
+                if job is not None:
+                    job.close()
                 if not group_killed:
                     cleanup = self._kill_group(process)
                     if cleanup:
                         cleanup_errors.append(cleanup)
                 process.wait(timeout=5)
+            elif job is not None:
+                job.close()
         stdout = stdout_path.read_text(encoding="utf-8", errors="replace") if stdout_path.exists() else ""
         raw_stderr = stderr_path.read_text(encoding="utf-8", errors="replace") if stderr_path.exists() else ""
         stderr, phase = CodeExecutorAgent._decode_docker_phase(raw_stderr)
         timed_out = timed_out or bool(phase.get("timeout"))
-        if timed_out:
+        if interrupted is not None:
+            timed_out, exit_code = False, 130
+        elif timed_out:
             exit_code = 124
             diagnostic = f"repository step {step['id']} timed out after {step['timeout_s']:g}s"
         if cleanup_errors:
@@ -303,8 +323,7 @@ class RepositoryRunner:
         if not stdout_path.exists():
             stdout_path.write_text("", encoding="utf-8")
         record.update(success=exit_code == 0, exit_code=exit_code, stdout=stdout,
-                      stderr=stderr, timed_out=timed_out,
-                      cancelled=interruption is not None,
+                      stderr=stderr, timed_out=timed_out, cancelled=interrupted is not None,
                       elapsed_s=round(time.monotonic() - started, 3))
         # Declared evidence is captured whatever the verdict was; a failed step's
         # partial output is often the thing a later diagnosis needs.
@@ -312,12 +331,13 @@ class RepositoryRunner:
         (run_dir / f"{step['id']}.json").write_text(
             json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
         emit({"type": "repository_step", "step_id": step["id"],
-              "status": "success" if record["success"] else "error", **record})
-        if interruption is not None:
-            interruption.step_record = record
-            raise interruption
+              "status": "interrupted" if interrupted is not None else "success" if record["success"] else "error", **record})
+        if interrupted is not None:
+            interrupted.repository_step_record = record
+            raise interrupted
         return record
 
+    @termination_signals()
     def run(self, workspace, steps, env_config, use_docker=False, on_event=None):
         """Execute the plan's argv steps in order; halt at the first required failure.
 
@@ -343,12 +363,14 @@ class RepositoryRunner:
         def reject(reason, code=-2):
             result.update(not_runnable=True, reason=reason)
             result["final"] = {"stage": "full", "success": False, "executed": False,
-                               "exit_code": code, "stdout": "", "stderr": reason}
+                               "exit_code": code, "stdout": "", "stderr": reason,
+                               "timed_out": code == 124}
             return result
 
         if use_docker:
             return reject("repository Docker execution is unsupported; choose local mode", -3)
         try:
+            validate_windows_venv()
             supplied = Path(workspace)
             if supplied.is_symlink():
                 raise ValueError("workspace must not be a symlink")
@@ -366,7 +388,7 @@ class RepositoryRunner:
             result["run_dir"] = str(run_dir)
             self.executor.env_config = dict(env_config or {})
             # Native wheels cannot be shared across Python ABIs or machines.
-            runtime = f"{sys.implementation.cache_tag}-{sys.platform}-{platform.machine()}"
+            runtime = runtime_fingerprint()
             deps_root = DEPS_CACHE_ROOT / "repository" / runtime
             self.executor.deps_cache_root = deps_root
             self.executor.deps_lock_root = DEPS_CACHE_ROOT
@@ -424,6 +446,8 @@ class RepositoryRunner:
                               "not_run": "missing_requirement", "requirement": unmet})
                         halted = step["id"]
                         continue
+                    # Identity is 1-based: the position a viewer sees, not the list offset.
+                    step = {**step, "step_index": step_index + 1, "step_count": len(planned)}
                     deadline = self.executor.env_config.get("deadline_monotonic")
                     if deadline is not None:
                         remaining = deadline - time.monotonic() - 2
@@ -471,6 +495,20 @@ class RepositoryRunner:
                     warnings.append(f"image collection failed: {exc}")
                 result["final"]["artifacts"] = result["artifacts"]
                 return result
+        except (KeyboardInterrupt, SystemExit) as exc:
+            record = getattr(exc, "repository_step_record", None)
+            if record is not None:
+                attempts.append(record)
+            result.update(success=False, cancelled=True, status="interrupted",
+                          executed=any(item.get("executed") for item in attempts))
+            result["final"] = dict(record or {"stage": "full", "success": False, "executed": False,
+                                             "exit_code": 130, "cancelled": True, "timed_out": False,
+                                             "stdout": "", "stderr": "repository execution interrupted"})
+            if "run_dir" in result:
+                (Path(result["run_dir"]) / "execution.json").write_text(
+                    json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+            exc.execution = result
+            raise
         except DependencyCacheBusy as exc:
             return reject(str(exc), -4)
         except (OSError, ValueError, TypeError) as exc:

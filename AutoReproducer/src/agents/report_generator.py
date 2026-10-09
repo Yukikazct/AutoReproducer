@@ -318,6 +318,7 @@ def _result_analysis_lines(data):
     if not analysis and not status:
         return []
     states = {"completed": "已完成", "public_readiness_accepted": "公开准备条件已通过；未执行结果摘要解释",
+              "public_readiness_rejected": "在线来源预审未通过；训练尚未开始",
               "result_analysis_failed": "结果摘要解释失败", "failed": "LLM 分析失败"}
     lines = ["### LLM 分析状态与结果摘要解释", "",
              "- **LLM 分析状态**: " + states.get(status, _txt(status, "未记录")),
@@ -499,6 +500,8 @@ class ReportGeneratorAgent(BaseAgent):
                          ("（仓库实验尚未执行）" if execution.get("mode") == "repository" else
                           "（代码未通过执行前检查）"))
             lines.append(f"- **未运行原因**: {execution.get('reason', 'N/A')}")
+        elif execution.get("mode") == "repository" and execution.get("executed") is False:
+            lines.append("- **执行状态**: ⏳ 未运行（训练尚未开始）")
         else:
             state = "⏹ 已中断" if final.get("cancelled") else "✅ 成功" if final.get("success") else "❌ 失败"
             if best_effort:
@@ -708,7 +711,18 @@ class ReportGeneratorAgent(BaseAgent):
                       f"- **基线耗时**: {_fmt(data.get('baseline_elapsed_s'), '.2f')} 秒",
                       f"- **本次累计耗时**: {_fmt(data.get('run_elapsed_s'), '.2f')} 秒（首次环境准备另计）",
                       f"- **协议/独立复算**: {validation.get('protocol_pass', False)} / {validation.get('independent_metrics_pass', False)}"]
-            for review in (data.get("method_analysis") or {}).get("reviews", []):
+            method_analysis = data.get("method_analysis") or {}
+            if method_analysis.get("status") == "rejected":
+                labels = {"reader": "论文方法分析", "finder": "资源核对",
+                          "builder": "依赖分析", "verifier": "证据预审"}
+                failed_role = method_analysis.get("failed_role", "")
+                lines += ["", "### 在线分析未通过",
+                          "- **失败阶段**: " + _markdown_text(labels.get(failed_role, failed_role)),
+                          "- **拒绝说明（不代表已核验的实验事实）**: " +
+                          _markdown_text(_txt(method_analysis.get("reason"))),
+                          "- **训练状态**: 在线预审未通过，训练尚未开始。",
+                          "- **诊断记录**: 运行目录中的 `method_analysis.json` 保留逐阶段结果与模型响应。"]
+            for review in method_analysis.get("reviews", []):
                 lines += ["", f"### 在线来源分析：{review['role']}", _markdown_text(review["summary"])]
                 for evidence in review["evidence"]:
                     lines += ["", f"> {_markdown_text(evidence['source_id'])}: " + _markdown_text(evidence["quote"]).replace("\n", "\n> ")]

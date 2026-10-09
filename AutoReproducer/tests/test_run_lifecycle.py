@@ -241,9 +241,13 @@ def test_method_cancellation_writes_final_result_and_releases_owner_lock(tmp_pat
     monkeypatch.setattr("src.agents.report_generator.ReportGeneratorAgent.run", lambda *a, **kw: {"report": "interrupted"})
     logger = Mock(); logger.get_stats.return_value = {}
     runner = Mock(); runner.run.side_effect = KeyboardInterrupt()
-    result = MethodReproduction(tmp_path, logger, runner=runner).run({"experiment_profile": "neural_ode_spiral"})
-    directory = Path(result["data"]["run_dir"])
-    assert result["state"] == "ERROR" and result["data"]["interrupted"]
+    # Cancellation is re-raised once the evidence is on disk, so the caller sees the
+    # interrupt instead of a returned result; the run directory carries the outcome.
+    with pytest.raises(KeyboardInterrupt):
+        MethodReproduction(tmp_path, logger, runner=runner).run({"experiment_profile": "neural_ode_spiral"})
+    directory = next((tmp_path / "runs").glob("*/result.json")).parent
+    result = read_json(directory / "result.json")
+    assert result["state"] == "INTERRUPTED" and result["data"]["interrupted"]
     assert read_json(directory / "result.json")["data"]["validation"]["status"] == "interrupted"
     assert read_json(directory / "run_status.json")["status"] == "interrupted"
     with FileLock(str(directory / ".run.lock"), timeout=0):

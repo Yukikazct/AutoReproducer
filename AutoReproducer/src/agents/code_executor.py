@@ -33,6 +33,7 @@ import tempfile
 import time
 import hashlib
 import json
+import uuid
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -402,11 +403,15 @@ class CodeExecutorAgent(BaseAgent):
     system_prompt = "在沙箱中安全执行论文代码,输出运行日志、数值结果与退出码"
 
     def __init__(self, llm_client: LLMClient, logger=None,
-                 use_docker: bool = False, mock_mode: bool = False):
+                 use_docker: bool = False, mock_mode: bool = False,
+                 on_event=None):
         super().__init__("CodeExecutor", logger)
         self.llm = llm_client
         self.use_docker = use_docker
         self.mock_mode = mock_mode
+        self.on_event = on_event
+        self._execution_id = None
+        self._execution_step_index = 0
         # 最近一次依赖就绪的隔离安装目录（供执行时注入 PYTHONPATH）
         self._deps_dir: Optional[str] = None
         # 运行时自愈补装的隔离目录集合（data/deps/heal-<module>/），
@@ -581,6 +586,10 @@ class CodeExecutorAgent(BaseAgent):
 
         input_data: {"paper_info", "env_config", "resources", "code"(可选)}
         """
+        with self._execution_scope():
+            return self._run(input_data)
+
+    def _run(self, input_data: dict) -> dict:
         # 仓库预设只能由 RepositoryRunner 跑整个仓库。单文件生成会丢掉多文件导入、
         # 作者入口和 train/eval 拆分，所以这里硬失败，绝不静默降级成 run.py。
         if input_data.get("experiment_profile"):
@@ -1272,6 +1281,27 @@ class CodeExecutorAgent(BaseAgent):
 
     # ---------------- 执行 ----------------
 
+    @contextmanager
+    def _execution_scope(self, *, reuse=False):
+        """Give each public invocation its own identity; steps share that identity."""
+        if reuse and self._execution_id is not None:
+            yield
+            return
+        previous = self._execution_id, self._execution_step_index
+        self._execution_id, self._execution_step_index = uuid.uuid4().hex, 0
+        try:
+            yield
+        finally:
+            self._execution_id, self._execution_step_index = previous
+
+    def _emit_execution_event(self, event):
+        """Ignore observer errors, while preserving process cancellation signals."""
+        if self.on_event is not None:
+            try:
+                self.on_event(dict(event))
+            except Exception:
+                pass
+
     def _execute_code(self, code: str, stage: str,
                       workdir: Optional[str] = None) -> Dict:
         """执行代码：本地子进程或 Docker 容器，按阶段使用不同超时。
@@ -1279,9 +1309,41 @@ class CodeExecutorAgent(BaseAgent):
         workdir: 指定执行目录时在目标目录执行且不清理（生命周期由调用方
         管理，如优化器真实执行配合快照回滚）；缺省时使用临时目录（用完删除）。
         """
-        if self.use_docker:
-            return self._execute_code_docker(code, stage, workdir=workdir)
-        return self._execute_code_local(code, stage, workdir=workdir)
+        with self._execution_scope(reuse=True):
+            self._execution_step_index += 1
+            identity = {"execution_id": self._execution_id,
+                        "step_id": f"step_{self._execution_step_index}",
+                        "step_index": self._execution_step_index}
+            self._emit_execution_event({"type": "execution_step", **identity,
+                                        "status": "running"})
+            try:
+                runner = self._execute_code_docker if self.use_docker else self._execute_code_local
+                result = runner(code, stage, workdir=workdir)
+            except (Exception, KeyboardInterrupt, SystemExit) as exc:
+                status = "interrupted" if isinstance(exc, (KeyboardInterrupt, SystemExit)) else "error"
+                try:
+                    self._emit_execution_event({"type": "execution_step", **identity,
+                                                "status": status, "reason": str(exc)})
+                except BaseException:
+                    # We are already unwinding the runner's failure. A failed
+                    # terminal notification must not replace its original cause.
+                    pass
+                raise
+            # Current runners buffer output. Preserve that behavior and associate
+            # each returned stream with its real invocation, without parsing it.
+            for stream in ("stdout", "stderr"):
+                if result.get(stream):
+                    self._emit_execution_event({"type": "execution_output", **identity,
+                                                "stream": stream, "text": result[stream]})
+            if result.get("cancelled") or result.get("interrupted"):
+                status = "interrupted"
+            elif (result.get("success") is True and not result.get("timed_out")
+                  and result.get("exit_code") in (None, 0)):
+                status = "success"
+            else:
+                status = "error"
+            self._emit_execution_event({"type": "execution_step", **identity, "status": status})
+            return result
 
     def execute_in_workspace(self, code: str, workdir: str,
                              stage: str = "full") -> Dict:
@@ -1291,7 +1353,8 @@ class CodeExecutorAgent(BaseAgent):
         （不清理），配合 src.safety.workspace_snapshot 完成
         "补丁 -> 真实重跑 -> 快照回滚"的安全优化闭环。
         """
-        return self._execute_code(code, stage, workdir=workdir)
+        with self._execution_scope():
+            return self._execute_code(code, stage, workdir=workdir)
 
     def _execute_code_local(self, code: str, stage: str,
                             workdir: Optional[str] = None) -> Dict:
