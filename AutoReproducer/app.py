@@ -8,6 +8,7 @@
   （OpenAI 兼容端点 / Key / 模型真实生效）。
 """
 import inspect
+import importlib
 import os
 import sys
 import tempfile
@@ -20,12 +21,16 @@ import streamlit as st
 # 添加项目根目录到路径
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from src.local_llm_settings import load_local_llm_settings
+load_local_llm_settings()
+
 from src.orchestrator import Orchestrator
 from src.llm.llm_client import LLMClient
 from src.audit.audit_logger import AuditLogger
 from src.base_agent import BaseAgent
 from src.corpus import list_papers
 from src.repository_profiles import PROFILE_LABELS, PAPER_TITLE, get_profile
+from src.title_routing import resolve_title_request
 from src.method_budget import CONFIRMATION_RESERVE_SECONDS, optimization_budget_error
 from frontend.report_renderer import render_report, build_report_bundle
 from frontend.llm_config import (
@@ -34,10 +39,15 @@ from frontend.llm_config import (
     config_missing,
     test_llm_connection,
 )
-from frontend.backend_pipeline import (
-    ProgressStore,
-    run_pipeline_background,
-)
+from frontend import pipeline_entrypoint
+
+# Only refresh the small loader. Older active pipeline modules keep their globals.
+if pipeline_entrypoint.BACKEND_API_VERSION != 4:
+    pipeline_entrypoint = importlib.reload(pipeline_entrypoint)
+
+_pipeline_backend = pipeline_entrypoint.load_backend_pipeline()
+ProgressStore = _pipeline_backend.ProgressStore
+run_pipeline_background = _pipeline_backend.run_pipeline_background
 from frontend.history_manager import (
     list_sessions,
     collect_storage_snapshot,
@@ -172,6 +182,29 @@ def render_llm_settings():
                        "（输入留空时回退环境变量）")
 
 
+@st.cache_data(show_spinner=False, max_entries=8)
+def _preview_pdf_input(payload: bytes, mock_mode: bool):
+    """Inspect uploaded bytes once; the backend independently verifies its file."""
+    from src.pdf_input import PDFInputError, PDFParserUnavailable, resolve_pdf_request
+    temporary = ""
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as handle:
+            handle.write(payload)
+            temporary = handle.name
+        request = resolve_pdf_request({"pdf_path": temporary, "mock_mode": mock_mode})
+        return {"resolution": request.get("pdf_resolution", {})}
+    except PDFParserUnavailable:
+        return {"parser_pending": True}
+    except PDFInputError as exc:
+        return {"error": str(exc)}
+    finally:
+        if temporary:
+            try:
+                os.unlink(temporary)
+            except OSError:
+                pass
+
+
 @st.fragment
 def render_paper_input():
     """只刷新论文输入；点击启动时主页面重新读取最新选项。"""
@@ -182,6 +215,19 @@ def render_paper_input():
         st.session_state.paper_title = st.text_input(
             "论文标题", value=st.session_state.paper_title,
             placeholder="输入论文标题...", key="paper_title_input")
+        match = resolve_title_request({"paper_title": st.session_state.paper_title,
+                    "mock_mode": st.session_state.mock_mode,
+                    "corpus_paper": None if st.session_state.get("corpus_paper_select", "无") == "无"
+                                    else st.session_state.get("corpus_paper_select")})
+        if match.get("title_resolution"):
+            selected = get_profile(match["experiment_profile"])
+            st.success("已匹配官方作者仓库：" + selected["repository"]["url"])
+            st.markdown(f"[论文]({selected['paper']['url']}) · [作者代码]({selected['repository']['url']})")
+            st.caption("将核验固定版本并执行：" + selected["label"])
+            if selected.get("adapter_id"):
+                st.caption("结论限于选定官方方法实验；论文完整基准需要另行适配。")
+            st.caption("该在线审核使用作者源码与项目适配证据。")
+            st.checkbox("在线核验匹配的作者代码与实验依据", value=True, key="title_llm_review")
     elif input_mode == "上传PDF":
         uploaded_file = st.file_uploader(
             "上传PDF文件", type=["pdf"], key="pdf_uploader",
@@ -191,6 +237,19 @@ def render_paper_input():
         else:
             st.success(f"已上传：{uploaded_file.name}"
                        f"（{format_size(uploaded_file.size)}）")
+            preview = _preview_pdf_input(uploaded_file.getvalue(), st.session_state.mock_mode)
+            if preview.get("error"):
+                st.error(preview["error"])
+            elif preview.get("resolution"):
+                selected = get_profile(preview["resolution"]["profile"])
+                st.success("PDF 首页已匹配作者仓库：" + selected["repository"]["url"])
+                st.markdown(f"[论文]({selected['paper']['url']}) · [作者代码]({selected['repository']['url']})")
+                st.caption("将执行：" + selected["label"] + "；结论按该实验的验收范围给出。")
+                st.caption("该在线审核使用作者源码与项目适配证据。")
+            else:
+                st.caption("将解析论文正文并核验资源；信息不足会明确报告，不能据占位代码认定复现。")
+            if not preview.get("error"):
+                st.checkbox("在线核验匹配的作者代码与实验依据", value=True, key="pdf_llm_review")
     else:
         st.selectbox("真实论文实验", list(PROFILE_LABELS),
                      format_func=lambda key: PROFILE_LABELS[key], key="experiment_profile")
@@ -215,7 +274,7 @@ def render_paper_input():
                     budget_error = optimization_budget_error(minutes * 60)
                     if budget_error:
                         st.warning(budget_error)
-            st.caption("先选择“准备实验环境”并运行一次；准备完成后再运行实验。"
+            st.caption("运行时会自动准备缺失环境、检查依赖并修复缓存；也可单独准备环境。"
                        "快速档目标为五分钟，建议尚未实测有效；验证建议使用独立长任务预算。"
                        "智能建议会把指标与训练摘要交给已配置的 API。")
             return
@@ -330,6 +389,23 @@ with st.sidebar:
         st.caption(f"当前任务会使用 {corpus_paper} 的依赖和参考指标。"
                    "仅运行上传的 PDF 时，请将语料对照设为“无”。")
 
+    title_resolution = None
+    if input_mode == "论文标题":
+        match = resolve_title_request({"paper_title": st.session_state.paper_title,
+                                      "corpus_paper": corpus_paper,
+                                      "mock_mode": st.session_state.mock_mode})
+        if match.get("title_resolution"):
+            experiment_profile = match["experiment_profile"]
+            title_resolution = match["title_resolution"]
+            # Title input runs the matched baseline. Preset controls belong to
+            # that input mode and must not leak a previous long optimization.
+            method_selected = False
+            requires_api = bool(st.session_state.get("title_llm_review", True))
+    elif input_mode == "上传PDF" and uploaded_file and not corpus_paper:
+        preview = _preview_pdf_input(uploaded_file.getvalue(), st.session_state.mock_mode)
+        if preview.get("resolution"):
+            requires_api = bool(st.session_state.get("pdf_llm_review", True))
+
     # 启动 / 重置按钮
     col1, col2 = st.columns(2)
     with col1:
@@ -426,16 +502,19 @@ if start_btn and not st.session_state.running:
             paper_title=pt, pdf_path=tmp_pdf,
             corpus_paper=corpus_paper,
             experiment_profile=experiment_profile,
-            prepare_only=(st.session_state.get("method_action") == "仅准备源码和命令" if method_selected else
+            title_resolution=title_resolution,
+            prepare_only=False if title_resolution else (st.session_state.get("method_action") == "仅准备源码和命令" if method_selected else
                           bool(st.session_state.get("repository_prepare_only")) if experiment_profile else False),
             prepare_environment=method_selected and st.session_state.get("method_action") == "准备实验环境",
             optimization_mode=st.session_state.get("method_optimization", "off") if method_selected else "off",
             max_candidates=int(st.session_state.get("method_max_candidates", 3)),
             budget_seconds=int(st.session_state.get("method_budget_minutes", 120)) * 60,
-            use_llm_review=(bool(st.session_state.get("method_llm_review")) if method_selected else
+            use_llm_review=(bool(st.session_state.get("title_llm_review", True)) if title_resolution else
+                             bool(st.session_state.get("pdf_llm_review", True)) if tmp_pdf else
+                            bool(st.session_state.get("method_llm_review")) if method_selected else
                             bool(st.session_state.get("repository_llm_review")) if experiment_profile else False),
             allow_result_summary_review=(bool(st.session_state.get("repository_result_review"))
-                                         if experiment_profile else False),
+                                         if experiment_profile and not title_resolution else False),
             model_name=model_name, base_url=base_url,
             api_key=api_key,
             mock_mode=st.session_state.mock_mode,
@@ -527,10 +606,24 @@ with tab1:
     stages = st.session_state.pipeline_stages
     execution_context = (snap or {}).get("execution_context") or {}
     active_executions = (snap or {}).get("active_executions") or []
+    active_runs = (snap or {}).get("active_runs") or []
+    active_workers = (snap or {}).get("active_workers") or []
+    pdf_source = (snap or {}).get("pdf_resolution") or {}
+    if pdf_source:
+        selected = get_profile(pdf_source["profile"])
+        st.caption("已根据 PDF 首页核验论文：" + pdf_source["title"])
+        st.markdown(f"作者仓库：[源码]({selected['repository']['url']}) · PDF SHA-256：`{pdf_source['sha256']}`")
+    has_method_study = any(stage["id"] == "method_advice" and stage.get("status") != "skipped"
+                           for stage in stages)
     if st.session_state.running and stages:
-        st.info("整体任务仍在运行。单个阶段或步骤完成，不代表整个复现任务已结束。")
+        st.info("整体任务仍在运行：代码仍在执行。" if active_executions else
+                "整体任务仍在运行：执行轮次尚未结束，正在等待后续步骤或清理。" if active_runs else
+                "整体任务仍在运行：等待后台进程返回并完成清理。" if active_workers and (snap or {}).get("finalization_pending") else
+                "整体任务仍在运行。单个阶段或步骤完成，不代表整个复现任务已结束。")
         for context in active_executions:
             st.caption("当前执行：" + context["label"])
+    if (snap or {}).get("finalization_pending"):
+        st.warning("已收到流水线结束请求，正在等待所属执行退出并清理；尚未确认任务结束。")
     agent_cards = []
     for i, stage in enumerate(stages):
         status = stage.get("status", "waiting")
@@ -544,10 +637,38 @@ with tab1:
         status_class = status if status in {"success", "error", "running"} else "waiting"
         title = stage.get("title", stage.get("agent", "执行阶段"))
         desc = stage.get("description", "")
+        agent = stage.get("agent", "")
+        phase_executions = [context for context in active_executions
+                            if context.get("phase_id") == stage["id"]]
+        phase_runs = [run for run in active_runs if run.get("phase_id") == stage["id"]]
         # Historical plans may call this role "complete training". Its actual
         # responsibility is code execution, regardless of the paper or commands.
         if stage.get("agent") in {"CodeExecutor", "⚡ CodeExecutor"}:
             title = "代码执行"
+            if has_method_study and stage["id"] == "execute_repository":
+                title = "基线代码执行"
+                desc = "基线训练与测试；后续优化试验在下方单独显示。"
+                if status == "success":
+                    status_text = "基线执行完成"
+            elif status == "success" and st.session_state.running and active_executions:
+                title = "代码执行（此前轮次）"
+                status_text = "此前轮次完成"
+        if has_method_study and stage["id"] == "verify_protocol":
+            title = "基线协议与产物核验"
+            desc = "核验基线轮次的协议与产物。"
+            if status == "success":
+                status_text = "基线核验完成"
+        if stage["id"] == "method_advice" and status == "running" and phase_executions:
+            title = "优化试验：代码执行"
+            status_text = "代码执行中"
+            agent += " · ⚡ CodeExecutor"
+            desc = "正在执行优化试验代码，当前轮次完成后继续后续处理。"
+        elif stage["id"] == "method_advice" and status == "running" and phase_runs:
+            title = "优化试验：执行轮次未结束"
+            status_text = "执行轮次未结束"
+            agent += " · ⚡ CodeExecutor"
+        if stage.get("completion_pending"):
+            status_text = "结束确认中"
         details = []
         if stage.get("attempt", 0) > 1:
             details.append(f"第 {stage['attempt']} 次尝试")
@@ -559,9 +680,10 @@ with tab1:
             details.append(outcome)
         if stage.get("reason"):
             details.append(str(stage["reason"]))
+        if stage.get("completion_reason"):
+            details.append(stage["completion_reason"])
         if status == "running":
-            details.extend("当前执行：" + context["label"] for context in active_executions
-                           if context.get("phase_id") == stage["id"])
+            details.extend("当前执行：" + context["label"] for context in phase_executions)
         detail_text = escape(" · ".join(details)).replace("\r", "").replace("\n", "<br>")
         detail_html = f'<p>{detail_text}</p>' if details else ""
         # 连续 HTML 不插入空行，避免 Markdown 将后续卡片识别为缩进代码块。
@@ -570,7 +692,7 @@ with tab1:
             f'<div class="agent-top"><span class="agent-index">{i + 1:02d} / {len(stages):02d}</span>'
             f'<span class="agent-status">{status_text}</span></div>'
             f'<div class="agent-name">{escape(title)}</div>'
-            f'<div class="agent-title">{escape(stage.get("agent", ""))}</div>'
+            f'<div class="agent-title">{escape(agent)}</div>'
             f'<p>{escape(desc)}</p>{detail_html}</div>')
     if agent_cards:
         st.markdown('<div class="agent-grid">' + ''.join(card.strip() for card in agent_cards) + '</div>',
@@ -578,13 +700,24 @@ with tab1:
         completed = sum(stage.get("status") == "success" for stage in stages)
         enabled_count = sum(stage.get("status") != "skipped" for stage in stages)
         progress = completed / enabled_count if enabled_count else 0
-        st.progress(progress, text=f"阶段完成: {completed}/{enabled_count}（复现结论以数值验收为准）")
+        task_status = "整体任务仍在运行；" if st.session_state.running else ""
+        st.progress(progress, text=f"阶段完成: {completed}/{enabled_count}（{task_status}复现结论以数值验收为准）")
         st.caption("上方仅按阶段计数，不代表耗时比例；执行轮数和步骤数以实际运行记录为准。")
+        with st.expander("各部分结束判定"):
+            st.caption("阶段负责人返回结果，且所属执行轮次退出并完成清理，才确认该部分结束。"
+                       "步骤间隙、日志中的最终轮数和完成请求都不能代替结束确认。")
+            st.table([{"阶段": stage.get("title", stage["id"]),
+                       "结束条件": stage.get("completion_rule", "负责人返回结果且所属执行全部结束"),
+                       "结束已确认": "是" if stage.get("completion_confirmed") else "否"}
+                      for stage in stages])
     else:
         st.info("启动后将按实际执行顺序显示阶段状态。")
     if snap and snap.get("execution_output"):
         with st.expander("代码执行输出（最近16000字符）", expanded=True):
-            if execution_context:
+            if active_executions:
+                for context in active_executions:
+                    st.caption(f"正在执行：{context['label']} · 进行中")
+            elif execution_context:
                 context_status = {"running": "进行中", "success": "本步骤完成", "error": "失败",
                                   "interrupted": "未正常结束"}.get(
                     execution_context.get("status"), "")
@@ -613,7 +746,15 @@ with tab1:
                 st.error("实验未通过：" + validation.get("reason", "查看报告和执行日志"))
             elif validation.get("status") == "not_reproduced":
                 st.warning("完整实验已运行，论文数值验收未通过：" + validation.get("reason", "查看指标差异"))
-            elif validation.get("status") in {"prepared", "environment_prepared", "inconclusive", "smoke_passed"}:
+            elif validation.get("status") == "insufficient_evidence":
+                st.warning("论文证据不足，尚未完成论文实验：" + validation.get("reason", "缺少可核验实现"))
+            elif validation.get("status") == "best_effort":
+                st.warning("已尝试按现有证据重建代码，但不能判定论文复现：" + validation.get("reason", "缺少完整实验协议"))
+            elif validation.get("status") in {"no_reference_metrics", "inconclusive"}:
+                st.warning("复现结论无法验收：" + validation.get("reason", "缺少论文指标或完整执行证据"))
+            elif validation.get("status") in {"not_runnable", "execution_incomplete", "execution_failed"}:
+                st.warning("论文实验未完成：" + validation.get("reason", "代码未运行或执行证据不完整"))
+            elif validation.get("status") in {"prepared", "environment_prepared", "smoke_passed"}:
                 st.info(validation.get("reason", "流程已结束，请查看实验结论"))
             elif validation.get("status") == "method_experiment_completed":
                 optimization = data.get("optimization") or {}

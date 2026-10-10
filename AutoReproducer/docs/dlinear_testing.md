@@ -11,15 +11,17 @@
 进入 `AutoReproducer/`，使用 Python 3.11 或 3.12。下面先给出无需 API 的作者完整训练命令：
 
 ```bash
-python scripts/reproduce_repository.py --profile dlinear_etth1_reference --offline
+python scripts/reproduce_repository.py --profile dlinear_etth1_reference
 ```
 
-不指定 `--profile` 时也默认执行完整实验。当前仓库预设使用本地 CPU，不依赖 Docker；首次运行安装隔离兼容依赖，再执行官方 `run_longExp.py` 完成训练与最终 test。`--offline` 禁止仓库、数据及公开论文/作者评论下载，不禁止 LLM API 请求；依赖尚未缓存时仍需要安装网络。所需公开来源或代码/数据缓存缺失时去掉 `--offline`。缓存来源、commit 或校验和不符会明确失败，不替换为合成数据。
+不指定 `--profile` 时也默认执行完整实验。当前预设使用本地 CPU，不依赖 Docker；运行时自动准备固定源码、真实数据和隔离兼容依赖，通过健康检查后执行官方 `run_longExp.py` 完成训练与最终 test。Store 启动环境或应用依赖不兼容时自动切换到标准 CPython 3.11/3.12 环境。源码坏对象和数据坏缓存在线按原 SHA 重新获取；默认公共依赖镜像不可用时回退官方源，冻结版本不变。
+
+源码、数据、公开论文/作者评论和兼容依赖缓存均已准备且希望禁止在线获取时，加 `--offline`。运行环境恢复也不会下载新解释器，应用依赖仅使用本地 wheel；冻结训练依赖必须已有健康缓存，缺失或损坏时停止。明确启用在线分析仍会访问 LLM API。离线缓存无法核验时停止，不使用合成数据。
 
 测试当前多 Agent 分析、完整训练和经用户允许的结果摘要分析时运行：
 
 ```bash
-python scripts/reproduce_repository.py --profile dlinear_etth1_reference --offline --llm-review --analysis-mode multi_agent --result-review
+python scripts/reproduce_repository.py --profile dlinear_etth1_reference --llm-review --analysis-mode multi_agent --result-review
 ```
 
 该命令复用 `LLM_BASE_URL`、`LLM_MODEL` 和已有 API 配置；未设置 `LLM_API_KEY` 时通过隐藏输入读取，不要将密钥写进命令或报告。`--llm-review` 启用默认 `multi_agent` 模式：PaperReader、ResourceFinder、EnvBuilder、Verifier 依次分析真实公开论文及固定作者源码，全部通过后才开始训练。
@@ -27,6 +29,8 @@ python scripts/reproduce_repository.py --profile dlinear_etth1_reference --offli
 `--result-review` 明确允许训练后把本次 MSE、MAE、已完成轮数、协议核验与独立复算是否通过的摘要发给 API；不发送工作区路径、原始日志、数据文件或 checkpoint。不允许发送结果摘要时去掉此参数，仍可执行四阶段公开分析与训练；单独使用 `--result-review` 而未加 `--llm-review` 会被 CLI 拒绝。
 
 四阶段均一次通过且结果摘要分析通过时是 **4 + 1 = 5 次调用**。每个预分析阶段最多允许一次有原文依据的修正重试，调用数可能增加；失败也可能提前停止。以报告和 `total_llm_calls` 的实际调用计数为准，不固定显示 5 次。API 解释不覆盖本地产物和确定性验收结论；结果摘要解释失败时，已完成训练的验收结果保留，另记 `analysis_status=result_analysis_failed`。
+
+GitHub REST 限额触发时，两个固定作者评论会自动从各自官方 issue 网页恢复；原始正文和作者成员身份必须一致，原 HTML 与评论 JSON 的哈希保留在公开来源 manifest。REST 诊断和网页恢复信息只留在本地证据记录，四阶段分析继续读取完整真实来源。
 
 本次真实成功记录恰好使用 5 次：`repository_analysis.json` 为4次且各阶段 `attempt=1`，`result_analysis.json` 为1次，最终结果与审计也均记录5次。报告中的参数来源区分论文原文、作者实验脚本和代码设置/默认值；作者依赖清单与单seed说明不被当作论文原环境或多seed统计已验证的证据。
 
@@ -75,8 +79,10 @@ python -m streamlit run app.py
 
 ## Windows与GPU
 
-本次已验证环境为macOS ARM64、Python 3.12.2、PyTorch 2.5.1、NumPy 1.26.4、Pandas 2.2.3、scikit-learn 1.5.2、Matplotlib 3.9.2。作者原依赖声明PyTorch 1.9.0，环境差异随报告记录，算法源码保持固定版本。
+10 月 7 日历史验收环境为 macOS ARM64、Python 3.12.2、PyTorch 2.5.1、NumPy 1.26.4、Pandas 2.2.3、scikit-learn 1.5.2、Matplotlib 3.9.2。作者原依赖声明 PyTorch 1.9.0，环境差异随报告记录，算法源码保持固定版本。
 
-Windows可先按现有CPU预设重跑。缓存按Python ABI、OS和架构隔离，应重新准备Windows依赖，不应复制macOS二进制缓存。需要NVIDIA CUDA时建议使用WSL2，确认驱动/CUDA可见、安装对应PyTorch/CUDA，再适配GPU预设。当前预设通过 `CUDA_VISIBLE_DEVICES` 固定CPU，仓库Docker路径尚不支持。Windows/CUDA未在本轮实测，DLinear规模小，GPU也不一定更快。
+2026-10-10 已在 Windows Store 启动环境完成自动恢复和完整 CPU 重跑：运行 `repository_b707311a3bb84f9db886af456a3780b5` 自动切换 `.venv-py312`、恢复限额作者评论、从官方源完成冻结依赖安装，最终 MSE **0.3841444**、MAE **0.4047131**，验收为 `reproduced`。四阶段公开分析实际调用 **4 次**，未启用结果摘要解释；见[报告](../data/runs/repository_b707311a3bb84f9db886af456a3780b5/report.md)与[结果](../data/runs/repository_b707311a3bb84f9db886af456a3780b5/result.json)。
+
+Windows 可直接运行现有 CPU 预设，所需独立依赖会按 Python ABI、OS 和架构自动准备与检查。当前预设通过 `CUDA_VISIBLE_DEVICES` 固定 CPU，仓库 Docker 路径尚不支持。DLinear CUDA 未在该验收中测试。
 
 作者说明硬件与PyTorch版本可能影响数值。重跑应比较固定协议、真实指标和既有容差，不承诺各平台得到逐位相同的MSE/MAE。

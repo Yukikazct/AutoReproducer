@@ -2,6 +2,8 @@
 
 2026-10-07 已从网页使用的生产后台入口完成一次新的真实运行：**5 次真实 DeepSeek API 分析 → 作者完整训练 → 最终测试 → 独立协议核验与指标复算 → 带图报告**。Mock 关闭，使用真实作者源码和 ETTh1 数据。最终状态为 `reproduced`，LLM 分析状态为 `completed`。
 
+2026-10-10 增加 Windows 自动恢复验收：`repository_b707311a3bb84f9db886af456a3780b5` 从 Store 启动环境自动切换到标准 `.venv-py312`，GitHub REST 403 的评论通过同一官方 issue 原文恢复，依赖镜像超时后从官方 PyPI 安装原冻结版本并通过原生健康检查。四阶段公开分析实际调用 4 次，完整 CPU 训练、协议核验及独立复算通过，MSE **0.3841444**、MAE **0.4047131**，两项均在原 5% 容差内，状态 `reproduced`。本次未启用结果摘要解释；见[报告](../data/runs/repository_b707311a3bb84f9db886af456a3780b5/report.md)和[结果](../data/runs/repository_b707311a3bb84f9db886af456a3780b5/result.json)。以下五次 API 调用与 macOS 环境细节保留为 10 月 7 日的历史记录。
+
 范围为 AAAI 2023 论文 **Are Transformers Effective for Time Series Forecasting?** 的 Table 2 中 **DLinear、ETTh1、多变量、输入 336 步、预测 96 步**这一项。结论不扩展为整篇论文全部实验已经复现。
 
 ## 汇报结论
@@ -83,17 +85,17 @@ f18de3ad269cef59bb07b5438d79bb3042d3be49bdeecf01c1cd6d29695ee066
 
 [作者单 seed 说明](https://github.com/cure-lab/LTSF-Linear/issues/33#issuecomment-1331937601)指出设备与 PyTorch 可能造成结果差异；[初始化版本说明](https://github.com/cure-lab/LTSF-Linear/issues/39#issuecomment-1398345611)指出后续模型与早期版本有差别。本次保留所选版本，没有调整初始化、挑选 seed 或重定义目标追平表格；不能确定小幅偏差的具体原因。
 
-未提供多 seed 方差、其他预测长度、其他数据集或其他模型的结果。当前仓库预设使用本地 CPU，不依赖 Docker。Windows/CUDA 尚未实测，硬件或框架变化后须按同样数据与协议重新验收。
+未提供多 seed 方差、其他预测长度、其他数据集或其他模型的结果。当前仓库预设使用本地 CPU，不依赖 Docker。Windows CPU 已完成上述 10 月 10 日完整验收；DLinear CUDA 尚未实测，硬件或框架变化后须按同样数据与协议重新验收。
 
 ## 重跑与汇报顺序
 
 从 `AutoReproducer/` 运行：
 
 ```bash
-python scripts/reproduce_repository.py --profile dlinear_etth1_reference --offline --llm-review --result-review
+python scripts/reproduce_repository.py --profile dlinear_etth1_reference --llm-review --result-review
 ```
 
-密钥通过已有配置或隐藏输入读取。详细操作见 [重跑步骤](dlinear_testing.md)。网页默认真实模式，选择官方仓库完整实验、保留多 Agent 分析、允许指标摘要分析后启动，使用与本次相同的生产后台。
+密钥通过已有配置或隐藏输入读取，运行时自动准备和健康检查环境；资源已有可核验缓存时可明确添加 `--offline`。详细操作见 [重跑步骤](dlinear_testing.md)。网页默认真实模式，选择官方仓库完整实验、保留多 Agent 分析、允许指标摘要分析后启动，使用同一生产后台。
 
 汇报可依次展示论文目标行和 DLinear 原理、参数来源、五个真实分析任务、训练与早停日志、独立复算、指标对照和两张图，最后说明范围与环境限制。
 

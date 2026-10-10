@@ -160,7 +160,7 @@ def test_repeated_public_calls_get_new_identities_and_reset_step_numbers(executo
         invoke()
         batches.append(list(events))
     assert len({events[0]["execution_id"] for events in batches}) == len(batches)
-    assert all(events[0]["step_index"] == 1 for events in batches)
+    assert all(step_events(events)[0]["step_index"] == 1 for events in batches)
     assert executor._execution_id is None
 
 

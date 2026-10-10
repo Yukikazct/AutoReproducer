@@ -19,7 +19,9 @@ SOURCE = {"source_id": "author", "content": "official model and optimizer",
 def method_run(tmp_path, monkeypatch):
     adapter = SimpleNamespace(prepare_dataset=Mock(return_value={}), materialize=Mock(return_value={}),
         public_sources=Mock(return_value=[SOURCE]),
-        steps=Mock(return_value=[{"id": "train", "argv": ["python", "-c", "print(1)"]}]),
+        steps=Mock(side_effect=lambda profile, train=True: [
+            {"id": "train" if train else "import_check", "argv": ["python", "-c", "print(1)"]}]),
+        verify_environment=Mock(),
         verify=Mock(return_value={"status": "method_experiment_completed", "is_reproduced": None}))
     monkeypatch.setattr("src.method_reproduction.get_adapter", lambda profile: adapter)
     def export(root, profile, workspace, **kwargs):
@@ -45,9 +47,13 @@ def method_run(tmp_path, monkeypatch):
     return run, runner
 
 
-def accepted_response():
+def accepted_response(role):
+    evidence = [{"source_id": SOURCE["source_id"], "quote": SOURCE["content"]},
+                {"source_id": SOURCE["source_id"], "quote": "official model"}]
+    if role in {"builder", "verifier"}:
+        evidence.append({"source_id": "project_frozen_contract", "quote": '"seed": 2021'})
     return {"response": json.dumps({"status": "accepted", "summary": "The supplied code supports this review.",
-            "evidence": [{"source_id": SOURCE["source_id"], "quote": SOURCE["content"]}]})}
+            "evidence": evidence})}
 
 
 @pytest.mark.parametrize("failed_role", ROLES)
@@ -56,7 +62,7 @@ def test_each_review_rejection_preserves_prior_success_and_blocks_unstarted_role
     index = ROLES.index(failed_role)
     rejected = {"response": json.dumps({"status": "insufficient_evidence",
                 "summary": "Missing source mapping for " + failed_role, "evidence": []})}
-    request = Mock(side_effect=[accepted_response() for _ in ROLES[:index]] + [rejected])
+    request = Mock(side_effect=[accepted_response(role) for role in ROLES[:index]] + [rejected])
     monkeypatch.setattr("src.method_advice.request_text", request)
     result, rows = run()
     assert result["state"] == "ERROR"
@@ -69,7 +75,9 @@ def test_each_review_rejection_preserves_prior_success_and_blocks_unstarted_role
     assert rows["execute_repository"]["status"] == "blocked"
     assert rows["generate_report"]["status"] == "success"
     assert failed_role in rows["review_" + failed_role]["reason"]
-    runner.run.assert_not_called()
+    runner.run.assert_called_once()
+    assert [step["id"] for step in runner.run.call_args.args[1]] == ["import_check"]
+    assert "deadline_monotonic" not in runner.run.call_args.args[2]
     assert request.call_count == index + 1
     data = result["data"]
     assert data["analysis_status"] == "public_readiness_rejected"
@@ -84,11 +92,13 @@ def test_each_review_rejection_preserves_prior_success_and_blocks_unstarted_role
 
 def test_successful_reviews_are_also_saved_before_training(method_run, monkeypatch):
     run, runner = method_run
-    monkeypatch.setattr("src.method_advice.request_text", Mock(side_effect=[accepted_response() for _ in ROLES]))
+    monkeypatch.setattr("src.method_advice.request_text", Mock(side_effect=[accepted_response(role) for role in ROLES]))
     result, rows = run()
     assert result["state"] == "COMPLETED"
     assert all(rows["review_" + role]["status"] == "success" for role in ROLES)
-    runner.run.assert_called_once()
+    assert runner.run.call_count == 2
+    assert [step["id"] for step in runner.run.call_args_list[0].args[1]] == ["import_check"]
+    assert [step["id"] for step in runner.run.call_args_list[1].args[1]] == ["train"]
     data = result["data"]
     saved = json.loads((Path(data["run_dir"]) / "method_analysis.json").read_text(encoding="utf-8"))
     assert saved == data["method_analysis"]

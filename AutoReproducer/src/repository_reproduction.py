@@ -12,17 +12,21 @@ import math
 import platform
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tarfile
+import time
 import urllib.request
 import uuid
 from pathlib import Path
+from filelock import FileLock
 
 from src.repository_profiles import get_profile
 from src.repository_adapters import get_adapter
 from src.execution_plan import build_plan, plan_step_ids
 from src.safety.paths import workspace_path
+from src.preset_downloads import atomic_cache_bytes, download_bytes
 
 
 def write_json(path, value):
@@ -58,6 +62,90 @@ def _canonical_url(url):
     return url.rstrip("/").removesuffix(".git").lower()
 
 
+def _verified_repository_archive(source, url, revision):
+    origin = _git(source, "remote", "get-url", "origin")
+    commit = _git(source, "rev-parse", "--verify", f"{revision}^{{commit}}")
+    if _canonical_url(origin) != _canonical_url(url) or commit != revision:
+        raise RuntimeError("仓库缓存来源或固定版本校验失败")
+    # rev-parse can succeed even when a referenced tree/blob is missing. Read
+    # the committed archive before selecting a cache so online preparation can
+    # recover broken objects rather than failing later in a new workspace.
+    return _git(source, "archive", "--format=tar", revision, binary=True)
+
+
+def _discard_temporary_repository(source, parent):
+    source, parent = Path(source), Path(parent).resolve()
+    resolved = source.resolve()
+    if resolved.parent != parent or not source.name.startswith(".fetch-"):
+        raise ValueError("临时仓库清理路径超出固定缓存目录")
+
+    def clear_read_only(operation, filename, error_info):
+        error = error_info[1]
+        path = Path(filename)
+        if not isinstance(error, PermissionError) or not path.resolve().is_relative_to(resolved):
+            raise error
+        # Git marks pack/index files read-only on Windows. Only the checked
+        # temporary tree is writable here; cached author trees stay untouched.
+        path.chmod(path.stat().st_mode | stat.S_IWRITE)
+        operation(filename)
+
+    if source.exists():
+        shutil.rmtree(source, onerror=clear_read_only)
+
+
+def _transient_git_error(error):
+    if isinstance(error, subprocess.TimeoutExpired):
+        return True
+    return bool(re.search(
+        r"could not resolve host|failed to connect|connection (?:reset|timed out)|"
+        r"operation timed out|remote end hung up|early eof|rpc failed|"
+        r"http/?[12](?:\.[01])? (?:408|429|5\d\d)|returned error:\s*(?:408|429|5\d\d)",
+        str(error), re.I))
+
+
+def _fetch_repository(cache, url, revision):
+    """Fetch exact author objects, then atomically publish a verified cache."""
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    for attempt in range(1, 4):
+        source = cache.parent / f".fetch-{uuid.uuid4().hex}"
+        try:
+            result = subprocess.run(
+                ["git", "clone", "--depth", "1", "--single-branch", url, str(source)],
+                capture_output=True, timeout=300)
+            if result.returncode:
+                raise RuntimeError(result.stderr.decode("utf-8", "replace")[-1000:])
+            _git(source, "fetch", "--depth", "1", "origin", revision, timeout=120)
+            _git(source, "checkout", "--detach", revision)
+            if _git(source, "rev-parse", "HEAD") != revision:
+                raise RuntimeError("固定仓库版本校验失败，停止执行")
+            archive = _verified_repository_archive(source, url, revision)
+            break
+        except (OSError, subprocess.SubprocessError, RuntimeError) as error:
+            _discard_temporary_repository(source, cache.parent)
+            if attempt == 3 or not _transient_git_error(error):
+                raise RuntimeError(f"固定仓库下载失败；已尝试 {attempt} 次，来源或固定版本未通过核验") from None
+            time.sleep(2 ** (attempt - 1))
+    with FileLock(str(cache.parent / f".{revision}.prepare.lock"), timeout=30):
+        if cache.exists():
+            try:
+                current_archive = _verified_repository_archive(cache, url, revision)
+            except (OSError, subprocess.SubprocessError, RuntimeError):
+                # Preserve a corrupt cache for diagnosis; never rewrite Git
+                # objects in place while another preparation may use them.
+                checked_cache = workspace_path(cache.parent, cache.name, "repository cache", must_exist=True)
+                quarantine = workspace_path(cache.parent, f".invalid-{revision}-{uuid.uuid4().hex}", "repository cache")
+                checked_cache.rename(quarantine)
+            else:
+                _discard_temporary_repository(source, cache.parent)
+                return cache, current_archive
+        try:
+            source.rename(cache)
+            source = cache
+        except OSError:
+            pass  # The verified unique tree remains usable if publication fails.
+    return source, archive
+
+
 def export_repository(data_root, profile, destination, *, offline=False):
     """Export the requested commit, not potentially modified cached working files."""
     root, dest = Path(data_root), Path(destination)
@@ -75,35 +163,15 @@ def export_repository(data_root, profile, destination, *, offline=False):
         if not (candidate / ".git").exists():
             continue
         try:
-            origin = _git(candidate, "remote", "get-url", "origin")
-            commit = _git(candidate, "rev-parse", "--verify", f"{revision}^{{commit}}")
-            if _canonical_url(origin) == _canonical_url(url) and commit == revision:
-                source = candidate
-                break
+            archive = _verified_repository_archive(candidate, url, revision)
+            source = candidate
+            break
         except (OSError, subprocess.SubprocessError, RuntimeError):
             continue
     if source is None:
         if offline:
             raise RuntimeError("离线模式中没有来源与固定版本均可核验的仓库缓存")
-        # Use a unique temporary directory so concurrent preparations do not share
-        # a partly cloned repository or move each other's worktree HEAD.
-        cache.parent.mkdir(parents=True, exist_ok=True)
-        source = cache.parent / f".fetch-{uuid.uuid4().hex}"
-        result = subprocess.run(["git", "clone", "--depth", "1", "--single-branch", url, str(source)],
-                                capture_output=True, timeout=300)
-        if result.returncode:
-            raise RuntimeError("仓库下载失败: " + result.stderr.decode("utf-8", "replace")[-1000:])
-        _git(source, "fetch", "--depth", "1", "origin", revision, timeout=120)
-        _git(source, "checkout", "--detach", revision)
-        if _git(source, "rev-parse", "HEAD") != revision:
-            raise RuntimeError("固定仓库版本校验失败，停止执行")
-        if not cache.exists():
-            try:
-                source.rename(cache)
-                source = cache
-            except OSError:
-                pass  # Another request may have populated the same immutable key.
-    archive = _git(source, "archive", "--format=tar", revision, binary=True)
+        source, archive = _fetch_repository(cache, url, revision)
     files = {}
     with tarfile.open(fileobj=io.BytesIO(archive), mode="r:") as tar:
         members = tar.getmembers()
@@ -149,15 +217,10 @@ def prepare_dataset(data_root, profile, workspace, *, offline=False):
     if source is None:
         if offline:
             raise RuntimeError("离线模式中缺少真实ETTh1数据或数据校验和不符")
-        request = urllib.request.Request(spec["url"], headers={"User-Agent": "AutoReproducer"})
-        with urllib.request.urlopen(request, timeout=60) as response:
-            content = response.read(spec["bytes"] + 1)
+        content = download_bytes(spec["url"], max_bytes=spec["bytes"], timeout_s=60)
         if len(content) != spec["bytes"] or hashlib.sha256(content).hexdigest() != spec["sha256"]:
             raise RuntimeError("真实ETTh1下载内容校验失败；不会替换为合成数据")
-        cache.parent.mkdir(parents=True, exist_ok=True)
-        temp = cache.parent / f".{uuid.uuid4().hex}.part"
-        temp.write_bytes(content)
-        temp.replace(cache)
+        atomic_cache_bytes(cache, content)
         source = cache
     with source.open(encoding="utf-8", newline="") as file:
         reader = csv.reader(file)
@@ -341,6 +404,10 @@ class RepositoryReproduction:
         run_dir.mkdir(parents=True)
         data["run_dir"] = str(run_dir.resolve())
         data["report_path"] = str((run_dir / "report.md").resolve())
+        if input_data.get("title_resolution"):
+            data["title_resolution"] = dict(input_data["title_resolution"])
+        if input_data.get("pdf_resolution"):
+            data["pdf_resolution"] = dict(input_data["pdf_resolution"])
 
         def emit(event):
             if on_event:
@@ -431,6 +498,7 @@ class RepositoryReproduction:
                 ("analyze_finder", "ResourceFinder", "分析资源映射", "核对固定源码、实验入口与数据映射", multi_analysis),
                 ("analyze_builder", "EnvBuilder", "分析依赖方案", "区分作者原始依赖与尚未执行的兼容建议", multi_analysis),
                 ("review_readiness", "Verifier", "训练前证据预审", "检查前三项公开分析；通过后才允许真实执行", multi_analysis),
+                ("prepare_dependencies", "EnvBuilder", "自动准备训练环境", "验证实际依赖；缺失或损坏时按冻结版本自动修复", not prepare_only),
                 ("execute_repository", "CodeExecutor", "代码执行", "按本次执行计划运行代码并记录实际结果", not prepare_only),
                 ("verify_protocol", "Verifier", "训练后本地核验", "核验完整运行协议并独立复算最终指标", not prepare_only and profile["validation"]["level"] == "reference"),
                 ("validate_metrics", "ResultValidator", "确定性数值验收", "按冻结协议判定结果；阶段完成与复现通过分别显示", not prepare_only),
@@ -478,7 +546,8 @@ class RepositoryReproduction:
                 if plan_step_ids(stored.get("steps")) != plan_step_ids(plan["steps"]) or \
                         stored.get("spec_sha256") != plan["spec_sha256"]:
                     raise RuntimeError("落盘执行计划与本次执行步骤不一致")
-                environment = {**profile["environment"], "python_version": platform.python_version(),
+                environment = {**profile["environment"], "dependency_health_check": True,
+                               "auto_prepare": True, "offline": offline, "python_version": platform.python_version(),
                                "platform": platform.platform(), "interpreter": sys.executable}
                 data["env_config"] = environment
                 write_json(run_dir / "environment.json", environment)
@@ -499,6 +568,10 @@ class RepositoryReproduction:
                     public_packet = phase("READ_PAPER", "SourceLoader", lambda: sources.build_packet(
                         snapshot["path"], snapshot, profile, offline=offline), "load_public_sources")
                     data["public_source_manifest"] = str(sources.manifest_path)
+                    source_manifest = read_json(sources.manifest_path) if Path(sources.manifest_path).is_file() else {}
+                    data["public_source_recovery"] = [
+                        {key: comment[key] for key in ("source_id", "retrieval_url", "recovery") if key in comment}
+                        for comment in source_manifest.get("author_comments", []) if comment.get("recovery")]
                     write_json(run_dir / "public_sources.json", public_packet)
                     try:
                         data["repository_analysis"] = adapter.analysis(self.llm, self.logger, max_repairs=1).run(
@@ -511,10 +584,21 @@ class RepositoryReproduction:
                         if data.get("repository_analysis"):
                             write_json(run_dir / "repository_analysis.json", data["repository_analysis"])
                 runner = self.runner or RepositoryRunner(logger=self.logger)
+                def execution_event(event):
+                    if event.get("type") == "repository_environment":
+                        emit({"type": "state", "state": "BUILD_ENV", "agent": "EnvBuilder",
+                              "phase_id": "prepare_dependencies", "status": event["status"],
+                              "reason": event.get("reason") or
+                              ("依赖验证通过，环境已就绪" if event["status"] == "success" else
+                               "正在检查依赖并自动准备所需环境")})
+                    elif event.get("type") == "repository_step" and event.get("status") == "running":
+                        emit({"type": "state", "state": "EXECUTE_CODE", "agent": "CodeExecutor",
+                              "phase_id": "execute_repository", "status": "running"})
+                    emit({**event, "phase_id": "execute_repository"})
                 execution = phase("EXECUTE_CODE", "CodeExecutor", lambda: runner.run(
                     snapshot["path"], profile["steps"], environment,
                     use_docker=self.use_docker,
-                    on_event=lambda execution_event: emit({**execution_event, "phase_id": "execute_repository"})),
+                    on_event=execution_event),
                     "execute_repository")
                 data["execution"] = execution
                 # Images shipped in the fixed source tree are published figures,

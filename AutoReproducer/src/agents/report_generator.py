@@ -408,6 +408,11 @@ class ReportGeneratorAgent(BaseAgent):
                   f"- **代码仓库**: {resources.get('code_repo_url', '未找到')}",
                   f"- **数据集**: {resources.get('dataset_url', '未找到')}",
                   f"- **置信度**: {_fmt(resources.get('confidence', 0.0))}"]
+        identity = resources.get("repository_identity") or {}
+        if identity:
+            lines += [f"- **仓库关联证据**: {identity.get('reason', '未核验')}",
+                      f"- **发现来源**: {identity.get('source', '未记录')}",
+                      "- **执行范围**: 定位仓库是资源发现结果；是否运行仓库由下方执行对象和实际步骤确认。"]
         urls = resources.get("extracted_urls", []) or []
         if urls:
             lines.append(f"- **从论文中提取URL**: {len(urls)} 个")
@@ -441,6 +446,24 @@ class ReportGeneratorAgent(BaseAgent):
                   f"{len(_txt(env_config.get('requirements_txt')).splitlines())}"]
         if env_config.get("note"):
             lines.append(f"- **环境适配**: {env_config['note']}")
+        runtime_recovery = data.get("runtime_preparation") or {}
+        prepared_env = execution.get("environment") or {}
+        health_checks = prepared_env.get("dependency_health_attempts") or []
+        cache_repairs = prepared_env.get("dependency_cache_repairs") or []
+        if runtime_recovery or health_checks or cache_repairs:
+            lines += ["", "### 自动环境恢复", ""]
+            if runtime_recovery:
+                lines.append("- **运行环境**: " + _markdown_text(runtime_recovery.get("reason", "已自动准备兼容环境")))
+            if health_checks:
+                passed = sum(check.get("success") is True for check in health_checks)
+                lines.append(f"- **实际依赖检查**: {passed}/{len(health_checks)} 次通过（导入、版本与原生运算）")
+            if cache_repairs:
+                succeeded = sum(repair.get("status") == "succeeded" for repair in cache_repairs)
+                lines.append(f"- **缓存修复**: {succeeded}/{len(cache_repairs)} 项完成；依赖版本与实验协议保持冻结")
+        source_recoveries = data.get("public_source_recovery") or []
+        if source_recoveries:
+            lines += ["", "### 公开证据自动恢复", "",
+                      f"- **恢复来源数**: {len(source_recoveries)}；从固定官方网页读取原文并校验身份、定位与哈希"]
         disk_usage = (execution.get("final") or {}).get("disk_usage") or env_config.get("disk_usage")
         lines += _disk_usage_lines(disk_usage)
         if env_config.get("dependency_corpus"):
@@ -479,6 +502,13 @@ class ReportGeneratorAgent(BaseAgent):
             lines.append("- **执行对象**: 固定版本完整官方仓库（多文件）")
         else:
             lines.append(f"- **代码长度**: {len(_txt(execution.get('code')))} 字符")
+            scope = execution.get("reproduction_scope")
+            if scope:
+                lines.append("- **执行对象**: " + {
+                    "generated_reconstruction": "模型依据可用论文证据生成的单文件实现；未运行已发现仓库。",
+                    "user_supplied_code": "用户提供的代码；系统未据此确认作者仓库执行。",
+                    "mock_demo": "Mock 演示代码，不能用作真实论文复现证据。",
+                }.get(scope, _txt(scope)))
         # 清洗记录：清洗层碰过代码就必须让人看见——丢掉疑似代码行是"结果可能
         # 已被洗残"的信号，静默吞掉正是此前"代码不完整却查不出来"的成因。
         sstats = execution.get("sanitize_stats") or {}
@@ -495,9 +525,9 @@ class ReportGeneratorAgent(BaseAgent):
         final = execution.get("final", {}) or {}
         best_effort = bool(execution.get("best_effort"))
         if execution.get("not_runnable"):
-            # 只剩两道真门（语法错误 / 危险调用）会走到这里
             lines.append("- **执行状态**: ⚠️ 未运行" +
                          ("（仓库实验尚未执行）" if execution.get("mode") == "repository" else
+                           "（论文证据不足，未获得实现）" if execution.get("evidence_status") == "insufficient_evidence" else
                           "（代码未通过执行前检查）"))
             lines.append(f"- **未运行原因**: {execution.get('reason', 'N/A')}")
         elif execution.get("mode") == "repository" and execution.get("executed") is False:
@@ -508,15 +538,15 @@ class ReportGeneratorAgent(BaseAgent):
                 state += "（尽力而为：论文信息不足）"
             lines.append(f"- **执行状态**: {state}")
         if best_effort:
-            # 信息不足也必须跑——但跑出来的东西不能被读成论文结论。这两句是
-            # 报告里唯一防止"占位数字被当成复现结果"的拦网，措辞不能省。
+            # An attempted reconstruction remains inconclusive while its paper
+            # evidence is incomplete, including when the script exits cleanly.
             lines += [
                 "- **⚠️ 信息不足**: "
                 + _txt(execution.get("best_effort_reason"), "论文信息不足"),
                 "- **生成方式**: "
-                + ("系统本地兜底脚本（模型未给出可用代码）"
+                + ("Mock 本地演示脚本（不属于论文实现）"
                    if execution.get("fallback_used")
-                   else "模型按占位约定生成的最小可运行脚本"),
+                    else "模型尝试依据已知论文证据重建；关键证据不足时明确记录未运行"),
             ]
             for a in execution.get("assumptions") or []:
                 lines.append(f"  - 假设: {a}")
@@ -578,13 +608,15 @@ class ReportGeneratorAgent(BaseAgent):
         # 5. 验证结果 + 指标对比
         # 四态：复现成功 / 复现失败 / 无法验证（代码没跑起来，不能算复现失败）/
         # 无法核对（跑了，但论文信息不足、代码是占位实现——既不判成功也不判失败）
-        if validation.get("status") == "not_runnable":
+        if validation.get("status") == "insufficient_evidence":
+            state_text = "⚠️ 无法核验（论文证据不足，未执行论文实验）"
+        elif validation.get("status") == "not_runnable":
             state_text = "⚠️ 无法验证（代码未运行）"
         elif validation.get("status") == "best_effort":
             # 必须排在 is_reproduced 之前：best_effort 的 is_reproduced 是 None，
             # 落到下面会被判成 ❌ 失败——那等于把"我们没拿到论文信息"说成
             # "论文复现失败"。
-            state_text = "⚠️ 无法核对（论文信息不足，代码为占位实现，非论文结论）"
+            state_text = "⚠️ 无法核对（论文证据不足或使用演示代码，非论文结论）"
         elif validation.get("status") == "no_reference_metrics":
             state_text = "⚠️ 无法核验（论文未声明参考指标数值）"
         elif validation.get("status") == "execution_failed":
@@ -709,7 +741,8 @@ class ReportGeneratorAgent(BaseAgent):
                       f"- **实验状态**: {validation.get('status', '尚未执行')}",
                       "- **结论范围**: 官方方法实验；没有对应论文表格数值验收，不宣称整篇论文数值复现。",
                       f"- **基线耗时**: {_fmt(data.get('baseline_elapsed_s'), '.2f')} 秒",
-                      f"- **本次累计耗时**: {_fmt(data.get('run_elapsed_s'), '.2f')} 秒（首次环境准备另计）",
+                      f"- **本次总耗时（含环境准备）**: {_fmt(data.get('run_elapsed_s'), '.2f')} 秒",
+                      f"- **实验与报告耗时（环境准备后）**: {_fmt(data.get('execution_elapsed_s'), '.2f')} 秒",
                       f"- **协议/独立复算**: {validation.get('protocol_pass', False)} / {validation.get('independent_metrics_pass', False)}"]
             method_analysis = data.get("method_analysis") or {}
             if method_analysis.get("status") == "rejected":

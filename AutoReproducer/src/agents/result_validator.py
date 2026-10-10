@@ -48,6 +48,9 @@ class ResultValidatorAgent(BaseAgent):
                 "metric_records": records,
                 "is_reproduced": match, "status": status, "reason": reason,
                 "execution_status": execution_status,
+                "execution_source": execution.get("execution_source"),
+                "reproduction_scope": execution.get("reproduction_scope"),
+                "repository_executed": execution.get("repository_executed", False),
                 "result_level": level or ("reproduced" if match else "inconclusive"),
                 "confidence": inner["confidence"], "llm_calls": self._delta_llm_calls(),
             }
@@ -58,6 +61,10 @@ class ResultValidatorAgent(BaseAgent):
             self.log("validate", "SUCCESS" if match is True else "WARNING", reason, result)
             return result
 
+        if execution.get("evidence_status") == "insufficient_evidence":
+            execution_status = "not_run"
+            return finish("insufficient_evidence", None,
+                          execution.get("reason") or "论文证据不足，未获得可运行实现；未执行论文实验。")
         not_runnable = self._detect_not_runnable(execution, stdout)
         if not_runnable:
             return finish("not_runnable", None,
@@ -69,14 +76,14 @@ class ResultValidatorAgent(BaseAgent):
         if execution_status == "incomplete":
             return finish("execution_incomplete", None,
                           f"执行证据不足，无法核验：{execution_reason}")
+        if execution.get("best_effort") or execution.get("fallback_used") or paper_info.get("insufficient_info"):
+            return finish("best_effort", None,
+                          "论文信息不足或代码使用了演示兜底，其输出不能与论文声明比对"
+                          "（不判定为复现成功或失败）")
         if metric_errors:
             return finish("invalid_metrics", False, "最终运行指标无效：" + "；".join(metric_errors),
                           {"differences": metric_errors, "invalid_metrics": metric_errors},
                           level="failed")
-        if execution.get("best_effort") or paper_info.get("insufficient_info"):
-            return finish("best_effort", None,
-                          "论文信息不足，代码为尽力而为的占位实现，其输出不能与论文声明比对"
-                          "（不判定为复现成功或失败）")
         if execution_status == "smoke_passed":
             return finish("smoke_passed", None,
                           "仅完成冒烟检查，尚未完成完整实验与论文数值核验。", level="smoke_passed")

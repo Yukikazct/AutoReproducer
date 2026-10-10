@@ -288,7 +288,7 @@ def test_real_phase_order_separates_readiness_from_local_verification(pipeline):
     plan = next(event["stages"] for event in events if event["type"] == "pipeline_plan")
     assert [stage["id"] for stage in plan] == [
         "select_experiment", "prepare_repository", "prepare_environment_plan", "load_public_sources",
-        "analyze_reader", "analyze_finder", "analyze_builder", "review_readiness", "execute_repository",
+        "analyze_reader", "analyze_finder", "analyze_builder", "review_readiness", "prepare_dependencies", "execute_repository",
         "verify_protocol", "validate_metrics", "review_result_summary", "generate_report"]
     assert next(stage for stage in plan if stage["id"] == "review_result_summary")["status"] == "skipped"
     states = [event for event in events if event["type"] == "state" and event.get("phase_id")]
@@ -392,7 +392,7 @@ def test_no_analysis_plan_and_reserved_optimization_do_not_execute_model_or_opti
                     use_llm_review=False, enable_optimization=True)
     plan = next(event["stages"] for event in events if event["type"] == "pipeline_plan")
     enabled = [stage["id"] for stage in plan if stage["status"] != "skipped"]
-    assert enabled == ["select_experiment", "prepare_repository", "prepare_environment_plan", "execute_repository",
+    assert enabled == ["select_experiment", "prepare_repository", "prepare_environment_plan", "prepare_dependencies", "execute_repository",
                        "verify_protocol", "validate_metrics", "generate_report"]
     optimization = result["data"]["optimization"]
     assert optimization["requested"] is True and optimization["available"] is False

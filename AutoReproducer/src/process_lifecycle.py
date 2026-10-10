@@ -233,7 +233,10 @@ class ProcessJob:
 
     def close(self):
         if self.handle:
-            self.api.CloseHandle(self.handle)
+            # Keep ownership until Windows confirms that closing the job worked.
+            # Otherwise a caller must not announce that descendants were cleaned.
+            if not self.api.CloseHandle(self.handle):
+                raise ctypes.WinError(ctypes.get_last_error())
             self.handle = None
 
 

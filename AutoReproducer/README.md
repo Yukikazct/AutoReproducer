@@ -2,9 +2,13 @@
 
 基于多智能体协作的论文自动复现与优化系统
 
-## 当前可运行实验（2026-10-09）
+## 当前可运行实验（2026-10-10）
 
 网页“官方仓库预设”和命令行共用真实执行流程。当前支持以下固定案例，运行前关闭 Mock 与 Docker：
+
+选择预设后可直接运行。系统自动取得固定版本源码和真实数据、检查 Python 与隔离依赖，缺失或损坏时按冻结版本准备和修复；环境检查通过后才开始训练。Windows Store 启动环境会自动切换到健康的标准 CPython 环境。自动恢复保留作者算法、训练参数、真实数据和验收门槛，详见[运行环境与自动准备](docs/cross_platform_runtime.md)。
+
+[10 月 10 日自动恢复验收](docs/automatic_preset_recovery_20261010.md)已完成 DLinear、SIREN 和 Neural ODE 的真实训练；包含缺失依赖、并发排队及前次准备失败后的恢复记录。
 
 | 预设 | 实验与设备 | 已有证据 |
 |---|---|---|
@@ -28,32 +32,34 @@ SIREN 与 Neural ODE 的结果为 `method_experiment_completed`、`is_reproduced
 
 优化扩展中的 SIREN 使用固定 80%/10%/10% 训练、验证和留出像素；Neural ODE 使用新增初值轨迹验证。选优只看验证集，冻结候选后才打开留出评估，不把这些指标混称为官方全图或全轨迹拟合结果。DLinear 保留作者协议，不开放参数优化。已有 [10 月 8 日检查点](docs/implementation_checkpoint_20261008.md)保留 SIREN 优化测量和 Neural ODE 中断记录；[10 月 9 日续跑](docs/resumed_validation_20261009.md)已完成 SIREN 四阶段在线分析及 Neural ODE 两种子留出确认；后者第二种子未达提升门槛，结论为 `tested_no_gain`、`optimized=False`。
 
-从 `AutoReproducer/` 目录运行，先准备对应环境，再选择模式：
+从 `AutoReproducer/` 目录直接运行；也可提前准备环境，便于重复实验：
 
 ```powershell
-# 准备源码、数据、隔离依赖和设备；此阶段不训练
+# 可选预热：准备源码、数据、隔离依赖和设备；此阶段不训练
 python scripts/reproduce_repository.py --profile siren_camera_quick --prepare-environment
 python scripts/reproduce_repository.py --profile neural_ode_spiral --prepare-environment
 
 # 真实基线，无需 API
-python scripts/reproduce_repository.py --profile siren_camera_quick --offline --optimization off
+python scripts/reproduce_repository.py --profile siren_camera_quick --optimization off
 
 # 真实基线与建议：从 LLM_API_KEY 读取密钥，交互终端未配置时隐藏输入
-python scripts/reproduce_repository.py --profile siren_camera_quick --offline --optimization suggest
-python scripts/reproduce_repository.py --profile neural_ode_spiral --offline --optimization suggest
+python scripts/reproduce_repository.py --profile siren_camera_quick --optimization suggest
+python scripts/reproduce_repository.py --profile neural_ode_spiral --optimization suggest
 
 # 独立候选训练与两种子留出确认；每次命令创建新实验
-python scripts/reproduce_repository.py --profile neural_ode_spiral --offline --optimization validate --max-candidates 3 --budget-seconds 7200
+python scripts/reproduce_repository.py --profile neural_ode_spiral --optimization validate --max-candidates 3 --budget-seconds 7200
 
 # 可选：在训练前增加四阶段真实 API 公开来源分析
-python scripts/reproduce_repository.py --profile siren_camera_quick --offline --llm-review --optimization suggest
+python scripts/reproduce_repository.py --profile siren_camera_quick --llm-review --optimization suggest
 ```
 
-`--prepare-only` 只准备源码、数据与执行计划，不安装环境；`--prepare-environment` 还会安装依赖并检查设备。正式方法实验只复用已准备缓存，缺失即失败。`--offline` 约束源码与数据获取，启用建议或在线分析时仍会访问 API。网页对应“准备实验环境”与“运行实验”，运行结果和原始建议记录保存在本机 `data/runs/<运行编号>/`，不随 Git 分发。
+`--prepare-only` 只准备源码、数据与执行计划，不安装环境；`--prepare-environment` 还会安装依赖并检查设备。正式运行会自动执行这些准备和健康检查，可直接选择网页“运行实验”；“准备实验环境”用于提前预热。运行结果和原始建议记录保存在本机 `data/runs/<运行编号>/`，不随 Git 分发。
+
+明确指定 `--offline` 时，源码、数据、公开证据和冻结训练依赖只使用可核验本地缓存，缺失或损坏即停止，禁止在线下载安装。运行环境恢复也不会下载新解释器，只使用已有解释器和本地应用 wheel。明确启用建议或在线分析时仍会访问 LLM API。
 
 运行中优化状态为 `running`；正常取消保存 `interrupted` 记录及已有实验结果。Windows 的训练进程受 Job 管理，关闭启动会话（含 `py` 启动器）或强杀主 Python 后会清理训练后代。强杀后，下次方法实验自动识别失去运行锁的未完成记录，也可运行 `python scripts/recover_interrupted_optimizations.py`，为结果与报告补记中断；这不会续训或改写已完成指标。POSIX 的正常 SIGTERM 会清理进程组；SIGKILL 后孤儿训练可能持续至超时，不能将记录恢复视为立即终止所有后代。
 
-Windows 支持直接运行 Python 和标准 CPython 虚拟环境。Microsoft Store Python 创建的虚拟环境会经系统代理派生脱离 Job 的进程，因此仓库实验会在执行前拒绝该配置；需要虚拟环境时，请使用 [python.org 的 Windows 安装版](https://www.python.org/downloads/windows/)创建。程序不修改现有虚拟环境配置。
+Windows 支持直接运行 Python 和标准 CPython 虚拟环境。检测到 Microsoft Store Python、解释器版本不兼容或应用依赖无法导入时，系统会自动发现并验证已有标准环境，或创建项目专用运行环境。64 位 Windows 未发现兼容解释器时，会下载 python.org 官方安装程序、验证数字签名后安装到项目缓存。原启动环境及全局依赖不被改写；后续运行自动健康检查并复用准备结果。
 
 ## DLinear 官方仓库复现（2026-10-07：真实 4 + 1 多 Agent 流程通过）
 
@@ -65,15 +71,17 @@ Windows 支持直接运行 Python 和标准 CPython 虚拟环境。Microsoft Sto
 
 查看[新完整报告](data/runs/repository_e9408141e3dd44319e854bbdf4a70c0c/report.md)、[最终结果](data/runs/repository_e9408141e3dd44319e854bbdf4a70c0c/result.json)、[四阶段分析](data/runs/repository_e9408141e3dd44319e854bbdf4a70c0c/repository_analysis.json)、[结果解释](data/runs/repository_e9408141e3dd44319e854bbdf4a70c0c/result_analysis.json)及[报告和图片 ZIP](data/runs/repository_e9408141e3dd44319e854bbdf4a70c0c/report_with_figures.zip)。旧版单次 API 基线的[原始报告](data/runs/repository_66efc14890e34cb196a07a7d2bcb78fe/report.md)仍保留，新运行的指标与第 7 轮早停结果相同。完整对照见[复现结果](docs/dlinear_reproduction_result.md)。
 
+2026-10-10 的 Windows 自动恢复验收运行 `repository_b707311a3bb84f9db886af456a3780b5` 从 Store 启动环境自动切换到 `.venv-py312`；GitHub REST 的 403 限额通过官方 issue 网页恢复两个准确作者评论，默认依赖镜像超时后从官方 PyPI 安装相同版本，并通过 Python 3.12 原生包健康检查。四阶段公开分析完成后执行完整作者训练和独立核验，最终 **MSE 0.3841444、MAE 0.4047131**，两项均在原 **5%** 容差内，状态为 `reproduced`。本次公开分析实际调用 **4 次**，未启用结果摘要解释；见[报告](data/runs/repository_b707311a3bb84f9db886af456a3780b5/report.md)与[最终结果](data/runs/repository_b707311a3bb84f9db886af456a3780b5/result.json)。
+
 重跑步骤见 [DLinear 用户测试步骤](docs/dlinear_testing.md)，从 `AutoReproducer/` 目录运行：
 
 ```bash
-python scripts/reproduce_repository.py --profile dlinear_etth1_reference --offline
+python scripts/reproduce_repository.py --profile dlinear_etth1_reference
 # 四阶段公开分析 + 完整训练 + 允许 API 解释结果摘要：
-python scripts/reproduce_repository.py --profile dlinear_etth1_reference --offline --llm-review --analysis-mode multi_agent --result-review
+python scripts/reproduce_repository.py --profile dlinear_etth1_reference --llm-review --analysis-mode multi_agent --result-review
 ```
 
-DLinear 与 Neural ODE 预设使用本地 CPU；SIREN 已适配 Windows/NVIDIA CUDA 并完成上述本机实验。依赖缓存按 Python ABI、OS、架构和依赖清单隔离；本节 DLinear 历史实测平台为 macOS ARM64。框架和硬件变化可能影响结果，不保证重跑得到逐位相同数值。
+DLinear 与 Neural ODE 预设使用本地 CPU；SIREN 已适配 Windows/NVIDIA CUDA 并完成上述本机实验。依赖缓存按 Python ABI、OS、架构和依赖清单隔离；DLinear 10 月 7 日历史实测为 macOS ARM64，10 月 10 日自动恢复验收为 Windows AMD64 / Python 3.12。框架和硬件变化可能影响结果，不保证重跑得到逐位相同数值。
 
 Markdown 图片使用同目录的 `<report_stem>_assets/` 相对资产目录。分享时使用网页“⬇️ 下载报告和图片（ZIP）”并保留解压后的目录结构；只复制 `.md` 无法携带图片。预分析拒绝会保留原文诊断并停止训练；每阶段最多一次修正，其他运行的实际调用数可能与本次 5 次不同。
 
@@ -154,7 +162,23 @@ INIT → READ_PAPER → FIND_RESOURCES → BUILD_ENV → EXECUTE_CODE → VALIDA
   → [方法预设可选：建议 / 候选训练与确认] → GENERATE_REPORT → COMPLETED
 ```
 
-网页根据实际执行阶段显示进度，Agent 名称只是负责人。执行环节统一称为“代码执行”，按执行方提供的独立编号区分轮次与步骤，不从论文名称、命令或目录推断训练类型。总步骤未知时只显示当前步骤，不估算百分比。阶段显示“本阶段完成”，整个任务只在收到结束事件后结束；阶段完成比例既不是耗时比例，也不代表论文数值验收通过，验收结论以 `validation` 为准。执行输出按轮次和步骤分段，使用 240 像素高的滚动窗口；普通脚本模式在步骤返回时更新输出，仓库模式提供实时输出。步骤说明将来可以由 LLM 生成，但状态以真实执行结果为准。
+网页根据实际执行阶段显示进度，Agent 名称只是负责人。启用方法优化时，已完成的基线单独显示“基线执行完成”和“基线核验完成”；后续优化训练在优化卡片显示“代码执行中”和当前轮次。阶段负责人返回结果，且本阶段所属的执行轮次、步骤和后台进程已退出并完成清理，才确认阶段结束。整轮 `execution_run` 从准备到清理持续开放，步骤间隙仍在运行；`done` 或 `error` 提前到达会显示“结束确认中”，不能直接关闭任务。进程异常退出后，只由持有它的进程在确认清理后将未返回结果的执行标为中断，不补写成功。网页的“各部分结束判定”列出每阶段条件与确认状态。
+
+当前执行按执行方提供的独立编号区分轮次与步骤，不从日志计数、论文名称、命令或目录推断状态。总步骤未知时只显示当前步骤，不估算百分比。阶段完成比例既不是耗时比例，也不代表论文数值验收通过，验收结论以 `validation` 为准。执行输出按轮次和步骤分段，使用 240 像素高的滚动窗口；普通脚本模式在步骤返回时更新输出，仓库模式提供实时输出。
+
+### 标题与 PDF 输入的复现路线
+
+直接输入下列完整论文标题，或上传首页标题与之匹配的原始 PDF，即可选择固定作者仓库并运行已核验的实验，不需要手动切换到仓库预设。标题只规范化大小写、空白与外层引号；相似标题、正文或参考文献中的提及不能选择预设。
+
+| 论文 | 作者仓库 | 自动运行与结论范围 |
+|---|---|---|
+| Neural Ordinary Differential Equations | `rtqichen/torchdiffeq` | 官方螺旋拟合，2000 次迭代；完成作者方法实验，不等同于完整论文基准复现 |
+| Are Transformers Effective for Time Series Forecasting? | `cure-lab/LTSF-Linear` | 已适配的 DLinear ETTh1 冻结协议与数值验收 |
+| Implicit Neural Representations with Periodic Activation Functions | `vsitzmann/siren` | 已适配的官方单图拟合方法实验 |
+
+PDF 先验证文件与正文，再识别首页标题，保存 SHA-256、页数和字节数；提取为空时尝试另一解析器。缺失、损坏、无法解密或没有可读正文的 PDF 明确停止，不能用空内容生成训练代码。解析依赖缺失则先自动准备兼容运行环境再重试。标题和 PDF 的通用路线也先检查宿主环境，不只仓库预设会自动恢复；Windows Store 等不兼容环境交给受控的兼容进程执行。显式仓库预设、语料对照或外部代码保持其输入优先级。
+
+匹配路线默认在线核对固定作者源码与项目适配证据；可关闭对应复选框。这项审核不宣称已分析论文全文。旧预设的优化、仅准备和结果分享选项不会带入标题或 PDF 输入。其他有效论文继续进入通用发现与代码重建路线：搜索候选仓库不等于核验作者仓库，也不等于执行了该仓库；证据不足的运行只能给出尽力重建或无法验收的结论。详见 [输入与结束判定验收记录](docs/paper_input_completion_20261010.md)。
 
 **每个阶段输出都会经过 Prompt-Free 验证**（Verifier 复用该 Agent 的
 `system_prompt` 作为质量标准）；验证未通过时按修正建议触发一次修正重试，
@@ -198,11 +222,13 @@ INIT → READ_PAPER → FIND_RESOURCES → BUILD_ENV → EXECUTE_CODE → VALIDA
 - `fetch_code` / `fetch_dataset` / `fetch_weights`：只拉当前任务最小集（代码仓库 depth 1 克隆、数据集冒烟子集、权重本地复制或按子路径下载），重复 fetch 幂等复用缓存，绝不重复下载；
 - `manifest`：每篇论文的资源清单写入 `data/manifests/<paper_id>.json`（兼容 2026-09-09 存量格式），`cleaned_at` 记录清理时间；
 - **L0 配额守护**：`AUTOREPRO_L0_QUOTA_GB` 可配（默认 20GB），超限时 `enforce_quota` 按最近使用（LRU）返回建议归档清单，不自动删除；
-- 通用论文流程的下载助手采用“尽力而为”策略：网络不可用时可返回明确标记的 `dataset_smoke` 诊断数据。本文顶部的官方仓库完整实验使用单独的固定来源与哈希校验，代码或真实数据不可用时直接失败，不替换为合成数据。
+- 通用论文流程的下载助手采用“尽力而为”策略：网络不可用时可返回明确标记的 `dataset_smoke` 诊断数据。本文顶部的官方仓库完整实验使用单独的固定来源与哈希校验，在线缺失或坏缓存会按原版本自动恢复；有限重试后仍无法取得真实代码或数据才失败，不替换为合成数据。
 
 ### 隔离依赖安装（P0-3）
 
 真实模式下 `pip install --target data/deps/<sha1(reqs)>` 一次性安装到隔离目录并落 `.ready` 就绪标记，执行时经 **PYTHONPATH 注入** 该目录；同名依赖清单跨论文跨会话只落一份（多论文共享、天然去重），不污染全局 Python。`AUTOREPRO_DEPS_ROOT` 可覆盖根目录。
+
+官方预设的依赖缓存进一步按 Python ABI、系统和架构隔离；每次复用都检查固定版本、导入及关键原生运算。就绪标记存在但缓存已损坏时，会加锁重建相同版本；默认公共镜像超时或连接失败时可回退官方 PyPI，准备和健康检查记录随本次运行保存。
 
 ### 镜像级共享（P1-1，`src/agents/env_builder.py`）
 

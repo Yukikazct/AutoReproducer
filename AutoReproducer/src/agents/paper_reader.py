@@ -7,7 +7,6 @@
 """
 import json
 import re
-from pathlib import Path
 from typing import Dict
 from src.base_agent import BaseAgent
 from src.llm.llm_client import LLMClient
@@ -42,8 +41,13 @@ class PaperReaderAgent(BaseAgent):
         paper_title = input_data.get("paper_title", "") or ""
 
         pdf_text = ""
-        if pdf_path and Path(pdf_path).exists():
-            pdf_text = self._extract_text(pdf_path)
+        pdf_input = None
+        if pdf_path:
+            from src.pdf_input import extract_pdf_input, supported_pdf_title
+            # Reject an unreadable upload before making any model request. A
+            # filename or user title cannot stand in for its missing content.
+            pdf_input = extract_pdf_input(pdf_path)
+            pdf_text = pdf_input.text
 
         # 标题-only：如实标注"没有正文"，绝不编造摘要。编造出来的占位摘要
         # 会被下游当成真实论文信息，进而生成与论文无关的代码。
@@ -81,12 +85,18 @@ MSE/MAE 等保留原始单位。单位未知时留空，不按数值大小猜百
         if not parsed or not parsed.get("title"):
             parsed = self._fallback_extract(pdf_text, paper_title)
 
-        # 用户显式传入标题时，以用户输入为准（忠实于输入）
-        if paper_title:
+        # For an upload, its visible identity takes priority over unrelated title
+        # textbox state or a model guess. Title-only requests retain user input.
+        visible_title = supported_pdf_title(pdf_input) if pdf_input is not None else None
+        if visible_title:
+            parsed["title"] = visible_title
+        elif paper_title and pdf_input is None:
             parsed["title"] = paper_title
         # 透传"信息是否足以生成针对性复现代码"给下游
         # （CodeExecutor 据此拒绝编造代码，ResultValidator 据此判"无法验证"）
-        if not isinstance(parsed.get("insufficient_info"), bool):
+        if title_only and not getattr(self.llm, "mock_mode", False):
+            parsed["insufficient_info"] = True
+        elif not isinstance(parsed.get("insufficient_info"), bool):
             parsed["insufficient_info"] = self._judge_insufficient(
                 parsed, title_only)
         parsed["info_sufficient"] = not parsed["insufficient_info"]
@@ -99,11 +109,18 @@ MSE/MAE 等保留原始单位。单位未知时留空，不按数值大小猜百
         self.log("parse_paper", "SUCCESS",
                  f"成功解析论文: {parsed.get('title', '未知')[:50]}", parsed)
 
-        return {
+        result = {
             "paper_info": parsed,
-            "raw_text": pdf_text[:2000],
+            "raw_text": pdf_text,
+            "extracted_code_urls": re.findall(
+                r"https?://github\.com/[^\s\)\]}\"]+", pdf_text),
             "llm_calls": self._delta_llm_calls(),
         }
+        if pdf_input is not None:
+            result["pdf_input"] = {"sha256": pdf_input.sha256,
+                                   "pages": pdf_input.page_count, "bytes": pdf_input.byte_size,
+                                   "readable": True}
+        return result
 
     # ---------------- 内部工具 ----------------
 
@@ -198,21 +215,6 @@ MSE/MAE 等保留原始单位。单位未知时留空，不按数值大小猜百
         return info
 
     def _extract_text(self, pdf_path: str) -> str:
-        """提取 PDF 文本：PyPDF2 主用，pdfplumber 兜底。"""
-        try:
-            from PyPDF2 import PdfReader
-            reader = PdfReader(pdf_path)
-            return "\n".join(
-                (page.extract_text() or "") for page in reader.pages)
-        except Exception as exc_pypdf:
-            self.log("extract_pdf", "RUNNING",
-                     f"PyPDF2 解析失败,切换 pdfplumber: {exc_pypdf}")
-            try:
-                import pdfplumber
-                with pdfplumber.open(pdf_path) as pdf:
-                    return "\n".join((page.extract_text() or "")
-                                     for page in pdf.pages)
-            except Exception as exc_plumber:
-                self.log("extract_pdf", "ERROR",
-                         f"PDF 解析失败: {exc_pypdf} / {exc_plumber}")
-                return ""
+        """Extract readable content; never silently substitute an empty PDF."""
+        from src.pdf_input import extract_pdf_input
+        return extract_pdf_input(pdf_path).text

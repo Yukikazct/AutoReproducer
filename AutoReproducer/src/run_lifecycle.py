@@ -10,6 +10,7 @@ from pathlib import Path
 from filelock import FileLock, Timeout
 
 from src.method_adapters import read_json, write_json
+from src.process_lifecycle import termination_signals, watch_parent_session
 from src.sandbox_timeout import ParentWatch
 
 
@@ -18,6 +19,14 @@ def cancellation_signals():
     """CLI signals/launcher exit unwind the same stack as Ctrl-C; threads keep their owner."""
     if threading.current_thread() is not threading.main_thread():
         yield
+        return
+    if os.name == "nt":
+        # A Windows venv redirector remains alive waiting for its worker after
+        # the actual launching session has exited. Reuse the verified launcher
+        # traversal/retained process handles, rather than watching only that
+        # immediate wrapper or guessing ownership from a Python filename.
+        with termination_signals(), watch_parent_session():
+            yield
         return
     old = {}
     stopped = threading.Event()

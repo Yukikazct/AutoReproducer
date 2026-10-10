@@ -71,6 +71,19 @@ def test_child_gets_utf8_stdio():
     assert env.get("PYTHONIOENCODING") == "utf-8"
 
 
+def test_real_training_process_does_not_inherit_agent_credentials(monkeypatch):
+    names = ("LLM_API_KEY", "GITHUB_TOKEN", "GH_TOKEN", "AUTOREPRO_GITHUB_TOKEN")
+    for name in names:
+        monkeypatch.setenv(name, "private-fixture-" + name)
+    monkeypatch.setenv("PIP_INDEX_URL", "https://private-pip.invalid/simple")
+    executor = _executor()
+    assert executor._exec_env()["PIP_INDEX_URL"] == "https://private-pip.invalid/simple"
+    code = "import os\nnames=" + repr(names) + "\nprint(all(name not in os.environ for name in names))\n"
+    result = executor._execute_code_local(code, stage="smoke")
+    assert result["success"], result.get("stderr")
+    assert result["stdout"].strip() == "True"
+
+
 def test_docker_run_capture_declares_utf8(monkeypatch):
     """docker run 捕获输出必须显式 UTF-8 解码，与本地执行同一条规矩。
 

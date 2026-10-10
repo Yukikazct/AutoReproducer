@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import datetime
@@ -136,6 +137,30 @@ def test_local_use_prevents_same_thread_cleanup_and_refreshes_on_exit(root, tmp_
     assert notices and "正在使用" in notices[0]
     assert ce.read_deps_meta(path)["last_used"] != "2000-01-01T00:00:00"
     assert history.delete_deps_cache([path.name])[0] == 1
+
+
+def test_auto_preparation_queues_behind_active_cache_outside_experiment_deadline(root, tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "LOCK_TIMEOUT", 0.01)
+    locked, release = threading.Event(), threading.Event()
+    def active_setup():
+        with cache.cache_guard(root):
+            locked.set()
+            assert release.wait(5)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        holder = pool.submit(active_setup)
+        assert locked.wait(5)
+        timer = threading.Timer(0.1, release.set)
+        timer.start()
+        deadline = time.monotonic() + 5
+        runner = repository.RepositoryRunner(executor=ce.CodeExecutorAgent(None, logger=Mock()))
+        result = runner.run(tmp_path, [{"id": "run", "argv": ["python", "-c", "print('READY')"]}],
+                            {"auto_prepare": True, "deadline_monotonic": deadline,
+                             "exclude_environment_preparation_from_deadline": True})
+        holder.result(timeout=5)
+        timer.join()
+    assert result["success"], result["final"]["stderr"]
+    assert result["environment"]["preparation_elapsed_s"] >= 0.08
+    assert result["effective_env_config"]["deadline_monotonic"] > deadline
 
 
 def test_repository_scope_covers_steps_and_refreshes_nested_environment(root, tmp_path):

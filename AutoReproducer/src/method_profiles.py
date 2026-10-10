@@ -5,7 +5,7 @@ SIREN_SHA = "4df34baee3f0f9c8f351630992c1fe1f69114b5f"
 SIREN_NOTEBOOK_SHA256 = "ac8bbdb970916bfb344d406d11d98a9746565036fae4d251dd1e67a70f7b1be6"
 CAMERA_SHA256 = "361a6d56d22ee52289cd308d5461d090e06a56cb36007d8dfc3226cbe8aaa5db"
 ODE_SHA = "657943acefa826ef04c025ebeb1ff5e9d60dc268"
-METHOD_LABELS = {"siren_camera_quick": "SIREN · 图像拟合 · 五分钟快速档（需预先准备环境）",
+METHOD_LABELS = {"siren_camera_quick": "SIREN · 图像拟合 · 五分钟快速档（环境自动准备）",
                  "neural_ode_spiral": "Neural ODE · 官方螺旋轨迹拟合"}
 COMMON_REQUIREMENTS = "numpy==1.26.4\nscipy==1.14.1\nmatplotlib==3.9.2\nPillow==10.4.0\n"
 

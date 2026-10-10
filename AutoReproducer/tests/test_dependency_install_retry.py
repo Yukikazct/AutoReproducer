@@ -12,6 +12,8 @@ from src.agents.code_executor import CodeExecutorAgent
 REQUIREMENTS = "numpy==1.26.4\npandas==2.2.3\ntorch==2.5.1"
 MIRROR = "https://pypi.tuna.tsinghua.edu.cn/simple"
 OFFICIAL = "https://pypi.org/simple"
+CUDA_REQUIREMENTS = ("--extra-index-url https://download.pytorch.org/whl/cu121\n"
+                     "torch==2.5.1+cu121\ntorchvision==0.20.1+cu121\nnumpy==1.26.4")
 NO_CANDIDATES = ("ERROR: Could not find a version that satisfies the requirement numpy==1.26.4 "
                  "(from versions: none)\nERROR: No matching distribution found for numpy==1.26.4")
 
@@ -53,6 +55,8 @@ def install_responses(monkeypatch, responses):
         return subprocess.CompletedProcess(cmd, response[0], stdout=response[1], stderr=response[2])
 
     monkeypatch.setattr(ce.subprocess, "run", run)
+    monkeypatch.setattr(CodeExecutorAgent, "_run_dependency_command",
+                        lambda instance, command, **kwargs: run(command, **kwargs))
     return calls
 
 
@@ -70,6 +74,143 @@ def test_missing_default_mirror_candidates_fall_back_once_with_identical_pins(mo
     records = instance.env_config["dependency_install_attempts"]
     assert [r["success"] for r in records] == [False, True]
     assert "from versions: none" in records[0]["diagnostic"]
+
+
+@pytest.mark.parametrize("wheel_index", ["cpu", "cu121"])
+def test_reviewed_pytorch_extra_index_is_preserved_when_primary_mirror_fails(monkeypatch, tmp_path, wheel_index):
+    instance = executor()
+    requirements = f"--extra-index-url https://download.pytorch.org/whl/{wheel_index}\n" + REQUIREMENTS
+    instance.env_config["requirements_txt"] = requirements
+    calls = install_responses(monkeypatch, [(1, "", NO_CANDIDATES), (0, "installed", "")])
+    assert prepare(instance, tmp_path) is None
+    assert [call["index"] for call in calls] == [MIRROR, OFFICIAL]
+    assert [call["requirements"] for call in calls] == [requirements, requirements]
+
+
+def test_auto_prepared_cuda_timeout_gets_long_official_retry_with_same_pins(monkeypatch, tmp_path):
+    first_timeout = subprocess.TimeoutExpired(["pip"], 300, output=b"extracting CUDA wheel",
+                                             stderr=b"partial target copy")
+    calls = install_responses(monkeypatch, [first_timeout, (0, "installed", "")])
+    instance = executor()
+    instance.env_config.update(requirements_txt=CUDA_REQUIREMENTS, auto_prepare=True)
+    assert prepare(instance, tmp_path) is None
+    assert [call["index"] for call in calls] == [MIRROR, OFFICIAL]
+    assert [call["kwargs"]["timeout"] for call in calls] == [300, 1800]
+    assert [call["requirements"] for call in calls] == [CUDA_REQUIREMENTS] * 2
+    records = instance.env_config["dependency_install_attempts"]
+    assert [record["timeout_s"] for record in records] == [300, 1800]
+    assert records[0]["timed_out"] and not records[1]["timed_out"]
+    assert "extracting CUDA wheel" in records[0]["diagnostic"]
+    assert "partial target copy" in records[0]["diagnostic"]
+
+
+def test_explicit_official_cuda_install_has_same_long_budget_without_self_retry(monkeypatch, tmp_path):
+    monkeypatch.setattr(ce, "PIP_INDEX_URL", OFFICIAL)
+    timeout = subprocess.TimeoutExpired(["pip"], 1800, output="partial wheel copy")
+    calls = install_responses(monkeypatch, [timeout])
+    instance = executor()
+    instance.env_config.update(requirements_txt=CUDA_REQUIREMENTS, auto_prepare=True)
+    diagnostic = prepare(instance, tmp_path)
+    assert len(calls) == 1 and calls[0]["kwargs"]["timeout"] == 1800
+    assert calls[0]["requirements"] == CUDA_REQUIREMENTS
+    assert "依赖安装超时(1800s)" in diagnostic and "partial wheel copy" in diagnostic
+    assert instance.env_config["dependency_install_attempts"][0]["timeout_s"] == 1800
+
+
+@pytest.mark.parametrize("private_source", ["links", "requirements", "extra", "compact_index", "compact_links",
+                                           "abbreviated_index", "abbreviated_links"])
+def test_explicit_official_index_with_private_cuda_sources_keeps_generic_budget(monkeypatch, tmp_path, private_source):
+    monkeypatch.setattr(ce, "PIP_INDEX_URL", OFFICIAL)
+    requirements = CUDA_REQUIREMENTS
+    if private_source == "links":
+        monkeypatch.setattr(ce, "PIP_FIND_LINKS", "https://packages.company.invalid/wheels")
+    elif private_source == "requirements":
+        requirements = "--index-url https://packages.company.invalid/simple\n" + requirements
+    elif private_source == "compact_index":
+        requirements = "-ihttps://packages.company.invalid/simple\n" + requirements
+    elif private_source == "compact_links":
+        requirements = "-fhttps://packages.company.invalid/wheels\n" + requirements
+    elif private_source == "abbreviated_index":
+        requirements = "--index-u=https://packages.company.invalid/simple\n" + requirements
+    elif private_source == "abbreviated_links":
+        requirements = "--find-li=https://packages.company.invalid/wheels\n" + requirements
+    else:
+        requirements += "\n--extra-index-url https://packages.company.invalid/simple"
+    calls = install_responses(monkeypatch, [(1, "", NO_CANDIDATES)])
+    instance = executor()
+    instance.env_config.update(requirements_txt=requirements, auto_prepare=True)
+    assert prepare(instance, tmp_path) is not None
+    assert len(calls) == 1 and calls[0]["kwargs"]["timeout"] == 300
+
+
+@pytest.mark.parametrize("requirements,auto_prepare", [
+    ("--extra-index-url https://download.pytorch.org/whl/cpu\n"
+     "torch==2.5.1+cpu\nnumpy==1.26.4", True),
+    ("--extra-index-url https://download.pytorch.org/whl/cu121\n" + REQUIREMENTS, True),
+    ("torch==2.5.1+cu121\nnumpy==1.26.4", True),
+    ("--extra-index-url https://download.pytorch.org/whl/cu121\n"
+     "torch==2.5.1+cu118", True),
+    (CUDA_REQUIREMENTS, False),
+])
+def test_only_matching_auto_prepared_cuda_wheels_get_long_retry(monkeypatch, tmp_path, requirements, auto_prepare):
+    calls = install_responses(monkeypatch, [(1, "", NO_CANDIDATES), (0, "installed", "")])
+    instance = executor()
+    instance.env_config.update(requirements_txt=requirements, auto_prepare=auto_prepare)
+    assert prepare(instance, tmp_path) is None
+    assert [call["kwargs"]["timeout"] for call in calls] == [300, 300]
+    assert [record["timeout_s"] for record in instance.env_config["dependency_install_attempts"]] == [300, 300]
+
+
+@pytest.mark.parametrize("private_source", ["index", "links", "requirements", "extra", "no-index",
+                                           "compact_index", "compact_links", "abbreviated_index", "abbreviated_links"])
+def test_pinned_cuda_retains_explicit_sources_and_budget(monkeypatch, tmp_path, private_source):
+    requirements = CUDA_REQUIREMENTS
+    if private_source == "index":
+        monkeypatch.setattr(ce, "PIP_INDEX_URL", "https://packages.company.invalid/simple")
+    elif private_source == "links":
+        monkeypatch.setattr(ce, "PIP_FIND_LINKS", "https://packages.company.invalid/wheels")
+    elif private_source == "requirements":
+        requirements = "--index-url https://packages.company.invalid/simple\n" + requirements
+    elif private_source == "extra":
+        requirements += "\n--extra-index-url https://packages.company.invalid/simple"
+    elif private_source == "compact_index":
+        requirements = "-ihttps://packages.company.invalid/simple\n" + requirements
+    elif private_source == "compact_links":
+        requirements = "-fhttps://packages.company.invalid/wheels\n" + requirements
+    elif private_source == "abbreviated_index":
+        requirements = "--index-u=https://packages.company.invalid/simple\n" + requirements
+    elif private_source == "abbreviated_links":
+        requirements = "--find-li=https://packages.company.invalid/wheels\n" + requirements
+    else:
+        requirements = "--no-index\n" + requirements
+    calls = install_responses(monkeypatch, [(1, "", NO_CANDIDATES)])
+    instance = executor()
+    instance.env_config.update(requirements_txt=requirements, auto_prepare=True)
+    assert prepare(instance, tmp_path) is not None
+    assert len(calls) == 1 and calls[0]["requirements"] == requirements
+    assert calls[0]["kwargs"]["timeout"] == 300
+
+
+def test_cuda_native_health_rebuild_retains_long_official_retry(monkeypatch, tmp_path):
+    calls = install_responses(monkeypatch, [(1, "", NO_CANDIDATES), (0, "installed", ""),
+                                           (0, "rebuilt", "")])
+    instance = executor()
+    instance.env_config.update(requirements_txt=CUDA_REQUIREMENTS, auto_prepare=True,
+                               dependency_health_check=True)
+    monkeypatch.setattr(instance, "_check_local_dependency_health",
+                        Mock(side_effect=["broken native DLL", None]))
+    assert prepare(instance, tmp_path) is None
+    assert [call["index"] for call in calls] == [MIRROR, OFFICIAL, OFFICIAL]
+    assert [call["kwargs"]["timeout"] for call in calls] == [300, 1800, 1800]
+    assert [call["requirements"] for call in calls] == [CUDA_REQUIREMENTS] * 3
+
+
+def test_private_extra_index_retains_source_policy(monkeypatch, tmp_path):
+    instance = executor()
+    instance.env_config["requirements_txt"] = "--extra-index-url https://private.invalid/simple\n" + REQUIREMENTS
+    calls = install_responses(monkeypatch, [(1, "", NO_CANDIDATES)])
+    assert prepare(instance, tmp_path) is not None
+    assert len(calls) == 1
 
 
 @pytest.mark.parametrize("first_error", [

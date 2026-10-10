@@ -17,10 +17,9 @@
 - 执行前语法门：清洗后的代码必须能 compile，不通过则针对"截断/语法
   错误"再生成（限次），仍不可编译则诚实短路为"未运行"，绝不把残码
   送进沙箱——避免把"代码被截断"掩盖成沙箱里的 IndentationError；
-- 信息不足时**不再预先拒绝**：改成尽力而为生成一份最小可运行脚本并照常
-  进沙箱（模型两次都不给代码时落本地兜底脚本 `_BEST_EFFORT_SCRIPT`），
-  结果带 `best_effort` 标注一路传到报告，由 ResultValidator 判为"无法核对"
-  而非"复现成功/失败"——既不交白卷，也不让占位结果冒充论文结论。
+- 信息不足时仍尝试按已知论文证据生成代码，并标为 `best_effort`；真实复现
+  请求不会把模型拒答替换成与论文无关的本地演示训练。模型仍未给出代码时
+  明确返回证据不足、未运行。合成兜底仅供 Mock 演示。
 """
 import ast
 import os
@@ -44,12 +43,16 @@ from src.llm.llm_client import LLMClient
 from src.execution_plan import RepositoryModeFallbackRejected
 from src.agents.env_builder import PIP_INDEX_URL, PIP_FIND_LINKS
 from src.agents.dependency_resolver import (
-    find_missing_module, python_package_for, align_runtime_requirements,
+    find_missing_module, python_package_for, align_runtime_requirements, MODULE_TO_PYPI,
 )
 from src.resource_events import ResourceEventLogger
 from src.execution_artifacts import prepare_plot_runtime, collect_images, FONT_PATH
 from src.storage_usage import directory_usage, docker_image_usage, disk_usage_snapshot, unmeasured_disk_usage
-from src.dependency_cache import cache_guard, DependencyCacheBusy
+from src.dependency_cache import (
+    cache_guard, DependencyCacheBusy, DEPENDENCY_HEALTH_PROBE, reset_managed_environment,
+)
+from src.runtime_platform import runtime_fingerprint
+from src.safety.paths import workspace_path
 
 LOCAL_TIMEOUT_SMOKE = 10
 LOCAL_TIMEOUT_FULL = 60
@@ -60,6 +63,10 @@ DOCKER_STARTUP_TIMEOUT = 30
 EXIT_DEPENDENCY_FAILED = -7
 # 本地依赖安装超时（numpy/matplotlib/torch 等大包需要更长时间）
 LOCAL_PIP_TIMEOUT = 300
+# Cold pinned CUDA wheels need time for extraction and the --target copy. The
+# default mirror stays bounded at 300 s before the reviewed official retry.
+LOCAL_CUDA_PIP_TIMEOUT = 1800
+LOCAL_DEPENDENCY_HEALTH_TIMEOUT = 90
 # 运行时缺模块自我修复上限：缺包 -> 隔离安装 -> 重跑，最多 3 轮
 # （对齐 ScholarAgent coder.py 的 MAX_SELF_CORRECTIONS=3）
 MAX_PIP_SELF_HEAL = 3
@@ -115,13 +122,41 @@ def _public_mirror_failure(detail: str, timed_out: bool = False) -> bool:
 
 
 def _allow_official_pip_fallback(requirements: str) -> bool:
-    # Explicit private indexes/links and requirements-file source options must
+    # Explicit private indexes/links and primary requirements-file sources must
     # retain the user's routing policy. Only the application's public defaults
-    # (including an explicitly disabled default find-links) may fall back.
-    return (PIP_INDEX_URL.rstrip("/") == _DEFAULT_PUBLIC_PIP_INDEX
-            and PIP_FIND_LINKS in {"", _DEFAULT_PUBLIC_FIND_LINKS}
-            and not re.search(r"(?m)^\s*(?:-i\b|--(?:extra-)?index-url\b|"
-                              r"-f\b|--find-links\b|--no-index\b)", requirements))
+    # and the reviewed presets' unchanged supplemental torch indexes may fall back.
+    if (PIP_INDEX_URL.rstrip("/") != _DEFAULT_PUBLIC_PIP_INDEX
+            or PIP_FIND_LINKS not in {"", _DEFAULT_PUBLIC_FIND_LINKS}):
+        return False
+    return _reviewed_pip_requirement_sources(requirements)
+
+
+def _reviewed_pip_requirement_sources(requirements: str) -> bool:
+    """Keep explicit private/primary requirements-file routing unchanged."""
+    for raw in requirements.splitlines():
+        line = raw.strip()
+        # pip also accepts compact short flags and unique long abbreviations.
+        # Permit only the exact reviewed supplemental wheel-index options;
+        # unknown flags/includes keep their routing rather than guessing it.
+        if line.startswith("-") and not re.fullmatch(
+                r"--extra-index-url(?:\s+|=)https://download\.pytorch\.org/whl/(?:cpu|cu121)/?", line):
+            return False
+    # Reviewed method presets retain their official torch wheel index in the
+    # requirements file. Only the application's default primary mirror changes.
+    return True
+
+
+def _pinned_cuda_requirements(requirements: str) -> bool:
+    """Identify the reviewed torch CUDA wheel without changing its pins."""
+    if not _reviewed_pip_requirement_sources(requirements):
+        return False
+    wheel = re.search(r"(?m)^\s*torch\s*==\s*\d+(?:\.\d+)*\+cu(\d+)\s*(?:#.*)?$",
+                      requirements)
+    if not wheel:
+        return False
+    return bool(re.search(
+        r"(?m)^\s*--extra-index-url(?:\s+|=)https://download\.pytorch\.org/whl/cu" +
+        re.escape(wheel.group(1)) + r"/?\s*$", requirements))
 
 # ---- P1-⑪ Docker 沙箱加固参数（镜像白名单 + cap-drop + 只读 + 非 root + 限额） ----
 # 镜像白名单前缀（逗号分隔，可用 AUTOREPRO_DOCKER_IMAGE_ALLOWLIST 覆盖）：
@@ -257,8 +292,8 @@ MAX_EXECUTION_REPAIRS = 3
 # 续写 prompt 里回灌的"已写内容"末尾行数（够模型接上下文即可，不必全给）
 _CONTINUE_TAIL_LINES = 40
 # 模型仍可能回的占位标记（整份"代码"只有这一行注释）。命中即走
-# `_recover_from_placeholder`：定向重试 MAX_MARK_RETRY 次，仍拿不到代码就
-# 落本地兜底脚本 `_BEST_EFFORT_SCRIPT`——绝不让"模型拒答"变成"没代码可跑"。
+# `_recover_from_placeholder`：定向重试 MAX_MARK_RETRY 次。真实复现仍无代码
+# 则记录未运行；仅 Mock 演示可以使用 `_BEST_EFFORT_SCRIPT`。
 _INSUFFICIENT_INFO_MARK = "# INSUFFICIENT_INFO"
 # 语法错误信息中提示"输出被截断"的特征词
 _TRUNCATION_HINTS = (
@@ -277,8 +312,7 @@ _TRACEBACK_RE = re.compile(
 # 判定"未知/占位"论文信息用的空值模式（与 PaperReader._UNKNOWN_RE 判据一致）
 _UNKNOWN_RE = re.compile(
     r"^\s*(|未知.*|未找到|无|n/?a|none|null)\s*$", re.IGNORECASE)
-# Exit code：代码在进入沙箱前就被拦下（仅剩两道真门：语法错误 / 危险调用。
-# 论文信息不足已不再是拦截理由——见模块 docstring 与 best_effort 标注）
+# Exit code：代码未进入沙箱（语法、安全或生成实现证据门）。
 EXIT_NOT_RUNNABLE = -5
 # Exit code：本地执行被危险代码静态门拦下（命令执行/动态执行/网络/递归删除）
 EXIT_DANGER_BLOCKED = -6
@@ -311,8 +345,8 @@ _DANGEROUS_PATTERNS = (
 
 # 论文信息不足时的结果说明（报告与日志共用同一句话，避免两处措辞漂移）
 _BEST_EFFORT_REASON = (
-    "论文未提供可用的方法/数据集/声明指标；本轮代码为尽力而为的占位实现，"
-    "其输出不是论文结论")
+    "论文的关键方法、数据或声明指标尚未充分确认，或本轮使用了 Mock 演示兜底；"
+    "本轮输出不是论文结论")
 
 # 信息不足且模型两次都不给代码时使用的**本地兜底脚本**：保证"一定有代码、
 # 一定能执行、一定有输出"。三条硬约束（每条都有测试兜）：
@@ -412,6 +446,7 @@ class CodeExecutorAgent(BaseAgent):
         self.on_event = on_event
         self._execution_id = None
         self._execution_step_index = 0
+        self._execution_run_state = None
         # 最近一次依赖就绪的隔离安装目录（供执行时注入 PYTHONPATH）
         self._deps_dir: Optional[str] = None
         # 运行时自愈补装的隔离目录集合（data/deps/heal-<module>/），
@@ -426,6 +461,9 @@ class CodeExecutorAgent(BaseAgent):
     @contextmanager
     def dependency_scope(self, *, timeout=None):
         """Keep installed packages alive throughout preparation and execution."""
+        if timeout is None and (getattr(self, "env_config", None) or {}).get("auto_prepare"):
+            from src.dependency_cache import AUTO_PREPARATION_LOCK_TIMEOUT
+            timeout = AUTO_PREPARATION_LOCK_TIMEOUT
         with cache_guard(self._dependency_lock_root(), timeout=timeout):
             try:
                 yield
@@ -586,8 +624,10 @@ class CodeExecutorAgent(BaseAgent):
 
         input_data: {"paper_info", "env_config", "resources", "code"(可选)}
         """
-        with self._execution_scope():
-            return self._run(input_data)
+        with self._execution_scope() as invocation:
+            result = self._run(input_data)
+            invocation["result"] = result
+            return result
 
     def _run(self, input_data: dict) -> dict:
         # 仓库预设只能由 RepositoryRunner 跑整个仓库。单文件生成会丢掉多文件导入、
@@ -605,6 +645,7 @@ class CodeExecutorAgent(BaseAgent):
         self._runtime_source_env = env_config
         self._runtime_declared = paper_info.get("dependencies") or []
         self._runtime_preserve_all = bool(input_data.get("corpus_paper"))
+        self._paper_evidence = str(input_data.get("raw_text") or "")[:6000]
         # "尽力而为"标注位：外部代码路径没有生成这一步，保持默认值
         insufficient, fallback_used = False, False
 
@@ -613,26 +654,37 @@ class CodeExecutorAgent(BaseAgent):
             code, sanitize_stats = self._sanitize_code_ex(code)
             self._record_sanitize("外部代码清洗", code, sanitize_stats)
         else:
-            # 论文信息不足**不再预先拒绝**：降级为"尽力而为"标注，照样生成、
-            # 照样进沙箱。用户实测过一次「代码长度 0 字符 + 未运行」的空报告，
-            # 那条路是"论文信息不足就交白卷"；现在改成：跑出来的东西带
-            # best_effort 标注一路传到报告，不参与复现判定——既不交白卷，
-            # 也不让占位结果被读成论文结论。
+            # 仍然尝试生成，但缺失的论文证据不能用无关演示实验填充。
             insufficient = self._info_insufficient(paper_info)
             if insufficient:
                 self.log("generate_code", "WARNING",
-                         "论文信息不足（缺少方法/数据集/声明指标）——改为尽力"
-                         "而为生成最小可运行脚本，其结果不得当作论文结论")
+                         "论文信息不足（缺少方法/数据集/声明指标）——尝试依据"
+                         "已知论文内容生成代码；无法实现时明确返回缺口，结果不得当作论文结论")
             code, sanitize_stats, fallback_used = self._produce_code(
                 paper_info, insufficient=insufficient)
 
-        # 带进报告与验证层的"尽力而为"标注（外部代码路径全部为默认值）
+        # A local demo fallback never becomes paper evidence, even when the
+        # original metadata claimed to be sufficient.
+        best_effort = insufficient or fallback_used
+        source = "user_supplied_code" if input_data.get("code") else (
+            "mock_demo" if self.mock_mode else "llm_generated")
         best_effort_fields = {
-            "best_effort": insufficient,
-            "best_effort_reason": _BEST_EFFORT_REASON if insufficient else "",
+            "best_effort": best_effort,
+            "best_effort_reason": _BEST_EFFORT_REASON if best_effort else "",
             "fallback_used": fallback_used,
             "assumptions": self._extract_assumptions(code),
+            "execution_source": source,
+            "reproduction_scope": "user_supplied_code" if input_data.get("code") else (
+                "mock_demo" if self.mock_mode else "generated_reconstruction"),
+            "repository_executed": False,
         }
+
+        if self._is_placeholder_code(code):
+            return self._not_runnable(
+                "未获得可依据论文执行的代码：模型未给出实现，论文方法或数据证据仍有缺口。"
+                "已尝试生成与定向补充，未用无关演示模型替代论文实验。",
+                code=code, sanitize_stats=sanitize_stats,
+                extra={**best_effort_fields, "evidence_status": "insufficient_evidence"})
 
         # 语法门：不可编译的代码绝不进沙箱——残码在沙箱里会被报成
         # IndentationError 之类，掩盖"输出被截断"这个真实原因。
@@ -699,12 +751,8 @@ class CodeExecutorAgent(BaseAgent):
         续写"把总长度累加上去（最多 MAX_CODE_CONTINUE 轮），每轮都过语法门。
         续写仍不完整时，才回落到"从头再生成"作为最后手段。
 
-        另一条路是模型"拒答"（只回占位标记或空输出）：定向重试
-        MAX_MARK_RETRY 次，仍拿不到代码就落本地兜底脚本，保证"一定有代码可跑"
-        ——见 `_recover_from_placeholder`。
-
-        `insufficient=True` 时 prompt 会要求"信息不足也必须给出最小可运行
-        脚本"（见 `_generate_code_prompt`）。
+        模型仅给占位标记或空输出时做一次依据论文证据的定向补充；仍然
+        无实现则返回占位标记，由调用方明确记录未运行。Mock 演示可兜底。
 
         返回 `(代码, 清洗统计, 是否用了本地兜底脚本)`；代码仍可能是不可编译
         的——由调用方 run() 的语法门统一判定并短路为"未运行"，此处不负责
@@ -718,8 +766,8 @@ class CodeExecutorAgent(BaseAgent):
         if self._is_placeholder_code(code):
             code, stats, fallback_used = self._recover_from_placeholder(
                 paper_info, insufficient, stats)
-            if fallback_used:
-                return code, stats, True   # 兜底脚本本身完整，无需再续写
+            if fallback_used or self._is_placeholder_code(code):
+                return code, stats, fallback_used
 
         # ---- 阶段 1：续写拼接（针对"输出被截断"/代码被洗残） ----
         prev_err = self._syntax_error(code)
@@ -773,8 +821,8 @@ class CodeExecutorAgent(BaseAgent):
                 # 重生成直接拒答：换指令定向重试，仍不成则落兜底脚本收工
                 code, stats, fallback_used = self._recover_from_placeholder(
                     paper_info, insufficient, stats)
-                if fallback_used:
-                    return code, stats, True
+                if fallback_used or self._is_placeholder_code(code):
+                    return code, stats, fallback_used
                 continue
             code = new_code
         return code, stats, fallback_used
@@ -822,6 +870,7 @@ class CodeExecutorAgent(BaseAgent):
         prompt = f"""你在帮我写一份论文复现的 Python 脚本，上一次输出因为长度
 限制在中间被截断了。请**从断点继续往下写**，把剩余部分补完。
 
+论文标题: {paper_info.get('title', '未知')}
 论文方法: {paper_info.get('method', '未知')}
 数据集: {paper_info.get('dataset', '未知')}
 指标: {paper_info.get('metrics', {})}
@@ -941,16 +990,15 @@ class CodeExecutorAgent(BaseAgent):
 
     def _generate_code_prompt(self, paper_info: Dict,
                               insufficient: bool = False) -> str:
-        """生成 prompt；`insufficient=True` 时第 5 条换成"必须交出最小脚本"。
-
-        信息充足（默认）时输出与历史版本逐字一致——`TestPrompts` 锁死了其中
-        的「完整」「围栏」「字符串字面量」与四段流程等串。
-        """
+        """Use known paper evidence; synthetic demo instructions are Mock-only."""
         return f"""根据论文信息生成一份**完整**的复现脚本。
+论文标题: {paper_info.get('title', '未知')}
 论文方法: {paper_info.get('method', '未知')}
 指标: {paper_info.get('metrics', {})}
 指标单位: {paper_info.get('metric_units', {})}
 数据集: {paper_info.get('dataset', '未知')}
+可用论文原文（为空表示尚未获取正文）:
+{getattr(self, '_paper_evidence', '')}
 
 【脚本必须覆盖的完整流程】
 数据加载/构造 → 模型与方法定义 → 训练循环 → 评估 → **打印论文声明的各项指标**。
@@ -980,20 +1028,19 @@ class CodeExecutorAgent(BaseAgent):
    划分。信息不足的占位脚本不得编造指标，可省略这一行。
 """
 
-    @staticmethod
-    def _rule5(insufficient: bool) -> str:
-        """输出格式第 5 条，按信息是否充足分两种口径。
-
-        信息不足时**不再提供"交白卷"的出口**：旧文案让模型"只输出一行占位
-        标记并停止"，而那行标记当年没有任何代码识别它——结果是空烧预算、再把
-        空脚本送进执行。禁令仍在，但宾语从"生成代码"改成"冒充结论"：可以写
-        通用实现、可以用合成数据，但不许把无关数据集或编造的数值写成论文声明值。
-        """
+    def _rule5(self, insufficient: bool) -> str:
+        """Keep a real attempt distinct from an unrelated runnable demo."""
         if not insufficient:
             return ("若上面的论文方法/数据集确实是未知的占位值，无法据此写出"
                     "针对性代码，则只输出一行 "
                     f"`{_INSUFFICIENT_INFO_MARK}` 并停止，严禁用无关数据集"
                     "(如 CIFAR-10/IMDB)编造一个与本论文无关的模型来充数。")
+        if not self.mock_mode:
+            return ("论文信息仍有缺口。请尝试依据已知方法和可确认的数据构建针对性实现，"
+                    "并以 # 假设: 注释明确尚未证实的配置。严禁用无关模型、合成线性回归"
+                    "或任意演示数据替代论文实验；只有论文方法本身要求合成数据时才可构造。"
+                    "若缺失的关键方法或数据使实现无法成立，只输出一行 "
+                    f"`{_INSUFFICIENT_INFO_MARK}` 并停止；不得编造论文指标。")
         return """上面的论文方法/数据集/指标**缺失或为未知占位值**。即便如此也**必须**
    交出一份能直接运行的最小复现脚本——不允许以"信息不足"为由拒答、
    不允许只输出一行占位标记、不允许留空：
@@ -1039,16 +1086,7 @@ class CodeExecutorAgent(BaseAgent):
 
     def _recover_from_placeholder(self, paper_info: Dict, insufficient: bool,
                                   stats: Dict) -> tuple:
-        """模型"拒答"时的处置：定向重试 → 仍拒答则落本地兜底脚本。
-
-        为什么不直接同 prompt 重放：`_regenerate_code` 那条路已经证明重复同
-        一条指令只会再撞一次；这里换的是**指令本身**（"上一次只回复了占位
-        标记，必须给出可运行脚本"），且只问 MAX_MARK_RETRY 次。兜底脚本保证
-        "一定有代码、一定能执行、一定有输出"——这正是用户要的
-        「一定要尝试生成代码并允许」的底线。
-
-        返回 `(代码, 清洗统计, 是否用了兜底脚本)`。
-        """
+        """Attempt an evidence-based recovery; local synthetic fallback is Mock-only."""
         self.log("generate_code", "WARNING",
                  "模型未给出代码（占位标记/空输出），发起定向重试"
                  f"（上限 {MAX_MARK_RETRY} 次）",
@@ -1061,19 +1099,25 @@ class CodeExecutorAgent(BaseAgent):
             self._record_sanitize("定向重试", code, stats)
             if not self._is_placeholder_code(code):
                 return code, stats, False
+        if not self.mock_mode:
+            self.log("generate_code", "WARNING",
+                     "定向补充后仍没有论文实现；证据不足，未运行无关的本地演示脚本")
+            return _INSUFFICIENT_INFO_MARK, stats, False
         self.log("generate_code", "WARNING",
-                 "定向重试仍未拿到代码，回落到本地兜底脚本"
+                 "Mock 定向重试仍未拿到代码，使用本地演示脚本"
                  f"（{len(_BEST_EFFORT_SCRIPT.splitlines())} 行）")
         return _BEST_EFFORT_SCRIPT, stats, True
 
     def _mark_retry_prompt(self, paper_info: Dict,
                            insufficient: bool) -> str:
-        """定向重试 prompt：说明上一次只回了占位标记，明确要求可运行脚本。
-
-        末尾那句是**覆盖式**的：即便上面第 5 条按信息充足的口径写了"无法写出
-        针对性代码就回占位标记"，这里也要求必须给出脚本——否则两次拒答直接
-        落到兜底脚本，用户就看不到任何"尝试生成"的结果。
-        """
+        """Try to obtain an implementation without inventing a different experiment."""
+        if not self.mock_mode:
+            return (self._generate_code_prompt(paper_info, insufficient) + f"""
+【上一次只回复了占位标记】
+上一次没有给出可运行的论文实现。请根据已有论文方法与数据证据补充实现；
+不得为了可运行而改成无关模型或演示训练。若关键证据仍不足，请保持
+`{_INSUFFICIENT_INFO_MARK}`，系统会明确记录未运行与缺失证据。
+""")
         return (self._generate_code_prompt(paper_info, insufficient) + f"""
 【上一次只回复了占位标记】
 上一次的输出是 `{_INSUFFICIENT_INFO_MARK}`，没有给出任何可运行的代码。
@@ -1283,16 +1327,48 @@ class CodeExecutorAgent(BaseAgent):
 
     @contextmanager
     def _execution_scope(self, *, reuse=False):
-        """Give each public invocation its own identity; steps share that identity."""
+        """Close an invocation only after its runner and result bookkeeping finish."""
         if reuse and self._execution_id is not None:
-            yield
+            yield self._execution_run_state
             return
-        previous = self._execution_id, self._execution_step_index
+        previous = (self._execution_id, self._execution_step_index,
+                    self._execution_run_state)
         self._execution_id, self._execution_step_index = uuid.uuid4().hex, 0
+        invocation = self._execution_run_state = {"started": False, "result": None}
+        failure = None
         try:
-            yield
+            yield invocation
+        except BaseException as exc:
+            failure = exc
+            raise
         finally:
-            self._execution_id, self._execution_step_index = previous
+            try:
+                if invocation["started"]:
+                    status = ("interrupted" if isinstance(failure, (KeyboardInterrupt, SystemExit))
+                              else "error" if failure is not None
+                              else self._execution_result_status(invocation["result"]))
+                    try:
+                        self._emit_execution_event({"type": "execution_run",
+                                                    "execution_id": self._execution_id,
+                                                    "status": status})
+                    except BaseException:
+                        if failure is None:
+                            raise
+            finally:
+                (self._execution_id, self._execution_step_index,
+                 self._execution_run_state) = previous
+
+    @staticmethod
+    def _execution_result_status(result):
+        result = result or {}
+        final = result.get("final") or result
+        if (result.get("cancelled") or result.get("interrupted")
+                or final.get("cancelled") or final.get("interrupted")):
+            return "interrupted"
+        if (result.get("success") is True and not result.get("timed_out")
+                and not final.get("timed_out") and final.get("exit_code") in (None, 0)):
+            return "success"
+        return "error"
 
     def _emit_execution_event(self, event):
         """Ignore observer errors, while preserving process cancellation signals."""
@@ -1309,7 +1385,13 @@ class CodeExecutorAgent(BaseAgent):
         workdir: 指定执行目录时在目标目录执行且不清理（生命周期由调用方
         管理，如优化器真实执行配合快照回滚）；缺省时使用临时目录（用完删除）。
         """
-        with self._execution_scope(reuse=True):
+        with self._execution_scope(reuse=True) as invocation:
+            # Start lazily: syntax/danger preflight rejection is not an execution.
+            if not invocation["started"]:
+                invocation["started"] = True
+                self._emit_execution_event({"type": "execution_run",
+                                            "execution_id": self._execution_id,
+                                            "status": "running"})
             self._execution_step_index += 1
             identity = {"execution_id": self._execution_id,
                         "step_id": f"step_{self._execution_step_index}",
@@ -1329,19 +1411,14 @@ class CodeExecutorAgent(BaseAgent):
                     # terminal notification must not replace its original cause.
                     pass
                 raise
+            invocation["result"] = result
             # Current runners buffer output. Preserve that behavior and associate
             # each returned stream with its real invocation, without parsing it.
             for stream in ("stdout", "stderr"):
                 if result.get(stream):
                     self._emit_execution_event({"type": "execution_output", **identity,
                                                 "stream": stream, "text": result[stream]})
-            if result.get("cancelled") or result.get("interrupted"):
-                status = "interrupted"
-            elif (result.get("success") is True and not result.get("timed_out")
-                  and result.get("exit_code") in (None, 0)):
-                status = "success"
-            else:
-                status = "error"
+            status = self._execution_result_status(result)
             self._emit_execution_event({"type": "execution_step", **identity, "status": status})
             return result
 
@@ -1353,8 +1430,10 @@ class CodeExecutorAgent(BaseAgent):
         （不清理），配合 src.safety.workspace_snapshot 完成
         "补丁 -> 真实重跑 -> 快照回滚"的安全优化闭环。
         """
-        with self._execution_scope():
-            return self._execute_code(code, stage, workdir=workdir)
+        with self._execution_scope() as invocation:
+            result = self._execute_code(code, stage, workdir=workdir)
+            invocation["result"] = result
+            return result
 
     def _execute_code_local(self, code: str, stage: str,
                             workdir: Optional[str] = None) -> Dict:
@@ -1535,9 +1614,114 @@ class CodeExecutorAgent(BaseAgent):
         自己的输出也按 UTF-8 编码，父进程按 UTF-8 解码不会乱码。
         """
         env = os.environ.copy()
+        # Author/generated code needs its dependencies, not agent credentials.
+        for name in ("LLM_API_KEY", "GITHUB_TOKEN", "GH_TOKEN", "AUTOREPRO_GITHUB_TOKEN"):
+            env.pop(name, None)
         env["PIP_USER"] = "0"
         env["PYTHONIOENCODING"] = "utf-8"
         return env
+
+    def _run_dependency_command(self, command, *, timeout, env):
+        """Own preset installers/probes so timeout stops their descendants."""
+        if (getattr(self, "env_config", None) or {}).get("auto_prepare"):
+            from src.process_lifecycle import validate_windows_venv
+            from src.runtime_preparation import RuntimePreparationTimeout, run_owned_process
+            validate_windows_venv()
+            try:
+                return run_owned_process(command, timeout_s=timeout, env=env)
+            except RuntimePreparationTimeout as exc:
+                raise subprocess.TimeoutExpired(command, timeout, output=exc.stdout,
+                                                stderr=exc.stderr) from exc
+        return subprocess.run(command, capture_output=True, text=True,
+                              encoding="utf-8", errors="replace", timeout=timeout, env=env)
+
+    def _check_local_dependency_health(self, deps_dir: Path, requirements: str,
+                                       phase: str) -> Optional[str]:
+        """Probe reviewed preset dependencies before reusing or marking a cache.
+
+        -I keeps the repository, PYTHONPATH and user site out of the probe. The
+        probe inserts only this target and rejects imports from global packages,
+        so an installed host package cannot conceal an incomplete managed cache.
+        """
+        env_config = getattr(self, "env_config", None) or {}
+        self.env_config = env_config
+        if self.mock_mode or not env_config.get("dependency_health_check"):
+            return None
+        started = time.monotonic()
+        self.resource_events.emit("dependency", deps_dir.name, "health_check", "running",
+                                  path=str(deps_dir), phase=phase)
+        exit_code, timed_out, detail = None, False, ""
+        try:
+            from packaging.requirements import Requirement
+            from packaging.utils import canonicalize_name
+            import_names = {canonicalize_name(package): module for module, package
+                            in MODULE_TO_PYPI.items()}
+            # Multiple aliases exist for BeautifulSoup; use its public module.
+            import_names["beautifulsoup4"] = "bs4"
+            parsed = []
+            for raw in requirements.splitlines():
+                line = raw.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if line.startswith(("--index-url ", "--extra-index-url ", "--find-links ",
+                                    "--index-url=", "--extra-index-url=", "--find-links=",
+                                    "-i ", "-f ")) or line == "--no-index":
+                    continue
+                requirement = Requirement(line)
+                if requirement.marker and not requirement.marker.evaluate():
+                    continue
+                name = canonicalize_name(requirement.name)
+                parsed.append({"name": name, "specifier": str(requirement.specifier),
+                               "module": import_names.get(name, requirement.name.replace("-", "_"))})
+            env = self._pip_env()
+            env["MPLBACKEND"] = "Agg"
+            env["PYTHONNOUSERSITE"] = "1"
+            # Rendering a tiny canvas must not race with another worker's
+            # font-cache writes or use a writable user configuration directory.
+            with tempfile.TemporaryDirectory(prefix="_health_plot_", dir=deps_dir.parent) as plot_dir:
+                env["MPLCONFIGDIR"] = plot_dir
+                result = self._run_dependency_command(
+                    [sys.executable, "-I", "-c", DEPENDENCY_HEALTH_PROBE, str(deps_dir), json.dumps(parsed)],
+                    timeout=LOCAL_DEPENDENCY_HEALTH_TIMEOUT, env=env)
+            exit_code = result.returncode
+            detail = "\n".join(stream for stream in (result.stdout or "", result.stderr or "") if stream).strip()
+        except subprocess.TimeoutExpired as exc:
+            timed_out = True
+            captured = []
+            for stream in (exc.stdout, exc.stderr):
+                if isinstance(stream, bytes):
+                    stream = stream.decode("utf-8", "replace")
+                if stream:
+                    captured.append(stream)
+            detail = (f"依赖健康检查超时({LOCAL_DEPENDENCY_HEALTH_TIMEOUT}s)\n" +
+                      "\n".join(captured)[-1000:])
+        except Exception as exc:
+            detail = f"依赖健康检查异常: {exc}"
+        safe_detail = _safe_install_diagnostic(detail)[-1600:]
+        record = {"phase": phase, "path": str(deps_dir), "runtime": runtime_fingerprint(),
+                  "success": exit_code == 0, "exit_code": exit_code, "timed_out": timed_out,
+                  "duration_s": round(time.monotonic() - started, 3), "diagnostic": safe_detail}
+        env_config.setdefault("dependency_health_attempts", []).append(record)
+        self.resource_events.emit("dependency", deps_dir.name, "health_check",
+                                  "succeeded" if exit_code == 0 else "failed", **record)
+        if exit_code == 0:
+            return None
+        return f"依赖健康检查失败(exit={exit_code}): {safe_detail}"
+
+    def _record_dependency_repair(self, deps_dir: Path, reason: str) -> None:
+        record = {"path": str(deps_dir), "reason": _safe_install_diagnostic(reason)[-1600:],
+                  "status": "running"}
+        self.env_config.setdefault("dependency_cache_repairs", []).append(record)
+        self.log("repair_deps", "RUNNING", "隔离依赖缓存不完整或损坏，保留版本约束自动重建", record)
+        self.resource_events.emit("dependency", deps_dir.name, "repair", "running", **record)
+
+    def _finish_dependency_repair(self, deps_dir: Path, success: bool) -> None:
+        repairs = (getattr(self, "env_config", None) or {}).get("dependency_cache_repairs", [])
+        for repair in repairs:
+            if repair.get("path") == str(deps_dir) and repair.get("status") == "running":
+                repair["status"] = "succeeded" if success else "failed"
+                self.resource_events.emit("dependency", deps_dir.name, "repair", repair["status"],
+                                          path=str(deps_dir), reason=repair["reason"])
 
     def _heal_install_local(self, module: str) -> Optional[str]:
         try:
@@ -1558,6 +1742,41 @@ class CodeExecutorAgent(BaseAgent):
             # mock 演示：不触网、不装大包，视为就绪
             self._deps_dir == self._deps_dir  # noqa: B015 保持无副作用
             return None
+        if (getattr(self, "env_config", None) or {}).get("dependency_health_check"):
+            module = module.split(".")[0]
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", module):
+                return "自愈安装失败: 模块名不合法"
+            # An unconstrained supplemental package is still isolated by the
+            # active preset's ABI, platform and fixed requirements, rather than
+            # sharing a global heal-torch directory with another interpreter.
+            reqs = (self.env_config.get("requirements_txt") or "").strip()
+            root = Path(getattr(self, "deps_cache_root", DEPS_CACHE_ROOT))
+            heal_root = root / "supplemental" / reqs_digest(reqs)
+            heal_dir = heal_root / f"heal-{module}"
+            try:
+                managed_root = self._dependency_lock_root()
+                relative = heal_dir.absolute().relative_to(managed_root.absolute())
+                workspace_path(managed_root, relative, "supplemental dependency target")
+            except (OSError, ValueError) as exc:
+                return f"自愈缓存路径检查失败: {exc}"
+            saved_root = getattr(self, "deps_cache_root", None)
+            saved_deps = self._deps_dir
+            self.deps_cache_root = heal_root
+            try:
+                heal_root.mkdir(parents=True, exist_ok=True)
+                with tempfile.TemporaryDirectory(prefix="_heal_prepare_", dir=heal_root) as workdir:
+                    error = self._ensure_local_deps_locked(
+                        workdir, requirements_override=package, deps_directory=heal_dir,
+                        install_kind="heal", module=module)
+                if not error:
+                    self._heal_dirs.add(str(heal_dir))
+                return error
+            finally:
+                self._deps_dir = saved_deps
+                if saved_root is None:
+                    del self.deps_cache_root
+                else:
+                    self.deps_cache_root = saved_root
         heal_dir = self._dependency_lock_root() / f"heal-{module}"
         ready_mark = heal_dir / _DEPS_READY_MARK
         if ready_mark.is_file():
@@ -1576,10 +1795,7 @@ class CodeExecutorAgent(BaseAgent):
             if PIP_FIND_LINKS:
                 cmd += ["--find-links", PIP_FIND_LINKS]
             cmd += [package]
-            res = subprocess.run(cmd, capture_output=True, text=True,
-                                 encoding="utf-8", errors="replace",
-                                 env=self._pip_env(),
-                                 timeout=LOCAL_PIP_TIMEOUT)
+            res = self._run_dependency_command(cmd, env=self._pip_env(), timeout=LOCAL_PIP_TIMEOUT)
             if res.returncode == 0:
                 ready_mark.write_text("ok\n", encoding="utf-8")
                 self._heal_dirs.add(str(heal_dir))
@@ -1601,7 +1817,8 @@ class CodeExecutorAgent(BaseAgent):
         except DependencyCacheBusy as exc:
             return str(exc)
 
-    def _ensure_local_deps_locked(self, workdir: str) -> Optional[str]:
+    def _ensure_local_deps_locked(self, workdir: str, *, requirements_override=None,
+                                  deps_directory=None, install_kind="reqs", module="") -> Optional[str]:
         """确保本地执行环境已安装论文依赖；None 表示就绪，否则返回诊断文本。
 
         依赖来源与 Docker 路径一致：优先 env_config.requirements_txt，
@@ -1613,7 +1830,8 @@ class CodeExecutorAgent(BaseAgent):
         mock_mode=True 时跳过真实安装（mock 演示不触网、不装大包）。
         """
         env_config = getattr(self, "env_config", None) or {}
-        reqs = (env_config.get("requirements_txt") or "").strip()
+        reqs = (requirements_override if requirements_override is not None else
+                env_config.get("requirements_txt") or "").strip()
         if not reqs:
             pkgs = env_config.get("required_packages") or []
             if isinstance(pkgs, list):
@@ -1622,16 +1840,37 @@ class CodeExecutorAgent(BaseAgent):
             return None
 
         deps_root = Path(getattr(self, "deps_cache_root", DEPS_CACHE_ROOT))
-        key = reqs if deps_root == DEPS_CACHE_ROOT else f"{deps_root.resolve()}\n{reqs}"
-        deps_dir = deps_root / reqs_digest(reqs)
+        deps_dir = Path(deps_directory) if deps_directory is not None else deps_root / reqs_digest(reqs)
+        key = (reqs if deps_root == DEPS_CACHE_ROOT and deps_directory is None else
+               f"{deps_dir.resolve()}\n{reqs}")
         ready_mark = deps_dir / _DEPS_READY_MARK
         self._deps_dir = None
         resource_id = reqs_digest(reqs)
         self.resource_events.emit(
             "dependency", resource_id, "install", "running",
             requirements=_safe_install_diagnostic(normalize_requirements(reqs)))
+        health_enabled = bool(env_config.get("dependency_health_check")) and not self.mock_mode
+        invalid_cache = False
+        managed_root = self._dependency_lock_root()
+        if health_enabled:
+            try:
+                relative = deps_dir.absolute().relative_to(managed_root.absolute())
+                workspace_path(managed_root, relative, "dependency health target")
+            except (OSError, ValueError) as exc:
+                return f"依赖缓存路径检查失败: {exc}"
+            if ready_mark.is_file():
+                health_error = self._check_local_dependency_health(deps_dir, reqs, "cached")
+                if not health_error:
+                    self._deps_dir = str(deps_dir)
+                    _INSTALLED_DEPS[key] = ""
+                    touch_deps_meta(deps_dir)
+                    return None
+                if env_config.get("offline"):
+                    return f"离线模式下依赖缓存未通过健康检查，不能联网重建：{health_error}"
+                invalid_cache = True
+                self._record_dependency_repair(deps_dir, health_error)
         if key in _INSTALLED_DEPS and not _INSTALLED_DEPS[key] and (
-                self.mock_mode or ready_mark.is_file()):
+                self.mock_mode or (ready_mark.is_file() and not health_enabled)):
             if not self.mock_mode:
                 self._deps_dir = str(deps_dir)
                 touch_deps_meta(deps_dir)
@@ -1641,6 +1880,9 @@ class CodeExecutorAgent(BaseAgent):
             return None
         if _INSTALLED_DEPS.get(key):
             self.log("install_deps", "RUNNING", "上次依赖安装失败，允许本次运行重新尝试")
+
+        if env_config.get("offline") and not self.mock_mode and not ready_mark.is_file():
+            return "离线模式缺少完整的固定依赖缓存；本次未联网安装或训练"
 
         req_file = os.path.join(workdir, "requirements.txt")
         with open(req_file, "w", encoding="utf-8") as f:
@@ -1663,7 +1905,7 @@ class CodeExecutorAgent(BaseAgent):
             return None
 
         # 磁盘就绪检测：同一依赖清单已在隔离目录装过则直接复用
-        if ready_mark.is_file():
+        if ready_mark.is_file() and not invalid_cache:
             self._deps_dir = str(deps_dir)
             _INSTALLED_DEPS[key] = ""
             touch_deps_meta(deps_dir)       # 刷新 last_used，供冷热清理判断
@@ -1678,28 +1920,36 @@ class CodeExecutorAgent(BaseAgent):
         env_config["dependency_install_attempts"] = attempts
         index, links = PIP_INDEX_URL, PIP_FIND_LINKS
         fallback_allowed = _allow_official_pip_fallback(reqs)
+        pinned_cuda = (bool(env_config.get("auto_prepare")) and _pinned_cuda_requirements(reqs)
+                       and links in {"", _DEFAULT_PUBLIC_FIND_LINKS})
         try:
             deps_dir.mkdir(parents=True, exist_ok=True)
             incomplete_target = any(deps_dir.iterdir())
-            for attempt in range(1, 3):
+            if incomplete_target and not invalid_cache:
+                self._record_dependency_repair(deps_dir, "上次安装未完成，清理残留目录后重装相同依赖")
+            fallback_used = False
+            health_rebuild_used = invalid_cache
+            # One public-source fallback and one clean native-package rebuild.
+            # Fixed pins and source policy are preserved on every invocation.
+            for attempt in range(1, 4):
+                reset_managed_environment(managed_root, deps_dir)
                 cmd = [sys.executable, "-m", "pip", "install",
                        "--disable-pip-version-check", "-q", "--no-user",
                        "--target", str(deps_dir), "-i", index]
-                # pip --target otherwise skips existing package directories,
-                # including files left by an interrupted earlier installation.
-                # --upgrade replaces those files under the same fixed pins.
+                # Retain pip's replacement semantics across retries, while the
+                # clean target removes obsolete binaries and old dist-info.
                 if incomplete_target or attempt > 1:
                     cmd += ["--upgrade"]
                 if links:
                     cmd += ["--find-links", links]
                 cmd += ["-r", req_file]
                 timed_out, exit_code = False, None
+                timeout_s = (LOCAL_CUDA_PIP_TIMEOUT if pinned_cuda and
+                             index.rstrip("/") == _OFFICIAL_PIP_INDEX else LOCAL_PIP_TIMEOUT)
                 self.log("install_deps", "RUNNING",
                          f"第 {attempt} 轮依赖安装: {_safe_install_diagnostic(index)}")
                 try:
-                    res = subprocess.run(cmd, capture_output=True, text=True,
-                                         encoding="utf-8", errors="replace", env=self._pip_env(),
-                                         timeout=LOCAL_PIP_TIMEOUT)
+                    res = self._run_dependency_command(cmd, env=self._pip_env(), timeout=timeout_s)
                     exit_code = res.returncode
                     detail = "\n".join(s for s in (res.stdout or "", res.stderr or "") if s).strip()
                 except subprocess.TimeoutExpired as exc:
@@ -1710,29 +1960,43 @@ class CodeExecutorAgent(BaseAgent):
                             stream = stream.decode("utf-8", "replace")
                         if stream:
                             captured.append(stream)
-                    detail = f"依赖安装超时({LOCAL_PIP_TIMEOUT}s)\n" + "\n".join(captured)
+                    detail = f"依赖安装超时({timeout_s}s)\n" + "\n".join(captured)
                 except Exception as exc:
                     detail = f"依赖安装异常: {exc}"
                 safe_detail = _safe_install_diagnostic(detail)[-1600:]
+                health_error = None
+                if exit_code == 0:
+                    health_error = self._check_local_dependency_health(
+                        deps_dir, reqs, "rebuild" if health_rebuild_used else "installed")
                 attempts.append({"attempt": attempt, "index_url": _safe_install_diagnostic(index),
-                                 "success": exit_code == 0, "exit_code": exit_code,
-                                 "timed_out": timed_out, "diagnostic": safe_detail})
+                                 "success": exit_code == 0 and not health_error, "exit_code": exit_code,
+                                 "timed_out": timed_out, "timeout_s": timeout_s, "diagnostic": safe_detail,
+                                 "health_diagnostic": health_error or ""})
+                if health_error:
+                    if not health_rebuild_used:
+                        self._record_dependency_repair(deps_dir, health_error)
+                        health_rebuild_used = True
+                        continue
+                    break
                 if exit_code == 0:
                     ready_mark.write_text("ok\n", encoding="utf-8")
                     self._deps_dir = str(deps_dir)
                     _INSTALLED_DEPS[key] = ""
-                    _write_deps_meta(deps_dir, "reqs", requirements=reqs)
+                    _write_deps_meta(deps_dir, install_kind,
+                                     requirements=reqs if install_kind == "reqs" else "", module=module)
+                    self._finish_dependency_repair(deps_dir, True)
                     self.log("install_deps", "SUCCESS",
                              f"隔离依赖安装完成（第 {attempt} 轮）: {deps_dir.name}")
                     self.resource_events.emit(
                         "dependency", resource_id, "install", "succeeded",
                         path=str(deps_dir), bytes=self._path_bytes(deps_dir), attempts=attempt)
                     return None
-                if attempt == 1 and fallback_allowed and _public_mirror_failure(detail, timed_out):
+                if not fallback_used and fallback_allowed and _public_mirror_failure(detail, timed_out):
                     self.log("install_deps", "WARNING",
                              "默认公共镜像不可用，保留固定依赖版本并回退官方 PyPI 一次",
                              {"attempt": attempt, "diagnostic": safe_detail})
                     index, links = _OFFICIAL_PIP_INDEX, ""
+                    fallback_used = True
                     continue
                 break
         except Exception as e:      # 连失败原因都拿不到（如 pip 自身异常）
@@ -1742,11 +2006,12 @@ class CodeExecutorAgent(BaseAgent):
                              "diagnostic": _safe_install_diagnostic(f"依赖安装异常: {e}")})
         diagnostics = "\n".join(
             f"第 {entry['attempt']} 轮（{entry['index_url']}, exit={entry['exit_code']}）: "
-            f"{entry['diagnostic']}" for entry in attempts)
+            f"{entry['diagnostic']} {entry.get('health_diagnostic', '')}" for entry in attempts)
         _INSTALLED_DEPS[key] = (
             f"依赖安装失败（已尝试 {len(attempts)} 轮），无法在本地环境执行:\n{diagnostics}"
             f"\n依赖清单: {_safe_install_diagnostic(reqs)[:200]}...")
         self.log("install_deps", "ERROR", _INSTALLED_DEPS[key][:200])
+        self._finish_dependency_repair(deps_dir, False)
         self.resource_events.emit(
             "dependency", resource_id, "install", "failed",
             detail=_INSTALLED_DEPS[key][:500])
@@ -1769,6 +2034,8 @@ class CodeExecutorAgent(BaseAgent):
         site-packages；无隔离目录时返回环境副本（行为与改造前一致）。
         """
         env = os.environ.copy()
+        for name in ("LLM_API_KEY", "GITHUB_TOKEN", "GH_TOKEN", "AUTOREPRO_GITHUB_TOKEN"):
+            env.pop(name, None)
         # 钉死子进程的标准流编码：父进程按 UTF-8 解码捕获到的输出，子进程
         # 就必须按 UTF-8 写出。否则在 Windows 中文环境下子进程默认用 GBK 写、
         # 父进程按 locale 解码，一旦生成代码打印中文/非 GBK 字节，reader 线程

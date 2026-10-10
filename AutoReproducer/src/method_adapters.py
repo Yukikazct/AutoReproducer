@@ -9,6 +9,7 @@ import uuid
 from pathlib import Path
 
 from src.method_profiles import SIREN_NOTEBOOK_SHA256
+from src.preset_downloads import atomic_cache_bytes, download_bytes
 from src.safety.paths import workspace_path
 
 RUNTIMES = Path(__file__).parent / "experiments"
@@ -38,13 +39,10 @@ def download_dataset(root, spec, workspace, offline=False):
     if not cache.is_file() or digest(cache) != spec["sha256"]:
         if offline:
             raise RuntimeError("离线缓存缺少固定数据或校验值不符；请先准备实验环境")
-        with urllib.request.urlopen(spec["url"], timeout=30) as response:
-            content = response.read(spec["bytes"] + 1)
+        content = download_bytes(spec["url"], max_bytes=spec["bytes"], timeout_s=30)
         if len(content) != spec["bytes"] or hashlib.sha256(content).hexdigest() != spec["sha256"]:
             raise ValueError("数据下载内容校验失败")
-        cache.parent.mkdir(parents=True, exist_ok=True)
-        temp = cache.with_name(f".{uuid.uuid4().hex}.part")
-        temp.write_bytes(content); temp.replace(cache)
+        atomic_cache_bytes(cache, content)
     target = workspace_path(workspace, spec["target"], "dataset")
     shutil.copyfile(cache, target)
     return {**spec, "path": str(target.resolve()), "verified": True}
@@ -224,9 +222,22 @@ class NeuralODEAdapter(SirenAdapter):
         entries = [("author_ode_demo", "examples/ode_demo.py", profile["paper"]["reference_source"]),
                    ("author_ode_readme", "README.md", f"{pinned}/README.md"),
                    ("author_ode_package_init", "torchdiffeq/__init__.py", f"{pinned}/torchdiffeq/__init__.py")]
-        return [{"source_id": identifier, "url": url, "locator": locator,
-                 "content": (root / locator).read_text(encoding="utf-8")}
-                for identifier, locator, url in entries]
+        # Older minimal snapshots contain only the three required files. When
+        # present, these author files also support solver defaults and declared
+        # dependency bounds without attributing project pins to the author.
+        optional = [("author_ode_solver_api", "torchdiffeq/_impl/odeint.py"),
+                    ("author_ode_solver_defaults", "torchdiffeq/_impl/misc.py"),
+                    ("author_ode_package_requirements", "setup.py")]
+        entries.extend((identifier, locator, f"{pinned}/{locator}")
+                       for identifier, locator in optional if (root / locator).is_file())
+        sources = []
+        for identifier, locator, url in entries:
+            content = (root / locator).read_text(encoding="utf-8")
+            sources.append({"source_id": identifier, "url": url, "locator": locator,
+                            "content": content, "origin": "official_repository",
+                            "revision": repository["revision"],
+                            "sha256": hashlib.sha256(content.encode("utf-8")).hexdigest()})
+        return sources
 
     def verify(self, *args, **kwargs):
         result = super().verify(*args, **kwargs)

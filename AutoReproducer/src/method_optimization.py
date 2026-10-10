@@ -88,7 +88,8 @@ class Study:
         directory = self.parent / "trials" / label
         directory.mkdir(parents=True, exist_ok=False)
         workspace = directory / "repo"
-        env = {**profile["environment"], "require_prepared": True, "cache_lock_timeout_s": 0,
+        env = {**profile["environment"], "require_prepared": True, "cache_lock_timeout_s": 60,
+               "dependency_health_check": True,
                "deadline_monotonic": min(self.deadline-reserve_s, start+1200)}
         record = {"label": label, "seed": seed, "candidate": candidate, "profile": profile,
                   "status": "running", "spec_sha256": spec_hash, "study_sha256": self.contract_hash,
@@ -136,7 +137,8 @@ class Study:
         if record["status"] != "completed":
             raise ValueError("失败训练不能进入留出确认")
         profile, workspace = record["profile"], Path(record["workspace"])
-        env = {**profile["environment"], "require_prepared": True, "cache_lock_timeout_s": 0,
+        env = {**profile["environment"], "require_prepared": True, "cache_lock_timeout_s": 60,
+               "dependency_health_check": True,
                "deadline_monotonic": min(self.deadline,time.monotonic()+120)}
         holdout = {"label": label, "status": "running", "study_sha256": self.contract_hash}
         write_json(workspace.parent / "holdout.json", holdout)

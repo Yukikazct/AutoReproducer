@@ -61,7 +61,8 @@ def test_multiple_files_import_and_nested_cwd_are_preserved(runner, tmp_path):
     assert [e["status"] for e in events if e["type"] == "repository_step"] == ["running", "success"]
     assert any(e["type"] == "repository_output" and "42" in e["text"] for e in events)
     assert all(e["execution_id"] == Path(result["run_dir"]).name for e in events)
-    assert all(e["step_index"] == 1 and e["step_count"] == 1 for e in events)
+    assert all(e["step_index"] == 1 and e["step_count"] == 1 for e in events
+               if e["type"] != "execution_run")
     prepared = Path(runner.executor._ensure_local_deps.call_args.args[0])
     assert prepared.is_relative_to(Path(result["run_dir"]))
     assert prepared != repo
@@ -77,9 +78,12 @@ def test_repeated_plans_have_distinct_ids_and_each_output_keeps_its_step(runner,
     assert first["success"] and second["success"]
     first_id, second_id = Path(first["run_dir"]).name, Path(second["run_dir"]).name
     assert first_id != second_id
-    assert all(e["execution_id"] == first_id and e["step_count"] == 2 for e in events[:boundary])
-    assert all(e["execution_id"] == second_id and e["step_count"] == 1 for e in events[boundary:])
-    assert {(e["step_id"], e["step_index"]) for e in events[:boundary]} == {
+    assert all(e["execution_id"] == first_id for e in events[:boundary])
+    assert all(e["execution_id"] == second_id for e in events[boundary:])
+    assert all(e["step_count"] == 2 for e in events[:boundary] if e["type"] != "execution_run")
+    assert all(e["step_count"] == 1 for e in events[boundary:] if e["type"] != "execution_run")
+    assert {(e["step_id"], e["step_index"]) for e in events[:boundary]
+            if e["type"] != "execution_run"} == {
         ("arbitrary_task", 1), ("anything_else", 2)}
     assert any(e["type"] == "repository_output" and e["step_index"] == 2
                and e["stream"] == "stderr" and "SECOND" in e["text"] for e in events)
@@ -460,3 +464,21 @@ def test_plan_is_rejected_before_any_process_when_dependencies_are_forward(runne
     assert result["not_runnable"] is True
     assert result["executed"] is False
     runner.executor._ensure_local_deps.assert_not_called()
+
+
+@pytest.mark.parametrize("exclude_preparation", [False, True])
+def test_environment_preparation_can_be_excluded_from_frozen_execution_deadline(runner, tmp_path, monkeypatch, exclude_preparation):
+    clock = {"now": 100.0}
+    monkeypatch.setattr(runner_module, "time", SimpleNamespace(monotonic=lambda: clock["now"], sleep=time.sleep))
+    def prepare(workdir):
+        clock["now"] += 1000
+        return None
+    runner.executor._ensure_local_deps.side_effect = prepare
+    result = runner.run(tmp_path, [step("work", "-c", "print('WITHIN_EXECUTION_BUDGET')")],
+                        {"deadline_monotonic": 105., "exclude_environment_preparation_from_deadline": exclude_preparation})
+    assert result["environment"]["preparation_elapsed_s"] == 1000
+    if exclude_preparation:
+        assert result["success"] and "WITHIN_EXECUTION_BUDGET" in result["final"]["stdout"]
+        assert result["effective_env_config"]["deadline_monotonic"] == 1105
+    else:
+        assert not result["executed"] and result["final"]["exit_code"] == 124

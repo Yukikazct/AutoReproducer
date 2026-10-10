@@ -17,7 +17,8 @@ SOURCES = [{"source_id": "demo", "url": "https://example.org/pinned/demo.py",
 
 def accepted(**extra):
     return {"status": "accepted", "summary": "作者示例使用 RMSprop。",
-            "evidence": [{"source_id": "demo", "quote": "RMSprop(parameters, lr=1e-3)"}], **extra}
+            "evidence": [{"source_id": "demo", "quote": "RMSprop(parameters, lr=1e-3)"},
+                         {"source_id": "demo", "quote": "optimizer"}], **extra}
 
 
 def test_finder_rejection_preserves_reader_and_exact_response(monkeypatch):
@@ -58,8 +59,12 @@ def test_malformed_or_invented_evidence_remains_rejected(monkeypatch, payload, r
 def test_review_scope_separates_author_evidence_from_project_contract(monkeypatch):
     contexts = []
     def request(llm, prompt, timeout):
-        contexts.append(json.loads(prompt.split("\n", 1)[1]))
-        return {"response": json.dumps(accepted(role="forged-role"))}
+        context = json.loads(prompt.split("\n", 1)[1])
+        contexts.append(context)
+        result = accepted(role="forged-role")
+        if context["review_responsibility"] == "project_adaptation_readiness":
+            result["evidence"].append({"source_id": "project_frozen_contract", "quote": '"seed": 2021'})
+        return {"response": json.dumps(result)}
     monkeypatch.setattr(method_advice, "request_text", request)
     profile = method_profile("neural_ode_spiral")
     analysis = method_advice.review_sources(LLM, profile, SOURCES, lambda *args: None)
@@ -68,7 +73,8 @@ def test_review_scope_separates_author_evidence_from_project_contract(monkeypatc
     assert contexts[0]["experiment_scope"] == {
         "kind": "official_method_experiment", "paper_table_reproduction": False,
         "paper_full_text_provided": False, "execution_completed": False}
-    assert contexts[0]["experiment_contract"]["parameters"] == profile["parameters"]
+    assert "experiment_contract" not in contexts[0] and "experiment_contract" not in contexts[1]
+    assert contexts[2]["experiment_contract"]["parameters"] == profile["parameters"]
     assert len(contexts[-1]["previous_reviews"]) == 3
     assert contexts[0]["sources"] == SOURCES
 

@@ -193,10 +193,14 @@ class TestPaperReaderInput:
         assert "ResNet" in result["paper_info"]["title"] or \
                "ResNet" in result.get("raw_text", "")
 
-    def test_pdf_missing_degrades_gracefully(self):
+    def test_pdf_missing_is_rejected_before_model_call(self):
+        from unittest.mock import Mock
+        from src.pdf_input import PDFInputError
         agent = PaperReaderAgent(make_mock_llm())
-        result = agent.run({"pdf_path": "C:/definitely/not/exists.pdf"})
-        assert result["paper_info"]  # 降级提取仍然给出结构化信息
+        agent.llm.chat = Mock(side_effect=AssertionError("Missing PDF must not reach a model"))
+        with pytest.raises(PDFInputError):
+            agent.run({"pdf_path": "C:/definitely/not/exists.pdf"})
+        agent.llm.chat.assert_not_called()
 
 
 # ============================================================

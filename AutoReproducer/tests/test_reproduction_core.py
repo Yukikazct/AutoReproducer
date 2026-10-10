@@ -5,8 +5,8 @@
    IndentationError"的根因）；
 2. 语法门 + 再生成：截断的代码被拦下、触发重试、仍不可编译时诚实
    短路为"未运行"，绝不把残码送进沙箱；
-3. 信息不足时改为**尽力而为生成并执行**（`best_effort` 标注）：报告里不再
-   出现"未运行"、也不判为复现成功；模型两次都不给代码时落本地兜底脚本；
+3. 信息不足时仍尝试依论文证据生成（`best_effort` 标注），不得判为复现成功；
+   无关的本地兜底脚本仅供 Mock 演示；真实请求缺实现时明确未运行；
 4. PaperReader 标题-only 不再编造占位摘要，透传 insufficient_info；
 5. ResultValidator 三态：无法运行 / 复现失败 / 复现成功，且 mse 与
    rmse 不再混键、缺失指标不再静默跳过。
@@ -331,9 +331,9 @@ class TestPlaceholderRecovery:
         assert result["success"] is True
         assert "上一次只回复了占位标记" in llm.prompts[-1]
 
-    def test_marker_twice_falls_back_to_local_script(self):
+    def test_mock_marker_twice_falls_back_to_local_script(self):
         llm = _ScriptedLLM([ce_mod._INSUFFICIENT_INFO_MARK])
-        result = CodeExecutorAgent(llm).run(
+        result = CodeExecutorAgent(llm, mock_mode=True).run(
             {"paper_info": {"method": "", "dataset": "", "metrics": {}}})
 
         assert llm.call_count == 1 + ce_mod.MAX_MARK_RETRY   # 严格锁预算
@@ -343,9 +343,9 @@ class TestPlaceholderRecovery:
         assert "不是论文结论" in result["final"]["stdout"]
         assert len(result["assumptions"]) >= 3
 
-    def test_empty_response_falls_back(self):
+    def test_mock_empty_response_falls_back(self):
         llm = _ScriptedLLM([""])
-        result = CodeExecutorAgent(llm).run({"paper_info": {}})
+        result = CodeExecutorAgent(llm, mock_mode=True).run({"paper_info": {}})
         assert result["fallback_used"] is True
         assert result["success"] is True
 
@@ -361,7 +361,7 @@ class TestPlaceholderRecovery:
     def test_fallback_output_has_no_extractable_metrics(self):
         """兜底脚本的输出不能被抽成"实测指标"——否则会喂出假的复现结论。"""
         llm = _ScriptedLLM([ce_mod._INSUFFICIENT_INFO_MARK])
-        result = CodeExecutorAgent(llm).run({"paper_info": {}})
+        result = CodeExecutorAgent(llm, mock_mode=True).run({"paper_info": {}})
         stdout = result["final"]["stdout"]
         assert "占位复现脚本" in stdout
         validator = ResultValidatorAgent(LLMClient(mock_mode=True))
@@ -509,7 +509,7 @@ class TestValidatorBestEffort:
         assert result["status"] == "best_effort"
         assert result["is_reproduced"] is None
         assert result["llm_calls"] == 0            # 跳过 LLM 比对，省预算
-        assert "占位" in result["reason"]
+        assert "输出不能与论文声明比对" in result["reason"]
         # 证据仍留：报告要显示"确实跑出了什么"，只是标注为不可核对
         assert result["metrics_comparison"]["actual"] == {"accuracy": 0.85}
 
