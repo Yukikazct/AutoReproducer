@@ -190,3 +190,39 @@ def test_reader_keeps_reference_links_as_candidates_and_discards_unsupported_mod
     assert result["paper_info"]["code_url_evidence"] is None
     assert result["extracted_code_urls"] == ["https://github.com/cited/work"]
     assert result["extracted_repository_links"][0]["evidence_type"] == "reference"
+
+
+def test_numbered_code_footnote_uses_canonical_annotation_despite_glued_column_text():
+    url = "https://github.com/authors/new-method"
+    page = "The code is available on Github1.\n" + "Body text. " * 100 + "\n1" + url + "viandvj."
+    records = extract_repository_links(["Title", page], [{"page": 2, "raw_url": url,
+                                                         "context": "Unrelated figure. 1" + url}])
+    evidence = next(item for item in records if item["source"] == "pdf_annotation")
+    assert evidence["url"] == evidence["raw_url"] == url
+    assert evidence["page"] == 2 and evidence["is_author_code"]
+    assert "The code is available on Github1" in evidence["context"]
+    assert "1" + url in evidence["context"]
+
+
+@pytest.mark.parametrize("declaration,footnotes", [
+    ("The code is available on Github2.", "1https://github.com/authors/new-method"),
+    ("Third-party code is available on Github1.", "1https://github.com/authors/new-method"),
+    ("Baseline code is available on Github1.", "1https://github.com/authors/new-method"),
+    ("References\nCode is available on Github1.", "1https://github.com/authors/new-method"),
+    ("Code is available on Github1.", "1https://github.com/authors/new-method\n1https://github.com/other/tool"),
+    ("Code is available on Github1. Our code is available on Github1.", "1https://github.com/authors/new-method"),
+])
+def test_numbered_annotation_needs_unambiguous_non_reference_author_declaration(declaration, footnotes):
+    annotations = [{"page": 1, "raw_url": url, "context": "Unrelated figure."} for url in
+                   ("https://github.com/authors/new-method", "https://github.com/other/tool")]
+    page = declaration + "\n" + "Body text. " * 100 + "\n" + footnotes
+    evidence = [item for item in extract_repository_links([page], annotations)
+                if item["source"] == "pdf_annotation"]
+    assert all(not item["is_author_code"] for item in evidence)
+
+
+def test_numbered_annotation_cannot_link_a_declaration_on_another_page():
+    url = "https://github.com/authors/new-method"
+    records = extract_repository_links(["Code is available on Github1.", "1" + url],
+                                       [{"page": 2, "raw_url": url}])
+    assert all(not record["is_author_code"] for record in records)

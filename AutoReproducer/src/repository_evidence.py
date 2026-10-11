@@ -143,6 +143,70 @@ def _evidence(url, raw_url, page, source, context, reference=False, claim_contex
             "is_author_code": author_code}
 
 
+def _numbered_annotation_claim(page_text, url, page_annotations, headings, initial_reference):
+    """Join explicit code declarations to unique same-page numbered URI footnotes.
+
+    PDF text can glue the footnote number and following column prose to a URL.
+    The annotation supplies the canonical target; the shared number supplies the
+    relationship to the declaration. Neither proximity nor a URL prefix alone
+    is sufficient to establish authorship.
+    """
+    repaired, positions = _repair_url_wraps(page_text)
+
+    def reference_at(offset):
+        state = initial_reference
+        for heading_offset, heading_state in headings:
+            if heading_offset <= offset:
+                state = heading_state
+        return state
+
+    targets, footnotes = {}, {}
+    for annotation in page_annotations:
+        target = normalize_repository_url(annotation.get("raw_url", ""))
+        if not target:
+            continue
+        visible = re.escape(target.removeprefix("https://"))
+        pattern = re.compile(r"(?<![\w])(?P<number>\d{1,3})[ \t]*"
+                             r"(?:https?://)?" + visible, re.I)
+        for match in pattern.finditer(repaired):
+            offset = positions[match.start()]
+            if reference_at(offset):
+                continue
+            number = match.group("number")
+            targets.setdefault(number, set()).add(target.lower())
+            footnotes.setdefault((number, target.lower()), []).append(
+                page_text[offset:positions[match.end() - 1] + 1])
+
+    claims = []
+    for declaration in _AUTHOR_CODE.finditer(page_text):
+        if reference_at(declaration.start()):
+            continue
+        # A numbered declaration is a short sentence, not arbitrary page text.
+        tail = page_text[declaration.end():declaration.end() + 200]
+        marker = re.match(r"[^.!?]{0,160}?\b(?:github|here|online|at|on)\s*"
+                          r"(?:\[\s*)?(\d{1,3})(?:\s*\])?(?=\s*[.,;:]|\s*$)",
+                          tail, re.I)
+        if not marker:
+            continue
+        number = marker.group(1)
+        if targets.get(number) != {url.lower()}:
+            continue
+        start = max(0, declaration.start() - 100)
+        # Preserve preceding baseline/third-party qualifiers in this sentence.
+        prefix = page_text[start:declaration.start()]
+        boundary = max(prefix.rfind("."), prefix.rfind("!"), prefix.rfind("?"))
+        start += boundary + 1
+        claim = page_text[start:declaration.end() + marker.end()].strip()
+        if is_author_code_statement(claim):
+            claims.append(claim)
+    if len(claims) != 1:
+        return ""
+    number_targets = [number for number, values in targets.items() if values == {url.lower()}]
+    footnote_text = " ".join(value for number in number_targets
+                             for value in footnotes.get((number, url.lower()), []))
+    return re.sub(r"\s+", " ", claims[0] + " " + footnote_text).strip()
+
+
 def extract_repository_links(pages, annotations=()):
     """Extract ranked repository evidence from all pages and URI annotations.
 
@@ -150,6 +214,7 @@ def extract_repository_links(pages, annotations=()):
     nearby visible ``context``. Duplicate annotation rectangles for one wrapped
     link are collapsed, while text and annotation provenance remain independent.
     """
+    annotations = tuple(annotations)
     records, page_reference, page_headings = [], {}, {}
     reference_section = False
     for page_number, text in enumerate(pages, 1):
@@ -214,6 +279,13 @@ def extract_repository_links(pages, annotations=()):
         if matching:
             record["evidence_type"] = matching["evidence_type"]
             record["is_author_code"] = matching["is_author_code"]
+        if not record["is_author_code"] and not reference:
+            claim = _numbered_annotation_claim(
+                str(pages[page - 1] or ""), url,
+                [item for item in annotations if item.get("page") == page],
+                page_headings[page], page_reference[page])
+            if claim:
+                record.update(context=claim, evidence_type="author_code_statement", is_author_code=True)
         records.append(record)
 
     unique = []
