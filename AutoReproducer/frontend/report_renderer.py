@@ -7,6 +7,7 @@ import zipfile
 from pathlib import Path
 from urllib.parse import unquote
 
+from frontend.display_text import report_display_text
 from src.execution_artifacts import (PROJECT_ROOT, MAX_IMAGE_BYTES,
                                      verified_report_image_bytes)
 
@@ -64,7 +65,7 @@ def render_report(report, report_path=None, *, st_module=None):
     report_path = report_path or DEFAULT_REPORT_PATH
     for part in report_parts(report):
         if part["type"] == "markdown":
-            st_module.markdown(part["text"])
+            st_module.markdown(report_display_text(part["text"]))
         else:
             raw = report_image_bytes(part["target"], report_path)
             if raw is None:

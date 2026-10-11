@@ -57,7 +57,7 @@ def _open_history(at):
     else:
         # Stateful Streamlit tabs support programmatic selection through their
         # public session key; AppTest does not yet expose a Tab.click method.
-        at.session_state["workspace_tabs"] = "📂 历史记录"
+        at.session_state["workspace_tabs"] = "历史记录"
         at.run()
     assert not at.exception
 
@@ -88,7 +88,7 @@ def test_history_loads_once_and_only_explicit_refresh_repeats_scan(history_scan_
     assert not at.exception
     snapshot.assert_called_once()
     if "workspace_tabs" in at.session_state:
-        at.session_state["workspace_tabs"] = "📋 流水线状态"
+        at.session_state["workspace_tabs"] = "流水线状态"
         at.run()
         assert not any(button.key == "resource_refresh" for button in at.button)
         snapshot.assert_called_once()
@@ -97,6 +97,15 @@ def test_history_loads_once_and_only_explicit_refresh_repeats_scan(history_scan_
     at.button(key="resource_refresh").click().run()
     assert not at.exception
     assert snapshot.call_count == 2
+
+
+def test_existing_browser_tab_selection_survives_label_normalization(history_scan_app):
+    at, snapshot = history_scan_app
+    at.session_state["workspace_tabs"] = "📂 历史记录"
+    at.run()
+    assert not at.exception
+    assert at.session_state["workspace_tabs"] == "历史记录"
+    snapshot.assert_called_once()
 
 
 def test_start_is_accepted_before_uncached_history_work(history_scan_app, monkeypatch):

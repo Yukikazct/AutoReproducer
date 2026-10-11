@@ -86,7 +86,7 @@ def test_baseline_completion_and_optimizer_execution_have_separate_cards(app, tm
     assert "基线协议与产物核验" in verification and "基线核验完成" in verification
     study = card(app, "method_advice")
     assert "running" in study and "优化试验：代码执行" in study and "代码执行中" in study
-    assert "🧪 Optimizer · ⚡ CodeExecutor" in study
+    assert "Optimizer · CodeExecutor" in study
     label = "代码执行 · 第 3 轮 · 步骤 2/3"
     assert "当前执行：" + label in study and active_caption(app, label)
     assert any("代码仍在执行" in notice.value and "整体任务" in notice.value for notice in app.info)
