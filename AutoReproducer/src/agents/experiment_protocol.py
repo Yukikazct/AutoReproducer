@@ -7,7 +7,8 @@ import re
 from src.base_agent import BaseAgent
 from src.discovered_repository_plan import (PlanEvidenceError, _canonical, _citations, _has_value,
     CPU_COMPATIBILITY_PINS, _PACKAGE_IMPORTS, _add_requested_files, _json_response,
-    _planning_view, _references, _source_request_kinds, _steps, _digest)
+    _planning_view, _references, _source_request_kinds, _source_request_progress, _steps, _digest,
+    _effective_author_parameters)
 
 
 PROTOCOL_SCHEMA = {
@@ -146,9 +147,15 @@ def validate_experiment_protocol(payload, packet, workspace):
     implementation = payload['implementation']
     if implementation.get('device') not in {'cpu','cuda'}:
         raise PlanEvidenceError('Protocol requires an explicit execution device')
-    _steps([{'id':'author_train','kind':'train','argv':implementation.get('argv'),
+    steps = _steps([{'id':'author_train','kind':'train','argv':implementation.get('argv'),
              'cwd':implementation.get('cwd'),'timeout_s':7200,'citations':implementation['citations']}],
            citations, packet, workspace)
+    actual_parameters = _effective_author_parameters(packet, steps[0])
+    for parameter in training['parameters']:
+        actual = actual_parameters.get(parameter['name'])
+        if actual is None or actual['value'] != parameter['value']:
+            raise PlanEvidenceError('Selected experiment parameter conflicts with its actual author command/default: '
+                                    + parameter['name'])
     alignment = payload['alignment']
     if alignment.get('status') not in {'matched','conflict','insufficient'}:
         raise PlanEvidenceError('Protocol must distinguish match, conflict and missing information')
@@ -205,6 +212,9 @@ class ExperimentProtocolAgent(BaseAgent):
         text_requests = dataset_requests = 0
         while len(failures) < 2:
             prompt = ('Select one complete experimental protocol before generating any execution steps. '
+                'If paper_reading is present, its full-paper notes navigate separate main-table/appendix '
+                'protocols and have original PDF evidence_ids. Verify them against the original excerpts; '
+                'notes are not authoritative source claims. '
                 'Different tables and appendices may use different splits and hyperparameters; select exactly one '
                 'and bind the method row, dataset column, split and script to that table. Do not describe alternative '
                 'branches as the selected dataset split. A split filename containing ratios is NOT numerical proof: '
@@ -243,6 +253,10 @@ class ExperimentProtocolAgent(BaseAgent):
                 'without leading --. Copy each evidence ID exactly from the supplied map. '
                 'Do not copy quotations. Schema:\n' + _canonical(PROTOCOL_SCHEMA) + '\n'
                 + ('Prior schema/citation feedback:\n' + feedback + '\n' if feedback else '')
+                + 'Current remaining read rounds: text=' + str(2-text_requests)
+                + ', NPZ=' + str(2-dataset_requests) + '. '
+                'When a kind is exhausted, do not request that kind again; return a complete protocol '
+                'or an evidence-linked insufficient/conflict judgment from the already-read sources.\n'
                 + 'Protocol evidence:\n' + _canonical(_planning_view(packet)))
             response = self.llm.chat(prompt, system_prompt=self.system_prompt, temperature=0,
                                      task='experiment_protocol')
@@ -258,9 +272,22 @@ class ExperimentProtocolAgent(BaseAgent):
                     requests += 1
                     text_requests += int(text)
                     dataset_requests += int(dataset)
-                    feedback = 'Requested pinned sources are available; establish the complete experiment protocol.'
+                    feedback = _source_request_progress(names, packet, text_requests, dataset_requests)
                     continue
-                return validate_experiment_protocol(payload, packet, workspace)
+                while True:
+                    try:
+                        return validate_experiment_protocol(payload, packet, workspace)
+                    except PlanEvidenceError as missing:
+                        # The source analyzer knows an exact local dependency;
+                        # read it under the SAME budget and recheck this payload.
+                        # No second model call or speculative filename is needed.
+                        required = getattr(missing, 'required_files', None)
+                        if not required or text_requests >= 2:
+                            raise
+                        _add_requested_files(required, packet, workspace)
+                        requests += 1
+                        text_requests += 1
+                        feedback = _source_request_progress(required, packet, text_requests, dataset_requests)
             except (PlanEvidenceError, ValueError, TypeError, KeyError) as exc:
                 if getattr(exc, 'planning_evidence', None):
                     raise

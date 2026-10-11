@@ -172,6 +172,10 @@ def build_evidence_packet(pdf_path, workspace, snapshot, *, max_files=32, max_so
         raise PlanEvidenceError("Missing or oversized repository snapshot")
     inventory = {}
     dataset_summary_bytes = 0
+    # Large research repositories contain hundreds of unrelated split sets.
+    # Their numbers distract from the selected paper table and exhaust the
+    # useful context. Keep a complete catalog and read selected arrays on demand.
+    initial_dataset_summaries = sum(name.lower().endswith('.npz') for name in files) <= 16
     for name, digest in files.items():
         if not isinstance(digest, str) or not _SHA.fullmatch(digest):
             raise PlanEvidenceError("Repository snapshot has an invalid checksum")
@@ -180,7 +184,7 @@ def build_evidence_packet(pdf_path, workspace, snapshot, *, max_files=32, max_so
             raise PlanEvidenceError("Repository snapshot must identify regular files")
         inventory[name] = {"sha256": digest, "bytes": path.stat().st_size,
                            "text_available": _text_candidate(name) and path.stat().st_size <= 100000}
-        if path.suffix.lower() == ".npz" and path.stat().st_size <= 2 * 1024 * 1024:
+        if initial_dataset_summaries and path.suffix.lower() == ".npz" and path.stat().st_size <= 2 * 1024 * 1024:
             try:
                 summary = _read_dataset_summary(workspace, name, digest)
                 if dataset_summary_bytes + len(summary["text"]) <= 100000:
@@ -266,11 +270,13 @@ def _planning_excerpts(packet):
     for page in packet["pdf"]["pages"]:
         add(f"pdf_p{page['page']}", {"source": "pdf", "page": page["page"]}, page["text"])
     for path, source in sorted(packet["repository"]["files"].items()):
-        prefix = "repo_" + re.sub(r'[^a-z0-9_]', '_', path.casefold())[:36] + '_' + _digest(path.encode())[:6]
+        # Path is a separate source field. Compact stable IDs avoid models
+        # mixing a similarly named file's prefix with another file's hash.
+        prefix = 'repo_' + _digest(path.encode())[:12]
         add(prefix, {"source": "repository", "path": path}, source["text"])
     for path, entry in packet["file_inventory"].items():
         if entry.get("dataset_evidence"):
-            prefix = "data_" + re.sub(r'[^a-z0-9_]', '_', path.casefold())[:36] + '_' + _digest(path.encode())[:6]
+            prefix = 'data_' + _digest(path.encode())[:12]
             add(prefix, {"source": "dataset", "path": path}, entry["dataset_evidence"]["text"])
     return excerpts
 
@@ -293,6 +299,53 @@ def _planning_view(packet):
             entry["dataset_evidence"].pop("text")
     view["evidence_excerpts"] = _planning_excerpts(packet)
     return view
+
+
+def bind_full_paper_notes(packet, reader_result):
+    """Bind full-reader navigation to real PDF excerpt IDs, never guessed facts."""
+    coverage = reader_result.get('reading_coverage') or {}
+    batches = reader_result.get('reading_batches') or []
+    if not batches or coverage.get('complete') is not True:
+        return
+    text = '\n'.join(page['text'] for page in packet['pdf']['pages'])
+    if (coverage.get('text_sha256') != _digest(text.encode('utf-8'))
+            or coverage.get('read_characters') != len(text)
+            or (reader_result.get('pdf_input') or {}).get('sha256') != packet['pdf']['sha256']):
+        raise PlanEvidenceError('Full-paper notes do not belong to the actual complete PDF evidence')
+    position = 0
+    for start, end in coverage.get('spans', []):
+        if type(start) is not int or start != position or type(end) is not int or not start < end <= len(text):
+            raise PlanEvidenceError('Full-paper note coverage has a gap or overlap')
+        position = end
+    if position != len(text):
+        raise PlanEvidenceError('Full-paper note coverage omits original text')
+    offsets, position = {}, 0
+    for page in packet['pdf']['pages']:
+        offsets[page['page']] = position
+        position += len(page['text']) + 1
+    excerpts = _planning_excerpts(packet)
+    ranges = {}
+    for key, ref in excerpts.items():
+        if ref['source'] == 'pdf':
+            start = offsets[ref['page']] + int(key.rsplit('_', 1)[1])
+            ranges[key] = (start, start + len(ref['quote']))
+    source_ids = {}
+    for key, source in (reader_result.get('reading_originals') or {}).items():
+        start, end = source.get('start'), source.get('end')
+        if (type(start) is not int or type(end) is not int or not 0 <= start < end <= len(text)
+                or source.get('text') != text[start:end]):
+            raise PlanEvidenceError('Paper reading note original span is not actual PDF text')
+        source_ids[key] = [ref for ref, (left, right) in ranges.items() if left < end and start < right]
+    notes = []
+    for batch in batches:
+        for note in batch['notes']:
+            ids = note['source_ids']
+            if not ids or any(key not in source_ids for key in ids):
+                raise PlanEvidenceError('Full-paper note has no verified original PDF sources')
+            notes.append({'detail': note['detail'],
+                          'evidence_ids': list(dict.fromkeys(ref for key in ids for ref in source_ids[key]))})
+    packet['paper_reading'] = {'coverage': deepcopy(coverage), 'notes': notes,
+        'purpose': 'navigation_only_verify_against_original_pdf_excerpts'}
 
 
 def _citations(payload, packet, workspace):
@@ -421,7 +474,9 @@ def _author_imports(packet, step, *, include_sources=False, device=None):
         visited.add(path)
         source = packet['repository']['files'].get(path)
         if source is None:
-            raise PlanEvidenceError(f'Required import source is not in the bounded packet; request_files: {path}')
+            missing = PlanEvidenceError(f'Required import source is not in the bounded packet; request_files: {path}')
+            missing.required_files = [path]
+            raise missing
         try:
             tree = ast.parse(source['text'])
         except SyntaxError as exc:
@@ -1095,6 +1150,19 @@ def _source_request_kinds(names):
     return any(not name.lower().endswith('.npz') for name in names), any(name.lower().endswith('.npz') for name in names)
 
 
+def _source_request_progress(names, packet, text_requests, dataset_requests):
+    excerpts = _planning_excerpts(packet)
+    available = {name: [key for key, ref in excerpts.items() if ref.get('path') == name]
+                 for name in names}
+    return ('These exact requests succeeded; their existing source IDs are available below. '
+            'Do not request them again to repair a citation or obtain their numbers. '
+            'For a multi-run experiment, request the remaining selected NPZ paths whose '
+            'dataset_catalog.summary_available=false; do not repeat the first eight splits. '
+            'Copy existing evidence IDs exactly and preserve the actual table/split relationships.\n'
+            + _canonical({'fulfilled_requests': available, 'remaining_text_rounds': 2-text_requests,
+                          'remaining_dataset_rounds': 2-dataset_requests}))
+
+
 _SEMANTIC_GATES = {
     "same_experiment": ("pdf", "repository"),
     "complete_author_protocol": ("repository",),
@@ -1298,7 +1366,7 @@ def propose_plan(llm, packet, workspace, *, max_attempts=2):
                 requests += 1
                 text_requests += int(text)
                 dataset_requests += int(dataset)
-                feedback = "Requested source files are now present. Produce the complete evidence-bound plan."
+                feedback = _source_request_progress(payload['request_files'], packet, text_requests, dataset_requests)
                 continue
             accepted = validate_plan(payload, packet, workspace)
         except (PlanEvidenceError, ValueError, TypeError, KeyError) as exc:

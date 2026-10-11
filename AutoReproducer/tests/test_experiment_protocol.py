@@ -138,6 +138,10 @@ def test_two_source_rounds_do_not_exhaust_two_split_summary_rounds(tmp_path):
     class Reader:
         mock_mode = False
         def chat(self, prompt, **kwargs):
+            if len(requests) == 1:
+                assert 'Do not request them again' in prompt
+                assert 'remaining_dataset_rounds":1' in prompt
+                assert 'split_7.npz' in prompt and 'data_' in prompt
             return json.dumps(requests.pop(0) if requests else raw)
 
     protocol = ExperimentProtocolAgent(Reader()).run(packet, fixture['workspace'])
@@ -181,6 +185,17 @@ def test_numeric_representation_is_normalized_only_when_original_source_supports
     assert accepted['metrics'][0]['reference'] == 100
     raw['metrics'][0]['reference'] = '97.123'
     with pytest.raises(planner.PlanEvidenceError, match='real paper number'):
+        validate_experiment_protocol(raw, packet, fixture['workspace'])
+
+
+@pytest.mark.parametrize('name', ['epochs', 'invented_option'])
+def test_protocol_parameter_must_match_actual_native_command_not_an_unrelated_source_number(tmp_path, name):
+    fixture, packet, raw, actual_protocol = protocol_fixture(tmp_path)
+    parameter = raw['training']['parameters'][0]
+    parameter.update(name=name, value=7)  # Source has seed=7, but this command uses epochs=40.
+    assert planner._has_value(7, planner._references(parameter['citations'],
+        {item['id']: item for item in actual_protocol['citations']}))
+    with pytest.raises(planner.PlanEvidenceError, match='actual author command/default: ' + name):
         validate_experiment_protocol(raw, packet, fixture['workspace'])
 
 

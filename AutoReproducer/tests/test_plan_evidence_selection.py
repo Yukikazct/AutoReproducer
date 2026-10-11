@@ -100,3 +100,78 @@ def test_on_demand_dataset_read_never_bypasses_hash_budget_or_no_pickle(tmp_path
     with pytest.raises(planner.PlanEvidenceError):
         planner._add_requested_files([path.name], packet, fixture['workspace'])
     assert packet == original
+
+
+def test_large_split_inventory_is_catalogued_without_unrelated_initial_numbers(tmp_path):
+    fixture = make_experiment(tmp_path)
+    for index in range(20):
+        path = fixture['workspace'] / f'split_{index}.npz'
+        np.savez(path, test_mask=np.array([1, 0], dtype=np.uint8))
+        fixture['snapshot']['files'][path.name] = hashlib.sha256(path.read_bytes()).hexdigest()
+    packet = planner.build_evidence_packet(fixture['pdf'], fixture['workspace'], fixture['snapshot'])
+    view = planner._planning_view(packet)
+    assert len(view['dataset_catalog']) == 20
+    assert all(not item['summary_available'] for item in view['dataset_catalog'].values())
+    assert not any(ref['source'] == 'dataset' for ref in view['evidence_excerpts'].values())
+    planner._add_requested_files(['split_19.npz'], packet, fixture['workspace'])
+    assert json.loads(packet['file_inventory']['split_19.npz']['dataset_evidence']['text'])['arrays']['test_mask']['selected_samples'] == 1
+    assert planner._planning_view(packet)['dataset_catalog']['split_19.npz']['summary_available'] is True
+
+
+def test_similarly_named_sources_have_distinct_compact_stable_ids(tmp_path):
+    fixture = make_experiment(tmp_path)
+    for name in ('cpu/train.py', 'gpu/train.py'):
+        path = fixture['workspace'] / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('same = 1\n', encoding='utf-8')
+        fixture['snapshot']['files'][name] = hashlib.sha256(path.read_bytes()).hexdigest()
+    packet = planner.build_evidence_packet(fixture['pdf'], fixture['workspace'], fixture['snapshot'])
+    refs = {key: ref for key, ref in planner._planning_excerpts(packet).items() if ref.get('path') in {'cpu/train.py', 'gpu/train.py'}}
+    assert len(refs) == 2 and all(len(key) == 19 for key in refs)
+    for key, ref in refs.items():
+        citation = planner._citations({'citations': [{'id': key, 'evidence_id': key}]}, packet, fixture['workspace'])[key]
+        assert citation['path'] == ref['path']
+    before = set(refs)
+    packet['repository']['files'].pop('README.md')
+    assert before.issubset(planner._planning_excerpts(packet))
+
+
+def reader_navigation(packet):
+    text = '\n'.join(page['text'] for page in packet['pdf']['pages'])
+    start = text.rfind(packet['pdf']['pages'][-1]['text'])
+    return {'pdf_input': {'sha256': packet['pdf']['sha256']},
+        'reading_coverage': {'complete': True, 'text_sha256': hashlib.sha256(text.encode()).hexdigest(),
+                             'read_characters': len(text), 'spans': [[0, len(text)]]},
+        'reading_originals': {'original': {'start': start, 'end': len(text), 'text': text[start:]}},
+        'reading_batches': [{'notes': [{'detail': 'The actual result table belongs to the stated experiment.',
+                                       'source_ids': ['original']}]}]}
+
+
+def test_full_reader_navigation_uses_actual_pdf_page_citation_ids(tmp_path):
+    fixture = make_experiment(tmp_path)
+    packet = planner.build_evidence_packet(fixture['pdf'], fixture['workspace'], fixture['snapshot'])
+    planner.bind_full_paper_notes(packet, reader_navigation(packet))
+    note = packet['paper_reading']['notes'][0]
+    refs = planner._citations({'citations': [{'id': key, 'evidence_id': key} for key in note['evidence_ids']]},
+                             packet, fixture['workspace'])
+    assert refs and all(ref['source'] == 'pdf' and ref['page'] == 3 for ref in refs.values())
+    assert packet['paper_reading']['purpose'] == 'navigation_only_verify_against_original_pdf_excerpts'
+
+
+@pytest.mark.parametrize('mutation', ['pdf', 'text', 'gap', 'source'])
+def test_reading_notes_never_substitute_another_pdf_or_incomplete_original_coverage(tmp_path, mutation):
+    fixture = make_experiment(tmp_path)
+    packet = planner.build_evidence_packet(fixture['pdf'], fixture['workspace'], fixture['snapshot'])
+    reader = reader_navigation(packet)
+    if mutation == 'pdf':
+        reader['pdf_input']['sha256'] = 'a'*64
+    elif mutation == 'text':
+        reader['reading_coverage']['text_sha256'] = 'a'*64
+    elif mutation == 'gap':
+        reader['reading_coverage']['spans'][0][0] = 1
+    else:
+        reader['reading_originals']['original']['text'] = 'fabricated'
+    original = deepcopy(packet)
+    with pytest.raises(planner.PlanEvidenceError):
+        planner.bind_full_paper_notes(packet, reader)
+    assert packet == original

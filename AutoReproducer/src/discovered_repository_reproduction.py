@@ -253,7 +253,7 @@ class DiscoveredRepositoryReproduction:
 
     def _run(self, request, on_event, run_dir):
         from src.agents.report_generator import ReportGeneratorAgent
-        from src.discovered_repository_plan import build_evidence_packet, propose_plan
+        from src.discovered_repository_plan import build_evidence_packet, bind_full_paper_notes, propose_plan
         started = time.monotonic()
         emit = on_event or (lambda event: None)
         phases = [("prepare_repository", "FIND_RESOURCES", "ResourceFinder", "核验论文与 Git 仓库并固定源码版本"),
@@ -329,6 +329,7 @@ class DiscoveredRepositoryReproduction:
                     attempt.update(revision=revision, archive_sha256=snapshot.get("archive_sha256"),
                                    workspace=str(workspace.resolve()))
                     packet = build_evidence_packet(request["pdf_path"], workspace, snapshot, for_identity_review=True)
+                    bind_full_paper_notes(packet, request)
                     if manual:
                         packet["repository_input"] = {"source": "user_supplied", "url": url}
                     if packet["pdf"]["sha256"] != document.sha256:
