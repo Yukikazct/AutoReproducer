@@ -1,5 +1,7 @@
 # 独立新 PDF 验收规则
 
+已下载的原始 PDF 现已归档到 [论文样本目录](../examples/papers/README.md)，[来源清单](../examples/papers/manifest.json)记录各文件的 SHA-256、页数和下载依据；目录收录只表示保存测试资料，验收结论以本记录为准。
+
 ## 2026-10-11 收尾：ChebNetII 规划失败，暂停新 PDF 验收
 
 按用户要求暂停继续寻找论文和训练，提交已验证修复，并将剩余问题提交为 GitHub issue。本轮尚无未参与修复的新 PDF 完整复现成功记录。
