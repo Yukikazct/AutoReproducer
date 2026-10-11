@@ -193,7 +193,7 @@ _PREFLIGHT = '''import importlib, importlib.metadata, json, platform, sys
 from pathlib import Path
 root = Path(__file__).resolve().parent
 requirements = json.loads((root / "requirements.json").read_text(encoding="utf-8"))
-aliases = {"scikit-learn": "sklearn", "pillow": "PIL"}
+aliases = {"scikit-learn": "sklearn", "pillow": "PIL", "tensorboardx": "tensorboardX"}
 modules, versions = {}, {}
 for requirement in requirements:
     name, expected = requirement.split("==", 1)

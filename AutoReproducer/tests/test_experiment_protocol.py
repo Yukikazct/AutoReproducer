@@ -115,6 +115,16 @@ def test_required_options_and_short_aliases_use_actual_argparse_destinations(tmp
         planner._effective_author_parameters(packet, step)
 
 
+def test_only_unambiguous_native_long_option_abbreviations_are_compiled(tmp_path):
+    fixture, packet, _, _ = protocol_fixture(tmp_path)
+    step = deepcopy(fixture['proposal']['steps'][0])
+    step['argv'] = [value if value != '--epochs' else '--epoch' for value in step['argv']]
+    assert planner._effective_author_parameters(packet, step)['epochs']['value'] == 40
+    packet['repository']['files']['train.py']['text'] += "\nparser.add_argument('--epoch-file', default='')\n"
+    with pytest.raises(planner.PlanEvidenceError, match='unambiguously resolve'):
+        planner._effective_author_parameters(packet, step)
+
+
 def test_unused_reviewed_packages_are_omitted_and_required_imports_are_hash_bound(tmp_path):
     fixture, packet, raw, protocol = protocol_fixture(tmp_path)
     proposal = deepcopy(fixture['proposal'])

@@ -25,7 +25,7 @@ CPU_COMPATIBILITY_PINS = {
     "torch": "2.5.1+cpu", "torchvision": "0.20.1+cpu", "numpy": "1.26.4",
     "scipy": "1.14.1", "pandas": "2.2.3", "scikit-learn": "1.5.2",
     "matplotlib": "3.9.2", "pillow": "10.4.0", "networkx": "2.8.8",
-    "tqdm": "4.67.1", "hyperopt": "0.2.7", "seaborn": "0.13.2",
+    "tqdm": "4.67.1", "hyperopt": "0.2.7", "seaborn": "0.13.2", "tensorboardx": "2.6.2.2",
 }
 CUDA_INDEX_URL = "https://download.pytorch.org/whl/cu121"
 CUDA_COMPATIBILITY_PINS = {**CPU_COMPATIBILITY_PINS, "torch": "2.5.1+cu121",
@@ -34,7 +34,7 @@ RELATIVE_TOLERANCE = 0.05
 _SHA = re.compile(r"[0-9a-f]{64}")
 _ID = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,63}")
 _NUMBER = re.compile(r"(?<![\w.])[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?(?![\w.])")
-_PACKAGE_IMPORTS = {"scikit-learn": "sklearn", "pillow": "PIL"}
+_PACKAGE_IMPORTS = {"scikit-learn": "sklearn", "pillow": "PIL", "tensorboardx": "tensorboardX"}
 _TEXT_SUFFIXES = {".py", ".md", ".rst", ".txt", ".toml", ".yaml", ".yml", ".sh", ".cff"}
 _FORBIDDEN_FLAGS = {"--smoke", "--dry-run", "--fast-dev-run", "--limit-train-batches",
                     "--limit-test-batches", "--subset", "--max-samples"}
@@ -505,7 +505,10 @@ def _effective_author_parameters(packet, step):
     while index < len(argv):
         flag, sep, value = argv[index].partition('=')
         if flag not in flags:
-            raise PlanEvidenceError('Cannot resolve the selected author option from its actual parser: ' + flag)
+            matches = [option for option in flags if flag.startswith('--') and option.startswith(flag)]
+            if len(matches) != 1:
+                raise PlanEvidenceError('Cannot unambiguously resolve the selected author option from its actual parser: ' + flag)
+            flag = matches[0]
         definition = definitions[flags[flag]]
         provided.add(flags[flag])
         action = definition['action']
