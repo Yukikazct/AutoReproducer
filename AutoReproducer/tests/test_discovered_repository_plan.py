@@ -164,6 +164,36 @@ def test_quote_repairs_are_bounded_and_review_happens_only_after_validation(expe
     assert all(call[1]["task"] == "discovered_repository_plan" for call in invalid_llm.calls)
 
 
+def test_quote_whitespace_is_reconciled_to_exact_original_without_editing_proposal(experiment):
+    proposal = deepcopy(experiment["proposal"])
+    citation = proposal["citations"][1]
+    original = citation["quote"]
+    citation["quote"] = "\n\t".join(original.split())
+    accepted = validate(experiment, proposal)
+    evidence = next(item for item in accepted["citations"] if item["id"] == citation["id"])
+    assert evidence["quote"] == original
+    assert evidence["proposed_quote"] == citation["quote"]
+    assert citation["quote"] != original
+
+
+def test_quote_whitespace_reconciliation_cannot_change_reference_number(experiment):
+    proposal = deepcopy(experiment["proposal"])
+    proposal["citations"][1]["quote"] = "\n".join(
+        proposal["citations"][1]["quote"].replace("100.0", "100.1").split())
+    with pytest.raises(planner.PlanEvidenceError, match="not verbatim"):
+        validate(experiment, proposal)
+
+
+def test_quote_feedback_identifies_all_invalid_citations_in_one_attempt(experiment):
+    proposal = deepcopy(experiment["proposal"])
+    invalid = proposal["citations"][:2]
+    for item in invalid:
+        item["quote"] = "Fabricated quote with different numbers 123.456."
+    with pytest.raises(planner.PlanEvidenceError, match="not verbatim") as failure:
+        validate(experiment, proposal)
+    assert all(item["id"] in str(failure.value) for item in invalid)
+
+
 def test_source_request_is_bounded_and_added_before_evidence_is_frozen(experiment):
     packet = experiment["packet"]
     del packet["repository"]["files"]["train.py"]

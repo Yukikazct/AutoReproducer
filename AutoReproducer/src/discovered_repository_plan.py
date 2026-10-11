@@ -179,7 +179,7 @@ def _citations(payload, packet, workspace):
     items = payload.get("citations")
     if not isinstance(items, list) or not 1 <= len(items) <= 100:
         raise PlanEvidenceError("Plan needs bounded, explicit source citations")
-    result = {}
+    result, unmatched = {}, []
     pages = {page["page"]: page for page in packet["pdf"]["pages"]}
     for item in items:
         if not isinstance(item, dict) or not isinstance(item.get("id"), str) or not _ID.fullmatch(item["id"]):
@@ -211,9 +211,22 @@ def _citations(payload, packet, workspace):
         else:
             raise PlanEvidenceError("Citation source must be pdf or repository")
         if quote not in source["text"]:
-            raise PlanEvidenceError("Citation quote is not verbatim in the identified source")
+            # Models commonly collapse PDF line breaks. Recover the exact
+            # source substring only when EVERY non-whitespace character is
+            # identical; numbers, punctuation, ligatures and words stay strict.
+            pattern = r"\s+".join(re.escape(part) for part in re.split(r"\s+", quote.strip()))
+            match = re.search(pattern, source["text"])
+            if match is None:
+                location = "page " + str(item["page"]) if item["source"] == "pdf" else item["path"]
+                unmatched.append(item["id"] + " (" + location + ")")
+            else:
+                accepted["proposed_quote"] = quote
+                quote = match.group()
         accepted["quote"] = quote
         result[item["id"]] = accepted
+    if unmatched:
+        raise PlanEvidenceError("Citation quote is not verbatim in the identified source: "
+                                + ", ".join(unmatched)[:1400])
     return result
 
 
