@@ -1,5 +1,6 @@
 """Project-owned capture around unchanged, evidence-bound author entrypoints."""
 from copy import deepcopy
+import ast
 import hashlib
 import json
 import math
@@ -10,7 +11,7 @@ from src.method_adapters import digest, read_json, write_json
 from src.safety.paths import workspace_path
 
 
-CAPTURE_SCHEMA = {
+SINGLE_CAPTURE_SCHEMA = {
     "kind": "torch_classification", "model": "simple_global_identifier",
     "forward_args": ["simple_global_tensor_identifier"], "labels": "simple_global_identifier",
     "test_indices": "simple_global_identifier_or_null_for_complete_labels",
@@ -19,16 +20,34 @@ CAPTURE_SCHEMA = {
     "reported_metric": {"label": "literal_author_printed_accuracy_label", "unit": "fraction|percent"},
     "citations": ["repository_citation_ids"],
 }
+SERIES_CAPTURE_SCHEMA = {
+    **SINGLE_CAPTURE_SCHEMA,
+    "kind": "torch_classification_series", "device": "cpu|cuda",
+    "scope": {"path": "pinned_author_python_file", "function": "unique_top_level_function"},
+    "forward_args": ["author_local_or_global_tensor_tree_or_scalar_identifier"],
+    "expected_runs": "positive_source_cited_integer",
+    "expected_test_samples": ["one_source_cited_complete_test_count_per_native_run"],
+    "expected_optimizer_steps": "source_cited_per_run_maximum_optimizer_steps",
+    "completion": {"kind": "fixed_steps OR author_epoch_counter",
+                   "epoch_counter": "local_identifier_only_for_author_epoch_counter",
+                   "epoch_offset": "0_or_1_only_for_author_epoch_counter",
+                   "updates_per_epoch": "positive_source_cited_integer_only_for_author_epoch_counter"},
+    "aggregation": "mean",
+}
+CAPTURE_SCHEMA = {"single_run": SINGLE_CAPTURE_SCHEMA, "native_series": SERIES_CAPTURE_SCHEMA}
 CAPTURE_DIR = "_autorepro_capture"
 _IDENTIFIER = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,127}")
 
 
 def validate_capture(capture, packet, workspace):
     """Only named author globals are selectable; no expressions or new programs."""
-    if not isinstance(capture, dict) or capture.get("kind") != "torch_classification":
+    if not isinstance(capture, dict) or capture.get("kind") not in {"torch_classification", "torch_classification_series"}:
         raise ValueError("Only full-test PyTorch classification capture is supported")
     required = {"kind", "model", "forward_args", "labels", "test_indices",
                 "expected_optimizer_steps", "expected_test_samples", "reported_metric", "citations"}
+    series = capture["kind"] == "torch_classification_series"
+    if series:
+        required |= {"device", "scope", "expected_runs", "completion", "aggregation"}
     if set(capture) != required:
         raise ValueError("Capture must use the complete fixed schema without executable extensions")
     args = capture.get("forward_args")
@@ -43,9 +62,42 @@ def validate_capture(capture, packet, workspace):
         if (not isinstance(name, str) or not _IDENTIFIER.fullmatch(name)
                 or not re.search(r"(?<!\w)" + re.escape(name) + r"(?!\w)", source)):
             raise ValueError("Capture selectors must be simple identifiers present in author Python source")
-    for key in ("expected_optimizer_steps", "expected_test_samples"):
+    for key in ("expected_optimizer_steps",) if series else ("expected_optimizer_steps", "expected_test_samples"):
         if type(capture.get(key)) is not int or not 0 < capture[key] <= 10000000:
             raise ValueError("Capture requires positive, bounded prospective completion counts")
+    if series:
+        if capture["device"] not in {"cpu", "cuda"} or capture["aggregation"] != "mean":
+            raise ValueError("Native series needs a fixed device and all-run mean aggregation")
+        runs, samples = capture["expected_runs"], capture["expected_test_samples"]
+        if (type(runs) is not int or not 1 <= runs <= 100 or not isinstance(samples, list)
+                or len(samples) != runs or any(type(n) is not int or not 0 < n <= 10000000 for n in samples)):
+            raise ValueError("Native series requires one complete prospective test count for every run")
+        scope = capture["scope"]
+        if (not isinstance(scope, dict) or set(scope) != {"path", "function"}
+                or not isinstance(scope["function"], str) or not _IDENTIFIER.fullmatch(scope["function"])
+                or scope["path"] not in packet["repository"]["files"] or not scope["path"].endswith(".py")):
+            raise ValueError("Capture scope must name a pinned author Python function")
+        tree = ast.parse(packet["repository"]["files"][scope["path"]]["text"])
+        functions = [node for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                     and node.name == scope["function"]]
+        if len(functions) != 1 or functions[0] not in tree.body or isinstance(functions[0], ast.AsyncFunctionDef):
+            raise ValueError("Capture scope must resolve to one unique synchronous top-level author function")
+        completion = capture["completion"]
+        if not isinstance(completion, dict):
+            raise ValueError("Series completion must have a fixed, non-executable rule")
+        if completion.get("kind") == "fixed_steps":
+            if set(completion) != {"kind"}:
+                raise ValueError("Fixed-step completion cannot carry executable or extra fields")
+        elif completion.get("kind") == "author_epoch_counter":
+            if (set(completion) != {"kind", "epoch_counter", "epoch_offset", "updates_per_epoch"}
+                    or not isinstance(completion["epoch_counter"], str)
+                    or not _IDENTIFIER.fullmatch(completion["epoch_counter"])
+                    or type(completion["epoch_offset"]) is not int or completion["epoch_offset"] not in {0, 1}
+                    or type(completion["updates_per_epoch"]) is not int
+                    or not 0 < completion["updates_per_epoch"] <= capture["expected_optimizer_steps"]):
+                raise ValueError("Author epoch completion needs a local counter and fixed source-backed multiplier")
+        else:
+            raise ValueError("Unknown native series completion rule")
     reported = capture.get("reported_metric")
     if (not isinstance(reported, dict) or set(reported) != {"label", "unit"}
             or reported.get("unit") not in {"fraction", "percent"}
@@ -69,6 +121,12 @@ def materialize_capture(workspace, plan, spec_hash, *, snapshot=None):
         raise ValueError("Project capture directory would overwrite author repository content")
     destination.mkdir()
     runtime = Path(__file__).parent / "experiments" / "discovered_capture.py"
+    series = plan["capture"]["kind"] == "torch_classification_series"
+    runtime_files = ["runtime.py", "config.json"]
+    if series:
+        (destination / "common.py").write_bytes(runtime.read_bytes())
+        runtime = runtime.with_name("discovered_series_capture.py")
+        runtime_files.append("common.py")
     (destination / "runtime.py").write_bytes(runtime.read_bytes())
     train = next(step for step in plan["steps"] if step["kind"] == "train")
     config = {"version": 1, "spec_sha256": spec_hash, "capture": deepcopy(plan["capture"]),
@@ -77,11 +135,13 @@ def materialize_capture(workspace, plan, spec_hash, *, snapshot=None):
     steps = []
     for original in plan["steps"]:
         step = deepcopy(original)
-        step["env"] = {"CUDA_VISIBLE_DEVICES": "", "PYTHONUNBUFFERED": "1"}
+        step["env"] = {"PYTHONUNBUFFERED": "1"}
+        if plan["capture"].get("device", "cpu") == "cpu":
+            step["env"]["CUDA_VISIBLE_DEVICES"] = ""
         if step["kind"] == "train":
             step.update(argv=["python", "-u", f"{CAPTURE_DIR}/runtime.py", "capture"], cwd=".")
-            step["artifacts"] = [f"{CAPTURE_DIR}/capture.json", f"{CAPTURE_DIR}/model.pt",
-                                 f"{CAPTURE_DIR}/tensors.pt"]
+            step["artifacts"] = [f"{CAPTURE_DIR}/capture.json"] + [f"{CAPTURE_DIR}/{name}" for name in
+                (series_artifact_names(plan["capture"]["expected_runs"]) if series else ["model.pt", "tensors.pt"])]
         steps.append(step)
     if any(step["id"] == "independent_evaluation" for step in steps):
         raise ValueError("Author step identifier collides with independent evaluation")
@@ -89,11 +149,15 @@ def materialize_capture(workspace, plan, spec_hash, *, snapshot=None):
                   "argv": ["python", "-u", f"{CAPTURE_DIR}/runtime.py", "evaluate"], "cwd": ".",
                   "timeout_s": 300, "depends_on": [steps[-1]["id"]],
                   "env": {"CUDA_VISIBLE_DEVICES": "", "PYTHONUNBUFFERED": "1"},
-                  "requires": [f"{CAPTURE_DIR}/capture.json", f"{CAPTURE_DIR}/model.pt",
-                               f"{CAPTURE_DIR}/tensors.pt"],
+                  "requires": [f"{CAPTURE_DIR}/capture.json"] + [f"{CAPTURE_DIR}/{name}" for name in
+                      (series_artifact_names(plan["capture"]["expected_runs"]) if series else ["model.pt", "tensors.pt"])],
                   "artifacts": [f"{CAPTURE_DIR}/independent_metrics.json"]})
     return {"files": {f"{CAPTURE_DIR}/{name}": digest(destination / name)
-                       for name in ("runtime.py", "config.json")}, "steps": steps}
+                       for name in runtime_files}, "steps": steps}
+
+
+def series_artifact_names(runs):
+    return [f"run_{index:03d}_{suffix}" for index in range(runs) for suffix in ("model.pt", "tensors.pt")]
 
 
 def _reported_accuracy(plan, execution):
@@ -137,7 +201,10 @@ def verify_capture(plan, workspace, execution, spec_hash):
     for record in (capture, metrics):
         if record.get("spec_sha256") != spec_hash or record.get("pass") is not True:
             raise ValueError("Independent runtime evidence does not match the frozen experiment")
-    if (capture.get("optimizer_steps") != plan["capture"]["expected_optimizer_steps"]
+    series = plan["capture"]["kind"] == "torch_classification_series"
+    if series:
+        verify_series_receipts(plan["capture"], root, capture, metrics)
+    if ((not series and capture.get("optimizer_steps") != plan["capture"]["expected_optimizer_steps"])
             or capture.get("test_samples") != plan["capture"]["expected_test_samples"]
             or capture.get("parameters_changed") is not True
             or metrics.get("test_samples") != capture["test_samples"]
@@ -145,7 +212,7 @@ def verify_capture(plan, workspace, execution, spec_hash):
             or metrics.get("predictions_match") is not True
             or metrics.get("numpy_torch_crosscheck") is not True):
         raise ValueError("Training updates, complete test split or independent prediction identity failed")
-    for name in ("model.pt", "tensors.pt"):
+    for name in series_artifact_names(plan["capture"]["expected_runs"]) if series else ("model.pt", "tensors.pt"):
         if capture.get("files_sha256", {}).get(name) != digest(root / name):
             raise ValueError("Training artifact changed after independent evaluation")
     accuracy, loss = metrics.get("accuracy"), metrics.get("cross_entropy")
@@ -187,3 +254,47 @@ def verify_capture(plan, workspace, execution, spec_hash):
                                  "test_samples": capture["test_samples"], "complete": True},
             "metrics": {item["name"]: item["actual"] for item in comparisons},
             "capture": capture, "independent_metrics": metrics, "author_reported_metric": reported}
+
+
+def verify_series_receipts(contract, root, capture, metrics):
+    """Reconcile every natural return, update count, full split and fresh metric."""
+    runs, independent = capture.get("runs"), metrics.get("runs")
+    expected = contract["expected_runs"]
+    if (capture.get("kind") != "torch_classification_series" or capture.get("aggregation") != "mean"
+            or metrics.get("aggregation") != "mean" or capture.get("training_device") != contract["device"]
+            or metrics.get("device") != "cpu" or not isinstance(runs, list) or len(runs) != expected
+            or not isinstance(independent, list) or len(independent) != expected):
+        raise ValueError("Every declared native repetition must have training and fresh evaluation evidence")
+    for index, (run, evaluated) in enumerate(zip(runs, independent)):
+        steps = run.get("optimizer_steps")
+        rule = contract["completion"]
+        if (run.get("index") != index or evaluated.get("index") != index
+                or run.get("natural_return") is not True or run.get("parameters_changed") is not True
+                or type(steps) is not int or not 0 < steps <= contract["expected_optimizer_steps"]
+                or run.get("test_samples") != contract["expected_test_samples"][index]
+                or evaluated.get("test_samples") != run["test_samples"]
+                or evaluated.get("predictions_match") is not True
+                or evaluated.get("numpy_torch_crosscheck") is not True):
+            raise ValueError("A native repetition lacks complete training or independent full-test evidence")
+        if rule["kind"] == "fixed_steps":
+            if steps != contract["expected_optimizer_steps"]:
+                raise ValueError("Native repetition did not complete all fixed optimizer steps")
+        elif (type(run.get("author_epoch_counter")) is not int
+              or run["author_epoch_counter"] < 0
+              or (run["author_epoch_counter"] + rule["epoch_offset"]) * rule["updates_per_epoch"] != steps):
+            raise ValueError("Observed updates disagree with the author's actual completion counter")
+        for field in ("accuracy", "cross_entropy"):
+            value = evaluated.get(field)
+            if (type(value) not in (int, float) or not math.isfinite(value) or value < 0
+                    or (field == "accuracy" and value > 1)):
+                raise ValueError("Native repetition has an invalid independent metric")
+        for name in series_artifact_names(expected)[2 * index:2 * index + 2]:
+            if run.get("files_sha256", {}).get(name) != digest(root / name):
+                raise ValueError("A native repetition artifact changed after evaluation")
+    if (capture.get("optimizer_steps") != sum(run["optimizer_steps"] for run in runs)
+            or capture.get("parameters_changed") is not True):
+        raise ValueError("Aggregate training evidence does not reconcile with every repetition")
+    for field in ("accuracy", "cross_entropy"):
+        if not math.isclose(metrics.get(field, float("nan")), sum(row[field] for row in independent) / expected,
+                            rel_tol=1e-12, abs_tol=1e-12):
+            raise ValueError("Reported aggregate is not the mean of every independent repetition")

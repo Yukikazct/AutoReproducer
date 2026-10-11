@@ -147,16 +147,22 @@ def verify_snapshot(workspace, snapshot, generated):
 
 
 def environment_for_plan(plan):
-    from src.discovered_repository_plan import CPU_COMPATIBILITY_PINS, CPU_INDEX_URL
+    from src.discovered_repository_plan import (CPU_COMPATIBILITY_PINS, CPU_INDEX_URL,
+                                               CUDA_COMPATIBILITY_PINS, CUDA_INDEX_URL)
+    device = (plan.get("capture") or {}).get("device", "cpu")
+    if device not in {"cpu", "cuda"}:
+        raise ValueError("作者执行设备不在已审阅环境中")
+    version_map = CUDA_COMPATIBILITY_PINS if device == "cuda" else CPU_COMPATIBILITY_PINS
+    index_url = CUDA_INDEX_URL if device == "cuda" else CPU_INDEX_URL
     requirements = plan.get("requirements") or {}
     pins = requirements.get("compatibility") or []
     checked = []
     for value in pins:
         match = re.fullmatch(r"([A-Za-z0-9][A-Za-z0-9_.-]*)==([A-Za-z0-9][A-Za-z0-9_.+-]*)", value)
         if not match:
-            raise ValueError("兼容环境必须使用已审阅的精确 CPU 依赖版本")
+            raise ValueError("兼容环境必须使用已审阅的精确依赖版本")
         name = re.sub(r"[-_.]+", "-", match[1]).lower()
-        known = {re.sub(r"[-_.]+", "-", key).lower(): version for key, version in CPU_COMPATIBILITY_PINS.items()}
+        known = {re.sub(r"[-_.]+", "-", key).lower(): version for key, version in version_map.items()}
         expected = str(known.get(name, ""))
         # The public map may store versions or complete requirements.
         expected = expected.split("==")[-1]
@@ -165,10 +171,10 @@ def environment_for_plan(plan):
         checked.append(value)
     if not checked:
         raise ValueError("缺少冻结的本次执行依赖")
-    return {"requirements_txt": f"--extra-index-url {CPU_INDEX_URL}\n" + "\n".join(checked) + "\n",
+    return {"requirements_txt": f"--extra-index-url {index_url}\n" + "\n".join(checked) + "\n",
             "author_requirements": deepcopy(requirements.get("author", [])),
             "compatibility_reason": requirements.get("reason", ""),
-            "note": "基于作者依赖与源码导入选择的项目 CPU 兼容环境；不是论文原始运行环境的等价声明。",
+            "note": f"基于作者依赖与源码导入选择的项目 {device.upper()} 兼容环境；不是论文原始运行环境的等价声明。",
             "auto_prepare": True, "dependency_health_check": True,
             "cache_lock_timeout_s": AUTO_PREPARATION_LOCK_TIMEOUT}
 
@@ -188,14 +194,20 @@ for requirement in requirements:
     modules[name] = str(Path(module.__file__).resolve())
     versions[name] = actual
 import torch, numpy
-if torch.cuda.is_available():
+contract = json.loads((root / "config.json").read_text(encoding="utf-8"))["capture"]
+device = contract.get("device", "cpu")
+if device == "cpu" and torch.cuda.is_available():
     raise ValueError("Generic CPU contract unexpectedly exposes a CUDA device")
-x = torch.tensor([[1., 2.]], requires_grad=True)
+if device == "cuda" and not torch.cuda.is_available():
+    raise ValueError("Source-required CUDA execution has no usable native GPU")
+x = torch.tensor([[1., 2.]], requires_grad=True, device=device)
 (x @ x.T).sum().backward()
-if not numpy.isfinite(x.grad.numpy()).all():
-    raise ValueError("Native CPU operation failed")
+if not numpy.isfinite(x.grad.detach().cpu().numpy()).all():
+    raise ValueError("Native device operation failed")
 record = {"versions": versions, "modules": modules, "python": sys.version,
-          "platform": platform.platform(), "device": "cpu", "native_probe_pass": True}
+          "platform": platform.platform(), "device": device, "native_probe_pass": True}
+if device == "cuda":
+    record.update(cuda_version=torch.version.cuda, gpu_name=torch.cuda.get_device_name(0))
 (root / "preflight.json").write_text(json.dumps(record, indent=2), encoding="utf-8")
 print(json.dumps(record), flush=True)
 '''
@@ -445,7 +457,8 @@ class DiscoveredRepositoryReproduction:
 
             preflight = [{"id": "native_preflight", "kind": "check", "required": True,
                           "argv": ["python", "-u", f"{CAPTURE_DIR}/preflight.py"], "cwd": ".",
-                          "timeout_s": 180, "env": {"CUDA_VISIBLE_DEVICES": ""},
+                          "timeout_s": 180, "env": {"CUDA_VISIBLE_DEVICES": ""}
+                              if plan["capture"].get("device", "cpu") == "cpu" else {},
                           "artifacts": [f"{CAPTURE_DIR}/preflight.json"]}]
             preparation = self.runner.run(workspace, preflight, environment, on_event=progress)
             data["environment_preparation"] = preparation
@@ -454,8 +467,8 @@ class DiscoveredRepositoryReproduction:
                 raise RuntimeError("依赖准备或原生导入/运算检查失败：" + str(
                     preparation.get("reason") or preparation.get("final", {}).get("stderr", ""))[-2000:])
             probe = read_json(runtime_dir / "preflight.json")
-            if probe.get("native_probe_pass") is not True or probe.get("device") != "cpu":
-                raise ValueError("原生 CPU 运算检查缺少成功证据")
+            if probe.get("native_probe_pass") is not True or probe.get("device") != plan["capture"].get("device", "cpu"):
+                raise ValueError("原生设备运算检查缺少成功证据")
             data["native_preflight"] = probe
             verify_frozen_inputs()
             event(phase, "success")

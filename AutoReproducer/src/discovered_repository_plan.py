@@ -12,6 +12,7 @@ import math
 from pathlib import Path
 import re
 import shlex
+import zipfile
 from urllib.parse import urlsplit
 
 from src.safety.paths import workspace_path
@@ -24,6 +25,9 @@ CPU_COMPATIBILITY_PINS = {
     "matplotlib": "3.9.2", "pillow": "10.4.0", "networkx": "2.8.8",
     "tqdm": "4.67.1", "hyperopt": "0.2.7",
 }
+CUDA_INDEX_URL = "https://download.pytorch.org/whl/cu121"
+CUDA_COMPATIBILITY_PINS = {**CPU_COMPATIBILITY_PINS, "torch": "2.5.1+cu121",
+                           "torchvision": "0.20.1+cu121"}
 RELATIVE_TOLERANCE = 0.05
 _SHA = re.compile(r"[0-9a-f]{64}")
 _ID = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,63}")
@@ -87,6 +91,43 @@ def _read_source(workspace, name, expected):
     return {"text": text, "sha256": expected, "bytes": len(raw)}
 
 
+def _read_dataset_summary(workspace, name, expected):
+    """Describe immutable NPZ split arrays without executing pickle or code."""
+    import numpy as np
+    path = workspace_path(workspace, name, "bundled split evidence", must_exist=True, forbid_git=True)
+    if path.suffix.lower() != ".npz" or path.stat().st_size > 2 * 1024 * 1024 or _digest(path.read_bytes()) != expected:
+        raise PlanEvidenceError("Bundled split evidence changed or exceeds its bound")
+    with zipfile.ZipFile(path) as archive:
+        if len(archive.infolist()) > 32 or sum(item.file_size for item in archive.infolist()) > 2 * 1024 * 1024:
+            raise PlanEvidenceError("Bundled split arrays exceed their bounded uncompressed size")
+        for item in archive.infolist():
+            if not item.filename.endswith(".npy"):
+                raise PlanEvidenceError("Bundled split evidence must contain only NumPy arrays")
+            with archive.open(item) as stream:
+                version = np.lib.format.read_magic(stream)
+                reader = { (1, 0): np.lib.format.read_array_header_1_0,
+                           (2, 0): np.lib.format.read_array_header_2_0 }.get(version)
+                if reader is None:
+                    raise PlanEvidenceError("Unsupported bounded split array header")
+                shape, _, dtype = reader(stream, max_header_size=10000)
+                if dtype.hasobject or math.prod(shape) * dtype.itemsize > item.file_size:
+                    raise PlanEvidenceError("Unsafe split array shape or object payload")
+    arrays = {}
+    with np.load(path, allow_pickle=False) as data:
+        for key in data.files:
+            array = data[key]
+            if array.dtype.hasobject:
+                raise PlanEvidenceError("Object arrays cannot provide split evidence")
+            value = {"shape": list(array.shape), "dtype": str(array.dtype)}
+            if array.ndim == 1 and array.dtype == np.bool_:
+                value["selected_samples"] = int(array.sum())
+            elif array.ndim == 1 and np.issubdtype(array.dtype, np.integer):
+                value.update(length=len(array), unique_values=len(np.unique(array)))
+            arrays[key] = value
+    text = _canonical({"path": name, "format": "numpy_npz", "arrays": arrays})
+    return {"text": text, "sha256": expected, "evidence_sha256": _digest(text.encode())}
+
+
 def build_evidence_packet(pdf_path, workspace, snapshot, *, max_files=32, max_source_bytes=180000):
     """Keep every PDF page and bounded, hash-checked source; omit local paths."""
     from src.pdf_input import _extract_pypdf, _extract_pdfplumber, extract_pdf_input
@@ -116,6 +157,7 @@ def build_evidence_packet(pdf_path, workspace, snapshot, *, max_files=32, max_so
     if not isinstance(files, dict) or not files or len(files) > 10000:
         raise PlanEvidenceError("Missing or oversized repository snapshot")
     inventory = {}
+    dataset_summary_bytes = 0
     for name, digest in files.items():
         if not isinstance(digest, str) or not _SHA.fullmatch(digest):
             raise PlanEvidenceError("Repository snapshot has an invalid checksum")
@@ -124,6 +166,14 @@ def build_evidence_packet(pdf_path, workspace, snapshot, *, max_files=32, max_so
             raise PlanEvidenceError("Repository snapshot must identify regular files")
         inventory[name] = {"sha256": digest, "bytes": path.stat().st_size,
                            "text_available": _text_candidate(name) and path.stat().st_size <= 100000}
+        if path.suffix.lower() == ".npz" and path.stat().st_size <= 2 * 1024 * 1024:
+            try:
+                summary = _read_dataset_summary(workspace, name, digest)
+                if dataset_summary_bytes + len(summary["text"]) <= 100000:
+                    inventory[name]["dataset_evidence"] = summary
+                    dataset_summary_bytes += len(summary["text"])
+            except (ValueError, OSError, ImportError, zipfile.BadZipFile):
+                pass  # Optional summaries never replace the original data.
     selected, size = {}, 0
     for name in sorted(inventory, key=_priority):
         item = inventory[name]
@@ -208,8 +258,16 @@ def _citations(payload, packet, workspace):
             _read_source(workspace, name, source["sha256"])
             accepted = {"id": item["id"], "source": "repository", "path": name,
                         "sha256": source["sha256"], "revision": packet["repository"]["revision"]}
+        elif item.get("source") == "dataset":
+            name = item.get("path")
+            entry = packet["file_inventory"].get(name, {})
+            source = entry.get("dataset_evidence")
+            if not source or _read_dataset_summary(workspace, name, entry["sha256"]) != source:
+                raise PlanEvidenceError("Citation needs unchanged, bounded bundled split evidence")
+            accepted = {"id": item["id"], "source": "dataset", "path": name,
+                        "sha256": entry["sha256"], "evidence_sha256": source["evidence_sha256"]}
         else:
-            raise PlanEvidenceError("Citation source must be pdf or repository")
+            raise PlanEvidenceError("Citation source must be pdf, repository or dataset")
         if quote not in source["text"]:
             # Models commonly collapse PDF line breaks. Recover the exact
             # source substring only when EVERY non-whitespace character is
@@ -230,7 +288,7 @@ def _citations(payload, packet, workspace):
     return result
 
 
-def _requirements(value, citations, packet):
+def _requirements(value, citations, packet, device="cpu"):
     if not isinstance(value, dict) or not isinstance(value.get("reason"), str) or not value["reason"].strip():
         raise PlanEvidenceError("Compatibility dependencies need an explicit explanation")
     refs = _references(value.get("citations"), citations, "repository")
@@ -245,13 +303,14 @@ def _requirements(value, citations, packet):
     if not isinstance(compatibility, list) or not compatibility:
         raise PlanEvidenceError("Frozen compatibility dependency pins are required")
     names = set()
+    pins = CUDA_COMPATIBILITY_PINS if device == "cuda" else CPU_COMPATIBILITY_PINS
     for requirement in compatibility:
         if not isinstance(requirement, str) or not re.fullmatch(r"[\w-]+==[\w.+-]+", requirement):
             raise PlanEvidenceError("Compatibility dependencies must be exact reviewed pins")
         name, version = requirement.split("==")
         normalized = name.casefold().replace("_", "-")
-        if normalized in names or CPU_COMPATIBILITY_PINS.get(normalized) != version:
-            raise PlanEvidenceError("Compatibility dependency is outside the reviewed CPU version map")
+        if normalized in names or pins.get(normalized) != version:
+            raise PlanEvidenceError("Compatibility dependency is outside the reviewed device version map")
         names.add(normalized)
         import_name = _PACKAGE_IMPORTS.get(normalized, normalized)
         if normalized != "numpy" and not re.search(r"(?<!\w)" + re.escape(import_name) + r"(?!\w)", combined, re.I):
@@ -260,9 +319,8 @@ def _requirements(value, citations, packet):
         raise PlanEvidenceError("Independent evaluation needs the reviewed torch and numpy dependencies")
     return {"author": list(author), "compatibility": list(compatibility),
             "reason": value["reason"], "citations": list(value["citations"]),
-            "runtime_required": ["torch==" + CPU_COMPATIBILITY_PINS["torch"],
-                                 "numpy==" + CPU_COMPATIBILITY_PINS["numpy"]],
-            "index_url": CPU_INDEX_URL}
+            "runtime_required": ["torch==" + pins["torch"], "numpy==" + pins["numpy"]],
+            "index_url": CUDA_INDEX_URL if device == "cuda" else CPU_INDEX_URL}
 
 
 def _datasets(items, citations, packet, workspace):
@@ -492,7 +550,8 @@ def validate_plan(payload, packet, workspace):
     accepted = {"version": 1, "scope": payload["scope"], "repository": deepcopy(payload["repository"]),
                 "parameters": deepcopy(parameters), "parameter_citations": deepcopy(parameter_citations),
                 "citations": list(citations.values()), "claims": deepcopy(claims),
-                "requirements": _requirements(payload.get("requirements"), citations, packet),
+                "requirements": _requirements(payload.get("requirements"), citations, packet,
+                                              (payload.get("capture") or {}).get("device", "cpu")),
                 "datasets": _datasets(payload.get("datasets"), citations, packet, workspace),
                 "steps": _steps(payload.get("steps"), citations, packet, workspace),
                 "metrics": accepted_metrics}
@@ -500,10 +559,21 @@ def validate_plan(payload, packet, workspace):
     if not isinstance(capture, dict):
         raise PlanEvidenceError("Independent full-test capture is required")
     refs = _references(capture.get("citations"), citations, "repository")
-    for field in ("expected_optimizer_steps", "expected_test_samples"):
+    counts = ["expected_optimizer_steps", "expected_test_samples"]
+    if capture.get("kind") == "torch_classification_series":
+        counts.append("expected_runs")
+    for field in counts:
         value = capture.get(field)
-        if type(value) is not int or value <= 0 or not _has_value(value, refs):
+        values = value if field == "expected_test_samples" and isinstance(value, list) else [value]
+        if not values or any(type(v) is not int or v <= 0 or not _has_value(v, refs) for v in values):
             raise PlanEvidenceError(f"Independent capture needs source-backed {field}")
+    if capture.get("kind") == "torch_classification_series":
+        if capture.get("device") == "cuda" and not _has_value("cuda", refs):
+            raise PlanEvidenceError("CUDA execution needs actual author source evidence")
+        rule = capture.get("completion") or {}
+        if rule.get("kind") == "author_epoch_counter":
+            if any(not _has_value(rule.get(field), refs) for field in ("epoch_counter", "epoch_offset", "updates_per_epoch")):
+                raise PlanEvidenceError("Native early-stop completion needs source-backed counter and update rule")
     reported = capture.get("reported_metric")
     if (not isinstance(reported, dict) or reported.get("unit") not in {"percent", "fraction"}
             or not isinstance(reported.get("label"), str)
@@ -537,10 +607,13 @@ Unknown or unsupported details require {"unsupported":"concrete reason"}.
 
 def _prompt(packet, feedback):
     return """Produce one source-grounded plan BEFORE execution. Every citation
-is {id,source:'pdf'|'repository',page or path,quote}; quote must be copied VERBATIM.
+is {id,source:'pdf'|'repository'|'dataset',page or path,quote}; quote must be copied VERBATIM.
 Reference metrics need PDF page citations containing the actual value and
 row/header context; units must follow the paper. Protocol/defaults/data/split/
 seed/hyperparameters must come from author sources, never implicit guesses.
+When several complete published experiments are available, prefer the smallest
+complete bundled dataset with an exact author command and paper reference.
+Keep every native split/repetition and the full chosen protocol unchanged.
 If needed, request at most 8 missing text files with {"request_files":[paths]};
 only file_inventory paths are available. No network tools or external sources.
 
@@ -558,16 +631,29 @@ JSON schema:
  capture:CAPTURE_SCHEMA_FROM_RUNTIME}
 
 One complete native author training invocation is supported. Every argv token
-must be quoted from its README, script or CLI definition; run with CPU only
-using a documented author flag or runner CUDA visibility. No env overrides,
+must be quoted from its README, script or CLI definition. CPU execution needs
+a documented author flag or runner CUDA visibility. A source-required
+CUDA series may use the separately reviewed CUDA pins and native GPU probe.
+No env overrides,
 generated scripts, python -c/-m, shell, diagnostic reductions or extra training.
-Use author settings/defaults unchanged and explain modern CPU compatibility
+Use author settings/defaults unchanged and explain modern device compatibility
 pins separately from original dependency lines. Both torch and numpy are
 required by the independent evaluator; numpy does not need an author import
 citation and must not be invented as an original author requirement.
 Available reviewed pins:
 """ + _canonical(CPU_COMPATIBILITY_PINS) + "\n\nCapture schema:\n" + _capture_schema() + (
         "\n\nPrior validation feedback (repair citations/schema only before training):\n" + feedback if feedback else ""
+    ) + "\nReviewed CUDA pins (only source-required CUDA execution):\n" + _canonical(CUDA_COMPATIBILITY_PINS) + (
+        "\nA native entrypoint containing all repetitions may use torch_classification_series. "
+        "Capture a unique author function's final locals at its natural return; preserve all native "
+        "splits, runs and early-stop rules. Never invent a repeat loop or seeds. A bundled NPZ split "
+        "summary can be cited as {source:'dataset',path,quote} from file_inventory.dataset_evidence; "
+        "the pipeline derives it from the actual immutable arrays, not model guesses. "
+        "Choose ONE capture schema. Series expected_optimizer_steps is the full per-run upper bound; "
+        "author_epoch_counter uses the actual final local epoch plus the source-defined offset, "
+        "multiplied by the source-defined optimizer updates per epoch. Natural author returns and "
+        "all native repetitions are mandatory. expected_test_samples is an ordered list with one "
+        "complete original split count per run, supported by source or actual bundled dataset evidence."
     ) + "\n\nComplete PDF and bounded source packet:\n" + _canonical(packet)
 
 
@@ -654,7 +740,7 @@ metric_definition_and_reference: paper number with its row/header/units,
 evaluation definition and reported accuracy label agree. A number merely
 appearing anywhere in a citation is insufficient. A multi-seed/fold result
 requires the complete protocol; one favorable run cannot replace its mean.
-dependency_compatibility: reviewed modern CPU pins cover the author's actual
+dependency_compatibility: reviewed modern device pins cover the author's actual
 imports without changing the method; original requirement lines remain
 truthful; runtime-only torch/NumPy are separately identified.
 
