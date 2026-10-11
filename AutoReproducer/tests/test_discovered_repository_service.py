@@ -108,11 +108,11 @@ def test_two_actual_author_entrypoints_complete_service_and_report(
         assert digest(workspace / name) == sha
     last_phases = {event["phase_id"]: event["status"] for event in events
                    if event.get("type") == "state"}
-    assert len(last_phases) == 7 and set(last_phases.values()) == {"success"}
+    assert len(last_phases) == 8 and set(last_phases.values()) == {"success"}
     assert read_json(run_dir / "run_status.json")["status"] == "completed"
     with FileLock(str(run_dir / ".run.lock"), timeout=0):
         pass
-    assert llm.get_call_count() == 3
+    assert llm.get_call_count() == 4
     frozen = read_json(run_dir / "experiment_spec.json")["spec"]
     assert frozen == data["grounded_repository_plan"]
     assert frozen["semantic_review"]["accepted"] is True
@@ -272,7 +272,7 @@ def test_requested_sources_survive_planning_rejection_without_hiding_reason(
     assert result["state"] == "ERROR"
     assert reason in result["error"]
     assert result["data"]["validation"]["failure_phase"] == "plan_repository"
-    assert llm.get_call_count() == 4
+    assert llm.get_call_count() == 5
     run_dir = Path(result["data"]["run_dir"])
     rejection = read_json(run_dir / "plan_rejection.json")
     assert rejection["semantic_review"]["checks"]["same_experiment"]["reason"] == reason
@@ -282,6 +282,17 @@ def test_requested_sources_survive_planning_rejection_without_hiding_reason(
         packet = read_json(run_dir / "source_packet.json")
         assert "author_model.py" in packet["repository"]["files"]
         assert "SignalModel" in packet["repository"]["files"]["author_model.py"]["text"]
+    runner.runner.run.assert_not_called()
+
+
+def test_exception_without_message_stays_error_and_cannot_report_completed(tmp_path, monkeypatch):
+    from src.agents.experiment_protocol import ExperimentProtocolAgent
+    _, runner, request, _ = setup_service(tmp_path, monkeypatch)
+    monkeypatch.setattr(ExperimentProtocolAgent, 'run', Mock(side_effect=ValueError()))
+    runner.runner.run = Mock(side_effect=AssertionError('Rejected protocol cannot execute'))
+    result = runner.run(request)
+    assert result['state'] == 'ERROR' and result['error'] == 'ValueError'
+    assert result['data']['validation']['failure_phase'] == 'select_experiment'
     runner.runner.run.assert_not_called()
 
 

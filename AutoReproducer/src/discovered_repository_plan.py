@@ -6,12 +6,14 @@ data and independently measurable results before any training can begin.
 """
 from copy import deepcopy
 import ast
+import difflib
 import hashlib
 import json
 import math
 from pathlib import Path
 import re
 import shlex
+import sys
 import zipfile
 from urllib.parse import urlsplit
 
@@ -41,8 +43,9 @@ _FORBIDDEN_FLAGS = {"--smoke", "--dry-run", "--fast-dev-run", "--limit-train-bat
 class PlanEvidenceError(ValueError):
     """An unverified proposal must not start author code or claim reproduction."""
 
-    def __init__(self, message, *, planning_evidence=None):
+    def __init__(self, message, *, planning_evidence=None, category='invalid_evidence'):
         super().__init__(message)
+        self.category = category
         if planning_evidence is not None:
             self.planning_evidence = planning_evidence
 
@@ -123,6 +126,11 @@ def _read_dataset_summary(workspace, name, expected):
                 value["selected_samples"] = int(array.sum())
             elif array.ndim == 1 and np.issubdtype(array.dtype, np.integer):
                 value.update(length=len(array), unique_values=len(np.unique(array)))
+                # A named integer 0/1 mask has the same selection semantics as
+                # a boolean mask. Index arrays (including [0, 1]) do not.
+                if (re.search(r"(?:^|_)mask$", key, re.I) and len(array)
+                        and np.all((array == 0) | (array == 1))):
+                    value["selected_samples"] = int(np.count_nonzero(array))
             arrays[key] = value
     text = _canonical({"path": name, "format": "numpy_npz", "arrays": arrays})
     return {"text": text, "sha256": expected, "evidence_sha256": _digest(text.encode())}
@@ -219,7 +227,9 @@ def _references(ids, citations, kind=None):
 
 
 def _has_value(value, refs):
-    text = "\n".join(ref["quote"] for ref in refs)
+    # Inventory establishes file existence, never a sample count, parameter,
+    # protocol or metric hidden in a filename, byte size or checksum.
+    text = "\n".join(ref["quote"] for ref in refs if ref["source"] != "inventory")
     if isinstance(value, bool):
         return str(value).lower() in text.lower()
     if isinstance(value, (int, float)):
@@ -228,17 +238,75 @@ def _has_value(value, refs):
     return isinstance(value, str) and value.strip() and value.casefold() in text.casefold()
 
 
+def _planning_excerpts(packet):
+    """Selectable exact source spans spare the model a PDF transcription task."""
+    excerpts = {}
+
+    def add(prefix, location, text):
+        start = 0
+        while start < len(text):
+            end = min(start + 6000, len(text))
+            if end < len(text):
+                newline = text.rfind("\n", start + 4000, end)
+                if newline >= 0:
+                    end = newline + 1
+            quote = text[start:end]
+            if len(quote.strip()) >= 4:
+                excerpts[f"{prefix}_{start}"] = {**location, "quote": quote}
+            if end == len(text):
+                break
+            start = end - 1000
+
+    for page in packet["pdf"]["pages"]:
+        add(f"pdf_p{page['page']}", {"source": "pdf", "page": page["page"]}, page["text"])
+    for path, source in sorted(packet["repository"]["files"].items()):
+        prefix = "repo_" + re.sub(r'[^a-z0-9_]', '_', path.casefold())[:36] + '_' + _digest(path.encode())[:6]
+        add(prefix, {"source": "repository", "path": path}, source["text"])
+    for path, entry in packet["file_inventory"].items():
+        if entry.get("dataset_evidence"):
+            prefix = "data_" + re.sub(r'[^a-z0-9_]', '_', path.casefold())[:36] + '_' + _digest(path.encode())[:6]
+            add(prefix, {"source": "dataset", "path": path}, entry["dataset_evidence"]["text"])
+    return excerpts
+
+
+def _planning_view(packet):
+    view = deepcopy(packet)
+    if view.get('experiment_protocol'):
+        view['experiment_protocol'].pop('citations', None)
+    for page in view["pdf"]["pages"]:
+        page.pop("text")
+    for source in view["repository"]["files"].values():
+        source.pop("text")
+    for entry in view["file_inventory"].values():
+        if entry.get("dataset_evidence"):
+            entry["dataset_evidence"].pop("text")
+    view["evidence_excerpts"] = _planning_excerpts(packet)
+    return view
+
+
 def _citations(payload, packet, workspace):
     items = payload.get("citations")
     if not isinstance(items, list) or not 1 <= len(items) <= 100:
         raise PlanEvidenceError("Plan needs bounded, explicit source citations")
     result, unmatched = {}, []
     pages = {page["page"]: page for page in packet["pdf"]["pages"]}
+    excerpts = None
     for item in items:
         if not isinstance(item, dict) or not isinstance(item.get("id"), str) or not _ID.fullmatch(item["id"]):
             raise PlanEvidenceError("Invalid citation identifier")
         if item["id"] in result:
             raise PlanEvidenceError("Duplicate citation identifier")
+        if "evidence_id" in item:
+            if set(item) != {"id", "evidence_id"} or not isinstance(item["evidence_id"], str):
+                raise PlanEvidenceError("Selectable citations must contain only id and evidence_id")
+            if excerpts is None:
+                excerpts = _planning_excerpts(packet)
+            excerpt = excerpts.get(item["evidence_id"])
+            if excerpt is None:
+                suggestions = difflib.get_close_matches(item['evidence_id'], excerpts, n=3, cutoff=0.35)
+                raise PlanEvidenceError("Citation refers to an unknown source excerpt ID: " + item['evidence_id']
+                    + '; existing similar IDs: ' + ', '.join(suggestions))
+            item = {"id": item["id"], **excerpt}
         quote = item.get("quote")
         if not isinstance(quote, str) or not 4 <= len(quote.strip()) <= 10000:
             raise PlanEvidenceError("Citation needs a bounded verbatim quote")
@@ -266,11 +334,25 @@ def _citations(payload, packet, workspace):
             entry = packet["file_inventory"].get(name, {})
             source = entry.get("dataset_evidence")
             if not source or _read_dataset_summary(workspace, name, entry["sha256"]) != source:
-                raise PlanEvidenceError("Citation needs unchanged, bounded bundled split evidence")
+                raise PlanEvidenceError(f"Citation {item['id']} ({name}) needs unchanged, bounded bundled split evidence; "
+                    "source=dataset requires file_inventory.dataset_evidence. Use source=inventory for file existence, "
+                    "and cite the README/loader as source=repository to establish dataset usage.")
             accepted = {"id": item["id"], "source": "dataset", "path": name,
                         "sha256": entry["sha256"], "evidence_sha256": source["evidence_sha256"]}
+        elif item.get("source") == "inventory":
+            name = item.get("path")
+            entry = packet["file_inventory"].get(name)
+            if entry is None:
+                raise PlanEvidenceError("Inventory citation refers to a missing snapshot file")
+            path = workspace_path(workspace, name, "inventory evidence", must_exist=True, forbid_git=True)
+            if not path.is_file() or _digest(path.read_bytes()) != entry["sha256"]:
+                raise PlanEvidenceError("Inventory file changed after the snapshot")
+            source = {"text": name}
+            accepted = {"id": item["id"], "source": "inventory", "path": name,
+                        "sha256": entry["sha256"], "revision": packet["repository"]["revision"],
+                        "evidence_scope": "file_existence_only"}
         else:
-            raise PlanEvidenceError("Citation source must be pdf, repository or dataset")
+            raise PlanEvidenceError("Citation source must be pdf, repository, dataset or inventory")
         if quote not in source["text"]:
             # Models commonly collapse PDF line breaks. Recover the exact
             # source substring only when EVERY non-whitespace character is
@@ -291,7 +373,155 @@ def _citations(payload, packet, workspace):
     return result
 
 
-def _requirements(value, citations, packet, device="cpu"):
+def _author_imports(packet, step, *, include_sources=False):
+    """Follow imports in pinned author files; no model-generated dependency list."""
+    argv = step.get('argv') or []
+    position = 2 if len(argv) > 1 and argv[1] == '-u' else 1
+    if len(argv) <= position:
+        raise PlanEvidenceError('Cannot determine imports without an author entrypoint')
+    entry = (Path(step.get('cwd', '.')) / argv[position]).as_posix()
+    queue, visited, imports = [entry], set(), []
+    absolute_roots = list(dict.fromkeys([Path(entry).parent, Path('.')]))
+    inventory = packet['file_inventory']
+
+    def local_module(parts, bases):
+        for base in bases:
+            target = base.joinpath(*parts)
+            module, package = target.as_posix() + '.py', (target / '__init__.py').as_posix()
+            namespace = any(name.startswith(target.as_posix().rstrip('/') + '/') for name in inventory)
+            if module not in inventory and package not in inventory and not namespace:
+                continue
+            resolved = []
+            for index in range(1, len(parts)):
+                initializer = (base.joinpath(*parts[:index]) / '__init__.py').as_posix()
+                if initializer in inventory:
+                    resolved.append(initializer)
+            if module in inventory:
+                resolved.append(module)
+            elif package in inventory:
+                resolved.append(package)
+            return True, resolved, target, module not in inventory
+        return False, [], None, False
+
+    while queue:
+        path = queue.pop()
+        if path in visited:
+            continue
+        visited.add(path)
+        source = packet['repository']['files'].get(path)
+        if source is None:
+            raise PlanEvidenceError(f'Required import source is not in the bounded packet; request_files: {path}')
+        try:
+            tree = ast.parse(source['text'])
+        except SyntaxError as exc:
+            raise PlanEvidenceError(f'Author import source is not valid Python: {path}') from exc
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                modules = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                modules = [node.module or '']
+            else:
+                continue
+            for module in modules:
+                root = module.split('.')[0]
+                relative_import = isinstance(node, ast.ImportFrom) and node.level
+                if relative_import:
+                    parent = Path(path).parent
+                    if node.level - 1 > len(parent.parts):
+                        raise PlanEvidenceError('Author relative import escapes the repository: ' + path)
+                    for _ in range(node.level - 1):
+                        parent = parent.parent
+                    bases = [parent]
+                else:
+                    bases = absolute_roots
+                parts = module.split('.') if module else []
+                local, resolved, target, package = local_module(parts, bases)
+                # "from . import layers" and "from package import layers"
+                # can load a submodule even when the module field is empty.
+                if isinstance(node, ast.ImportFrom) and (package or not parts):
+                    for alias in node.names:
+                        if alias.name == '*':
+                            continue
+                        found, children, _, _ = local_module([alias.name], [target] if target is not None else bases)
+                        local |= found
+                        resolved.extend(children)
+                if local:
+                    queue.extend(resolved)
+                elif relative_import:
+                    raise PlanEvidenceError('Cannot resolve pinned author relative import in ' + path)
+                elif root and root not in sys.stdlib_module_names:
+                    imports.append({'module':root, 'path':path, 'line':node.lineno,
+                                    'statement':ast.get_source_segment(source['text'], node), 'sha256':source['sha256']})
+    return {'imports':imports, 'sources':sorted(visited)} if include_sources else imports
+
+
+def _effective_author_parameters(packet, step):
+    """Resolve literal argparse defaults and the validated author's actual flags."""
+    sources = _author_imports(packet, step, include_sources=True)['sources']
+    definitions, flags = {}, {}
+    for path in sources:
+        source = packet['repository']['files'][path]
+        for node in ast.walk(ast.parse(source['text'])):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute) or node.func.attr!='add_argument':
+                continue
+            options = [arg.value for arg in node.args if isinstance(arg,ast.Constant)
+                       and isinstance(arg.value,str) and arg.value.startswith('--')]
+            if not options:
+                continue
+            kw = {item.arg:item.value for item in node.keywords}
+            def literal(name, default=None):
+                try:
+                    return ast.literal_eval(kw[name]) if name in kw else default
+                except (ValueError, TypeError):
+                    return default
+            dest = literal('dest', options[0][2:].replace('-', '_'))
+            action = literal('action', 'store')
+            unresolved = object()
+            default = literal('default', False if action=='store_true' else True if action=='store_false' else unresolved)
+            converter = kw.get('type')
+            if (action not in {'store', 'store_true', 'store_false'}
+                    or 'nargs' in kw or 'const' in kw
+                    or converter is not None and not (isinstance(converter, ast.Name)
+                                                     and converter.id in {'str','int','float','bool'})):
+                raise PlanEvidenceError('Author argparse declaration requires unsupported dynamic/action semantics: '
+                                        + str(dest), category='runtime_unsupported')
+            converter = converter.id if isinstance(converter,ast.Name) else 'str'
+            if default is unresolved:
+                continue
+            declaration = {'value':default,'action':action,'type':converter,
+                'source':{'source':'repository','path':path,'quote':ast.get_source_segment(source['text'],node),
+                          'sha256':source['sha256'],'revision':packet['repository']['revision']}}
+            if dest in definitions and definitions[dest]['value']!=default:
+                raise PlanEvidenceError('Ambiguous author argparse defaults: ' + dest)
+            definitions[dest] = declaration
+            for option in options:
+                flags[option] = dest
+    argv = step['argv']
+    index = 3 if argv[1]=='-u' else 2
+    while index < len(argv):
+        flag, sep, value = argv[index].partition('=')
+        if flag not in flags:
+            raise PlanEvidenceError('Cannot resolve the selected author option from its actual parser: ' + flag)
+        definition = definitions[flags[flag]]
+        action = definition['action']
+        if action in {'store_true','store_false'}:
+            if sep:
+                raise PlanEvidenceError('Boolean author action cannot take an explicit value: ' + flag)
+            definition['value'] = action=='store_true'
+            index += 1
+        else:
+            if not sep:
+                index += 1
+                if index >= len(argv):
+                    raise PlanEvidenceError('Selected author option is missing its value: ' + flag)
+                value = argv[index]
+            converter = {'str':str,'int':int,'float':float,'bool':bool}[definition['type']]
+            definition['value'] = converter(value)
+            index += 1
+    return definitions
+
+
+def _requirements(value, citations, packet, device="cpu", step=None):
     if not isinstance(value, dict) or not isinstance(value.get("reason"), str) or not value["reason"].strip():
         raise PlanEvidenceError("Compatibility dependencies need an explicit explanation")
     refs = _references(value.get("citations"), citations, "repository")
@@ -300,13 +530,19 @@ def _requirements(value, citations, packet, device="cpu"):
                                           or "\n" in line or "\r" in line for line in author):
         raise PlanEvidenceError("Original dependency lines must be a list of strings")
     combined = "\n".join(ref["quote"] for ref in refs)
-    original_lines = {line.strip() for line in combined.splitlines()}
-    if any(line not in original_lines for line in author):
+    def unformat(line):
+        line = re.sub(r"^\s*(?:[-*+]|\d+[.)])\s+", "", line).strip()
+        return line[1:-1] if len(line) >= 2 and line.startswith("`") and line.endswith("`") else line
+
+    original_lines = [line.strip() for line in combined.splitlines() if line.strip()]
+    originals = {unformat(line): line for line in original_lines}
+    if any(unformat(line) not in originals for line in author):
         raise PlanEvidenceError("Original dependencies are not supported by their citations")
-    if not isinstance(compatibility, list) or not compatibility:
+    if not isinstance(compatibility, list) or (not compatibility and step is None):
         raise PlanEvidenceError("Frozen compatibility dependency pins are required")
     names = set()
     pins = CUDA_COMPATIBILITY_PINS if device == "cuda" else CPU_COMPATIBILITY_PINS
+    missing_imports = []
     for requirement in compatibility:
         if not isinstance(requirement, str) or not re.fullmatch(r"[\w-]+==[\w.+-]+", requirement):
             raise PlanEvidenceError("Compatibility dependencies must be exact reviewed pins")
@@ -317,13 +553,36 @@ def _requirements(value, citations, packet, device="cpu"):
         names.add(normalized)
         import_name = _PACKAGE_IMPORTS.get(normalized, normalized)
         if normalized != "numpy" and not re.search(r"(?<!\w)" + re.escape(import_name) + r"(?!\w)", combined, re.I):
-            raise PlanEvidenceError(f"Compatibility dependency lacks source/import evidence: {name}")
+            missing_imports.append(name)
+    if missing_imports and step is None:
+        raise PlanEvidenceError("Compatibility dependency lacks source/import evidence: " + ", ".join(missing_imports)
+            + "; cite the actual import files or omit unused packages")
     if not {"torch", "numpy"} <= names:
-        raise PlanEvidenceError("Independent evaluation needs the reviewed torch and numpy dependencies")
-    return {"author": list(author), "compatibility": list(compatibility),
+        if step is None:
+            raise PlanEvidenceError("Independent evaluation needs the reviewed torch and numpy dependencies")
+    import_evidence, omitted = [], []
+    if step is not None:
+        actual = _author_imports(packet, step)
+        inverse = {module: name for name, module in _PACKAGE_IMPORTS.items()}
+        required = {'torch', 'numpy'}
+        unsupported = []
+        for item in actual:
+            package = inverse.get(item['module'], item['module'])
+            if package not in pins:
+                unsupported.append(item['module'] + ' in ' + item['path'])
+            else:
+                required.add(package)
+                import_evidence.append({**item, 'package':package, 'pin':package + '==' + pins[package]})
+        if unsupported:
+            raise PlanEvidenceError('Author imports require packages outside the reviewed runtime: ' + ', '.join(sorted(set(unsupported))),
+                                    category='runtime_unsupported')
+        omitted = [line for line in compatibility if line.split('==')[0].casefold().replace('_', '-') not in required]
+        compatibility = [name + '==' + pins[name] for name in sorted(required)]
+    return {"author": [originals[unformat(line)] for line in author], "compatibility": list(compatibility),
             "reason": value["reason"], "citations": list(value["citations"]),
             "runtime_required": ["torch==" + pins["torch"], "numpy==" + pins["numpy"]],
-            "index_url": CUDA_INDEX_URL if device == "cuda" else CPU_INDEX_URL}
+            "index_url": CUDA_INDEX_URL if device == "cuda" else CPU_INDEX_URL,
+            "import_evidence": import_evidence, "omitted_unused_proposals": omitted}
 
 
 def _datasets(items, citations, packet, workspace):
@@ -336,6 +595,7 @@ def _datasets(items, citations, packet, workspace):
         refs = _references(item.get("citations"), citations)
         accepted = {"kind": item.get("kind"), "citations": list(item["citations"])}
         if item.get("kind") == "bundled":
+            _references(item.get("citations"), citations, "repository")
             paths = item.get("paths")
             if not isinstance(paths, list) or not paths or len(paths) > 200:
                 raise PlanEvidenceError("Bundled data needs explicit files, without wildcards")
@@ -522,9 +782,22 @@ def validate_plan(payload, packet, workspace):
         raise PlanEvidenceError("Immutable author parameters need individual source citations")
     if set(parameters) != set(parameter_citations):
         raise PlanEvidenceError("All author parameters must have individually scoped evidence")
+    parameters, parameter_citations = deepcopy(parameters), deepcopy(parameter_citations)
+    if packet.get('experiment_protocol'):
+        train = next((step for step in payload.get('steps', []) if isinstance(step,dict) and step.get('kind')=='train'), None)
+        if train is None:
+            raise PlanEvidenceError('Cannot compile parameters without the selected author train step')
+        for name, declaration in _effective_author_parameters(packet, train).items():
+            if name in parameters and parameters[name] != declaration['value']:
+                raise PlanEvidenceError('Proposed parameter differs from actual author CLI/default: ' + name)
+            identifier = 'author_arg_' + _digest(name.encode())[:12]
+            citations[identifier] = {'id':identifier, **declaration['source'], 'evidence_scope':'effective_author_argument'}
+            parameters[name] = declaration['value']
+            parameter_citations[name] = list(dict.fromkeys([*(parameter_citations.get(name) or []), identifier]))
     for key, value in parameters.items():
         refs = _references(parameter_citations[key], citations)
-        if not _has_value(value, refs):
+        compiled = any(ref.get('evidence_scope')=='effective_author_argument' for ref in refs)
+        if not compiled and not _has_value(value, refs):
             raise PlanEvidenceError(f"Parameter value is unsupported by its quote: {key}")
     metrics = payload.get("metrics")
     if not isinstance(metrics, list) or not metrics:
@@ -554,7 +827,9 @@ def validate_plan(payload, packet, workspace):
                 "parameters": deepcopy(parameters), "parameter_citations": deepcopy(parameter_citations),
                 "citations": list(citations.values()), "claims": deepcopy(claims),
                 "requirements": _requirements(payload.get("requirements"), citations, packet,
-                                              (payload.get("capture") or {}).get("device", "cpu")),
+                                              (payload.get("capture") or {}).get("device", "cpu"),
+                                              next((step for step in payload.get('steps', []) if step.get('kind') == 'train'), None)
+                                              if packet.get('experiment_protocol') else None),
                 "datasets": _datasets(payload.get("datasets"), citations, packet, workspace),
                 "steps": _steps(payload.get("steps"), citations, packet, workspace),
                 "metrics": accepted_metrics}
@@ -586,6 +861,10 @@ def validate_plan(payload, packet, workspace):
         raise PlanEvidenceError("Independent classification acceptance needs the paper accuracy reference")
     # Import lazily: source discovery remains usable before torch is installed.
     accepted["capture"] = _validate_capture(capture, packet, workspace)
+    if packet.get('experiment_protocol'):
+        from src.agents.experiment_protocol import bind_plan_to_protocol
+        bind_plan_to_protocol(accepted, packet['experiment_protocol'])
+        accepted['experiment_protocol'] = deepcopy(packet['experiment_protocol'])
     accepted["pdf_sha256"] = packet["pdf"]["sha256"]
     accepted["evidence_sha256"] = _digest(_canonical(packet).encode("utf-8"))
     accepted["plan_sha256"] = _digest(_canonical(accepted).encode("utf-8"))
@@ -610,10 +889,24 @@ Unknown or unsupported details require {"unsupported":"concrete reason"}.
 
 def _prompt(packet, feedback):
     return """Produce one source-grounded plan BEFORE execution. Every citation
-is {id,source:'pdf'|'repository'|'dataset',page or path,quote}; quote must be copied VERBATIM.
+should be {id,evidence_id}, selecting an existing evidence_excerpts ID. The
+program resolves the exact original text, source, page/path and immutable hash;
+you do not need to copy PDF line breaks, ligatures or source code. A direct
+{id,source:'pdf'|'repository'|'dataset',page or path,quote} is also supported but
+its quote must be verbatim. To establish only that a bundled file exists, use
+{id,source:'inventory',path,quote:path}; inventory cannot prove dataset identity,
+split sizes, parameters or metrics. Cite the README or loader for dataset usage.
+source:'dataset' means ONLY a program-read file_inventory.dataset_evidence NPZ
+summary. A filename/pickle path is not a readable dataset summary.
 Reference metrics need PDF page citations containing the actual value and
 row/header context; units must follow the paper. Protocol/defaults/data/split/
 seed/hyperparameters must come from author sources, never implicit guesses.
+If the packet contains experiment_protocol, compile EXACTLY that selected
+experiment: retain its argv/cwd/device, parameters, metric references/units and
+ALL repetitions. Do not select another experiment in this step. Compatibility
+pins will be resolved by the program from the selected entrypoint's real import
+graph; proposed unused reviewed pins are recorded and omitted. requirements
+author still records the actual original declarations, with cited evidence.
 When several complete published experiments are available, prefer the smallest
 complete bundled dataset with an exact author command and paper reference.
 Keep every native split/repetition and the full chosen protocol unchanged.
@@ -622,7 +915,7 @@ only file_inventory paths are available. No network tools or external sources.
 
 JSON schema:
 {version:1,scope:'selected_paper_experiment',repository:{url,revision},
- citations:[{id,source,page?,path?,quote}],
+ citations:[{id,evidence_id} OR {id,source,page?,path?,quote}],
  claims:{protocol:[citation_ids],dataset:[citation_ids],metrics:[citation_ids]},
  parameters:{author_parameter:value},parameter_citations:{author_parameter:[ids]},
  requirements:{author:[verbatim requirement lines],compatibility:[name==version],reason,citations:[ids]},
@@ -643,6 +936,12 @@ Use author settings/defaults unchanged and explain modern device compatibility
 pins separately from original dependency lines. Both torch and numpy are
 required by the independent evaluator; numpy does not need an author import
 citation and must not be invented as an original author requirement.
+The capture schemas are ALTERNATIVES, not wrapper keys. capture must be ONE
+flat object starting with kind; never return {single_run:{...}} or
+{native_series:{...}}. model names the trained instance variable, not its class.
+Do not promise a fixed optimizer step count if the author actually early-stops.
+If the paper reports a mean over N runs, a single native run cannot verify that
+mean. Require an author entrypoint that implements all N runs or return unsupported.
 Available reviewed pins:
 """ + _canonical(CPU_COMPATIBILITY_PINS) + "\n\nCapture schema:\n" + _capture_schema() + (
         "\n\nPrior validation feedback (repair citations/schema only before training):\n" + feedback if feedback else ""
@@ -657,7 +956,7 @@ Available reviewed pins:
         "multiplied by the source-defined optimizer updates per epoch. Natural author returns and "
         "all native repetitions are mandatory. expected_test_samples is an ordered list with one "
         "complete original split count per run, supported by source or actual bundled dataset evidence."
-    ) + "\n\nComplete PDF and bounded source packet:\n" + _canonical(packet)
+    ) + "\n\nComplete PDF and bounded source packet with selectable original spans:\n" + _canonical(_planning_view(packet))
 
 
 def _capture_schema():
@@ -747,11 +1046,12 @@ dependency_compatibility: reviewed modern device pins cover the author's actual
 imports without changing the method; original requirement lines remain
 truthful; runtime-only torch/NumPy are separately identified.
 
-Return exactly {"accepted":boolean,"checks":{GATE:{"passed":boolean,
+Return exactly {"checks":{GATE:{"passed":boolean,
 "reason":"specific evidence-based reasoning","citations":[existing plan
 citation IDs]}}} with every gate named above. Each passed check needs concrete
 citation IDs with the required original PDF/repository sources. If any point
-cannot be established, set accepted=false and that check passed=false. Do not
+cannot be established, set that check passed=false. The program computes the
+aggregate verdict from every required check; do not supply an aggregate. Do not
 invent certainty. Do not propose a fix or tune for metric acceptance.
 
 Required source kinds per gate:\n""" + _canonical(_SEMANTIC_GATES)
@@ -767,7 +1067,12 @@ Required source kinds per gate:\n""" + _canonical(_SEMANTIC_GATES)
         raise
     review_audit = {"stage": "semantic_review", "candidate": deepcopy(plan),
                     "semantic_review": _bounded_audit(verdict)}
-    if not isinstance(verdict, dict) or verdict.get("accepted") is not True:
+    if not isinstance(verdict, dict) or ('accepted' in verdict and type(verdict['accepted']) is not bool):
+        raise PlanEvidenceError('Independent semantic review is not a well-typed object', planning_evidence=review_audit)
+    checks = verdict.get('checks')
+    all_checks = (isinstance(checks, dict) and set(checks)==set(_SEMANTIC_GATES)
+                  and all(isinstance(check,dict) and check.get('passed') is True for check in checks.values()))
+    if not all_checks:
         failed = verdict.get("checks", {}) if isinstance(verdict, dict) else {}
         reasons = [f"{gate}: {str(check.get('reason', 'unconfirmed'))[:700]}"
                    for gate, check in failed.items()
@@ -776,7 +1081,7 @@ Required source kinds per gate:\n""" + _canonical(_SEMANTIC_GATES)
         if reasons:
             message += "; " + "; ".join(reasons)[:2400]
         review_audit["reason"] = message
-        raise PlanEvidenceError(message, planning_evidence=review_audit)
+        raise PlanEvidenceError(message, planning_evidence=review_audit, category='protocol_mismatch')
     checks = verdict.get("checks")
     if not isinstance(checks, dict) or set(checks) != set(_SEMANTIC_GATES):
         raise PlanEvidenceError("Independent semantic review omitted required experiment checks",
@@ -804,6 +1109,10 @@ Required source kinds per gate:\n""" + _canonical(_SEMANTIC_GATES)
                                    "reviewed_plan_sha256": accepted.pop("plan_sha256"),
                                    "evidence_sha256": accepted["evidence_sha256"],
                                    "task": "discovered_repository_plan_review"}
+    accepted['semantic_review']['aggregation'] = 'all_required_verified_checks'
+    if 'accepted' in verdict:
+        accepted['semantic_review']['model_aggregate_verdict'] = verdict['accepted']
+        accepted['semantic_review']['aggregate_verdict_consistent'] = verdict['accepted'] is True
     accepted["plan_sha256"] = _digest(_canonical(accepted).encode("utf-8"))
     return accepted
 
@@ -811,6 +1120,33 @@ Required source kinds per gate:\n""" + _canonical(_SEMANTIC_GATES)
 def _bounded_audit(value):
     encoded = _canonical(value)
     return deepcopy(value) if len(encoded) <= 64000 else {"truncated": True, "excerpt": encoded[:64000]}
+
+
+def _planning_diagnostics(payload, packet, workspace, primary):
+    """Collect independent schema/evidence errors in one pre-training repair."""
+    problems = [f"{type(primary).__name__}: {primary}"]
+    if not isinstance(payload, dict) or payload.get("unsupported"):
+        return problems
+    try:
+        citations = _citations(payload, packet, workspace)
+    except (PlanEvidenceError, ValueError, TypeError, KeyError):
+        return problems  # No guesses from invalid source references.
+    capture = payload.get("capture") or {}
+    checks = [lambda: _requirements(payload.get("requirements"), citations, packet,
+                                   capture.get("device", "cpu") if isinstance(capture, dict) else "cpu",
+                                   next((step for step in payload.get('steps', []) if isinstance(step,dict) and step.get('kind') == 'train'), None)
+                                   if packet.get('experiment_protocol') else None),
+              lambda: _datasets(payload.get("datasets"), citations, packet, workspace),
+              lambda: _steps(payload.get("steps"), citations, packet, workspace),
+              lambda: _validate_capture(payload.get("capture"), packet, workspace)]
+    for check in checks:
+        try:
+            check()
+        except (PlanEvidenceError, ValueError, TypeError, KeyError) as exc:
+            message = f"{type(exc).__name__}: {exc}"
+            if message not in problems:
+                problems.append(message)
+    return problems
 
 
 def propose_plan(llm, packet, workspace, *, max_attempts=2):
@@ -831,6 +1167,7 @@ def propose_plan(llm, packet, workspace, *, max_attempts=2):
     while failures < max_attempts:
         response = llm.chat(_prompt(packet, feedback), system_prompt=_SYSTEM,
                             temperature=0, task="discovered_repository_plan")
+        payload = None
         try:
             payload = _json_response(response)
             last_candidate = _bounded_audit(payload)
@@ -846,7 +1183,7 @@ def propose_plan(llm, packet, workspace, *, max_attempts=2):
             accepted = validate_plan(payload, packet, workspace)
         except (PlanEvidenceError, ValueError, TypeError, KeyError) as exc:
             failures += 1
-            feedback = f"{type(exc).__name__}: {exc}"[:1800]
+            feedback = "\n".join(_planning_diagnostics(payload, packet, workspace, exc))[:4000]
             validation_failures.append(feedback)
             continue
         # Semantic rejection is final. Repairing/tuning a rejected protocol is

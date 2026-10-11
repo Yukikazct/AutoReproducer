@@ -19,41 +19,11 @@ _support_spec.loader.exec_module(_support)
 ROOT, WORKSPACE = _support.ROOT, _support.WORKSPACE
 check_sources, read, select, sha, write = (_support.check_sources, _support.read,
                                          _support.select, _support.sha, _support.write)
+flatten, FlattenedAuthor = _support.flatten, _support.FlattenedAuthor
 
 
 def artifact_names(index):
     return [f"run_{index:03d}_{suffix}" for suffix in ("model.pt", "tensors.pt")]
-
-
-def flatten(value, tensors):
-    if isinstance(value, torch.Tensor):
-        if len(tensors) >= 64 or value.layout != torch.strided:
-            raise ValueError("Capture forward tensors must be bounded dense author inputs")
-        tensors.append(value.detach().cpu().clone())
-        return {"kind": "tensor", "index": len(tensors) - 1}
-    if type(value) in (bool, int, float) and (not isinstance(value, float) or np.isfinite(value)):
-        return {"kind": "scalar", "value": value}
-    if type(value) in (list, tuple) and 0 < len(value) <= 64:
-        return {"kind": type(value).__name__, "items": [flatten(item, tensors) for item in value]}
-    raise ValueError("Capture forward arguments must be real tensor trees or fixed author scalars")
-
-
-def reconstruct(layout, tensors):
-    if layout["kind"] == "tensor":
-        return tensors[layout["index"]]
-    if layout["kind"] == "scalar":
-        return layout["value"]
-    items = [reconstruct(item, tensors) for item in layout["items"]]
-    return tuple(items) if layout["kind"] == "tuple" else items
-
-
-class FlattenedAuthor(torch.nn.Module):
-    def __init__(self, model, layouts):
-        super().__init__()
-        self.author_model, self.layouts = model, layouts
-
-    def forward(self, *tensors):
-        return self.author_model(*(reconstruct(layout, tensors) for layout in self.layouts))
 
 
 def model_source(model, script, config):

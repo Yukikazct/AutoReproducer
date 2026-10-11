@@ -256,6 +256,7 @@ class DiscoveredRepositoryReproduction:
         started = time.monotonic()
         emit = on_event or (lambda event: None)
         phases = [("prepare_repository", "FIND_RESOURCES", "ResourceFinder", "核验论文与 Git 仓库并固定源码版本"),
+                  ("select_experiment", "READ_PAPER", "ExperimentProtocol", "判别论文实验方法与源码对应关系"),
                   ("plan_repository", "READ_PAPER", "PaperReader", "依据论文与源码冻结实验计划"),
                   ("prepare_dataset", "FIND_RESOURCES", "ResourceFinder", "准备完整真实数据"),
                   ("prepare_environment", "BUILD_ENV", "EnvBuilder", "准备依赖并进行原生运算检查"),
@@ -357,6 +358,13 @@ class DiscoveredRepositoryReproduction:
             data.update(repository=snapshot, revision_resolution=pin_evidence)
             write_json(run_dir / "repository.json", snapshot)
             event(phase, "success")
+            phase = "select_experiment"; event(phase, "running")
+            from src.agents.experiment_protocol import ExperimentProtocolAgent
+            protocol = ExperimentProtocolAgent(self.llm, self.logger).run(packet, workspace)
+            data['experiment_protocol'] = protocol
+            packet['experiment_protocol'] = protocol
+            write_json(run_dir / 'experiment_protocol.json', protocol)
+            event(phase, "success")
             phase = "plan_repository"; event(phase, "running")
             if digest(Path(request["pdf_path"])) != document.sha256:
                 raise ValueError("原始 PDF 在仓库准备期间发生变化，不能使用不同论文继续规划")
@@ -412,7 +420,7 @@ class DiscoveredRepositoryReproduction:
             raise
         except Exception as exc:
             phase = getattr(exc, "reproduction_phase", phase)
-            error = str(exc)
+            error = str(exc) or type(exc).__name__
             if phase == "prepare_repository":
                 try:
                     fallback_pdf = extract_pdf_input(request["pdf_path"])
@@ -427,6 +435,8 @@ class DiscoveredRepositoryReproduction:
                 write_json(run_dir / "plan_rejection.json", data["plan_rejection"])
             data["validation"] = {"status": "execution_failed" if phase in {"execute_repository", "verify_protocol"}
                                   else "insufficient_evidence", "failure_phase": phase, "is_reproduced": None,
+                                  "failure_kind": getattr(exc, 'category', 'execution_failure' if phase in {'execute_repository','verify_protocol'}
+                                                          else 'runtime_error'),
                                   "result_level": "failed", "reason": error}
             data.setdefault("execution", {"mode": "repository", "executed": False, "success": False,
                                           "repository_executed": False})

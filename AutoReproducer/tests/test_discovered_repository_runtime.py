@@ -120,6 +120,33 @@ def test_second_unregistered_layout_multiple_inputs_complete_labels(tmp_path):
     assert result["capture"]["test_samples"] == 8
 
 
+@pytest.mark.parametrize('layout', ['coo', 'csr'])
+def test_sparse_author_inputs_preserve_forward_and_fresh_metrics(tmp_path, layout):
+    def sparse_model(fixture):
+        root = fixture['workspace']
+        model = (root / 'author_model.py').read_text('utf-8')
+        model = model.replace('forward(self, features)', 'forward(self, features, adj)')
+        model = model.replace('self.linear(features)', 'self.linear(torch.sparse.mm(adj, features))')
+        script = (root / 'train.py').read_text('utf-8')
+        creation = ("nodes = torch.arange(len(features)).repeat(2)\n"
+                    "adj = torch.sparse_coo_tensor(torch.stack([nodes, nodes]), "
+                    "torch.full((len(nodes),), 0.5), (len(features), len(features)))\n")
+        if layout == 'csr':
+            creation += 'adj = adj.to_sparse_csr()\n'
+        script = script.replace('model = SignalModel()', creation + 'model = SignalModel()')
+        script = script.replace('model(features[:8])', 'model(features, adj)[:8]')
+        script = script.replace('model(features)', 'model(features, adj)')
+        for name, text in {'train.py': script, 'author_model.py': model}.items():
+            (root / name).write_text(text, encoding='utf-8')
+            fixture['snapshot']['files'][name] = hashlib.sha256((root / name).read_bytes()).hexdigest()
+            next(item for item in fixture['proposal']['citations'] if item.get('path') == name)['quote'] = text
+        fixture['proposal']['capture']['forward_args'].append('adj')
+    fixture, plan, digest, _, execution = run_fixture(tmp_path, mutate=sparse_model)
+    result = verify_capture(plan, fixture['workspace'], execution, digest)
+    assert result['is_reproduced'] and result['independent_metrics']['predictions_match']
+    assert result['independent_metrics']['numpy_torch_crosscheck']
+
+
 @pytest.mark.parametrize("layout", ["entrypoint_class", "torch_builtin"])
 def test_author_model_class_location_does_not_require_an_import_preset(tmp_path, layout):
     def change_model(fixture):

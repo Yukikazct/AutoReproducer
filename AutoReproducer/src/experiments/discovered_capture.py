@@ -65,6 +65,57 @@ def cpu_tensor(value):
     return value.detach().clone()
 
 
+def flatten(value, tensors):
+    """Trace sparse author inputs via exact index/value components, never dense copies."""
+    if isinstance(value, torch.Tensor):
+        def append(tensor):
+            if len(tensors) >= 64:
+                raise ValueError("Captured author tensor inputs exceed the component bound")
+            tensors.append(tensor.detach().cpu().clone())
+            return len(tensors) - 1
+
+        if value.layout == torch.strided:
+            return {"kind": "tensor", "index": append(value)}
+        if value.layout == torch.sparse_coo:
+            value = value.detach().cpu().coalesce()
+            return {"kind": "sparse_coo", "indices": append(value.indices()),
+                    "values": append(value.values()), "size": list(value.size())}
+        if value.layout == torch.sparse_csr:
+            return {"kind": "sparse_csr", "crow": append(value.crow_indices()),
+                    "col": append(value.col_indices()), "values": append(value.values()),
+                    "size": list(value.size())}
+        raise ValueError("Unsupported author tensor layout")
+    if type(value) in (bool, int, float) and (not isinstance(value, float) or np.isfinite(value)):
+        return {"kind": "scalar", "value": value}
+    if type(value) in (list, tuple) and 0 < len(value) <= 64:
+        return {"kind": type(value).__name__, "items": [flatten(item, tensors) for item in value]}
+    raise ValueError("Capture forward arguments must be real tensor trees or fixed author scalars")
+
+
+def reconstruct(layout, tensors):
+    if layout["kind"] == "tensor":
+        return tensors[layout["index"]]
+    if layout["kind"] == "sparse_coo":
+        return torch.sparse_coo_tensor(tensors[layout["indices"]], tensors[layout["values"]],
+                                       size=layout["size"], is_coalesced=True)
+    if layout["kind"] == "sparse_csr":
+        return torch.sparse_csr_tensor(tensors[layout["crow"]], tensors[layout["col"]],
+                                       tensors[layout["values"]], size=layout["size"])
+    if layout["kind"] == "scalar":
+        return layout["value"]
+    items = [reconstruct(item, tensors) for item in layout["items"]]
+    return tuple(items) if layout["kind"] == "tuple" else items
+
+
+class FlattenedAuthor(torch.nn.Module):
+    def __init__(self, model, layouts):
+        super().__init__()
+        self.author_model, self.layouts = model, layouts
+
+    def forward(self, *tensors):
+        return self.author_model(*(reconstruct(layout, tensors) for layout in self.layouts))
+
+
 def capture(config):
     check_sources(config)
     if torch.cuda.is_available():
@@ -133,11 +184,16 @@ def capture(config):
         select(outputs, labels, indices, contract["expected_test_samples"])
         # Trace only the author's trained forward path; independent evaluation
         # also checks every output against the original author module's result.
-        traced = torch.jit.trace(model, inputs, check_trace=True, strict=True)
-        if not torch.allclose(traced(*inputs), outputs, atol=1e-6, rtol=1e-5):
+        tensors = []
+        layouts = [flatten(value, tensors) for value in inputs]
+        if not tensors or sum(value.numel() * value.element_size() for value in tensors) > 2 * 1024**3:
+            raise ValueError("Captured author inputs exceed the frozen memory bound")
+        wrapper = FlattenedAuthor(model, layouts).eval()
+        traced = torch.jit.trace(wrapper, tuple(tensors), check_trace=True, strict=True)
+        if not torch.allclose(traced(*tensors), outputs, atol=1e-6, rtol=1e-5):
             raise ValueError("Exported author forward path differs from the trained model")
         torch.jit.save(traced, str(ROOT / "model.pt"))
-        torch.save({"inputs": inputs, "labels": labels, "test_indices": indices,
+        torch.save({"inputs": tuple(tensors), "labels": labels, "test_indices": indices,
                     "outputs": outputs.detach()}, ROOT / "tensors.pt")
     check_sources(config)
     write("capture.json", {"version": 1, "pass": True, "spec_sha256": config["spec_sha256"],

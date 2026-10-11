@@ -33,6 +33,21 @@ def test_plain_link_can_be_reviewed_but_cannot_start_planning(tmp_path):
     assert review["accepted"] and review["repository_revision"] == "a" * 40
 
 
+def test_candidate_location_beyond_page_viewport_remains_exact_source_evidence(packet):
+    import hashlib
+    page = packet['pdf']['pages'][0]
+    url = packet['repository']['url']
+    page['text'] = 'Title\n' + 'Earlier prose. ' * 1500 + '\nOur code is available at ' + url + '\nAUTHOR_CONTEXT'
+    page['sha256'] = hashlib.sha256(page['text'].encode()).hexdigest()
+    for link in packet['pdf']['repository_links']:
+        link['raw_url'] = url
+    view = identity_view(packet)
+    assert url not in view['pdf']['pages'][0]['text']
+    location = view['evidence_excerpts']['pdf_location_0']
+    assert 'AUTHOR_CONTEXT' in location['quote'] and location['quote'] in page['text']
+    assert view['code_locations'][0]['page'] == 1
+
+
 def test_actual_pdf_and_git_excerpts_reach_llm_and_quotes_are_verified(packet):
     view = identity_view(packet)
     llm = Mock(mock_mode=False, model="fixture-model")
@@ -165,6 +180,8 @@ def test_service_rejects_first_candidate_and_verifies_actual_alternative(tmp_pat
     monkeypatch.setattr(service, "resolve_repository_revision", lambda *a, **kw: ("a" * 40, {}))
     propose = Mock(side_effect=ValueError("Fixture stops after verified selection"))
     monkeypatch.setattr(planner, "propose_plan", propose)
+    from src.agents.experiment_protocol import ExperimentProtocolAgent
+    monkeypatch.setattr(ExperimentProtocolAgent, 'run', Mock(return_value={'scope':'identity_fixture'}))
     runner = service.DiscoveredRepositoryReproduction(tmp_path / "service", AuditLogger(log_dir=str(tmp_path / "logs")), llm=llm)
     runner.runner.run = Mock(side_effect=AssertionError("Selection test cannot execute training"))
     result = runner.run({"pdf_path": str(author["pdf"]), "resources": {

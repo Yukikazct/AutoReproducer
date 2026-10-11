@@ -492,6 +492,18 @@ class ReportGeneratorAgent(BaseAgent):
         lines.append("")
 
         repository = data.get("repository") or {}
+        protocol = data.get('experiment_protocol') or {}
+        if protocol:
+            method, dataset = protocol.get('method', {}), protocol.get('dataset', {})
+            repetitions = protocol.get('repetitions', {})
+            lines += ['### 选定实验的协议判别',
+                      '- **方法与变体**: ' + _markdown_text(str(method.get('name', '')) + ' / ' + str(method.get('variant', ''))),
+                      '- **数据集与划分**: ' + _markdown_text(str(dataset.get('name', '')) + ' / ' + str(dataset.get('split', ''))),
+                      '- **预处理**: ' + _markdown_text(str(dataset.get('preprocessing', ''))),
+                      '- **训练协议**: ' + _markdown_text(str(protocol.get('training', {}).get('description', ''))),
+                      f"- **完整运行次数与汇总**: {repetitions.get('count')} / {repetitions.get('aggregation')}",
+                      '- **论文与源码对应关系**: ' + _markdown_text(str(protocol.get('alignment', {}).get('reason', ''))),
+                      f"- **协议 SHA-256**: `{protocol.get('protocol_sha256', '')}`", '']
         spec = data.get("experiment_spec") or {}
         if spec:
             lines += ["### 用户提供的仓库实验来源" if identity.get("source") == "user_supplied_pinned_git_llm_review" else "### 官方仓库实验来源",

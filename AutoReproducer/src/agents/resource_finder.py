@@ -33,6 +33,10 @@ class ResourceFinderAgent(BaseAgent):
     """从论文信息中查找代码仓库、数据集和相关资源。"""
 
     system_prompt = "根据论文信息定位代码仓库与数据集,输出仓库 URL、数据源列表及置信度"
+    repository_system_prompt = ("当前任务仅整理本次 PDF 的仓库候选：实际链接和代码声明优先于模型猜测，"
+        "引用仓库不能确认作者实现，用户输入来源须单独标记。"
+        "数据集下载地址和预训练权重可留空，它们由后续完整实验规划确定，不是本阶段完成条件。"
+        "仓库是否属于作者及是否匹配论文将在拉取固定源码后核验；本阶段不能宣称复现成功。")
 
     def __init__(self, llm_client: LLMClient, logger=None,
                  offline: bool = False):

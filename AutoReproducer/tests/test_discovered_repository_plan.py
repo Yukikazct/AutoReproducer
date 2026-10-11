@@ -228,3 +228,53 @@ def test_binary_text_suffix_is_skipped_without_hiding_real_source_mutation(exper
     (fixture["workspace"] / "train.py").write_text("changed", encoding="utf-8")
     with pytest.raises(planner.PlanEvidenceError, match="changed after snapshot"):
         planner.build_evidence_packet(fixture["pdf"], fixture["workspace"], fixture["snapshot"])
+
+
+def test_dependency_markdown_formatting_restores_original_without_changing_versions(experiment):
+    fixture = experiment
+    path = fixture['workspace'] / 'requirements.txt'
+    path.write_text('- `torch==1.13.1`\n', encoding='utf-8')
+    fixture['snapshot']['files']['requirements.txt'] = hashlib.sha256(path.read_bytes()).hexdigest()
+    fixture['packet'] = planner.build_evidence_packet(fixture['pdf'], fixture['workspace'], fixture['snapshot'])
+    proposal = deepcopy(fixture['proposal'])
+    next(item for item in proposal['citations'] if item['id'] == 'requirements')['quote'] = path.read_text('utf-8')
+    accepted = validate(fixture, proposal)
+    assert accepted['requirements']['author'] == ['- `torch==1.13.1`']
+    proposal['requirements']['author'] = ['torch==1.13']
+    with pytest.raises(planner.PlanEvidenceError, match='Original dependencies'):
+        validate(fixture, proposal)
+
+
+def test_one_repair_receives_independent_dependency_and_capture_errors(experiment):
+    invalid = deepcopy(experiment['proposal'])
+    invalid['parameters']['epochs'] = 123456
+    invalid['requirements']['compatibility'].extend(['scipy==1.14.1', 'tqdm==4.67.1'])
+    invalid['capture'] = {'single_run': invalid['capture']}
+    llm = PlannedLLM(experiment['proposal'], prefixes=[invalid])
+    assert planner.propose_plan(llm, experiment['packet'], experiment['workspace'])['semantic_review']['accepted']
+    repair = llm.calls[1][0]
+    assert 'Parameter value is unsupported' in repair
+    assert 'scipy, tqdm' in repair
+
+
+@pytest.mark.parametrize('checks_pass', [False, True])
+def test_aggregate_is_derived_from_all_verified_checks_without_tuning(experiment, checks_pass):
+    from unittest.mock import Mock
+    inconsistent = accepted_review()
+    inconsistent['accepted'] = False
+    if not checks_pass:
+        inconsistent['accepted'] = True
+        inconsistent['checks']['same_experiment'].update(passed=False, reason='Paper method is a different variant.')
+    llm = Mock()
+    llm.chat.return_value = json.dumps(inconsistent)
+    candidate = validate(experiment)
+    if checks_pass:
+        result = planner.review_plan(llm, candidate, experiment['packet'])
+        assert result['semantic_review']['aggregate_verdict_consistent'] is False
+        assert result['semantic_review']['model_aggregate_verdict'] is False
+    else:
+        with pytest.raises(planner.PlanEvidenceError, match='different variant'):
+            planner.review_plan(llm, candidate, experiment['packet'])
+    assert llm.chat.call_count == 1
+    assert llm.chat.call_args.kwargs['task'] == 'discovered_repository_plan_review'
+    assert planner._canonical(candidate) in llm.chat.call_args.args[0]

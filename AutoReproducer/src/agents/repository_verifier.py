@@ -68,6 +68,20 @@ def identity_view(packet):
                 excerpts[f"pdf_p{page['page']}_{index}"] = {"source": "pdf", "page": page["page"], "quote": quote}
     for index, link in enumerate(links):
         excerpts[f"pdf_link_{index}"] = {"source": "pdf", "page": link["page"], "quote": link["context"][:1500]}
+        page = next((item for item in packet["pdf"]["pages"] if item["page"] == link["page"]), None)
+        if page:
+            # A candidate at the bottom of a long page must not disappear
+            # behind the header viewport. Give the model its actual surrounding
+            # paragraph in addition to the extracted claim/numbered footnote.
+            anchor = link.get("raw_url") or link["url"]
+            offset = page["text"].find(anchor)
+            if offset < 0 and link.get("context"):
+                pattern = r"\s+".join(re.escape(part) for part in link["context"].split())
+                match = re.search(pattern, page["text"])
+                offset = match.start() if match else -1
+            if offset >= 0:
+                quote = page["text"][max(0, offset - 1200):offset + len(anchor) + 1200]
+                excerpts[f"pdf_location_{index}"] = {"source": "pdf", "page": link["page"], "quote": quote}
     for number, (path, source) in enumerate(files.items()):
         lines = [line for line in source["text"].splitlines() if line.strip()]
         for index in range(0, len(lines), 3):
@@ -78,6 +92,9 @@ def identity_view(packet):
                     "repository_links": links},
             "repository": {"url": url, "revision": packet["repository"]["revision"], "files": files},
             "evidence_excerpts": excerpts,
+            "code_locations": [{key: link.get(key) for key in
+                ("url", "raw_url", "page", "source", "context", "evidence_type", "is_author_code")}
+                for link in links],
             "repository_input": {"source": "user_supplied" if manual else "pdf_link", "url": url},
             "file_tree": sorted(packet["file_inventory"])[:200]}
 

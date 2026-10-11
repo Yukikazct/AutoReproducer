@@ -152,6 +152,8 @@ class Orchestrator:
             "execution_source": "user_supplied_code" if input_data.get("code") else (
                 "mock_demo" if self.mock_mode else "llm_generated"),
             "repository_executed": False,
+            "reading_purpose": "repository_discovery" if input_data.get("pdf_path")
+                and not input_data.get("code") and not input_data.get("corpus_paper") else "experiment",
             "verifications": [],
             "fix_records": [],
             "optimization": self._reserved_optimization(input_data),
@@ -217,6 +219,12 @@ class Orchestrator:
                 main_completed = True
                 # Prompt-Free 验证 + 修正闭环
                 self._verify_step(state_name, agent, result)
+
+                if state_name == "READ_PAPER" and not self.mock_mode:
+                    reviews = [item for item in self.data["verifications"]
+                               if item["state"] == "READ_PAPER"]
+                    if not reviews or reviews[-1].get("pass") is not True:
+                        raise RuntimeError("论文解析结果未通过最终审查，未启动资源实验")
 
                 if state_name == "FIND_RESOURCES":
                     # The final reviewed Finder output owns the selection.
@@ -510,7 +518,9 @@ class Orchestrator:
             try:
                 reviewed = verifier.run({
                     "agent_name": agent.name,
-                    "system_prompt": getattr(agent, "system_prompt", "") or agent.name,
+                    "system_prompt": (getattr(agent, "repository_system_prompt", "")
+                        if state_name in {"READ_PAPER", "FIND_RESOURCES"} and self.data.get("reading_purpose") == "repository_discovery"
+                        else getattr(agent, "system_prompt", "")) or agent.name,
                     "output": output,
                 })
                 accepted = bool(reviewed.get("pass"))

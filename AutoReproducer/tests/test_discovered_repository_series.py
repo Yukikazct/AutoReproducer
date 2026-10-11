@@ -99,8 +99,11 @@ print('Test Accuracy:', np.mean(accuracies))
     return fixture
 
 
-def run_series(root, device="cpu"):
+def run_series(root, device="cpu", mutate=None):
     fixture = series_fixture(root, device)
+    if mutate:
+        mutate(fixture)
+        fixture['packet'] = build_evidence_packet(fixture['pdf'], fixture['workspace'], fixture['snapshot'])
     plan = propose_plan(PlannedLLM(fixture["proposal"]), fixture["packet"], fixture["workspace"])
     spec_hash = spec_digest(plan)
     manifest = materialize_capture(fixture["workspace"], plan, spec_hash, snapshot=fixture["snapshot"])
@@ -203,6 +206,32 @@ def test_native_cuda_series_exports_all_models_for_fresh_cpu_evaluation(tmp_path
     assert len(result["independent_metrics"]["runs"]) == 3
     environment = environment_for_plan(plan)
     assert "https://download.pytorch.org/whl/cu121" in environment["requirements_txt"]
+
+
+@pytest.mark.parametrize('device', ['cpu', 'cuda'])
+def test_sparse_native_series_preserves_every_model_and_run(tmp_path, device):
+    if device == 'cuda':
+        cuda_dependency_cache()
+    def sparse_model(fixture):
+        root = fixture['workspace']
+        model = (root / 'author_model.py').read_text('utf-8')
+        model = model.replace('forward(self, inputs, normalize)', 'forward(self, inputs, normalize, adj)')
+        model = model.replace('self.linear(inputs[0] + inputs[1])',
+                              'self.linear(torch.sparse.mm(adj, inputs[0] + inputs[1]))')
+        script = (root / 'train.py').read_text('utf-8')
+        script = script.replace('    model = SignalModel().to(device)',
+            '    adj = torch.eye(len(features), device=device).to_sparse()\n    model = SignalModel().to(device)')
+        script = script.replace('model(inputs, normalize)', 'model(inputs, normalize, adj)')
+        for name, text in {'train.py':script, 'author_model.py':model}.items():
+            (root / name).write_text(text, encoding='utf-8')
+            fixture['snapshot']['files'][name] = hashlib.sha256((root / name).read_bytes()).hexdigest()
+            next(item for item in fixture['proposal']['citations'] if item.get('path') == name)['quote'] = text
+        fixture['proposal']['capture']['forward_args'].append('adj')
+    fixture, plan, spec_hash, execution = run_series(tmp_path, device, mutate=sparse_model)
+    result = verify_capture(plan, fixture['workspace'], execution, spec_hash)
+    assert result['protocol_pass'] and result['independent_metrics_pass']
+    assert [item['optimizer_steps'] for item in result['capture']['runs']] == [8, 10, 12]
+    assert result['capture']['training_device'] == device
 
 
 def test_bundled_npz_split_summary_is_from_actual_hash_bound_arrays(tmp_path):

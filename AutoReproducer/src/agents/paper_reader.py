@@ -13,10 +13,63 @@ from src.llm.llm_client import LLMClient
 from src.repository_evidence import extract_repository_links
 
 
+READING_TEXT_LIMIT = 120000
+
+
+def reading_context(text):
+    """Read ordinary papers in full; label distributed excerpts for long ones."""
+    if len(text) <= READING_TEXT_LIMIT:
+        return text, {"complete": True, "total_characters": len(text),
+                      "spans": [[0, len(text)]]}
+    # Retain both the identity and late experiments/appendices. No guessed
+    # section boundaries or silent first-page truncation can hide the results.
+    width, count = 12000, 10
+    starts = [round(i * (len(text) - width) / (count - 1)) for i in range(count)]
+    spans = [[start, start + width] for start in starts]
+    context = "\n\n".join(f"[原文字符 {start}:{end}，全文 {len(text)} 字符]\n{text[start:end]}"
+                          for start, end in spans)
+    return context, {"complete": False, "total_characters": len(text), "spans": spans}
+
+
+def repository_reading_context(text, links):
+    """Identity header plus code-availability locations from the entire paper."""
+    spans = [[0, min(10000, len(text))]]
+    markers = re.compile(r"(?i)(?:source\s+code|code\s+(?:is\s+)?avail|implement(?:ation|ed)|"
+                         r"github\s*\.?\s*com|github|software\s+(?:is\s+)?avail)")
+    for match in markers.finditer(text):
+        start, end = max(0, match.start() - 600), min(len(text), match.end() + 1200)
+        if spans[-1][0] <= start <= spans[-1][1]:
+            spans[-1][1] = max(spans[-1][1], end)
+        else:
+            spans.append([start, end])
+    # Candidate evidence always survives this auxiliary prose bound, including
+    # numbered footnotes and URI annotations outside the selected text windows.
+    selected, size = [], 0
+    for start, end in spans:
+        end = min(end, start + 40000 - size)
+        if end <= start:
+            break
+        selected.append([start, end])
+        size += end - start
+    context = "\n\n".join(f"[原文字符 {start}:{end}]\n{text[start:end]}" for start, end in selected)
+    context += "\n\n[全 PDF 页面和 URI 注释提取的仓库位置，保留页码、代码声明与脚注]\n"
+    context += json.dumps(links, ensure_ascii=False)
+    return context, {"complete": False, "purpose": "repository_discovery",
+                     "total_characters": len(text), "spans": selected,
+                     "repository_locations": len(links)}
+
+
 class PaperReaderAgent(BaseAgent):
     """从论文 PDF 或标题中提取标题、方法、依赖、数值声明、数据集等结构化信息。"""
 
-    system_prompt = "从论文中提取标题、作者、方法、依赖列表、数值声明与数据集,输出结构化 JSON"
+    system_prompt = ("依据实际论文提取标题、作者、方法、软件依赖、实验指标与数据集，返回结构化对象。"
+                     "dependencies 只指原文明确提及的软件库，不包括基线模型、引用方法或论文。"
+                     "原文未说明软件库时空列表是正确结果。metrics 只包含带实验语境和单位的结果指标，"
+                     "不能把层数、训练轮数或基线结果当成本方法指标。没有证据的字段应留空，禁止补造。")
+    repository_system_prompt = ("当前任务是从实际 PDF 定位仓库候选：保留论文身份、实际 GitHub 地址、"
+        "所在页及代码声明/脚注证据。引用/基线仓库可以是候选但不能冒充作者实现。"
+        "本阶段不要求数据集、软件依赖或实验数值；它们留空不构成错误。"
+        "作者身份将在拉取固定 Git 源码后独立核验，不能只凭链接提前确认。")
 
     # LLM 输出中可能包裹 JSON 的常见噪音
     _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL)
@@ -60,6 +113,9 @@ class PaperReaderAgent(BaseAgent):
         # The language-model viewport is intentionally bounded, but repository
         # evidence comes from every page and link annotation, independently.
         repository_links = list(pdf_input.repository_links) if pdf_input is not None else []
+        purpose = input_data.get("reading_purpose", "experiment")
+        context, coverage = (repository_reading_context(pdf_text, repository_links)
+                             if purpose == "repository_discovery" else reading_context(pdf_text))
 
         prompt = f"""请从以下论文内容中提取结构化信息，返回JSON格式：
 {{
@@ -79,15 +135,28 @@ class PaperReaderAgent(BaseAgent):
 方法/领域可以填写；推断不出的字段一律留空（method/dataset 填 ""、
 metrics 填 {{}}），并把 "insufficient_info" 设为 true。
 严禁编造摘要、数据集、指标数值等任何未经证实的信息。
+dependencies 只填写原文明确命名的软件库（如 PyTorch），不是基线模型或引用方法。
+正文没有软件依赖声明时填 []，不为满足字段而推测依赖。
+metrics 只提取本论文方法的实验结果，保留数据集/方法变体语境（可写在指标名称中），
+不把模型层数、训练轮数、超参数或他人基线的数字作为结果指标。
+如果给的是标明范围的原文节选，未展示的内容不等于原文没有；如实保留信息缺口。
 指标单位必须来自原文：百分数记 percent，明确的 0~1 比例记 fraction；
 MSE/MAE 等保留原始单位。单位未知时留空，不按数值大小猜百分比。
 
 论文内容：
-{pdf_text[:3000]}
+{context}
 
 从完整 PDF 确定性提取的仓库链接及上下文（引用链接不等于作者实现）：
 {json.dumps(repository_links[:12], ensure_ascii=False)}
 """
+        if purpose == "repository_discovery":
+            prompt += ("\n当前阶段仅定位论文仓库。依据上述完整文档扫描所得的位置核对论文身份、"
+                       "代码声明和候选地址；method 可简要说明，dependencies、metrics、dataset "
+                       "可以留空。实验细节将在实际仓库确认之后从完整论文与源码重新提取。")
+        feedback = input_data.get("retry_feedback")
+        if isinstance(feedback, dict) and feedback.get("agent") == self.name:
+            prompt += ("\n上一轮审查反馈（只依据上述实际原文修正；无证据的建议不能执行）：\n"
+                       + json.dumps(feedback, ensure_ascii=False))
         llm_result = self.llm.chat(prompt, task="paper_reader")
         parsed = self._parse_json(llm_result)
         if not parsed or not parsed.get("title"):
@@ -126,6 +195,9 @@ MSE/MAE 等保留原始单位。单位未知时留空，不按数值大小猜百
         result = {
             "paper_info": parsed,
             "raw_text": pdf_text,
+            "reading_context": context,
+            "reading_coverage": coverage,
+            "reading_purpose": purpose,
             "extracted_code_urls": list(dict.fromkeys(link["url"] for link in repository_links)),
             "extracted_repository_links": repository_links,
             "llm_calls": self._delta_llm_calls(),
