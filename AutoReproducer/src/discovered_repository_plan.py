@@ -812,7 +812,7 @@ def _steps(items, citations, packet, workspace):
                     raise PlanEvidenceError("CPU selection must be a documented author option")
             elif arg not in quotes:
                 raise PlanEvidenceError(f"Author argv token has no source quote: {arg}")
-        _verify_author_arguments(argv[position + 1:], quotes, packet)
+        _verify_author_arguments(argv[position + 1:], quotes, packet, script=argv[position])
         if item.get("env") or item.get("required", True) is not True:
             raise PlanEvidenceError("Planner cannot override the execution environment or optionalize training")
         timeout = item.get("timeout_s")
@@ -845,7 +845,42 @@ def _steps(items, citations, packet, workspace):
     return result
 
 
-def _verify_author_arguments(arguments, quotes, packet):
+def _enumerated_command_values(quotes, script):
+    """Bind literal README enumerations to placeholders in the SAME entrypoint."""
+    if not script:
+        return {}
+    text = quotes.replace('\\\n', ' ').replace('\\\r\n', ' ')
+    commands = list(re.finditer(r'(?m)^\s*python\s+[^\r\n]+', text))
+    values = {}
+    for index, command in enumerate(commands):
+        try:
+            tokens = shlex.split(command.group().strip())
+        except ValueError:
+            continue
+        position = 2 if len(tokens) > 1 and tokens[1] == '-u' else 1
+        if len(tokens) <= position or tokens[position] != script:
+            continue
+        end = commands[index + 1].start() if index + 1 < len(commands) else len(text)
+        following = text[command.end():min(end, command.end() + 1000)]
+        # A new Markdown heading separates protocols, even for reused variables.
+        following = re.split(r'(?m)^\s*#{1,6}\s+', following, maxsplit=1)[0]
+        for flag, placeholder in zip(tokens[position + 1:], tokens[position + 2:]):
+            if not flag.startswith('--') or not re.fullmatch(r'\$[A-Za-z][A-Za-z0-9_]*', placeholder):
+                continue
+            declarations = re.findall(r'(?im)^\s*where\s+' + re.escape(placeholder)
+                + r'\s+is\s+selected\s+from\s+([^\r\n]+)', following)
+            if len(declarations) != 1:
+                continue
+            declaration = declarations[0].strip().removesuffix('.').strip()
+            atom = r'`?[A-Za-z0-9_][A-Za-z0-9_.-]*`?'
+            if not re.fullmatch(atom + r'(?:\s*,\s*(?:and\s+)?' + atom + r')+', declaration):
+                continue
+            members = [item.strip().removeprefix('and ').strip('`') for item in declaration.split(',')]
+            values.setdefault(flag, set()).update(members)
+    return values
+
+
+def _verify_author_arguments(arguments, quotes, packet, *, script=None):
     """Accept author CLI defaults or exact documented flag/value pairs only."""
     defaults, boolean_flags = {}, set()
     for name, source in packet["repository"]["files"].items():
@@ -877,6 +912,7 @@ def _verify_author_arguments(arguments, quotes, packet):
         documented = shlex.split(quotes.replace("\\\n", " ").replace("\\\r\n", " "))
     except ValueError:
         documented = []
+    enumerations = _enumerated_command_values(quotes, script)
     index = 0
     while index < len(arguments):
         token = arguments[index]
@@ -895,11 +931,14 @@ def _verify_author_arguments(arguments, quotes, packet):
             if index + 1 >= len(arguments) or arguments[index + 1].startswith("--"):
                 raise PlanEvidenceError("Author option is missing its documented value")
             value, consumed = arguments[index + 1], 2
+        if re.fullmatch(r'\$[A-Za-z][A-Za-z0-9_]*|\$\{[A-Za-z][A-Za-z0-9_]*\}', value):
+            raise PlanEvidenceError('Author command placeholder must be resolved to a documented literal value')
         matches_default = any(value == expected or _numeric_equal(value, expected)
                               for expected in defaults.get(flag, []))
         matches_command = any(documented[i:i + 2] == [flag, value] for i in range(len(documented) - 1))
         matches_command = matches_command or f"{flag}={value}" in documented
-        if not matches_default and not matches_command:
+        matches_enumeration = value in enumerations.get(flag, set())
+        if not matches_default and not matches_command and not matches_enumeration:
             raise PlanEvidenceError(f"Author option differs from both CLI defaults and documented commands: {flag}")
         index += consumed
 
