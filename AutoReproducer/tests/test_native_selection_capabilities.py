@@ -36,8 +36,7 @@ def test_function_dictionary_and_underscore_options_are_exact_source_results(tmp
     use_pyg_function_loop(fixture)
     source = (fixture['workspace'] / 'train.py').read_text('utf-8')
     options = discover_native_selections(files(source))
-    assert len(options) == 1
-    scope = options[0]['scope']
+    scope = next(option['scope'] for option in options if 'loop_counter' in option['scope'])
     assert scope['function'] == 'run_all' and scope['loop_counter'] == '_'
     assert scope['selection']['validation_metric'] == {'name': 'eval_info', 'keys': ['val_loss']}
     assert 'result_unit' not in scope['selection']  # Units remain an evidence judgement.
@@ -87,6 +86,6 @@ def test_protocol_view_recomputes_options_instead_of_trusting_input_flags(tmp_pa
     packet = build_evidence_packet(fixture['pdf'], fixture['workspace'], fixture['snapshot'])
     packet['program_detected_native_selections'] = [{'invented': True}]
     view = _planning_view(packet)
-    assert len(view['program_detected_native_selections']) == 1
-    assert 'invented' not in view['program_detected_native_selections'][0]
+    assert any('loop_counter' in item['scope'] for item in view['program_detected_native_selections'])
+    assert all('invented' not in item for item in view['program_detected_native_selections'])
     assert packet['program_detected_native_selections'] == [{'invented': True}]

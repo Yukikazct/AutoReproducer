@@ -83,6 +83,46 @@ def resolve_module_loop(source, scope):
             'scope_name': scope.get('function', '<module>'), 'function_line': function_line}
 
 
+def resolve_function_selection(source, scope):
+    """Resolve weights selected within one full naturally returning run."""
+    if not isinstance(scope, dict) or set(scope) != {'path', 'function', 'selection'}:
+        raise ValueError('Function selection needs a path, original function and validation selection')
+    name = scope['function']
+    if not isinstance(name, str) or not _NAME.fullmatch(name):
+        raise ValueError('Selected function must be an original identifier')
+    tree = ast.parse(source)
+    functions = [node for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                 and node.name == name]
+    if (len(functions) != 1 or functions[0] not in tree.body or not isinstance(functions[0], ast.FunctionDef)
+            or functions[0].decorator_list):
+        raise ValueError('Selection must belong to one unique undecorated synchronous top-level function')
+    function = functions[0]
+    selection = scope['selection']
+    fields = {'validation_metric', 'comparison', 'best_metric', 'result', 'result_unit'}
+    if (not isinstance(selection, dict) or set(selection) != fields
+            or selection.get('comparison') not in _COMPARISONS
+            or selection.get('result_unit') not in {'fraction', 'percent'}
+            or any(not isinstance(selection.get(key), str) or not _NAME.fullmatch(selection[key])
+                   for key in ('best_metric', 'result'))):
+        raise ValueError('Function selection needs an original validation comparison and test result')
+    validation = selector_expression(selection['validation_metric'])
+    guards = [node for node in owned_nodes(function) if isinstance(node, ast.If)
+              and isinstance(node.test, ast.Compare) and len(node.test.ops) == 1
+              and isinstance(node.test.ops[0], _COMPARISONS[selection['comparison']])
+              and ast.dump(node.test.left) == ast.dump(validation)
+              and isinstance(node.test.comparators[0], ast.Name)
+              and node.test.comparators[0].id == selection['best_metric']]
+    if len(guards) != 1:
+        raise ValueError('Function validation selection must resolve to one original source comparison')
+    assignments = [node for node in guards[0].body if isinstance(node, ast.Assign)
+                   and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
+                   and node.targets[0].id == selection['result']]
+    if len(assignments) != 1:
+        raise ValueError('Function selected result must be assigned directly in the original validation branch')
+    return {'scope_name': name, 'function_line': function.lineno,
+            'selection_start': assignments[0].lineno, 'selection_end': assignments[0].end_lineno}
+
+
 def discover_native_selections(files):
     """Expose source-resolved capture options, never an experiment acceptance."""
     result = []
@@ -139,4 +179,36 @@ def discover_native_selections(files):
                             'capture_mechanism': 'snapshot_after_original_validation_result_assignment',
                             'author_checkpoint_required': False,
                             'remaining_checks': 'Identify original model, inputs, full labels/test split, metric unit and all repetitions; then verify real optimizer updates and independent predictions at runtime.'})
+            if extra:
+                for guard in owned_nodes(container):
+                    if (not isinstance(guard, ast.If) or not isinstance(guard.test, ast.Compare)
+                            or len(guard.test.ops) != 1 or not isinstance(guard.test.comparators[0], ast.Name)):
+                        continue
+                    comparison = next((name for name, kind in _COMPARISONS.items()
+                                       if isinstance(guard.test.ops[0], kind)), None)
+                    if comparison is None:
+                        continue
+                    try:
+                        validation = selector(guard.test.left)
+                    except ValueError:
+                        continue
+                    best = guard.test.comparators[0].id
+                    for assignment in guard.body:
+                        if (not isinstance(assignment, ast.Assign) or len(assignment.targets) != 1
+                                or not isinstance(assignment.targets[0], ast.Name) or assignment.targets[0].id == best):
+                            continue
+                        scope = {'path': path, **extra, 'selection': {'validation_metric': validation,
+                            'comparison': comparison, 'best_metric': best, 'result': assignment.targets[0].id,
+                            'result_unit': 'fraction'}}
+                        try:
+                            resolved = resolve_function_selection(source['text'], scope)
+                        except ValueError:
+                            continue
+                        scope['selection'].pop('result_unit')
+                        result.append({'scope': scope, 'source_sha256': source['sha256'], **resolved,
+                            'validation_branch': ast.get_source_segment(source['text'], guard),
+                            'capture_mechanism': 'snapshot_after_original_validation_result_assignment',
+                            'completion_mechanism': 'natural_function_return_per_native_run',
+                            'author_checkpoint_required': False,
+                            'remaining_checks': 'This function must complete one full native run per invocation; establish original callers and all repetitions, then verify all actual updates, natural returns and independent predictions at runtime.'})
     return result

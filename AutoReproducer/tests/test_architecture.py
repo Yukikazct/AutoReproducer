@@ -247,7 +247,7 @@ class TestEndToEnd:
         for section in ["## 1. 论文信息", "## 2. 资源定位",
                         "## 3. 环境配置", "## 4. 代码执行",
                         "## 5. 验证结果", "## 6. 智能优化",
-                        "## 8. 审计与预算统计"]:
+                        "## 8. 审计与用量统计"]:
             assert section in report, f"报告缺少章节 {section}"
 
     def test_budget_stats_in_audit(self, e2e_result):

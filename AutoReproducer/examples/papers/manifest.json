@@ -1,0 +1,395 @@
+{
+  "version": 1,
+  "archived_on": "2026-10-11",
+  "deduplication": "sha256",
+  "original_file_count": 21,
+  "archived_pdf_count": 20,
+  "total_pdf_bytes": 37671741,
+  "scope": "Existing downloaded paper inputs only. Archiving is not evidence of successful reproduction.",
+  "papers": [
+    {
+      "file": "pdf/acm_gnn_holdout_08_20261011.pdf",
+      "title": "Revisiting Heterophily For Graph Neural Networks",
+      "bytes": 2171714,
+      "pages": 41,
+      "sha256": "448ceb4d95e2755d6a6f2f280a5e92ed52ef6fd3973d024402f3e21e533ed491",
+      "original_filenames": [
+        "acm_gnn_holdout_08_20261011.pdf"
+      ],
+      "role": "regression_or_candidate",
+      "sources": [
+        {
+          "source_url": "https://raw.githubusercontent.com/SitaoLuan/ACM-GNN/main/Revisiting_Heterophily_For_Graph_Neural_Networks_updated.pdf",
+          "final_url": "https://raw.githubusercontent.com/SitaoLuan/ACM-GNN/main/Revisiting_Heterophily_For_Graph_Neural_Networks_updated.pdf",
+          "downloaded_at_utc": "2026-10-11T09:16:51.019857+00:00",
+          "evidence": "download_record"
+        }
+      ]
+    },
+    {
+      "file": "pdf/chebnetii_independent_20261011_function.pdf",
+      "title": "Convolutional Neural Networks on Graphs with Chebyshev Approximation, Revisited",
+      "bytes": 713026,
+      "pages": 20,
+      "sha256": "c32e1ebcd886611ff66293f211e7f1b9e1ffebc6668a4b853de3bc0d2f357e37",
+      "original_filenames": [
+        "chebnetii_independent_20261011_function.pdf"
+      ],
+      "role": "regression_or_candidate",
+      "sources": [
+        {
+          "source_url": "https://arxiv.org/pdf/2202.03580",
+          "final_url": "https://arxiv.org/pdf/2202.03580",
+          "downloaded_at_utc": "2026-10-11T14:18:38.154935+00:00",
+          "evidence": "download_record"
+        }
+      ]
+    },
+    {
+      "file": "pdf/dagnn_independent_20261011_b9d5219.pdf",
+      "title": "Towards Deeper Graph Neural Networks",
+      "bytes": 7333332,
+      "pages": 11,
+      "sha256": "221f0885de41ffc6732da7b540d1bfbca8972da04a125ff0c8f6b16a3604c81b",
+      "original_filenames": [
+        "dagnn_independent_20261011_b9d5219.pdf"
+      ],
+      "role": "regression_or_candidate",
+      "sources": [
+        {
+          "source_url": "https://arxiv.org/pdf/2007.09296",
+          "final_url": "https://arxiv.org/pdf/2007.09296",
+          "downloaded_at_utc": "2026-10-11T13:26:45.095509+00:00",
+          "evidence": "download_record"
+        }
+      ]
+    },
+    {
+      "file": "pdf/deepxde_1907.04502.pdf",
+      "title": "DeepXDE: A Deep Learning Library for Solving Differential Equations",
+      "bytes": 1118278,
+      "pages": 21,
+      "sha256": "d17f9bf6b8f346baaa52b6ec81223c53dd3da6899324114c72c7e8c3432d9368",
+      "original_filenames": [
+        "deepxde_1907.04502.pdf"
+      ],
+      "role": "regression_or_candidate",
+      "sources": [
+        {
+          "source_url": "https://arxiv.org/pdf/1907.04502",
+          "final_url": null,
+          "downloaded_at_utc": null,
+          "evidence": "existing_project_reference_no_download_receipt"
+        }
+      ]
+    },
+    {
+      "file": "pdf/dlinear_2205.13504v3_finaltest_20261011.pdf",
+      "title": "Are Transformers Effective for Time Series Forecasting?",
+      "bytes": 1584902,
+      "pages": 15,
+      "sha256": "97abddd1821cc72942c8d7ddde7e99466bb91f1bddc37c2b54e0e97be7b5be1b",
+      "original_filenames": [
+        "dlinear_2205.13504v3_finaltest_20261011.pdf"
+      ],
+      "role": "regression_or_candidate",
+      "sources": [
+        {
+          "source_url": "https://arxiv.org/pdf/2205.13504v3",
+          "final_url": "https://arxiv.org/pdf/2205.13504v3",
+          "downloaded_at_utc": "2026-10-11T03:08:14.105406+00:00",
+          "evidence": "download_record"
+        }
+      ]
+    },
+    {
+      "file": "pdf/dropedge_1907.10903_holdout_07_20261011.pdf",
+      "title": "DropEdge: Towards Deep Graph Convolutional Networks on Node Classification",
+      "bytes": 721401,
+      "pages": 18,
+      "sha256": "0855a55c3d125dd50705f3f36b03083a468ace85a3a9ec8425f8b2362debe3f7",
+      "original_filenames": [
+        "dropedge_1907.10903_holdout_07_20261011.pdf"
+      ],
+      "role": "regression_or_candidate",
+      "sources": [
+        {
+          "source_url": "https://arxiv.org/pdf/1907.10903",
+          "final_url": "https://arxiv.org/pdf/1907.10903",
+          "downloaded_at_utc": "2026-10-11T08:05:38.672513+00:00",
+          "evidence": "download_record"
+        }
+      ]
+    },
+    {
+      "file": "pdf/fsgnn_2105.07634_holdout_04.pdf",
+      "title": "Improving Graph Neural Networks with Simple Architecture Design",
+      "bytes": 964498,
+      "pages": 10,
+      "sha256": "0485a517bd4359d844c6dcad74bd8186ae1ebcdeb23110ca1b1191a29c7bd6dc",
+      "original_filenames": [
+        "fsgnn_2105.07634_holdout_04.pdf"
+      ],
+      "role": "regression_or_candidate",
+      "sources": [
+        {
+          "source_url": "https://arxiv.org/pdf/2105.07634",
+          "final_url": "https://arxiv.org/pdf/2105.07634",
+          "downloaded_at_utc": "2026-10-11T06:19:17.004939+00:00",
+          "evidence": "download_record"
+        }
+      ]
+    },
+    {
+      "file": "pdf/gcnii_2007.02133_holdout_05.pdf",
+      "title": "Simple and Deep Graph Convolutional Networks",
+      "bytes": 3010886,
+      "pages": 13,
+      "sha256": "fda616230e48642bbda2218f82af71fa7e3de5e14e98dfa8c8a065cf451287a4",
+      "original_filenames": [
+        "gcnii_2007.02133_holdout_05.pdf"
+      ],
+      "role": "regression_or_candidate",
+      "sources": [
+        {
+          "source_url": "https://arxiv.org/pdf/2007.02133",
+          "final_url": "https://arxiv.org/pdf/2007.02133",
+          "downloaded_at_utc": "2026-10-11T06:40:44.136884+00:00",
+          "evidence": "download_record"
+        }
+      ]
+    },
+    {
+      "file": "pdf/gdc_independent_20261011_ec4b097.pdf",
+      "title": "Diffusion Improves Graph Learning",
+      "bytes": 667863,
+      "pages": 22,
+      "sha256": "317bcc011b22e74cf8943ad97c7a3539379cb6f0021b6144f38e3aae323ceb87",
+      "original_filenames": [
+        "gdc_independent_20261011_ec4b097.pdf"
+      ],
+      "role": "regression_or_candidate",
+      "sources": [
+        {
+          "source_url": "https://arxiv.org/pdf/1911.05485",
+          "final_url": "https://arxiv.org/pdf/1911.05485",
+          "downloaded_at_utc": "2026-10-11T13:55:12.275057+00:00",
+          "evidence": "download_record"
+        }
+      ]
+    },
+    {
+      "file": "pdf/ggcn_independent_20261011_bc20605.pdf",
+      "title": "Two Sides of the Same Coin: Heterophily and Oversmoothing in Graph Convolutional Neural Networks",
+      "bytes": 2320568,
+      "pages": 25,
+      "sha256": "e9e78e0ba131c39a0143e73114bad846d21224586f444534ba84cf1737dbb177",
+      "original_filenames": [
+        "ggcn_independent_20261011_bc20605.pdf"
+      ],
+      "role": "regression_or_candidate",
+      "sources": [
+        {
+          "source_url": "https://arxiv.org/pdf/2102.06462",
+          "final_url": "https://arxiv.org/pdf/2102.06462",
+          "downloaded_at_utc": "2026-10-11T11:20:02.101782+00:00",
+          "evidence": "download_record"
+        }
+      ]
+    },
+    {
+      "file": "pdf/gnn_lfhf_holdout_06_20261011.pdf",
+      "title": "Interpreting and Unifying Graph Neural Networks with An Optimization Framework",
+      "bytes": 933654,
+      "pages": 12,
+      "sha256": "862f95d01b672cbbe41f0455f70196438c18b1dbfb29206016351b35c49fda05",
+      "original_filenames": [
+        "gnn_lfhf_holdout_06_20261011.pdf"
+      ],
+      "role": "regression_or_candidate",
+      "sources": [
+        {
+          "source_url": "https://raw.githubusercontent.com/zhumeiqiBUPT/GNN-LF-HF/master/resources/Paper.pdf",
+          "final_url": "https://raw.githubusercontent.com/zhumeiqiBUPT/GNN-LF-HF/master/resources/Paper.pdf",
+          "downloaded_at_utc": "2026-10-11T07:56:15.508637+00:00",
+          "evidence": "download_record"
+        }
+      ]
+    },
+    {
+      "file": "pdf/gprgnn_2006.07988_holdout_03.pdf",
+      "title": "Adaptive Universal Generalized PageRank Graph Neural Network",
+      "bytes": 2742094,
+      "pages": 24,
+      "sha256": "ce84494f19fd6d74d1c2d19a9c4b5acfa5542a297cbcdd3755e5270bfcd2a942",
+      "original_filenames": [
+        "gprgnn_2006.07988_holdout_03.pdf"
+      ],
+      "role": "regression_or_candidate",
+      "sources": [
+        {
+          "source_url": "https://arxiv.org/pdf/2006.07988",
+          "final_url": "https://arxiv.org/pdf/2006.07988",
+          "downloaded_at_utc": "2026-10-11T05:34:12.871568+00:00",
+          "evidence": "download_record"
+        }
+      ]
+    },
+    {
+      "file": "pdf/jacobi_independent_20261011_0b2a771.pdf",
+      "title": "How Powerful are Spectral Graph Neural Networks",
+      "bytes": 2714350,
+      "pages": 19,
+      "sha256": "16bd503a1fcf2efe4344e9c55ce74b309511e3aca30c6248cd0d51aea4ccd42f",
+      "original_filenames": [
+        "jacobi_independent_20261011_0b2a771.pdf"
+      ],
+      "role": "regression_or_candidate",
+      "sources": [
+        {
+          "source_url": "https://arxiv.org/pdf/2205.11172v1",
+          "final_url": "https://arxiv.org/pdf/2205.11172v1",
+          "downloaded_at_utc": "2026-10-11T12:19:12.211851+00:00",
+          "evidence": "download_record"
+        }
+      ],
+      "notes": "Two different arXiv versions are archived as separate files; preserve each original SHA-256."
+    },
+    {
+      "file": "pdf/jacobi_v2_independent_20261011_0b2a771.pdf",
+      "title": "How Powerful are Spectral Graph Neural Networks",
+      "bytes": 869976,
+      "pages": 22,
+      "sha256": "8a2020af117fd55687eb70c427baf5cd3ebf02ba9458836f7e6b3e120a2d3ba7",
+      "original_filenames": [
+        "jacobi_v2_independent_20261011_0b2a771.pdf"
+      ],
+      "role": "regression_or_candidate",
+      "sources": [
+        {
+          "source_url": "https://arxiv.org/pdf/2205.11172v2",
+          "final_url": "https://arxiv.org/pdf/2205.11172v2",
+          "downloaded_at_utc": "2026-10-11T12:22:53.577488+00:00",
+          "evidence": "download_record"
+        }
+      ],
+      "notes": "Two different arXiv versions are archived as separate files; preserve each original SHA-256."
+    },
+    {
+      "file": "pdf/neural_ode_input_1806.07366.pdf",
+      "title": "Neural Ordinary Differential Equations",
+      "bytes": 3990592,
+      "pages": 18,
+      "sha256": "435299cc42b75f9ad43d9aa246c96d3d7bdcc3297aa57f419bdc571b9c25137c",
+      "original_filenames": [
+        "neural_ode_input_1806.07366.pdf"
+      ],
+      "role": "regression_or_candidate",
+      "sources": [
+        {
+          "source_url": "https://arxiv.org/pdf/1806.07366",
+          "final_url": null,
+          "downloaded_at_utc": null,
+          "evidence": "existing_project_reference_no_download_receipt"
+        }
+      ]
+    },
+    {
+      "file": "pdf/rezero_2003.04887.pdf",
+      "title": "ReZero is All You Need: Fast Convergence at Large Depth",
+      "bytes": 1314235,
+      "pages": 14,
+      "sha256": "54eea1741fad2e7a20e52f55c64b34977f1206c5e3c8e14804ea5385c299c070",
+      "original_filenames": [
+        "rezero_2003.04887.pdf",
+        "rezero_public_input_20261011.pdf"
+      ],
+      "role": "regression_or_candidate",
+      "sources": [
+        {
+          "source_url": "https://arxiv.org/pdf/2003.04887v2",
+          "final_url": null,
+          "downloaded_at_utc": null,
+          "evidence": "existing_project_reference_no_download_receipt"
+        }
+      ]
+    },
+    {
+      "file": "pdf/rezero_published_2021_protocol.pdf",
+      "title": "ReZero is All You Need: Fast Convergence at Large Depth",
+      "bytes": 1488599,
+      "pages": 10,
+      "sha256": "bf2b6024e163804142fac25ecbe0d22efe6f07e6f1feea81912a25be40090977",
+      "original_filenames": [
+        "rezero_published_2021_protocol.pdf"
+      ],
+      "role": "regression_or_candidate",
+      "sources": [
+        {
+          "source_url": "https://proceedings.mlr.press/v161/bachlechner21a/bachlechner21a.pdf",
+          "final_url": null,
+          "downloaded_at_utc": null,
+          "evidence": "existing_project_reference_no_download_receipt"
+        }
+      ]
+    },
+    {
+      "file": "pdf/sgc_1902.07153_holdout_01.pdf",
+      "title": "Simplifying Graph Convolutional Networks",
+      "bytes": 1469431,
+      "pages": 14,
+      "sha256": "1151ecd729ecbc9fe51e09d0a5ece2ae2f326bb03cd64f6a2158ec43c083af2e",
+      "original_filenames": [
+        "sgc_1902.07153_holdout_01.pdf"
+      ],
+      "role": "regression_or_candidate",
+      "sources": [
+        {
+          "source_url": "https://arxiv.org/pdf/1902.07153",
+          "final_url": "https://arxiv.org/pdf/1902.07153",
+          "downloaded_at_utc": "2026-10-11T03:50:47.239977+00:00",
+          "evidence": "download_record"
+        }
+      ]
+    },
+    {
+      "file": "pdf/ssgc_holdout_02.pdf",
+      "title": "Simple Spectral Graph Convolution",
+      "bytes": 1235078,
+      "pages": 16,
+      "sha256": "d00c9f89f873b11e7201bf249bb76ad698f0a2f1a6046a43a96064d8188d04a0",
+      "original_filenames": [
+        "ssgc_holdout_02.pdf"
+      ],
+      "role": "regression_or_candidate",
+      "sources": [
+        {
+          "source_url": "https://unsworks.unsw.edu.au/bitstreams/98ccc499-d878-4cd0-b6e9-b626d133a788/download",
+          "final_url": "https://unsworks.unsw.edu.au/server/api/core/bitstreams/98ccc499-d878-4cd0-b6e9-b626d133a788/content",
+          "downloaded_at_utc": "2026-10-11T04:05:00.452241+00:00",
+          "evidence": "download_record"
+        }
+      ]
+    },
+    {
+      "file": "rejected/medspacy_2106.07799_wrong_airgnn_candidate.pdf",
+      "title": "Launching into clinical space with medspaCy: a new clinical text processing toolkit in Python",
+      "bytes": 307264,
+      "pages": 10,
+      "sha256": "597662cc916e1a33307e61f4d9c5586618cf8a9480f239a89e9d2a991f5d0bfe",
+      "original_filenames": [
+        "airgnn_independent_20261011_ec4b097.pdf"
+      ],
+      "role": "rejected_wrong_paper",
+      "sources": [
+        {
+          "source_url": "https://arxiv.org/pdf/2106.07799",
+          "final_url": "https://arxiv.org/pdf/2106.07799",
+          "downloaded_at_utc": "2026-10-11T14:05:30.942922+00:00",
+          "evidence": "download_record"
+        }
+      ],
+      "notes": "Originally downloaded as an AirGNN candidate with the wrong arXiv ID; actual PDF is medspaCy. No AirGNN reproduction was attempted with this file."
+    }
+  ]
+}
