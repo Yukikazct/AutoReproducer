@@ -162,22 +162,16 @@ def _read_dataset_summary(workspace, name, expected):
 def build_evidence_packet(pdf_path, workspace, snapshot, *, max_files=32, max_source_bytes=180000,
                           for_identity_review=False):
     """Keep every PDF page and bounded, hash-checked source; omit local paths."""
-    from src.pdf_input import _extract_pypdf, _extract_pdfplumber, extract_pdf_input
+    from src.pdf_input import extract_pdf_input
     raw = Path(pdf_path).read_bytes()
     if len(raw) > 30 * 1024 * 1024:
         raise PlanEvidenceError("Paper exceeds the 30 MiB planning bound")
     document = extract_pdf_input(pdf_path)
     if document.sha256 != _digest(raw):
         raise PlanEvidenceError("PDF changed while preparing evidence")
-    pages = None
-    for parser in (_extract_pypdf, _extract_pdfplumber):
-        try:
-            extracted = parser(raw)[0]
-            if any(page.strip() for page in extracted):
-                pages = extracted
-                break
-        except Exception:
-            continue
+    # Reader, identity review and protocol references must share the SAME
+    # canonical page text, including any verified alternate-parser recovery.
+    pages = document.page_texts
     if not pages or len(pages) > 200 or sum(len(page) for page in pages) > 500000:
         raise PlanEvidenceError("Complete readable PDF evidence exceeds the planning bounds")
     revision, url = snapshot.get("revision"), snapshot.get("url")

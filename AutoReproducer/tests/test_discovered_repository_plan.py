@@ -2,6 +2,7 @@
 from copy import deepcopy
 import hashlib
 import json
+from unittest.mock import Mock
 
 import pytest
 
@@ -22,6 +23,26 @@ def experiment(tmp_path, monkeypatch):
 
 def validate(fixture, proposal=None):
     return planner.validate_plan(proposal or fixture["proposal"], fixture["packet"], fixture["workspace"])
+
+
+def test_protocol_evidence_reuses_reader_recovered_pages_without_reparsing(tmp_path, monkeypatch):
+    import src.pdf_input as pdf_input
+    fixture = make_experiment(tmp_path)
+    original, title, annotations = pdf_input._extract_pypdf(fixture['pdf'].read_bytes())
+    primary = [*original[:-1], original[-1] + '\nModel 73:25\x062:50']
+    secondary = [*original[:-1], original[-1] + '\nModel 73.25±2.50']
+    primary_parser = Mock(return_value=(primary, title, annotations))
+    secondary_parser = Mock(return_value=(secondary, title, annotations))
+    monkeypatch.setattr(pdf_input, '_extract_pypdf', primary_parser)
+    monkeypatch.setattr(pdf_input, '_extract_pdfplumber', secondary_parser)
+    packet = planner.build_evidence_packet(fixture['pdf'], fixture['workspace'], fixture['snapshot'])
+    assert [p['text'] for p in packet['pdf']['pages']] == secondary
+    assert all(p['sha256'] == hashlib.sha256(p['text'].encode()).hexdigest() for p in packet['pdf']['pages'])
+    primary_parser.assert_called_once_with(fixture['pdf'].read_bytes())
+    secondary_parser.assert_called_once_with(fixture['pdf'].read_bytes())
+    refs = [ref for ref in planner._planning_view(packet)['evidence_excerpts'].values()
+            if ref['source'] == 'pdf' and ref['page'] == len(secondary)]
+    assert planner._has_value(73.25, refs)
 
 
 @pytest.mark.parametrize("family", ["signals", "pairs"])
