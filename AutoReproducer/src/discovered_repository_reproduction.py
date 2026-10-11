@@ -193,7 +193,8 @@ _PREFLIGHT = '''import importlib, importlib.metadata, json, platform, sys
 from pathlib import Path
 root = Path(__file__).resolve().parent
 requirements = json.loads((root / "requirements.json").read_text(encoding="utf-8"))
-aliases = {"scikit-learn": "sklearn", "pillow": "PIL", "tensorboardx": "tensorboardX"}
+aliases = {"scikit-learn": "sklearn", "pillow": "PIL", "tensorboardx": "tensorboardX",
+           "googledrivedownloader": "google_drive_downloader"}
 modules, versions = {}, {}
 for requirement in requirements:
     name, expected = requirement.split("==", 1)
@@ -360,7 +361,14 @@ class DiscoveredRepositoryReproduction:
             event(phase, "success")
             phase = "select_experiment"; event(phase, "running")
             from src.agents.experiment_protocol import ExperimentProtocolAgent
-            protocol = ExperimentProtocolAgent(self.llm, self.logger).run(packet, workspace)
+            try:
+                protocol = ExperimentProtocolAgent(self.llm, self.logger).run(packet, workspace)
+            except BaseException:
+                try:
+                    write_json(run_dir / 'source_packet.json', packet)
+                except Exception as persistence_error:
+                    data['source_packet_persistence_error'] = str(persistence_error)
+                raise
             data['experiment_protocol'] = protocol
             packet['experiment_protocol'] = protocol
             write_json(run_dir / 'experiment_protocol.json', protocol)

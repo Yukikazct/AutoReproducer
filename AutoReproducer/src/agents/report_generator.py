@@ -252,6 +252,20 @@ def _discovered_plan_lines(data):
         lines += ["- " + _markdown_text(_txt(step.get("id"))) + "，目录：" +
                   _markdown_text(_txt(step.get("cwd"))),
                   "```json", json.dumps(step.get("argv", []), ensure_ascii=False), "```"]
+    capture = plan.get('capture') or {}
+    protocol = plan.get('experiment_protocol') or data.get('experiment_protocol') or {}
+    selection = protocol.get('model_selection') or {}
+    rule = capture.get('completion') or {'kind': 'fixed_steps'}
+    training_rule = (f"每次完整执行 {capture.get('expected_optimizer_steps')} 次优化器更新" if rule.get('kind') == 'fixed_steps'
+        else f"作者原始停止规则；实际更新数须等于 ({rule.get('epoch_counter')} + {rule.get('epoch_offset')}) × {rule.get('updates_per_epoch')}，上限 {capture.get('expected_optimizer_steps')}")
+    lines += ['', '**各阶段完成依据**', '', '| 阶段 | 必须核对的证据 |', '|---|---|',
+              '| 训练 | ' + _markdown_text(training_rule) + '；作者进程正常退出 |',
+              '| 模型选择 | ' + _markdown_text(str(selection.get('policy', '按独立协议审查确定的作者规则'))
+                  + '；' + str(selection.get('criterion', '')) + '；' + str(selection.get('evaluation_weights', '实际捕获模型与作者报告一致'))) + ' |',
+              f"| 重复实验 | 完成全部 {capture.get('expected_runs', 1)} 次原生运行，每次均有训练和独立评估记录 |",
+              '| 测试数据 | 每次完整测试样本数：' + _markdown_text(str(capture.get('expected_test_samples'))) + '；标签、索引与模型输入对应 |',
+              '| 独立评估 | 新进程重载实际模型，重新推理；NumPy 与 PyTorch 计算交叉核验，全部重复按原协议汇总 |',
+              '| 数值验收 | 作者报告与独立评估一致，再按冻结论文参考值与容差判定；实验完成和数值达标分别记录 |']
     review = plan.get("semantic_review") or {}
     if review:
         lines += ["", "**执行前独立协议审查**", "",

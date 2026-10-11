@@ -1,6 +1,7 @@
 """A protocol binds experiment selection before execution; unsupported stays failed."""
 from copy import deepcopy
 import hashlib
+import json
 
 import pytest
 
@@ -37,6 +38,67 @@ def test_selected_experiment_binds_command_numbers_repetitions_and_device(tmp_pa
         mutation(changed)
         with pytest.raises(planner.PlanEvidenceError, match=match):
             bind_plan_to_protocol(changed, protocol)
+
+
+def test_protocol_reads_missing_pinned_experiment_sources_before_deciding(tmp_path):
+    fixture, packet, raw, _ = protocol_fixture(tmp_path)
+    source = packet['repository']['files'].pop('train.py')
+    calls = []
+
+    class Reader:
+        mock_mode = False
+        def chat(self, prompt, **kwargs):
+            calls.append(prompt)
+            evidence = json.loads(prompt.split('Protocol evidence:\n', 1)[1])
+            if len(calls) == 1:
+                assert not any(ref.get('path') == 'train.py' for ref in evidence['evidence_excerpts'].values())
+                return json.dumps({'request_files': ['train.py']})
+            assert any(ref.get('path') == 'train.py' and ref['quote'] == source['text']
+                for ref in evidence['evidence_excerpts'].values())
+            return json.dumps(raw)
+
+    protocol = ExperimentProtocolAgent(Reader()).run(packet, fixture['workspace'])
+    assert len(calls) == 2
+    assert packet['repository']['files']['train.py'] == source
+    assert any(ref.get('path') == 'train.py' for ref in protocol['citations'])
+
+
+def test_protocol_rejection_after_source_reading_is_final(tmp_path):
+    fixture, packet, raw, _ = protocol_fixture(tmp_path)
+    packet['repository']['files'].pop('train.py')
+    calls = []
+
+    class Reader:
+        mock_mode = False
+        def chat(self, prompt, **kwargs):
+            calls.append(prompt)
+            return json.dumps({'request_files': ['train.py']} if len(calls) == 1 else {
+                'version': 1, 'alignment': {**raw['alignment'], 'status': 'conflict',
+                    'reason': 'The newly read implementation contradicts the paper training protocol.'}})
+
+    with pytest.raises(planner.PlanEvidenceError) as exc:
+        ExperimentProtocolAgent(Reader()).run(packet, fixture['workspace'])
+    assert exc.value.category == 'protocol_conflict'
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize('names', [['missing.py'], [['unhashable']], ['train.py']])
+def test_invalid_or_repeated_source_requests_cannot_loop(tmp_path, names):
+    fixture, packet, _, _ = protocol_fixture(tmp_path)
+    original = deepcopy(packet)
+    calls = []
+
+    class Reader:
+        mock_mode = False
+        def chat(self, prompt, **kwargs):
+            calls.append(prompt)
+            return json.dumps({'request_files': names})
+
+    with pytest.raises(planner.PlanEvidenceError) as exc:
+        ExperimentProtocolAgent(Reader()).run(packet, fixture['workspace'])
+    assert len(calls) == 2
+    assert exc.value.planning_evidence['source_requests'] == 0
+    assert packet == original
 
 
 def test_numeric_representation_is_normalized_only_when_original_source_supports_value(tmp_path):
@@ -134,6 +196,44 @@ def test_native_package_imports_follow_initializers_children_and_parent_relative
     result = planner._author_imports(packet, {'argv': ['python','train.py']}, include_sources=True)
     assert set(result['sources']) == set(texts)
     assert {item['module'] for item in result['imports']} == {'torch','numpy','scipy'}
+
+
+def test_only_exact_cuda_guard_is_pruned_for_frozen_cpu_with_source_audit():
+    source = ('import torch\nif torch.cuda.is_available():\n    import cuda_graph_dependency\n'
+              'else:\n    import numpy\nif unknown_condition:\n    import unknown_dependency\n')
+    packet = {'file_inventory': {'train.py': {}}, 'repository': {'files': {
+        'train.py': {'text': source, 'sha256': hashlib.sha256(source.encode()).hexdigest()}}}}
+    step = {'argv': ['python', 'train.py']}
+    cpu = planner._author_imports(packet, step, include_sources=True, device='cpu')
+    assert {item['module'] for item in cpu['imports']} == {'torch', 'numpy', 'unknown_dependency'}
+    excluded, = cpu['excluded_device_branches']
+    assert 'import cuda_graph_dependency' in excluded['statement']
+    assert excluded['sha256'] == packet['repository']['files']['train.py']['sha256']
+    assert 'cuda_graph_dependency' in {item['module'] for item in planner._author_imports(packet, step, device='cuda')}
+    assert 'cuda_graph_dependency' in {item['module'] for item in planner._author_imports(packet, step)}
+
+
+@pytest.mark.parametrize('binding', [
+    'torch = other', 'from other import torch', 'def use(torch):\n    pass',
+    'torch.cuda.is_available = lambda: False', 'del torch', "exec('dynamic code')",
+])
+def test_shadowed_or_mutated_torch_guard_cannot_hide_a_dependency(binding):
+    source = 'import torch\n' + binding + '\nif torch.cuda.is_available():\n    import unsupported_graph_library\n'
+    packet = {'file_inventory': {'train.py': {}}, 'repository': {'files': {
+        'train.py': {'text': source, 'sha256': 'a' * 64}}}}
+    actual = planner._author_imports(packet, {'argv': ['python', 'train.py']}, device='cpu')
+    assert 'unsupported_graph_library' in {item['module'] for item in actual}
+
+
+def test_downloader_import_compiles_its_real_missing_runtime_dependency(tmp_path):
+    fixture, packet, raw, protocol = protocol_fixture(tmp_path)
+    packet['repository']['files']['train.py']['text'] += '\nfrom google_drive_downloader import GoogleDriveDownloader\n'
+    citations = planner._citations(fixture['proposal'], packet, fixture['workspace'])
+    result = planner._requirements(fixture['proposal']['requirements'], citations, packet,
+        step=fixture['proposal']['steps'][0])
+    assert {'googledrivedownloader==0.4', 'requests==2.32.3'} <= set(result['compatibility'])
+    assert any(item.get('dependency_of') == 'googledrivedownloader' and item['package'] == 'requests'
+        for item in result['import_evidence'])
 
 
 @pytest.mark.parametrize('declaration', ["type=parse_integer", "action='append'", "nargs='+'"])

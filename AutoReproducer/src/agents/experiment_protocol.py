@@ -6,7 +6,7 @@ import re
 
 from src.base_agent import BaseAgent
 from src.discovered_repository_plan import (PlanEvidenceError, _canonical, _citations, _has_value,
-    _json_response, _planning_excerpts, _planning_view, _references, _steps, _digest)
+    _add_requested_files, _json_response, _planning_view, _references, _steps, _digest)
 
 
 PROTOCOL_SCHEMA = {
@@ -133,7 +133,8 @@ def validate_experiment_protocol(payload, packet, workspace):
         if name not in {'accuracy','cross_entropy'} or name in metric_names:
             raise PlanEvidenceError('Protocol metric is unsupported or duplicated')
         refs = _references(metric['citations'], citations, 'pdf')
-        if isinstance(value, bool) or not isinstance(value, (int,float)) or not _has_value(value, [r for r in refs if r['source']=='pdf']):
+        if (isinstance(value, bool) or not isinstance(value, (int,float)) or not math.isfinite(value)
+                or not _has_value(value, [r for r in refs if r['source']=='pdf'])):
             raise PlanEvidenceError('Protocol reference must be a real paper number')
         if (name == 'accuracy' and (unit not in {'percent','fraction'} or not 0 <= value <= (100 if unit=='percent' else 1))
                 or name == 'cross_entropy' and (unit!='scalar' or value < 0)):
@@ -199,17 +200,26 @@ class ExperimentProtocolAgent(BaseAgent):
             raise PlanEvidenceError('Experiment protocol selection requires a real model')
         feedback = ''
         failures = []
-        for _ in range(2):
+        requests = 0
+        while len(failures) < 2:
             prompt = ('Select one complete experimental protocol before generating any execution steps. '
                 'Use explicit source relationships; a single invocation is insufficient for a paper mean over N runs. '
                 'Separate training termination from model selection: early stopping does not establish which '
                 'weights are evaluated. Trace the original criterion and checkpoint save/load or model retention. '
                 'If the author only keeps a best-validation test scalar but cannot expose its matching model, '
                 'do not substitute the final-epoch model for independent evaluation. Never select weights by test performance. '
+                'An original module-level repetition loop with an unambiguous validation comparison and a direct '
+                'test-result assignment can be observed to retain the actual model at that selection point, even if '
+                'the author later deletes it. The entire original iteration must still finish; no new loop is generated. '
                 'When paper and code conflict or required information is absent, use alignment.status=conflict or insufficient '
                 'and explain exactly why. For these rejected cases return only version and alignment with PDF and '
                 'repository citations; do not invent the missing positive protocol fields. '
                 'Do not supply compatibility dependencies or invent training code. '
+                'The repository file_inventory is complete, but only bounded source files have been read. '
+                'If an experiment script, data loader, model, configuration, or selection implementation '
+                'needed to establish the protocol is missing from repository.files, first return ONLY '
+                '{"request_files":["exact inventory path",...]} for 1 to 8 new files. '
+                'At most two source-reading rounds are available; do not invent unseen contents. '
                 'Training parameters should use actual author CLI/config names. All citations select evidence_excerpts IDs. '
                 'Use typed JSON numbers for counts/references/numeric parameters (the schema numbers are examples, '
                 'never defaults), and booleans for boolean parameters. Parameter names are argparse destination names, '
@@ -221,6 +231,17 @@ class ExperimentProtocolAgent(BaseAgent):
                                      task='experiment_protocol')
             try:
                 payload = _json_response(response)
+                if isinstance(payload, dict) and 'request_files' in payload:
+                    if set(payload) != {'request_files'} or requests >= 2:
+                        raise PlanEvidenceError('Experiment protocol source requests are exhausted or malformed')
+                    names = payload['request_files']
+                    if (not isinstance(names, list) or any(not isinstance(name, str) for name in names)
+                            or any(name in packet['repository']['files'] for name in names)):
+                        raise PlanEvidenceError('Protocol source requests must identify unread inventory files')
+                    _add_requested_files(names, packet, workspace)
+                    requests += 1
+                    feedback = 'Requested pinned sources are available; establish the complete experiment protocol.'
+                    continue
                 return validate_experiment_protocol(payload, packet, workspace)
             except (PlanEvidenceError, ValueError, TypeError, KeyError) as exc:
                 if getattr(exc, 'planning_evidence', None):
@@ -229,4 +250,5 @@ class ExperimentProtocolAgent(BaseAgent):
                 failures.append(feedback)
         raise PlanEvidenceError('No evidence-bound experiment protocol: ' + feedback,
             planning_evidence={'stage':'experiment_protocol','schema_failures':failures,
+                               'source_requests':requests,
                                'response_excerpt':str(response)[:24000]}, category='model_structure_error')

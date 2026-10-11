@@ -24,7 +24,7 @@ SINGLE_CAPTURE_SCHEMA = {
 SERIES_CAPTURE_SCHEMA = {
     **SINGLE_CAPTURE_SCHEMA,
     "kind": "torch_classification_series", "device": "cpu|cuda",
-    "scope": {"path": "pinned_author_python_file", "function": "unique_top_level_function"},
+    "scope": "{path, function} for a unique top-level function; OR {path, loop_counter, selection:{validation_metric,comparison:'lt|le|gt|ge',best_metric,result,result_unit:'fraction|percent'}} for an original module-level repetition loop",
     "forward_args": ["author_local_or_global_tensor_tree_or_scalar_selector"],
     "expected_runs": "positive_source_cited_integer",
     "expected_test_samples": ["one_source_cited_complete_test_count_per_native_run"],
@@ -96,15 +96,22 @@ def validate_capture(capture, packet, workspace):
                 or len(samples) != runs or any(type(n) is not int or not 0 < n <= 10000000 for n in samples)):
             raise ValueError("Native series requires one complete prospective test count for every run")
         scope = capture["scope"]
-        if (not isinstance(scope, dict) or set(scope) != {"path", "function"}
-                or not isinstance(scope["function"], str) or not _IDENTIFIER.fullmatch(scope["function"])
-                or scope["path"] not in packet["repository"]["files"] or not scope["path"].endswith(".py")):
-            raise ValueError("Capture scope must name a pinned author Python function")
+        if (not isinstance(scope, dict) or not isinstance(scope.get('path'), str)
+                or scope.get('path') not in packet["repository"]["files"]
+                or not scope['path'].endswith('.py')):
+            raise ValueError("Capture scope must name pinned author Python source")
         tree = ast.parse(packet["repository"]["files"][scope["path"]]["text"])
-        functions = [node for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-                     and node.name == scope["function"]]
-        if len(functions) != 1 or functions[0] not in tree.body or isinstance(functions[0], ast.AsyncFunctionDef):
-            raise ValueError("Capture scope must resolve to one unique synchronous top-level author function")
+        if 'loop_counter' in scope:
+            from src.native_loop import resolve_module_loop
+            resolve_module_loop(packet['repository']['files'][scope['path']]['text'], scope)
+        else:
+            if (set(scope) != {'path','function'} or not isinstance(scope['function'], str)
+                    or not _IDENTIFIER.fullmatch(scope['function'])):
+                raise ValueError('Capture scope must name an original function or module loop')
+            functions = [node for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                         and node.name == scope["function"]]
+            if len(functions) != 1 or functions[0] not in tree.body or isinstance(functions[0], ast.AsyncFunctionDef):
+                raise ValueError("Capture scope must resolve to one unique synchronous top-level author function")
         completion = capture["completion"]
         if not isinstance(completion, dict):
             raise ValueError("Series completion must have a fixed, non-executable rule")
@@ -150,6 +157,8 @@ def materialize_capture(workspace, plan, spec_hash, *, snapshot=None):
         (destination / "common.py").write_bytes(runtime.read_bytes())
         runtime = runtime.with_name("discovered_series_capture.py")
         runtime_files.append("common.py")
+        (destination / 'native_loop.py').write_bytes((Path(__file__).parent / 'native_loop.py').read_bytes())
+        runtime_files.append('native_loop.py')
     (destination / "runtime.py").write_bytes(runtime.read_bytes())
     train = next(step for step in plan["steps"] if step["kind"] == "train")
     config = {"version": 1, "spec_sha256": spec_hash, "capture": deepcopy(plan["capture"]),
@@ -169,11 +178,12 @@ def materialize_capture(workspace, plan, spec_hash, *, snapshot=None):
     if any(step["id"] == "independent_evaluation" for step in steps):
         raise ValueError("Author step identifier collides with independent evaluation")
     steps.append({"id": "independent_evaluation", "kind": "eval", "required": True,
-                  "argv": ["python", "-u", f"{CAPTURE_DIR}/runtime.py", "evaluate"], "cwd": ".",
-                  "timeout_s": 300, "depends_on": [steps[-1]["id"]],
-                  "env": {"CUDA_VISIBLE_DEVICES": "", "PYTHONUNBUFFERED": "1"},
+                  "depends_on": [step['id'] for step in steps],
                   "requires": [f"{CAPTURE_DIR}/capture.json"] + [f"{CAPTURE_DIR}/{name}" for name in
-                      (series_artifact_names(plan["capture"]["expected_runs"]) if series else ["model.pt", "tensors.pt"])],
+                      (series_artifact_names(plan['capture']['expected_runs']) if series else ['model.pt', 'tensors.pt'])],
+                  "argv": ["python", "-u", f"{CAPTURE_DIR}/runtime.py", "evaluate"], "cwd": ".",
+                  "timeout_s": 300,
+                  "env": {"CUDA_VISIBLE_DEVICES": "", "PYTHONUNBUFFERED": "1"},
                   "artifacts": [f"{CAPTURE_DIR}/independent_metrics.json"]})
     return {"files": {f"{CAPTURE_DIR}/{name}": digest(destination / name)
                        for name in runtime_files}, "steps": steps}
@@ -264,6 +274,10 @@ def verify_capture(plan, workspace, execution, spec_hash):
                       "完整作者训练与独立评估已完成，指标未达到论文参考值的预设容差",
             "scope": "selected_paper_experiment", "protocol_pass": True,
             "independent_metrics_pass": True, "comparisons": comparisons,
+            "completion_checks": {"required_processes_exited": True,
+                "full_training_and_test_capture": True, "all_native_runs_evaluated": True,
+                "fresh_model_predictions_verified": True, "author_metric_reconciled": True,
+                "paper_reference_met": accepted},
             "metrics_comparison": {"paper": {item["name"]: item["reference"] for item in comparisons},
                                    "actual": {item["name"]: item["actual"] for item in comparisons},
                                    "paper_units": {item["name"]: item["unit"] for item in comparisons},
@@ -274,6 +288,8 @@ def verify_capture(plan, workspace, execution, spec_hash):
                                for item in comparisons],
             "training_summary": {"optimizer_steps": capture["optimizer_steps"],
                                  "steps_completed": capture["optimizer_steps"],
+                                 "runs_completed": len(capture['runs']) if series else 1,
+                                 "runs_required": plan['capture'].get('expected_runs', 1),
                                  "test_samples": capture["test_samples"], "complete": True},
             "metrics": {item["name"]: item["actual"] for item in comparisons},
             "capture": capture, "independent_metrics": metrics, "author_reported_metric": reported}
@@ -291,14 +307,24 @@ def verify_series_receipts(contract, root, capture, metrics):
     for index, (run, evaluated) in enumerate(zip(runs, independent)):
         steps = run.get("optimizer_steps")
         rule = contract["completion"]
+        loop = 'loop_counter' in contract['scope']
         if (run.get("index") != index or evaluated.get("index") != index
-                or run.get("natural_return") is not True or run.get("parameters_changed") is not True
+                or (run.get('native_loop_completed') is not True if loop else run.get("natural_return") is not True)
+                or run.get("parameters_changed") is not True
                 or type(steps) is not int or not 0 < steps <= contract["expected_optimizer_steps"]
                 or run.get("test_samples") != contract["expected_test_samples"][index]
                 or evaluated.get("test_samples") != run["test_samples"]
                 or evaluated.get("predictions_match") is not True
                 or evaluated.get("numpy_torch_crosscheck") is not True):
             raise ValueError("A native repetition lacks complete training or independent full-test evidence")
+        if loop:
+            selection = run.get('validation_selection') or {}
+            value, selected_steps = selection.get('accuracy'), selection.get('optimizer_steps')
+            if (run.get('author_loop_counter') != index or selection.get('source') != contract['scope']['selection']
+                    or type(selected_steps) is not int or not 0 < selected_steps <= steps
+                    or type(value) not in (int, float) or not math.isfinite(value) or not 0 <= value <= 1
+                    or not math.isclose(value, evaluated.get('accuracy', float('nan')), rel_tol=1e-10, abs_tol=1e-8)):
+                raise ValueError('Validation-selected weights do not match the original selected result')
         if rule["kind"] == "fixed_steps":
             if steps != contract["expected_optimizer_steps"]:
                 raise ValueError("Native repetition did not complete all fixed optimizer steps")

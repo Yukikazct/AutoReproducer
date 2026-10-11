@@ -91,7 +91,10 @@ def test_two_actual_author_entrypoints_complete_service_and_report(
     assert validation["is_reproduced"] is True
     assert data["repository_executed"] is True
     assert validation["training_summary"] == {"optimizer_steps": steps, "steps_completed": steps,
-                                               "test_samples": samples, "complete": True}
+                                              "test_samples": samples, "complete": True,
+                                              "runs_completed": 1, "runs_required": 1}
+    assert all(validation['completion_checks'].values())
+    assert '各阶段完成依据' in data['report']
     assert validation["metrics_comparison"]["paper"]["accuracy"] == 100.0
     assert validation["metrics_comparison"]["actual"]["accuracy"] == 100.0
     assert validation["independent_metrics"]["numpy_torch_crosscheck"] is True

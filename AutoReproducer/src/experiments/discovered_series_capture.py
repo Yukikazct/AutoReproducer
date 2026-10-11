@@ -1,16 +1,20 @@
 """Observe all native author repetitions without changing their training loop."""
 import ast
 from copy import deepcopy
+from contextlib import contextmanager
 import dis
 import inspect
 import importlib.util
+import math
 import os
+import random
 from pathlib import Path
 import runpy
 import sys
 
 import numpy as np
 import torch
+from native_loop import resolve_module_loop
 
 _support_path = Path(__file__).resolve().with_name("common.py")
 _support_spec = importlib.util.spec_from_file_location("_autorepro_capture_support", _support_path)
@@ -21,6 +25,18 @@ check_sources, read, select, sha, write = (_support.check_sources, _support.read
                                          _support.select, _support.sha, _support.write)
 flatten, FlattenedAuthor = _support.flatten, _support.FlattenedAuthor
 resolve_author_value, author_integer_tensor = _support.resolve_author_value, _support.author_integer_tensor
+
+
+@contextmanager
+def preserve_rng():
+    """Exporting a snapshot must not change later native random initializations."""
+    python_state, numpy_state = random.getstate(), np.random.get_state()
+    try:
+        with torch.random.fork_rng(devices=None if torch.cuda.is_available() else []):
+            yield
+    finally:
+        random.setstate(python_state)
+        np.random.set_state(numpy_state)
 
 
 def artifact_names(index):
@@ -40,13 +56,14 @@ def model_source(model, script, config):
     return name
 
 
-def capture_return(namespace, index, observers, script, config):
+@preserve_rng()
+def capture_return(namespace, index, observers, script, config, retained=None):
     contract = config["capture"]
-    model = resolve_author_value(namespace, contract['model'])
+    model = retained['model'] if retained is not None else resolve_author_value(namespace, contract['model'])
     if not isinstance(model, torch.nn.Module):
         raise ValueError("Natural author return does not expose its trained model")
     name = model_source(model, script, config)
-    parameter_ids = {id(parameter) for parameter in model.parameters()}
+    parameter_ids = retained['parameter_ids'] if retained is not None else {id(parameter) for parameter in model.parameters()}
     relevant = [(key, item) for key, item in observers.items()
                 if parameter_ids.intersection(id(parameter) for parameter in item["parameters"])]
     updates = sum(item["steps"] for _, item in relevant)
@@ -55,6 +72,9 @@ def capture_return(namespace, index, observers, script, config):
                   if id(parameter) in parameter_ids)
     if not changed or not 0 < updates <= contract["expected_optimizer_steps"]:
         raise ValueError("Observed optimizer steps and actual model changes do not prove training")
+    if retained is not None and (not retained['parameters_changed']
+            or not 0 < retained['optimizer_steps'] <= updates):
+        raise ValueError('Selected model must already have undergone real optimizer updates')
     rule, counter = contract["completion"], None
     if rule["kind"] == "fixed_steps":
         if updates != contract["expected_optimizer_steps"]:
@@ -66,18 +86,24 @@ def capture_return(namespace, index, observers, script, config):
             raise ValueError("Observed optimizer steps disagree with the native author's epoch counter")
     if any(parameter.device.type != contract["device"] for parameter in model.parameters()):
         raise ValueError("The actual author's trained model device differs from the frozen plan")
-    inputs = tuple(resolve_author_value(namespace, key) for key in contract['forward_args'])
-    raw_labels = resolve_author_value(namespace, contract['labels'])
+    inputs = retained['inputs'] if retained is not None else tuple(
+        resolve_author_value(namespace, key) for key in contract['forward_args'])
+    raw_labels = retained['labels'] if retained is not None else resolve_author_value(namespace, contract['labels'])
     labels = author_integer_tensor(raw_labels)
-    indices = None if contract['test_indices'] is None else author_integer_tensor(
-        resolve_author_value(namespace, contract['test_indices']))
+    raw_indices = retained['indices'] if retained is not None else (None if contract['test_indices'] is None
+        else resolve_author_value(namespace, contract['test_indices']))
+    indices = None if raw_indices is None else author_integer_tensor(raw_indices)
     expected = contract["expected_test_samples"][index]
     # Snapshot the model: observing a natural return must not change the
     # author's module mode, device or subsequent native program behavior.
     model = deepcopy(model).eval()
     with torch.no_grad():
         original = model(*inputs)
-        select(original, labels, indices, expected, contract.get('output_alignment', 'full_dataset'))
+        selected, selected_labels = select(original, labels, indices, expected, contract.get('output_alignment', 'full_dataset'))
+        if retained is not None:
+            actual = (selected.argmax(1) == selected_labels.to(selected.device)).double().mean().item()
+            if not math.isclose(actual, retained['accuracy'], rel_tol=1e-10, abs_tol=1e-8):
+                raise ValueError('Retained model does not reproduce the original validation-selected test result')
         originals = original.detach().cpu().clone()
         tensors = []
         layouts = [flatten(value, tensors) for value in inputs]
@@ -107,6 +133,10 @@ def capture_return(namespace, index, observers, script, config):
               "output_alignment": contract.get('output_alignment', 'full_dataset'),
               "model_source": name, "model_source_sha256": config["source_files"][name],
               "files_sha256": {name: sha(ROOT / name) for name in artifact_names(index)}}
+    if retained is not None:
+        record.update(natural_return=False, native_loop_completed=True, author_loop_counter=index,
+            validation_selection={'source': contract['scope']['selection'],
+                'accuracy': retained['accuracy'], 'optimizer_steps': retained['optimizer_steps']})
     print(f"AUTHOR_NATIVE_RUN_CAPTURED index={index} steps={updates} test_samples={expected}", flush=True)
     return record
 
@@ -124,10 +154,15 @@ def capture(config):
     if not all(path.is_relative_to(WORKSPACE) for path in (cwd, script, scope_path)):
         raise ValueError("Author entrypoint or capture scope escaped the workspace")
     tree = ast.parse(scope_path.read_text(encoding="utf-8"))
-    target = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
-                  and node.name == contract["scope"]["function"])
-    first_line = min([target.lineno] + [node.lineno for node in target.decorator_list])
+    module_loop = 'loop_counter' in contract['scope']
+    if module_loop:
+        loop = resolve_module_loop(scope_path.read_text('utf-8'), contract['scope'])
+    else:
+        target = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
+                      and node.name == contract["scope"]["function"])
+        first_line = min([target.lineno] + [node.lineno for node in target.decorator_list])
     observers, runs, return_instructions = {}, [], {}
+    loop_state = {'pending': False, 'retained': None}
 
     def before(optimizer, args, kwargs):
         key = id(optimizer)
@@ -157,17 +192,80 @@ def capture(config):
         namespace = {**frame.f_globals, **frame.f_locals}
         runs.append(capture_return(namespace, len(runs), observers, script, config))
 
+    @preserve_rng()
+    def retain_selected(namespace):
+        counter = namespace[contract['scope']['loop_counter']]
+        if type(counter) is not int or counter != len(runs) or counter >= contract['expected_runs']:
+            raise ValueError('Native module loop counter does not match the frozen complete repetition order')
+        model = resolve_author_value(namespace, contract['model'])
+        if not isinstance(model, torch.nn.Module):
+            raise ValueError('Validation selection does not expose the actual author model')
+        model_source(model, script, config)
+        ids = {id(parameter) for parameter in model.parameters()}
+        relevant = [item for item in observers.values()
+                    if ids.intersection(id(parameter) for parameter in item['parameters'])]
+        changed = any(not torch.equal(parameter.detach().cpu(), initial)
+            for item in relevant for parameter, initial in zip(item['parameters'], item['initial'])
+            if id(parameter) in ids)
+        value = namespace[contract['scope']['selection']['result']]
+        if isinstance(value, torch.Tensor) and value.numel() == 1:
+            value = value.detach().item()
+        elif isinstance(value, np.floating):
+            value = value.item()
+        if type(value) not in (int, float) or not math.isfinite(value):
+            raise ValueError('Author validation-selected result must be a real finite scalar accuracy')
+        value /= 100 if contract['scope']['selection']['result_unit'] == 'percent' else 1
+        if not 0 <= value <= 1:
+            raise ValueError('Author selected accuracy has inconsistent units')
+        loop_state['retained'] = {'model': deepcopy(model), 'parameter_ids': ids,
+            'parameters_changed': changed, 'optimizer_steps': sum(item['steps'] for item in relevant),
+            'accuracy': value,
+            'inputs': deepcopy(tuple(resolve_author_value(namespace, key) for key in contract['forward_args'])),
+            'labels': deepcopy(resolve_author_value(namespace, contract['labels'])),
+            'indices': None if contract['test_indices'] is None else deepcopy(
+                resolve_author_value(namespace, contract['test_indices']))}
+
+    def trace_module(frame, event, result):
+        if event == 'exception':
+            loop_state['pending'] = False
+        elif event == 'line':
+            line = frame.f_lineno
+            namespace = {**frame.f_globals, **frame.f_locals}
+            inside_assignment = loop['selection_start'] <= line <= loop['selection_end']
+            if loop_state['pending'] and not inside_assignment:
+                retain_selected(namespace)  # The original assignment has actually completed.
+                loop_state['pending'] = False
+            if inside_assignment:
+                loop_state['pending'] = True
+            if line == loop['loop_line'] and loop_state['retained'] is not None:
+                if namespace[contract['scope']['loop_counter']] != len(runs):
+                    raise ValueError('Original module loop did not finish the selected repetition in order')
+                runs.append(capture_return(namespace, len(runs), observers, script, config,
+                                           retained=loop_state['retained']))
+                loop_state['retained'] = None
+        return trace_module
+
+    def trace(frame, event, result):
+        if (event == 'call' and frame.f_code.co_name == '<module>'
+                and frame.f_code.co_filename == str(scope_path)):
+            return trace_module
+        return None
+
     from torch.optim.optimizer import register_optimizer_step_pre_hook, register_optimizer_step_post_hook
     pre, post = register_optimizer_step_pre_hook(before), register_optimizer_step_post_hook(after)
-    old_profile = sys.getprofile()
+    old_profile, old_trace = sys.getprofile(), sys.gettrace()
     os.chdir(cwd)
     sys.path.insert(0, str(script.parent))
     sys.argv = [str(script), *argv[position + 1:]]
     try:
-        sys.setprofile(profile)
+        if module_loop:
+            sys.settrace(trace)
+        else:
+            sys.setprofile(profile)
         runpy.run_path(str(script), run_name="__main__")
     finally:
         sys.setprofile(old_profile)
+        sys.settrace(old_trace)
         pre.remove()
         post.remove()
     if len(runs) != contract["expected_runs"]:

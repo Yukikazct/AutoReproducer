@@ -102,6 +102,8 @@ def cpu_tensor(value):
 
 def flatten(value, tensors):
     """Trace sparse author inputs via exact index/value components, never dense copies."""
+    if value is None:
+        return {'kind': 'none'}
     if isinstance(value, torch.Tensor):
         def append(tensor):
             if len(tensors) >= 64:
@@ -128,6 +130,8 @@ def flatten(value, tensors):
 
 
 def reconstruct(layout, tensors):
+    if layout['kind'] == 'none':
+        return None
     if layout["kind"] == "tensor":
         return tensors[layout["index"]]
     if layout["kind"] == "sparse_coo":

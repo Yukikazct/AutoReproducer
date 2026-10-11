@@ -26,6 +26,7 @@ CPU_COMPATIBILITY_PINS = {
     "scipy": "1.14.1", "pandas": "2.2.3", "scikit-learn": "1.5.2",
     "matplotlib": "3.9.2", "pillow": "10.4.0", "networkx": "2.8.8",
     "tqdm": "4.67.1", "hyperopt": "0.2.7", "seaborn": "0.13.2", "tensorboardx": "2.6.2.2",
+    "googledrivedownloader": "0.4", "requests": "2.32.3",
 }
 CUDA_INDEX_URL = "https://download.pytorch.org/whl/cu121"
 CUDA_COMPATIBILITY_PINS = {**CPU_COMPATIBILITY_PINS, "torch": "2.5.1+cu121",
@@ -34,7 +35,10 @@ RELATIVE_TOLERANCE = 0.05
 _SHA = re.compile(r"[0-9a-f]{64}")
 _ID = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,63}")
 _NUMBER = re.compile(r"(?<![\w.])[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?(?![\w.])")
-_PACKAGE_IMPORTS = {"scikit-learn": "sklearn", "pillow": "PIL", "tensorboardx": "tensorboardX"}
+_PACKAGE_IMPORTS = {"scikit-learn": "sklearn", "pillow": "PIL", "tensorboardx": "tensorboardX",
+                    "googledrivedownloader": "google_drive_downloader"}
+# Version 0.4 imports requests but omits it from its wheel dependency metadata.
+_RUNTIME_DEPENDENCIES = {'googledrivedownloader': ('requests',)}
 _TEXT_SUFFIXES = {".py", ".md", ".rst", ".txt", ".toml", ".yaml", ".yml", ".sh", ".cff"}
 _FORBIDDEN_FLAGS = {"--smoke", "--dry-run", "--fast-dev-run", "--limit-train-batches",
                     "--limit-test-batches", "--subset", "--max-samples"}
@@ -373,14 +377,14 @@ def _citations(payload, packet, workspace):
     return result
 
 
-def _author_imports(packet, step, *, include_sources=False):
+def _author_imports(packet, step, *, include_sources=False, device=None):
     """Follow imports in pinned author files; no model-generated dependency list."""
     argv = step.get('argv') or []
     position = 2 if len(argv) > 1 and argv[1] == '-u' else 1
     if len(argv) <= position:
         raise PlanEvidenceError('Cannot determine imports without an author entrypoint')
     entry = (Path(step.get('cwd', '.')) / argv[position]).as_posix()
-    queue, visited, imports = [entry], set(), []
+    queue, visited, imports, excluded = [entry], set(), [], []
     absolute_roots = list(dict.fromkeys([Path(entry).parent, Path('.')]))
     inventory = packet['file_inventory']
 
@@ -415,7 +419,48 @@ def _author_imports(packet, step, *, include_sources=False):
             tree = ast.parse(source['text'])
         except SyntaxError as exc:
             raise PlanEvidenceError(f'Author import source is not valid Python: {path}') from exc
-        for node in ast.walk(tree):
+        # Only a frozen CPU device with hidden CUDA can make this exact guard
+        # false. Unknown conditions and shadowed/mutated torch remain conservative.
+        def binds_torch(node):
+            if isinstance(node, ast.Name) and not isinstance(node.ctx, ast.Load) and node.id == 'torch':
+                return True
+            if isinstance(node, ast.ImportFrom) and any((alias.asname or alias.name) == 'torch' for alias in node.names):
+                return True
+            if isinstance(node, ast.arg) and node.arg == 'torch':
+                return True
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.name == 'torch':
+                return True
+            if isinstance(node, ast.alias) and (node.asname or node.name.split('.')[0]) == 'torch':
+                return node.name != 'torch' or node.asname is not None
+            if isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Store):
+                base = node.value
+                while isinstance(base, ast.Attribute):
+                    base = base.value
+                return isinstance(base, ast.Name) and base.id == 'torch'
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in {'exec', 'eval', 'setattr'}:
+                return True
+            return False
+
+        all_nodes = list(ast.walk(tree))
+        plain_torch = any(isinstance(node, ast.Import) and any(alias.name == 'torch' and alias.asname is None
+            for alias in node.names) for node in all_nodes)
+        safe_cpu_guard = device == 'cpu' and plain_torch and not any(binds_torch(node) for node in all_nodes)
+
+        def reachable(node):
+            yield node
+            if (safe_cpu_guard and isinstance(node, ast.If) and isinstance(node.test, ast.Call)
+                    and not node.test.args and not node.test.keywords
+                    and ast.dump(node.test.func) == ast.dump(ast.parse('torch.cuda.is_available()', mode='eval').body.func)):
+                excluded.append({'path': path, 'line': node.lineno, 'sha256': source['sha256'],
+                    'statement': ast.get_source_segment(source['text'], node),
+                    'reason': 'frozen_cpu_cuda_hidden_and_runtime_preflight_required'})
+                for child in node.orelse:
+                    yield from reachable(child)
+            else:
+                for child in ast.iter_child_nodes(node):
+                    yield from reachable(child)
+
+        for node in reachable(tree):
             if isinstance(node, ast.Import):
                 modules = [alias.name for alias in node.names]
             elif isinstance(node, ast.ImportFrom):
@@ -452,7 +497,7 @@ def _author_imports(packet, step, *, include_sources=False):
                 elif root and root not in sys.stdlib_module_names:
                     imports.append({'module':root, 'path':path, 'line':node.lineno,
                                     'statement':ast.get_source_segment(source['text'], node), 'sha256':source['sha256']})
-    return {'imports':imports, 'sources':sorted(visited)} if include_sources else imports
+    return {'imports':imports, 'sources':sorted(visited), 'excluded_device_branches':excluded} if include_sources else imports
 
 
 def _effective_author_parameters(packet, step):
@@ -571,9 +616,10 @@ def _requirements(value, citations, packet, device="cpu", step=None):
     if not {"torch", "numpy"} <= names:
         if step is None:
             raise PlanEvidenceError("Independent evaluation needs the reviewed torch and numpy dependencies")
-    import_evidence, omitted = [], []
+    import_evidence, omitted, excluded = [], [], []
     if step is not None:
-        actual = _author_imports(packet, step)
+        discovery = _author_imports(packet, step, include_sources=True, device=device)
+        actual, excluded = discovery['imports'], discovery['excluded_device_branches']
         inverse = {module: name for name, module in _PACKAGE_IMPORTS.items()}
         required = {'torch', 'numpy'}
         unsupported = []
@@ -584,6 +630,10 @@ def _requirements(value, citations, packet, device="cpu", step=None):
             else:
                 required.add(package)
                 import_evidence.append({**item, 'package':package, 'pin':package + '==' + pins[package]})
+                for dependency in _RUNTIME_DEPENDENCIES.get(package, ()):
+                    required.add(dependency)
+                    import_evidence.append({**item, 'package':dependency, 'pin':dependency + '==' + pins[dependency],
+                        'dependency_of': package, 'evidence_scope': 'reviewed_package_runtime_import'})
         if unsupported:
             raise PlanEvidenceError('Author imports require packages outside the reviewed runtime: ' + ', '.join(sorted(set(unsupported))),
                                     category='runtime_unsupported')
@@ -593,7 +643,8 @@ def _requirements(value, citations, packet, device="cpu", step=None):
             "reason": value["reason"], "citations": list(value["citations"]),
             "runtime_required": ["torch==" + pins["torch"], "numpy==" + pins["numpy"]],
             "index_url": CUDA_INDEX_URL if device == "cuda" else CPU_INDEX_URL,
-            "import_evidence": import_evidence, "omitted_unused_proposals": omitted}
+            "import_evidence": import_evidence, "omitted_unused_proposals": omitted,
+            "excluded_device_branches": excluded}
 
 
 def _datasets(items, citations, packet, workspace):
@@ -961,12 +1012,16 @@ Available reviewed pins:
     ) + "\nReviewed CUDA pins (only source-required CUDA execution):\n" + _canonical(CUDA_COMPATIBILITY_PINS) + (
         "\nA native entrypoint containing all repetitions may use torch_classification_series. "
         "Capture a unique author function's final locals at its natural return; preserve all native "
-        "splits, runs and early-stop rules. Never invent a repeat loop or seeds. A bundled NPZ split "
+        "splits, runs and early-stop rules. Alternatively capture an original top-level module loop "
+        "via scope:{path,loop_counter,selection:{validation_metric,comparison:'lt|le|gt|ge',best_metric,result,"
+        "result_unit:'fraction|percent'}}. The exact validation comparison and its direct test-result assignment "
+        "must exist in the source. This observes the original best-validation weights before later training "
+        "overwrites/deletes them; each complete native loop iteration must still finish. Never invent a repeat loop or seeds. A bundled NPZ split "
         "summary can be cited as {source:'dataset',path,quote} from file_inventory.dataset_evidence; "
         "the pipeline derives it from the actual immutable arrays, not model guesses. "
         "Choose ONE capture schema. Series expected_optimizer_steps is the full per-run upper bound; "
         "author_epoch_counter uses the actual final local epoch plus the source-defined offset, "
-        "multiplied by the source-defined optimizer updates per epoch. Natural author returns and "
+        "multiplied by the source-defined optimizer updates per epoch. Natural author returns or complete original module loop iterations and "
         "all native repetitions are mandatory. expected_test_samples is an ordered list with one "
         "complete original split count per run, supported by source or actual bundled dataset evidence."
         " Capture selectors are author identifiers or {name:'identifier',keys:['literal_dictionary_key',0]}; "
@@ -1054,7 +1109,10 @@ paper command may override generic defaults only when paper evidence agrees.
 model_selection_and_evaluation_weights: establish the selected experiment's
 checkpoint/weight policy separately from stopping training. Follow the actual
 validation criterion, save/load or retained model, and captured model at the
-scope's natural return or program exit. The captured weights must be the same
+scope's natural return, program exit, or validated original module-loop
+selection assignment. A module-loop observer retains the actual weights when
+the original best-validation result assignment completes and still requires
+the entire original training iteration to finish. The captured weights must be the same
 weights used for the reported test result, for EVERY native repetition. A best
 validation test scalar without its corresponding retained/restored model is
 insufficient; do not substitute final weights or choose by test performance.
