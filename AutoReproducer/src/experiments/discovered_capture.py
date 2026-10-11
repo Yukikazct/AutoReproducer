@@ -38,10 +38,38 @@ def check_sources(config):
             raise ValueError("Author source or bundled input changed: " + name)
 
 
-def select(output, labels, indices, expected):
+def resolve_author_value(namespace, selector):
+    if isinstance(selector, str):
+        return namespace[selector]
+    value = namespace[selector['name']]
+    for key in selector['keys']:
+        if type(value) not in (dict, list, tuple):
+            raise ValueError('Author key selector must traverse actual dictionary/list values')
+        value = value[key]
+    return value
+
+
+def author_integer_tensor(value):
+    if isinstance(value, torch.Tensor):
+        if value.dtype in {torch.int8, torch.int16, torch.int32, torch.int64}:
+            return value.to(dtype=torch.int64)
+        if value.dtype == torch.bool:
+            return value
+    elif isinstance(value, np.ndarray) and value.ndim == 1:
+        if value.dtype.kind == 'i' or value.dtype.kind == 'u' and (not value.size or value.max() <= np.iinfo(np.int64).max):
+            return torch.from_numpy(np.array(value, dtype=np.int64, copy=True))
+        if value.dtype.kind == 'b':
+            return torch.from_numpy(value.copy())
+    raise ValueError('Author labels/indices must be actual integer tensors or arrays without rounding')
+
+
+def select(output, labels, indices, expected, output_alignment='full_dataset'):
+    if output_alignment not in {'full_dataset', 'selected_test'}:
+        raise ValueError('Unknown author output alignment')
     if (not isinstance(output, torch.Tensor) or output.ndim != 2 or output.shape[1] < 2
             or not torch.isfinite(output).all() or not isinstance(labels, torch.Tensor)
-            or labels.ndim != 1 or labels.dtype != torch.int64 or labels.shape[0] != output.shape[0]):
+            or labels.ndim != 1 or labels.dtype != torch.int64
+            or output_alignment == 'full_dataset' and labels.shape[0] != output.shape[0]):
         raise ValueError("Capture requires finite class logits and corresponding integer class labels")
     if indices is not None:
         if not isinstance(indices, torch.Tensor) or indices.ndim != 1:
@@ -53,7 +81,14 @@ def select(output, labels, indices, expected):
         if (indices.dtype != torch.int64 or len(indices) != len(indices.unique())
                 or not len(indices) or indices.min().item() < 0 or indices.max().item() >= len(labels)):
             raise ValueError("Test indices must be unique, complete, in-range integer indices")
-        output, labels = output[indices], labels[indices]
+        if output_alignment == 'selected_test':
+            if output.shape[0] != len(indices):
+                raise ValueError('Selected author logits do not contain exactly the complete test rows')
+            labels = labels[indices.to(labels.device)]
+        else:
+            output, labels = output[indices.to(output.device)], labels[indices.to(labels.device)]
+    elif output_alignment != 'full_dataset':
+        raise ValueError('Selected-test logits require the original full-data test indices')
     if len(labels) != expected or labels.min().item() < 0 or labels.max().item() >= output.shape[1]:
         raise ValueError("The captured test split does not match the prospective complete sample count")
     return output, labels
@@ -150,7 +185,7 @@ def capture(config):
         pre.remove()
         post.remove()
     contract = config["capture"]
-    model = namespace[contract["model"]]
+    model = resolve_author_value(namespace, contract['model'])
     if not isinstance(model, torch.nn.Module):
         raise ValueError("Named author model is not a trained PyTorch module")
     implementation = getattr(getattr(type(model), "forward", None), "__code__", None)
@@ -175,13 +210,15 @@ def capture(config):
                   if id(p) in parameters)
     if updates != contract["expected_optimizer_steps"] or not changed:
         raise ValueError("Observed model optimizer steps or actual parameter changes do not prove full training")
-    inputs = tuple(cpu_tensor(namespace[name]) for name in contract["forward_args"])
-    labels = cpu_tensor(namespace[contract["labels"]])
-    indices = None if contract["test_indices"] is None else cpu_tensor(namespace[contract["test_indices"]])
+    inputs = tuple(cpu_tensor(resolve_author_value(namespace, name)) for name in contract['forward_args'])
+    raw_labels = resolve_author_value(namespace, contract['labels'])
+    labels = cpu_tensor(author_integer_tensor(raw_labels))
+    indices = None if contract['test_indices'] is None else cpu_tensor(
+        author_integer_tensor(resolve_author_value(namespace, contract['test_indices'])))
     model.eval()
     with torch.no_grad():
         outputs = model(*inputs)
-        select(outputs, labels, indices, contract["expected_test_samples"])
+        select(outputs, labels, indices, contract['expected_test_samples'], contract.get('output_alignment', 'full_dataset'))
         # Trace only the author's trained forward path; independent evaluation
         # also checks every output against the original author module's result.
         tensors = []
@@ -200,6 +237,8 @@ def capture(config):
           "optimizer_steps": updates, "parameters_changed": changed,
           "test_samples": contract["expected_test_samples"], "total_samples": len(labels),
           "classes": outputs.shape[1], "model_source": name,
+          "author_label_dtype": str(raw_labels.dtype),
+          "output_alignment": contract.get('output_alignment', 'full_dataset'),
           "model_source_sha256": config["source_files"][name],
           "model_type": type(model).__module__ + "." + type(model).__qualname__,
           "torch_version": torch.__version__, "native_torch_model": built_in,
@@ -223,7 +262,8 @@ def evaluate(config):
         if not torch.allclose(outputs, tensors["outputs"], atol=1e-6, rtol=1e-5):
             raise ValueError("Freshly loaded author model disagrees with captured predictions")
         logits, labels = select(outputs, tensors["labels"], tensors["test_indices"],
-                                config["capture"]["expected_test_samples"])
+                                config['capture']['expected_test_samples'],
+                                config['capture'].get('output_alignment', 'full_dataset'))
         values, targets = logits.double().numpy(), labels.numpy()
         accuracy = float(np.mean(np.argmax(values, axis=1) == targets))
         shifted = values - np.max(values, axis=1, keepdims=True)

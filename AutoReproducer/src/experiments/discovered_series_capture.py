@@ -20,6 +20,7 @@ ROOT, WORKSPACE = _support.ROOT, _support.WORKSPACE
 check_sources, read, select, sha, write = (_support.check_sources, _support.read,
                                          _support.select, _support.sha, _support.write)
 flatten, FlattenedAuthor = _support.flatten, _support.FlattenedAuthor
+resolve_author_value, author_integer_tensor = _support.resolve_author_value, _support.author_integer_tensor
 
 
 def artifact_names(index):
@@ -41,7 +42,7 @@ def model_source(model, script, config):
 
 def capture_return(namespace, index, observers, script, config):
     contract = config["capture"]
-    model = namespace[contract["model"]]
+    model = resolve_author_value(namespace, contract['model'])
     if not isinstance(model, torch.nn.Module):
         raise ValueError("Natural author return does not expose its trained model")
     name = model_source(model, script, config)
@@ -65,18 +66,18 @@ def capture_return(namespace, index, observers, script, config):
             raise ValueError("Observed optimizer steps disagree with the native author's epoch counter")
     if any(parameter.device.type != contract["device"] for parameter in model.parameters()):
         raise ValueError("The actual author's trained model device differs from the frozen plan")
-    inputs = tuple(namespace[key] for key in contract["forward_args"])
-    labels = namespace[contract["labels"]]
-    indices = None if contract["test_indices"] is None else namespace[contract["test_indices"]]
-    if not isinstance(labels, torch.Tensor) or (indices is not None and not isinstance(indices, torch.Tensor)):
-        raise ValueError("Natural return must expose the actual author labels and complete test selector")
+    inputs = tuple(resolve_author_value(namespace, key) for key in contract['forward_args'])
+    raw_labels = resolve_author_value(namespace, contract['labels'])
+    labels = author_integer_tensor(raw_labels)
+    indices = None if contract['test_indices'] is None else author_integer_tensor(
+        resolve_author_value(namespace, contract['test_indices']))
     expected = contract["expected_test_samples"][index]
     # Snapshot the model: observing a natural return must not change the
     # author's module mode, device or subsequent native program behavior.
     model = deepcopy(model).eval()
     with torch.no_grad():
         original = model(*inputs)
-        select(original, labels, indices, expected)
+        select(original, labels, indices, expected, contract.get('output_alignment', 'full_dataset'))
         originals = original.detach().cpu().clone()
         tensors = []
         layouts = [flatten(value, tensors) for value in inputs]
@@ -102,6 +103,8 @@ def capture_return(namespace, index, observers, script, config):
     record = {"index": index, "natural_return": True, "optimizer_steps": updates,
               "author_epoch_counter": counter, "parameters_changed": True,
               "test_samples": expected, "total_samples": len(labels), "classes": outputs.shape[1],
+              "author_label_dtype": str(raw_labels.dtype),
+              "output_alignment": contract.get('output_alignment', 'full_dataset'),
               "model_source": name, "model_source_sha256": config["source_files"][name],
               "files_sha256": {name: sha(ROOT / name) for name in artifact_names(index)}}
     print(f"AUTHOR_NATIVE_RUN_CAPTURED index={index} steps={updates} test_samples={expected}", flush=True)
@@ -201,7 +204,7 @@ def evaluate(config):
                     or not torch.equal(output.argmax(1), tensors["outputs"].argmax(1))):
                 raise ValueError("Fresh series model changed the captured predictions")
             logits, labels = select(output, tensors["labels"], tensors["test_indices"],
-                                    contract["expected_test_samples"][index])
+                                    contract['expected_test_samples'][index], contract.get('output_alignment', 'full_dataset'))
             values, targets = logits.double().numpy(), labels.numpy()
             accuracy = float(np.mean(np.argmax(values, axis=1) == targets))
             shifted = values - np.max(values, axis=1, keepdims=True)

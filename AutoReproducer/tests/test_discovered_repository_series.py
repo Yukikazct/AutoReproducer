@@ -128,6 +128,52 @@ def run_series(root, device="cpu", mutate=None):
     return fixture, plan, spec_hash, execution
 
 
+def use_selected_test_rows(fixture):
+    """Author selects its own output rows; full NumPy labels stay in author locals."""
+    path = fixture['workspace'] / 'author_model.py'
+    source = path.read_text('utf-8').replace('def forward(self, inputs, normalize):',
+                                           'def forward(self, inputs, normalize, selected):')
+    source = source.replace('return torch.nn.functional.normalize(output) if normalize else output',
+                            'return (torch.nn.functional.normalize(output) if normalize else output)[selected]')
+    path.write_text(source, encoding='utf-8')
+    fixture['snapshot']['files'][path.name] = hashlib.sha256(path.read_bytes()).hexdigest()
+    next(c for c in fixture['proposal']['citations'] if c.get('path') == path.name)['quote'] = source
+    path = fixture['workspace'] / 'train.py'
+    source = path.read_text('utf-8').replace('model(inputs, normalize)[:8]',
+        'model(inputs, normalize, torch.arange(8, device=device))')
+    source = source.replace('output = model(inputs, normalize)', 'output = model(inputs, normalize, idx_test)')
+    source = source.replace('output[idx_test].argmax(1)', 'output.argmax(1)')
+    source = source.replace('    model.train()\n    return accuracy, model',
+        "    splits = {'test': idx_test}\n    labels_all = labels.cpu().numpy().astype(np.int32)\n"
+        '    model.train()\n    return accuracy, model')
+    path.write_text(source, encoding='utf-8')
+    fixture['snapshot']['files'][path.name] = hashlib.sha256(path.read_bytes()).hexdigest()
+    next(c for c in fixture['proposal']['citations'] if c.get('path') == path.name)['quote'] = source
+    selector = {'name': 'splits', 'keys': ['test']}
+    fixture['proposal']['capture'].update(forward_args=['inputs','normalize',selector],
+        labels='labels_all', test_indices=selector, output_alignment='selected_test')
+
+
+@pytest.mark.parametrize('device', ['cpu', 'cuda'])
+def test_dictionary_test_selector_numpy_labels_and_already_selected_outputs(tmp_path, device):
+    if device == 'cuda':
+        cuda_dependency_cache()
+    fixture, plan, spec_hash, execution = run_series(tmp_path, device, use_selected_test_rows)
+    result = verify_capture(plan, fixture['workspace'], execution, spec_hash)
+    assert result['protocol_pass'] and result['independent_metrics_pass']
+    assert [row['accuracy'] for row in result['independent_metrics']['runs']] == [1.0,0.75,1.0]
+    assert all(row['author_label_dtype'] == 'int32' and row['output_alignment'] == 'selected_test'
+               for row in result['capture']['runs'])
+
+
+def test_selected_outputs_require_the_same_complete_test_indices_as_a_forward_input(tmp_path):
+    fixture = series_fixture(tmp_path)
+    capture = deepcopy(fixture['proposal']['capture'])
+    capture['output_alignment'] = 'selected_test'
+    with pytest.raises(ValueError, match='same complete author test indices'):
+        validate_capture(capture, fixture['packet'], fixture['workspace'])
+
+
 def cuda_dependency_cache():
     root = Path(__file__).resolve().parents[1] / "data/deps/repository" / runtime_fingerprint()
     caches = [path for path in root.glob("*") if (path / ".ready").is_file()

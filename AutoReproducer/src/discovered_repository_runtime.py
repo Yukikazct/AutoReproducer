@@ -12,9 +12,10 @@ from src.safety.paths import workspace_path
 
 
 SINGLE_CAPTURE_SCHEMA = {
-    "kind": "torch_classification", "model": "simple_global_identifier",
-    "forward_args": ["simple_global_tensor_identifier"], "labels": "simple_global_identifier",
-    "test_indices": "simple_global_identifier_or_null_for_complete_labels",
+    "kind": "torch_classification", "model": "author_identifier_or_fixed_key_selector",
+    "forward_args": ["author_identifier_or_fixed_key_selector"], "labels": "author_integer_tensor_or_array_selector",
+    "test_indices": "author_selector_or_null_for_complete_labels",
+    "output_alignment": "full_dataset|selected_test (selected_test requires test_indices also in forward_args)",
     "expected_optimizer_steps": "positive_source_cited_integer",
     "expected_test_samples": "positive_source_cited_integer",
     "reported_metric": {"label": "literal_author_printed_accuracy_label", "unit": "fraction|percent"},
@@ -24,7 +25,7 @@ SERIES_CAPTURE_SCHEMA = {
     **SINGLE_CAPTURE_SCHEMA,
     "kind": "torch_classification_series", "device": "cpu|cuda",
     "scope": {"path": "pinned_author_python_file", "function": "unique_top_level_function"},
-    "forward_args": ["author_local_or_global_tensor_tree_or_scalar_identifier"],
+    "forward_args": ["author_local_or_global_tensor_tree_or_scalar_selector"],
     "expected_runs": "positive_source_cited_integer",
     "expected_test_samples": ["one_source_cited_complete_test_count_per_native_run"],
     "expected_optimizer_steps": "source_cited_per_run_maximum_optimizer_steps",
@@ -39,6 +40,18 @@ CAPTURE_DIR = "_autorepro_capture"
 _IDENTIFIER = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,127}")
 
 
+def _selector_names(selector):
+    if isinstance(selector, str):
+        return [selector]
+    if (not isinstance(selector, dict) or set(selector) != {'name', 'keys'}
+            or not isinstance(selector['name'], str) or not isinstance(selector['keys'], list)
+            or not 1 <= len(selector['keys']) <= 8
+            or any(not (isinstance(key, str) and 1 <= len(key) <= 128
+                        or type(key) is int and 0 <= key < 10000000) for key in selector['keys'])):
+        raise ValueError('Author selectors must be identifiers or fixed dictionary/list key paths')
+    return [selector['name']]
+
+
 def validate_capture(capture, packet, workspace):
     """Only named author globals are selectable; no expressions or new programs."""
     if not isinstance(capture, dict) or capture.get("kind") not in {"torch_classification", "torch_classification_series"}:
@@ -48,8 +61,11 @@ def validate_capture(capture, packet, workspace):
     series = capture["kind"] == "torch_classification_series"
     if series:
         required |= {"device", "scope", "expected_runs", "completion", "aggregation"}
-    if set(capture) != required:
+    if set(capture) - {'output_alignment'} != required:
         raise ValueError("Capture must use the complete fixed schema without executable extensions")
+    alignment = capture.get('output_alignment', 'full_dataset')
+    if not isinstance(alignment, str) or alignment not in {'full_dataset', 'selected_test'}:
+        raise ValueError('Capture output alignment must be explicit full data or selected test rows')
     args = capture.get("forward_args")
     if not isinstance(args, list) or not 1 <= len(args) <= 16:
         raise ValueError("Capture needs a bounded ordered list of named forward tensors")
@@ -58,10 +74,17 @@ def validate_capture(capture, packet, workspace):
         names.append(capture["test_indices"])
     source = "\n".join(item["text"] for name, item in packet["repository"]["files"].items()
                        if name.endswith(".py"))
-    for name in names:
-        if (not isinstance(name, str) or not _IDENTIFIER.fullmatch(name)
-                or not re.search(r"(?<!\w)" + re.escape(name) + r"(?!\w)", source)):
-            raise ValueError("Capture selectors must be simple identifiers present in author Python source")
+    for selector in names:
+        for name in _selector_names(selector):
+            if (not _IDENTIFIER.fullmatch(name)
+                    or not re.search(r"(?<!\w)" + re.escape(name) + r"(?!\w)", source)):
+                raise ValueError("Capture selectors must identify values present in author Python source")
+        if isinstance(selector, dict):
+            for key in selector['keys']:
+                if isinstance(key, str) and not re.search(r"['\"]" + re.escape(key) + r"['\"]", source):
+                    raise ValueError('Capture dictionary key is absent from the pinned author source')
+    if alignment == 'selected_test' and (capture['test_indices'] is None or capture['test_indices'] not in args):
+        raise ValueError('Selected-test output must use the same complete author test indices as a forward input')
     for key in ("expected_optimizer_steps",) if series else ("expected_optimizer_steps", "expected_test_samples"):
         if type(capture.get(key)) is not int or not 0 < capture[key] <= 10000000:
             raise ValueError("Capture requires positive, bounded prospective completion counts")

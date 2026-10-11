@@ -25,7 +25,7 @@ CPU_COMPATIBILITY_PINS = {
     "torch": "2.5.1+cpu", "torchvision": "0.20.1+cpu", "numpy": "1.26.4",
     "scipy": "1.14.1", "pandas": "2.2.3", "scikit-learn": "1.5.2",
     "matplotlib": "3.9.2", "pillow": "10.4.0", "networkx": "2.8.8",
-    "tqdm": "4.67.1", "hyperopt": "0.2.7",
+    "tqdm": "4.67.1", "hyperopt": "0.2.7", "seaborn": "0.13.2",
 }
 CUDA_INDEX_URL = "https://download.pytorch.org/whl/cu121"
 CUDA_COMPATIBILITY_PINS = {**CPU_COMPATIBILITY_PINS, "torch": "2.5.1+cu121",
@@ -465,7 +465,7 @@ def _effective_author_parameters(packet, step):
             if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute) or node.func.attr!='add_argument':
                 continue
             options = [arg.value for arg in node.args if isinstance(arg,ast.Constant)
-                       and isinstance(arg.value,str) and arg.value.startswith('--')]
+                       and isinstance(arg.value,str) and arg.value.startswith('-')]
             if not options:
                 continue
             kw = {item.arg:item.value for item in node.keywords}
@@ -474,10 +474,12 @@ def _effective_author_parameters(packet, step):
                     return ast.literal_eval(kw[name]) if name in kw else default
                 except (ValueError, TypeError):
                     return default
-            dest = literal('dest', options[0][2:].replace('-', '_'))
+            primary = next((option for option in options if option.startswith('--')), options[0])
+            dest = literal('dest', primary.lstrip('-').replace('-', '_'))
             action = literal('action', 'store')
             unresolved = object()
-            default = literal('default', False if action=='store_true' else True if action=='store_false' else unresolved)
+            implicit = False if action=='store_true' else True if action=='store_false' else None
+            default = literal('default', unresolved) if 'default' in kw else implicit
             converter = kw.get('type')
             if (action not in {'store', 'store_true', 'store_false'}
                     or 'nargs' in kw or 'const' in kw
@@ -487,8 +489,9 @@ def _effective_author_parameters(packet, step):
                                         + str(dest), category='runtime_unsupported')
             converter = converter.id if isinstance(converter,ast.Name) else 'str'
             if default is unresolved:
-                continue
-            declaration = {'value':default,'action':action,'type':converter,
+                raise PlanEvidenceError('Author argparse default cannot be statically resolved: ' + str(dest),
+                                        category='runtime_unsupported')
+            declaration = {'value':default,'action':action,'type':converter,'required':literal('required', False),
                 'source':{'source':'repository','path':path,'quote':ast.get_source_segment(source['text'],node),
                           'sha256':source['sha256'],'revision':packet['repository']['revision']}}
             if dest in definitions and definitions[dest]['value']!=default:
@@ -498,11 +501,13 @@ def _effective_author_parameters(packet, step):
                 flags[option] = dest
     argv = step['argv']
     index = 3 if argv[1]=='-u' else 2
+    provided = set()
     while index < len(argv):
         flag, sep, value = argv[index].partition('=')
         if flag not in flags:
             raise PlanEvidenceError('Cannot resolve the selected author option from its actual parser: ' + flag)
         definition = definitions[flags[flag]]
+        provided.add(flags[flag])
         action = definition['action']
         if action in {'store_true','store_false'}:
             if sep:
@@ -518,6 +523,9 @@ def _effective_author_parameters(packet, step):
             converter = {'str':str,'int':int,'float':float,'bool':bool}[definition['type']]
             definition['value'] = converter(value)
             index += 1
+    for name, definition in definitions.items():
+        if definition['required'] and name not in provided:
+            raise PlanEvidenceError('Selected author command omitted a required option: ' + name)
     return definitions
 
 
@@ -730,8 +738,8 @@ def _verify_author_arguments(arguments, quotes, packet):
     index = 0
     while index < len(arguments):
         token = arguments[index]
-        if not token.startswith("--"):
-            raise PlanEvidenceError("Only explicit documented long-form author options are supported")
+        if not token.startswith('-') or token in {'-', '--'}:
+            raise PlanEvidenceError("Only explicit documented author options are supported")
         if "=" in token:
             flag, value = token.split("=", 1)
             consumed = 1
@@ -956,6 +964,12 @@ Available reviewed pins:
         "multiplied by the source-defined optimizer updates per epoch. Natural author returns and "
         "all native repetitions are mandatory. expected_test_samples is an ordered list with one "
         "complete original split count per run, supported by source or actual bundled dataset evidence."
+        " Capture selectors are author identifiers or {name:'identifier',keys:['literal_dictionary_key',0]}; "
+        "only fixed dictionary/list access is allowed, never calls, slicing or generated expressions. "
+        "Use the actual full author integer tensor/NumPy labels, not the last validation minibatch. "
+        "output_alignment='full_dataset' means the forward returns all rows before test indexing. "
+        "output_alignment='selected_test' means the author's forward already returns rows selected by "
+        "the identical test_indices selector supplied in forward_args; only labels are indexed again."
     ) + "\n\nComplete PDF and bounded source packet with selectable original spans:\n" + _canonical(_planning_view(packet))
 
 

@@ -99,6 +99,22 @@ def test_argparse_semantics_that_cannot_be_compiled_are_explicitly_rejected(tmp_
     assert exc.value.category == 'runtime_unsupported'
 
 
+def test_required_options_and_short_aliases_use_actual_argparse_destinations(tmp_path):
+    fixture, packet, _, _ = protocol_fixture(tmp_path)
+    packet['repository']['files']['train.py']['text'] += (
+        "\nparser.add_argument('-d', '--dataset', type=str, required=True)\n"
+        "parser.add_argument('-t', '--type', type=int, required=True)\n")
+    step = deepcopy(fixture['proposal']['steps'][0])
+    step['argv'].extend(['-d=author_data', '-t', '1'])
+    values = planner._effective_author_parameters(packet, step)
+    assert values['dataset']['value'] == 'author_data' and values['type']['value'] == 1
+    planner._verify_author_arguments(['-d=author_data', '-t', '1'],
+                                    'python train.py -d=author_data -t 1', packet)
+    step['argv'] = step['argv'][:-2]
+    with pytest.raises(planner.PlanEvidenceError, match='required option: type'):
+        planner._effective_author_parameters(packet, step)
+
+
 def test_unused_reviewed_packages_are_omitted_and_required_imports_are_hash_bound(tmp_path):
     fixture, packet, raw, protocol = protocol_fixture(tmp_path)
     proposal = deepcopy(fixture['proposal'])
