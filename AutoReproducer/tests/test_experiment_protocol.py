@@ -4,7 +4,7 @@ import hashlib
 
 import pytest
 
-from discovered_fixtures import PlannedLLM, fixture_protocol, make_experiment
+from discovered_fixtures import PlannedLLM, accepted_review, fixture_protocol, make_experiment
 from src.agents.experiment_protocol import ExperimentProtocolAgent, bind_plan_to_protocol, validate_experiment_protocol
 from src import discovered_repository_plan as planner
 
@@ -59,6 +59,53 @@ def test_protocol_conflict_is_a_distinct_non_retryable_rejection(tmp_path):
     with pytest.raises(planner.PlanEvidenceError, match='experiment conflict') as exc:
         validate_experiment_protocol(raw, packet, fixture['workspace'])
     assert exc.value.planning_evidence['stage'] == 'experiment_protocol'
+
+
+@pytest.mark.parametrize('change', [
+    lambda raw: raw.pop('model_selection'),
+    lambda raw: raw['model_selection'].update(policy='best_test_accuracy'),
+    lambda raw: raw['model_selection'].update(evaluation_weights=''),
+    lambda raw: raw['model_selection'].update(citations=raw['metrics'][0]['citations']),
+])
+def test_model_selection_cannot_be_omitted_or_lack_actual_source_policy(tmp_path, change):
+    fixture, packet, raw, _ = protocol_fixture(tmp_path)
+    change(raw)
+    with pytest.raises(planner.PlanEvidenceError):
+        validate_experiment_protocol(raw, packet, fixture['workspace'])
+
+
+def test_checkpoint_policy_may_come_from_author_source_without_inventing_pdf_detail(tmp_path):
+    fixture, packet, raw, _ = protocol_fixture(tmp_path)
+    raw['model_selection']['citations'] = raw['implementation']['citations']
+    accepted = validate_experiment_protocol(raw, packet, fixture['workspace'])
+    assert accepted['model_selection']['policy'] == 'last_epoch'
+    assert accepted['alignment']['citations']  # Paper/repository alignment remains independently mandatory.
+
+
+def test_best_validation_scalar_does_not_authorize_final_model_capture(tmp_path):
+    fixture, packet, raw, _ = protocol_fixture(tmp_path)
+    raw['model_selection'].update(policy='best_validation', criterion='Minimum validation loss.',
+        evaluation_weights='Author reports a selected score but retains only final-epoch weights.')
+    protocol = validate_experiment_protocol(raw, packet, fixture['workspace'])
+    packet['experiment_protocol'] = protocol
+    review = accepted_review()
+    review['checks']['model_selection_and_evaluation_weights'].update(passed=False,
+        reason='The final-epoch captured model does not retain the best-validation weights for the reported score.')
+    llm = PlannedLLM(fixture['proposal'], review)
+    with pytest.raises(planner.PlanEvidenceError, match='model_selection_and_evaluation_weights') as exc:
+        planner.propose_plan(llm, packet, fixture['workspace'])
+    assert exc.value.category == 'protocol_mismatch'
+    assert len(llm.calls) == 2  # A real negative judgment never triggers replanning/tuning.
+    assert 'matching model' in llm.calls[1][0] or 'corresponding retained/restored model' in llm.calls[1][0]
+
+
+def test_model_selection_audit_requires_original_pdf_context_and_source_flow(tmp_path):
+    fixture, packet, raw, protocol = protocol_fixture(tmp_path)
+    packet['experiment_protocol'] = protocol
+    review = accepted_review()
+    review['checks']['model_selection_and_evaluation_weights']['citations'] = ['script']
+    with pytest.raises(planner.PlanEvidenceError, match='original source evidence: model_selection'):
+        planner.propose_plan(PlannedLLM(fixture['proposal'], review), packet, fixture['workspace'])
 
 
 @pytest.mark.parametrize('status,category', [('conflict','protocol_conflict'), ('insufficient','missing_information')])

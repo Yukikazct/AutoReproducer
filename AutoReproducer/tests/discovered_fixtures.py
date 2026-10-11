@@ -207,6 +207,9 @@ def fixture_protocol(proposal, view):
         'training':{'description':'Full author fixture optimization', 'parameters':[
             {'name':key,'value':value,'citations':refs(proposal['parameter_citations'][key])}
             for key, value in proposal['parameters'].items()], 'citations':both},
+        'model_selection':{'policy':'last_epoch', 'criterion':'No model selection; evaluate final author weights.',
+                           'evaluation_weights':'The author evaluates the trained model after its full loop.',
+                           'citations':both},
         'repetitions':{'count':count, 'aggregation':'mean' if count>1 else 'single','citations':both},
         'metrics':[{**{k:m[k] for k in ('name','reference','unit')}, 'table_context':'Fixture row and test column',
                     'citations':refs(m['citations'])} for m in proposal['metrics']],

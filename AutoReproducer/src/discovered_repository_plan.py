@@ -876,6 +876,8 @@ def validate_plan(payload, packet, workspace):
         from src.agents.experiment_protocol import bind_plan_to_protocol
         bind_plan_to_protocol(accepted, packet['experiment_protocol'])
         accepted['experiment_protocol'] = deepcopy(packet['experiment_protocol'])
+        from src.experiment_partition import verify_partition
+        accepted['partition_verification'] = verify_partition(accepted, packet, workspace)
     accepted["pdf_sha256"] = packet["pdf"]["sha256"]
     accepted["evidence_sha256"] = _digest(_canonical(packet).encode("utf-8"))
     accepted["plan_sha256"] = _digest(_canonical(accepted).encode("utf-8"))
@@ -1015,6 +1017,7 @@ def _add_requested_files(names, packet, workspace):
 _SEMANTIC_GATES = {
     "same_experiment": ("pdf", "repository"),
     "complete_author_protocol": ("repository",),
+    "model_selection_and_evaluation_weights": ("pdf", "repository"),
     "complete_dataset_and_test_split": ("pdf", "repository"),
     "capture_uses_test_data": ("repository",),
     "metric_definition_and_reference": ("pdf", "repository"),
@@ -1048,6 +1051,17 @@ has the right value for THAT flag. No shortened subset, smoke run, convenient
 seed, changed default or settings from a different script/experiment. Omitted
 arguments must retain the applicable full author defaults. A documented full
 paper command may override generic defaults only when paper evidence agrees.
+model_selection_and_evaluation_weights: establish the selected experiment's
+checkpoint/weight policy separately from stopping training. Follow the actual
+validation criterion, save/load or retained model, and captured model at the
+scope's natural return or program exit. The captured weights must be the same
+weights used for the reported test result, for EVERY native repetition. A best
+validation test scalar without its corresponding retained/restored model is
+insufficient; do not substitute final weights or choose by test performance.
+For last-epoch evaluation prove the author actually evaluates those weights.
+Use the frozen experiment_protocol.model_selection when present; reject any
+different criterion or evaluation model. Citations must establish the source
+code flow, not merely contain the words 'best', 'model' or 'checkpoint'.
 complete_dataset_and_test_split: all original required dataset files/samples
 and the exact paper evaluation split are present; no synthetic substitution,
 train/validation split substituted for test, or unexplained reduction.
@@ -1199,6 +1213,8 @@ def propose_plan(llm, packet, workspace, *, max_attempts=2):
                 continue
             accepted = validate_plan(payload, packet, workspace)
         except (PlanEvidenceError, ValueError, TypeError, KeyError) as exc:
+            if getattr(exc, 'planning_evidence', None) and getattr(exc, 'category', None) in {'protocol_conflict', 'missing_information'}:
+                raise  # A proven data conflict cannot be repaired by changing the experiment.
             failures += 1
             feedback = "\n".join(_planning_diagnostics(payload, packet, workspace, exc))[:4000]
             validation_failures.append(feedback)
