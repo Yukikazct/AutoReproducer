@@ -345,7 +345,9 @@ class Orchestrator:
 
     def _emit_agent_completion(self, state_name, agent, result, attempt):
         status, reason, outcome = "success", None, "completed"
-        if state_name == "EXECUTE_CODE":
+        if state_name == 'READ_PAPER' and (result.get('reading_coverage') or {}).get('complete') is False:
+            status, reason, outcome = 'error', '论文全文阅读未完成', 'reading_incomplete'
+        elif state_name == "EXECUTE_CODE":
             final = (result or {}).get("final") or {}
             if (result.get("success") is False or result.get("not_runnable")
                     or final.get("success") is False or final.get("timed_out") or final.get("cancelled")
@@ -378,6 +380,9 @@ class Orchestrator:
         if state_name == "READ_PAPER":
             self.data["paper_info"] = result.get("paper_info", {})
             self.data["raw_text"] = result.get("raw_text", "")
+            for key in ('reading_context', 'reading_coverage', 'reading_batches', 'reading_originals'):
+                if key in result:
+                    self.data[key] = result[key]
             self.data["extracted_code_urls"] = result.get("extracted_code_urls", [])
             self.data["extracted_repository_links"] = result.get("extracted_repository_links", [])
             if result.get("pdf_input"):

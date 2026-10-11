@@ -6,7 +6,8 @@ import re
 
 from src.base_agent import BaseAgent
 from src.discovered_repository_plan import (PlanEvidenceError, _canonical, _citations, _has_value,
-    _add_requested_files, _json_response, _planning_view, _references, _steps, _digest)
+    CPU_COMPATIBILITY_PINS, _PACKAGE_IMPORTS, _add_requested_files, _json_response,
+    _planning_view, _references, _source_request_kinds, _steps, _digest)
 
 
 PROTOCOL_SCHEMA = {
@@ -201,8 +202,18 @@ class ExperimentProtocolAgent(BaseAgent):
         feedback = ''
         failures = []
         requests = 0
+        text_requests = dataset_requests = 0
         while len(failures) < 2:
             prompt = ('Select one complete experimental protocol before generating any execution steps. '
+                'Different tables and appendices may use different splits and hyperparameters; select exactly one '
+                'and bind the method row, dataset column, split and script to that table. Do not describe alternative '
+                'branches as the selected dataset split. A split filename containing ratios is NOT numerical proof: '
+                'use the actual bundled mask summaries and the paper table context. '
+                'Choose a faithful complete experiment whose original imports fit the reviewed runtime. '
+                'The CPU runtime hides CUDA; an exact torch.cuda.is_available() branch is then inactive. '
+                'Unknown conditions remain conservative. GPU availability alone does not make unsupported GPU '
+                'libraries available. The reviewed external imports (plus Python standard library) are: '
+                + ', '.join(sorted(_PACKAGE_IMPORTS.get(name, name.replace('-', '_')) for name in CPU_COMPATIBILITY_PINS)) + '. '
                 'Use explicit source relationships; a single invocation is insufficient for a paper mean over N runs. '
                 'Separate training termination from model selection: early stopping does not establish which '
                 'weights are evaluated. Trace the original criterion and checkpoint save/load or model retention. '
@@ -216,10 +227,16 @@ class ExperimentProtocolAgent(BaseAgent):
                 'repository citations; do not invent the missing positive protocol fields. '
                 'Do not supply compatibility dependencies or invent training code. '
                 'The repository file_inventory is complete, but only bounded source files have been read. '
+                'source_catalog lists the ONLY readable paths and marks already_read; copy its exact paths. '
+                'dataset_catalog lists bounded NPZ paths with summary_available. A missing summary can be read '
+                'via the same request_files list; the program supplies hash-verified array and mask counts, never '
+                'executes it as source. Request all selected split summaries needed for repetitions before deciding. '
+                'Do not infer that a random-split script or a configuration exists from a paper experiment name. '
                 'If an experiment script, data loader, model, configuration, or selection implementation '
                 'needed to establish the protocol is missing from repository.files, first return ONLY '
-                '{"request_files":["exact inventory path",...]} for 1 to 8 new files. '
-                'At most two source-reading rounds are available; do not invent unseen contents. '
+                '{"request_files":["exact source_catalog path",...]} for 1 to 8 files. '
+                'Two source-reading rounds and two separate NPZ summary rounds are available, '
+                'each at most 8 paths; a mixed request consumes both budgets. Do not invent unseen contents. '
                 'Training parameters should use actual author CLI/config names. All citations select evidence_excerpts IDs. '
                 'Use typed JSON numbers for counts/references/numeric parameters (the schema numbers are examples, '
                 'never defaults), and booleans for boolean parameters. Parameter names are argparse destination names, '
@@ -232,14 +249,15 @@ class ExperimentProtocolAgent(BaseAgent):
             try:
                 payload = _json_response(response)
                 if isinstance(payload, dict) and 'request_files' in payload:
-                    if set(payload) != {'request_files'} or requests >= 2:
+                    text, dataset = _source_request_kinds(payload['request_files'])
+                    if (set(payload) != {'request_files'} or (text and text_requests >= 2)
+                            or (dataset and dataset_requests >= 2)):
                         raise PlanEvidenceError('Experiment protocol source requests are exhausted or malformed')
                     names = payload['request_files']
-                    if (not isinstance(names, list) or any(not isinstance(name, str) for name in names)
-                            or any(name in packet['repository']['files'] for name in names)):
-                        raise PlanEvidenceError('Protocol source requests must identify unread inventory files')
                     _add_requested_files(names, packet, workspace)
                     requests += 1
+                    text_requests += int(text)
+                    dataset_requests += int(dataset)
                     feedback = 'Requested pinned sources are available; establish the complete experiment protocol.'
                     continue
                 return validate_experiment_protocol(payload, packet, workspace)
@@ -251,4 +269,5 @@ class ExperimentProtocolAgent(BaseAgent):
         raise PlanEvidenceError('No evidence-bound experiment protocol: ' + feedback,
             planning_evidence={'stage':'experiment_protocol','schema_failures':failures,
                                'source_requests':requests,
+                               'text_requests':text_requests, 'dataset_requests':dataset_requests,
                                'response_excerpt':str(response)[:24000]}, category='model_structure_error')

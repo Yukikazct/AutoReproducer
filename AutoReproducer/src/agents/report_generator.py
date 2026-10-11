@@ -450,6 +450,14 @@ class ReportGeneratorAgent(BaseAgent):
                   f"- **数据集**: {paper_info.get('dataset', '未知')}",
                   f"- **{'作者公开参考指标' if is_rezero else '声明指标'}**: {paper_info.get('metrics', {})}",
                   ""]
+        coverage = data.get('reading_coverage') or {}
+        if coverage:
+            title_only = coverage.get('scope') == 'provided_title'
+            lines += [f"- **{'标题输入阅读' if title_only else '论文全文阅读'}**: {'完成' if coverage.get('complete') else '未完成'}；"
+                      f"{coverage.get('read_characters', 0)}/{coverage.get('total_characters', 0)} 字符；"
+                      f"{coverage.get('completed_batches', 0)}/{coverage.get('total_batches', 0)} 批",
+                      ("- **阅读范围**: 当前仅有标题，尚未取得论文全文。" if title_only else
+                       "- **阅读完成依据**: 连续覆盖全部提取文本，所有批次均返回有效结果；汇总笔记用于定位，实验判定引用原文。"), ""]
 
         # 2. 资源定位
         lines += ["## 2. 资源定位",

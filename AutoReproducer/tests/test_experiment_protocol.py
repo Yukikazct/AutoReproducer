@@ -3,6 +3,7 @@ from copy import deepcopy
 import hashlib
 import json
 
+import numpy as np
 import pytest
 
 from discovered_fixtures import PlannedLLM, accepted_review, fixture_protocol, make_experiment
@@ -82,8 +83,8 @@ def test_protocol_rejection_after_source_reading_is_final(tmp_path):
     assert len(calls) == 2
 
 
-@pytest.mark.parametrize('names', [['missing.py'], [['unhashable']], ['train.py']])
-def test_invalid_or_repeated_source_requests_cannot_loop(tmp_path, names):
+@pytest.mark.parametrize('names', [['missing.py'], [['unhashable']]])
+def test_invalid_source_requests_cannot_loop(tmp_path, names):
     fixture, packet, _, _ = protocol_fixture(tmp_path)
     original = deepcopy(packet)
     calls = []
@@ -99,6 +100,74 @@ def test_invalid_or_repeated_source_requests_cannot_loop(tmp_path, names):
     assert len(calls) == 2
     assert exc.value.planning_evidence['source_requests'] == 0
     assert packet == original
+
+
+def test_repeated_read_is_idempotent_but_bounded_and_catalog_is_explicit(tmp_path):
+    fixture, packet, _, _ = protocol_fixture(tmp_path)
+    original = deepcopy(packet)
+    calls = []
+
+    class Reader:
+        mock_mode = False
+        def chat(self, prompt, **kwargs):
+            calls.append(prompt)
+            evidence = json.loads(prompt.split('Protocol evidence:\n', 1)[1])
+            assert evidence['source_catalog']['train.py']['already_read'] is True
+            assert 'dataset.json' not in evidence['source_catalog']
+            return json.dumps({'request_files': ['train.py']})
+
+    with pytest.raises(planner.PlanEvidenceError) as exc:
+        ExperimentProtocolAgent(Reader()).run(packet, fixture['workspace'])
+    assert len(calls) == 4
+    assert exc.value.planning_evidence['source_requests'] == 2
+    assert packet == original
+
+
+def test_two_source_rounds_do_not_exhaust_two_split_summary_rounds(tmp_path):
+    fixture, packet, raw, _ = protocol_fixture(tmp_path)
+    names = []
+    for index in range(10):
+        path = fixture['workspace'] / f'split_{index}.npz'
+        np.savez(path, test_mask=np.array([0, 1], dtype=np.uint8))
+        packet['file_inventory'][path.name] = {'bytes': path.stat().st_size, 'text_available': False,
+            'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
+        names.append(path.name)
+    requests = [{'request_files': ['train.py']}, {'request_files': ['author_model.py']},
+                {'request_files': names[:8]}, {'request_files': names[8:]}]
+
+    class Reader:
+        mock_mode = False
+        def chat(self, prompt, **kwargs):
+            return json.dumps(requests.pop(0) if requests else raw)
+
+    protocol = ExperimentProtocolAgent(Reader()).run(packet, fixture['workspace'])
+    assert protocol['alignment']['status'] == 'matched'
+    assert all(packet['file_inventory'][name].get('dataset_evidence') for name in names)
+    llm = PlannedLLM(fixture['proposal'], prefixes=[{'request_files': ['train.py']},
+        {'request_files': ['author_model.py']}, {'request_files': names[:8]}, {'request_files': names[8:]}])
+    plan = planner.propose_plan(llm, packet, fixture['workspace'])
+    assert plan['semantic_review']['accepted'] is True and len(llm.calls) == 6
+
+
+def test_mixed_requests_consume_both_budgets_and_cannot_loop(tmp_path):
+    fixture, packet, _, _ = protocol_fixture(tmp_path)
+    path = fixture['workspace'] / 'split.npz'
+    np.savez(path, test_mask=np.array([0, 1], dtype=np.uint8))
+    packet['file_inventory'][path.name] = {'bytes': path.stat().st_size, 'text_available': False,
+        'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
+    calls = []
+
+    class Reader:
+        mock_mode = False
+        def chat(self, prompt, **kwargs):
+            calls.append(prompt)
+            return json.dumps({'request_files': ['train.py', 'split.npz']})
+
+    with pytest.raises(planner.PlanEvidenceError) as failure:
+        ExperimentProtocolAgent(Reader()).run(packet, fixture['workspace'])
+    assert len(calls) == 4
+    assert failure.value.planning_evidence['text_requests'] == 2
+    assert failure.value.planning_evidence['dataset_requests'] == 2
 
 
 def test_numeric_representation_is_normalized_only_when_original_source_supports_value(tmp_path):

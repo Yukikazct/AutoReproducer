@@ -59,3 +59,44 @@ def test_only_binary_integer_mask_names_get_selected_sample_counts(tmp_path):
     assert 'selected_samples' not in arrays['train_indices']
     assert 'selected_samples' not in arrays['invalid_mask']
     assert 'selected_samples' not in arrays['float_mask']
+
+
+def test_selected_split_missing_from_initial_budget_can_be_read_on_demand(tmp_path):
+    fixture = make_experiment(tmp_path)
+    path = fixture['workspace'] / 'split_0.6_0.2.npz'
+    np.savez(path, train_mask=np.array([1, 1, 0, 0], dtype=np.uint8),
+             val_mask=np.array([0, 0, 1, 0], dtype=np.uint8), test_mask=np.array([0, 0, 0, 1], dtype=np.uint8))
+    fixture['snapshot']['files'][path.name] = hashlib.sha256(path.read_bytes()).hexdigest()
+    packet = planner.build_evidence_packet(fixture['pdf'], fixture['workspace'], fixture['snapshot'])
+    packet['file_inventory'][path.name].pop('dataset_evidence')
+    view = planner._planning_view(packet)
+    assert view['dataset_catalog'][path.name]['summary_available'] is False
+    assert path.name not in view['source_catalog']
+    planner._add_requested_files([path.name], packet, fixture['workspace'])
+    summary = packet['file_inventory'][path.name]['dataset_evidence']
+    assert json.loads(summary['text'])['arrays']['test_mask']['selected_samples'] == 1
+    assert json.loads(summary['text'])['arrays']['train_mask']['selected_samples'] == 2
+    selected = next(key for key, entry in planner._planning_excerpts(packet).items() if entry.get('path') == path.name)
+    citation = planner._citations({'citations': [{'id': 'selected_split', 'evidence_id': selected}]}, packet, fixture['workspace'])
+    assert citation['selected_split']['sha256'] == fixture['snapshot']['files'][path.name]
+    assert path.name not in packet['repository']['files']  # Never execute NPZ as author source.
+
+
+@pytest.mark.parametrize('failure', ['changed', 'budget', 'object'])
+def test_on_demand_dataset_read_never_bypasses_hash_budget_or_no_pickle(tmp_path, failure):
+    fixture = make_experiment(tmp_path)
+    path = fixture['workspace'] / 'split.npz'
+    np.savez(path, test_mask=np.array([0, 1], dtype=np.uint8))
+    fixture['snapshot']['files'][path.name] = hashlib.sha256(path.read_bytes()).hexdigest()
+    packet = planner.build_evidence_packet(fixture['pdf'], fixture['workspace'], fixture['snapshot'])
+    packet['file_inventory'][path.name].pop('dataset_evidence')
+    if failure == 'budget':
+        packet['limits']['dataset_summary_bytes'] = 0
+    else:
+        np.savez(path, values=np.array([{'unsafe': 'object'}], dtype=object))
+        if failure == 'object':
+            packet['file_inventory'][path.name]['sha256'] = hashlib.sha256(path.read_bytes()).hexdigest()
+    original = deepcopy(packet)
+    with pytest.raises(planner.PlanEvidenceError):
+        planner._add_requested_files([path.name], packet, fixture['workspace'])
+    assert packet == original

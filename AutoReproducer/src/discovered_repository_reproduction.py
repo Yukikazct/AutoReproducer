@@ -283,6 +283,9 @@ class DiscoveredRepositoryReproduction:
                 "reproduction_scope": "selected_paper_experiment", "execution_source": "author_repository",
                 "optimization": {"mode": "off", "available": False, "optimized": False,
                                  "status": "disabled", "reason": "运行已冻结作者实验协议"}}
+        for key in ('reading_coverage', 'reading_batches', 'reading_originals'):
+            if key in request:
+                data[key] = deepcopy(request[key])
         phase, error = "prepare_repository", None
         before_calls = self.llm.get_call_count() if self.llm else 0
         try:

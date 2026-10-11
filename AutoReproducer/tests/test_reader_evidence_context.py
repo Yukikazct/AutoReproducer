@@ -42,15 +42,13 @@ def test_reader_and_verifier_receive_late_experiments_and_preserve_library_seman
     assert '空列表是正确结果' in llm.calls[1][0]
 
 
-def test_long_paper_excerpts_include_head_middle_tail_with_explicit_coverage():
+def test_reading_context_never_samples_or_drops_long_paper_content():
     text = 'TITLE ' + 'x' * READING_TEXT_LIMIT + 'RESULT_TABLE'
     context, coverage = reading_context(text)
-    assert coverage['complete'] is False
+    assert coverage['complete'] is True
     assert coverage['total_characters'] == len(text)
-    assert context.startswith('[原文字符 0:')
-    assert 'TITLE ' in context and context.endswith('RESULT_TABLE')
-    assert sum(end-start for start, end in coverage['spans']) == READING_TEXT_LIMIT
-    assert len(context) < READING_TEXT_LIMIT + 2000
+    assert context == text
+    assert sum(end-start for start, end in coverage['spans']) == len(text)
 
 
 def test_retry_feedback_is_used_without_replacing_original_evidence():

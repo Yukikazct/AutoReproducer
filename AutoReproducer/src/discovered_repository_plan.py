@@ -76,7 +76,8 @@ def _priority(name):
         return 0, len(Path(name).parts), name
     if "requirement" in base or base in {"pyproject.toml", "setup.py", "setup.cfg", "environment.yml"}:
         return 1, len(Path(name).parts), name
-    if base in {"main.py", "train.py", "run.py", "args.py", "config.py"} or lower.startswith("scripts/"):
+    if (base in {"main.py", "train.py", "run.py", "args.py", "config.py"}
+            or lower.startswith("scripts/") or Path(lower).suffix in {'.sh', '.yaml', '.yml', '.toml'}):
         return 2, len(Path(name).parts), name
     if Path(name).suffix == ".py":
         return 3, len(Path(name).parts), name
@@ -217,6 +218,7 @@ def build_evidence_packet(pdf_path, workspace, snapshot, *, max_files=32, max_so
         "repository": {"url": url, "revision": revision, "files": selected},
         "file_inventory": inventory,
         "limits": {"source_bytes": max_source_bytes, "source_files": max(64, max_files),
+                   "dataset_summary_bytes": 160000,
                    "training_timeout_s": 7200, "relative_tolerance": RELATIVE_TOLERANCE},
     }
 
@@ -275,6 +277,11 @@ def _planning_excerpts(packet):
 
 def _planning_view(packet):
     view = deepcopy(packet)
+    view['source_catalog'] = {name: {'already_read': name in packet['repository']['files'],
+                                   'bytes': entry['bytes']}
+        for name, entry in packet['file_inventory'].items() if entry.get('text_available')}
+    view['dataset_catalog'] = {name: {'summary_available': bool(entry.get('dataset_evidence')), 'bytes': entry['bytes']}
+        for name, entry in packet['file_inventory'].items() if name.lower().endswith('.npz') and entry['bytes'] <= 2 * 1024 * 1024}
     if view.get('experiment_protocol'):
         view['experiment_protocol'].pop('citations', None)
     for page in view["pdf"]["pages"]:
@@ -974,8 +981,10 @@ author still records the actual original declarations, with cited evidence.
 When several complete published experiments are available, prefer the smallest
 complete bundled dataset with an exact author command and paper reference.
 Keep every native split/repetition and the full chosen protocol unchanged.
-If needed, request at most 8 missing text files with {"request_files":[paths]};
-only file_inventory paths are available. No network tools or external sources.
+If needed, request 1 to 8 exact source_catalog/dataset_catalog paths with
+{"request_files":[paths]}. Source text and program-read NPZ summaries each have
+two independent reading rounds; a mixed request consumes both. Already-read
+paths are allowed and remain counted. No network tools or external sources.
 
 JSON schema:
 {version:1,scope:'selected_paper_experiment',repository:{url,revision},
@@ -1051,13 +1060,18 @@ def _json_response(text):
 
 
 def _add_requested_files(names, packet, workspace):
-    if not isinstance(names, list) or not 1 <= len(names) <= 8 or len(set(names)) != len(names):
+    if (not isinstance(names, list) or not 1 <= len(names) <= 8
+            or any(not isinstance(name, str) for name in names) or len(set(names)) != len(names)):
         raise PlanEvidenceError("A source request must list 1 to 8 distinct filenames")
-    additions = {}
+    additions, summaries = {}, {}
     for name in names:
         item = packet["file_inventory"].get(name)
+        if item is not None and name.lower().endswith('.npz') and item['bytes'] <= 2 * 1024 * 1024:
+            summaries[name] = _read_dataset_summary(workspace, name, item['sha256'])
+            continue
         if item is None or not item["text_available"]:
-            raise PlanEvidenceError("Requested file is absent or not allowed text evidence")
+            raise PlanEvidenceError("Requested file is absent or not allowed text evidence: " + name
+                + "; copy an exact source_catalog/dataset_catalog path, or decide from the already-read sources")
         try:
             additions[name] = _read_source(workspace, name, item["sha256"])
         except UnicodeError as exc:
@@ -1066,7 +1080,19 @@ def _add_requested_files(names, packet, workspace):
     if (len(merged) > packet["limits"]["source_files"]
             or sum(item["bytes"] for item in merged.values()) > packet["limits"]["source_bytes"]):
         raise PlanEvidenceError("Requested evidence exceeds the bounded source budget")
+    summary_bytes = sum(len((summaries.get(name) or item.get('dataset_evidence') or {}).get('text', ''))
+        for name, item in packet['file_inventory'].items())
+    if summary_bytes > packet['limits'].get('dataset_summary_bytes', 160000):
+        raise PlanEvidenceError('Requested split summaries exceed the bounded dataset evidence budget')
     packet["repository"]["files"] = merged
+    for name, summary in summaries.items():
+        packet['file_inventory'][name]['dataset_evidence'] = summary
+
+
+def _source_request_kinds(names):
+    if not isinstance(names, list) or not names or any(not isinstance(name, str) for name in names):
+        raise PlanEvidenceError('Source request needs a bounded list of exact paths')
+    return any(not name.lower().endswith('.npz') for name in names), any(name.lower().endswith('.npz') for name in names)
 
 
 _SEMANTIC_GATES = {
@@ -1239,7 +1265,7 @@ def _planning_diagnostics(payload, packet, workspace, primary):
 
 
 def propose_plan(llm, packet, workspace, *, max_attempts=2):
-    """Allow two bounded source requests and two pre-training quote repairs.
+    """Allow two text rounds, two NPZ rounds and pre-training quote repairs.
 
     ``packet`` gains any requested source files; callers persist it AFTER this
     function returns so the frozen evidence digest includes the same sources.
@@ -1252,6 +1278,7 @@ def propose_plan(llm, packet, workspace, *, max_attempts=2):
     if type(max_attempts) is not int or not 1 <= max_attempts <= 3:
         raise PlanEvidenceError("Planning repair attempts must be bounded")
     feedback, requests, failures, last_candidate = "", 0, 0, None
+    text_requests = dataset_requests = 0
     validation_failures = []
     while failures < max_attempts:
         response = llm.chat(_prompt(packet, feedback), system_prompt=_SYSTEM,
@@ -1263,10 +1290,14 @@ def propose_plan(llm, packet, workspace, *, max_attempts=2):
             if isinstance(payload, dict) and payload.get("unsupported"):
                 raise PlanEvidenceError("Unsupported author experiment: " + str(payload["unsupported"])[:1000])
             if isinstance(payload, dict) and "request_files" in payload:
-                if requests >= 2:
-                    raise PlanEvidenceError("The two bounded source discovery rounds are exhausted")
+                text, dataset = _source_request_kinds(payload['request_files'])
+                if (set(payload) != {'request_files'} or (text and text_requests >= 2)
+                        or (dataset and dataset_requests >= 2)):
+                    raise PlanEvidenceError("The bounded source or split discovery rounds are exhausted")
                 _add_requested_files(payload["request_files"], packet, workspace)
                 requests += 1
+                text_requests += int(text)
+                dataset_requests += int(dataset)
                 feedback = "Requested source files are now present. Produce the complete evidence-bound plan."
                 continue
             accepted = validate_plan(payload, packet, workspace)
@@ -1284,4 +1315,5 @@ def propose_plan(llm, packet, workspace, *, max_attempts=2):
                             planning_evidence={"stage": "deterministic_validation",
                                                "candidate": last_candidate,
                                                "validation_failures": validation_failures,
-                                               "source_requests": requests})
+                                               "source_requests": requests,
+                                               "text_requests": text_requests, "dataset_requests": dataset_requests})
