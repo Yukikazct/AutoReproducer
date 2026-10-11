@@ -32,6 +32,25 @@ DANGEROUS_SNIPPETS = [
     "os.spawnv(os.P_WAIT, 'cmd')",
     "import pty",
     "eval('1+1')",
+    "eval()",
+    "import builtins\nbuiltins.eval('1+1')",
+    "import builtins as b\nb.eval()",
+    "import builtins as b\nother = b\nother.eval()",
+    "from builtins import eval as evaluate\nevaluate('1+1')",
+    "evaluate = eval\nevaluate('1+1')",
+    "getattr(builtins, 'eval')('1+1')",
+    "from builtins import getattr as lookup\nlookup(builtins, 'eval')('1+1')",
+    "import builtins as b\nb.getattr(b, 'eval')('1+1')",
+    "getattr(model, 'eval')()",
+    "import builtins as b\nb.__dict__['eval']('1+1')",
+    "__builtins__['eval']('1+1')",
+    "model.eval('1+1')",
+    "model.eval(expression='1+1')",
+    "model.eval(*args)",
+    "model.eval(**kwargs)",
+    "get_model().eval()",
+    "models[0].eval()",
+    "model.eval(\n",  # Cannot parse: retain the conservative regex fallback.
     "exec('import os')",
     "__import__('os').system('id')",
     "import socket\ns = socket.socket()",
@@ -58,6 +77,11 @@ BENIGN_SNIPPETS = [
     "data = open('data.csv').read()",
     "import os\nprint(os.getcwd())\nprint(os.path.join('a', 'b'))",
     "import torch\nmodel = torch.compile(model)",      # compile 不误报
+    "import torch\nmodel = torch.nn.Linear(2, 1)\nmodel.eval()",
+    "self.model.eval()",
+    "import builtins as b\nmodel.eval()\nb.print('done')",
+    "model.eval(\n)\n",
+    "# eval('1+1') is only documentation\nprint('eval( is text')",
     "def train(epochs=3):\n    return epochs\n\n"
     "if __name__ == '__main__':\n    train()",
     "import shutil\nshutil.copy('a', 'b')",          # copy 非 rmtree
@@ -112,3 +136,54 @@ def test_execute_local_benign_code_still_runs(tmp_path):
         "print('hello-from-sandbox')\n", stage="smoke")
     assert result["success"] is True
     assert "hello-from-sandbox" in result["stdout"]
+
+
+MODEL_EVAL_SCRIPT = """class Model:
+    def eval(self):
+        print('model-entered-evaluation-mode')
+        return self
+
+model = Model()
+model.eval()
+"""
+
+
+def test_run_allows_model_evaluation_method():
+    """The same gate used by ReZero must admit the ordinary PyTorch idiom."""
+    agent = CodeExecutorAgent(LLMClient(mock_mode=True))
+    result = agent.run({"code": MODEL_EVAL_SCRIPT, "paper_info": {}})
+
+    assert result["success"] is True
+    assert not result.get("not_runnable")
+    assert "model-entered-evaluation-mode" in result["final"]["stdout"]
+
+
+def test_execute_local_allows_model_evaluation_method():
+    agent = CodeExecutorAgent(LLMClient(mock_mode=True))
+    result = agent._execute_code_local(MODEL_EVAL_SCRIPT, stage="smoke")
+
+    assert result["success"] is True
+    assert not result.get("danger_blocked")
+    assert "model-entered-evaluation-mode" in result["stdout"]
+
+
+@pytest.mark.parametrize("code", [
+    "eval('1+1')",
+    "import builtins as b\nb.eval()",
+    "from builtins import eval as evaluate\nevaluate('1+1')",
+    "getattr(builtins, 'eval')('1+1')",
+])
+def test_builtin_eval_stays_blocked_at_both_execution_entrypoints(monkeypatch, code):
+    def unexpected_execution(*args, **kwargs):
+        raise AssertionError("Dynamic eval must not reach a subprocess")
+
+    monkeypatch.setattr(ce_mod.subprocess, "run", unexpected_execution)
+    agent = CodeExecutorAgent(LLMClient(mock_mode=True))
+    run_result = agent.run({"code": code, "paper_info": {}})
+    local_result = agent._execute_code_local(code, stage="smoke")
+
+    assert run_result["not_runnable"] is True
+    assert run_result["final"]["exit_code"] == EXIT_NOT_RUNNABLE
+    assert "eval 动态执行" in run_result["reason"]
+    assert local_result["danger_blocked"] is True
+    assert local_result["exit_code"] == EXIT_DANGER_BLOCKED

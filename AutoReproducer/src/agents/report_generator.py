@@ -413,6 +413,18 @@ class ReportGeneratorAgent(BaseAgent):
             lines += [f"- **仓库关联证据**: {identity.get('reason', '未核验')}",
                       f"- **发现来源**: {identity.get('source', '未记录')}",
                       "- **执行范围**: 定位仓库是资源发现结果；是否运行仓库由下方执行对象和实际步骤确认。"]
+        evidence = resources.get("selection_evidence") or identity.get("evidence") or {}
+        if evidence:
+            page = evidence.get("page")
+            lines += [f"- **PDF 仓库来源**: {evidence.get('source', '未记录')}"
+                      + (f"，第 {page} 页" if page else ""),
+                      f"- **原文仓库链接**: {evidence.get('url', '')}",
+                      f"- **证据类型**: {evidence.get('evidence_type', 'repository_link')}"]
+            if evidence.get("context"):
+                lines.append("- **原文上下文**: " + _markdown_text(str(evidence["context"])))
+            pdf_input = data.get("pdf_input") or {}
+            if pdf_input.get("sha256"):
+                lines.append(f"- **来源 PDF SHA-256**: `{pdf_input['sha256']}`")
         urls = resources.get("extracted_urls", []) or []
         if urls:
             lines.append(f"- **从论文中提取URL**: {len(urls)} 个")

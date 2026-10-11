@@ -329,6 +329,9 @@ class Orchestrator:
             self.data["paper_info"] = result.get("paper_info", {})
             self.data["raw_text"] = result.get("raw_text", "")
             self.data["extracted_code_urls"] = result.get("extracted_code_urls", [])
+            self.data["extracted_repository_links"] = result.get("extracted_repository_links", [])
+            if result.get("pdf_input"):
+                self.data["pdf_input"] = result["pdf_input"]
         elif state_name == "FIND_RESOURCES":
             self.data["resources"] = result.get("resources", {})
         elif state_name == "BUILD_ENV":
@@ -494,6 +497,7 @@ class Orchestrator:
                             {"issues": verif.get("issues", [])})
             # 修正闭环：预算内重试一次（生成->验证->修正->再验证）
             retries = 0
+            previous_output = result
             while retries < MAX_FIX_RETRIES and not verif.get("pass", False):
                 retries += 1
                 suggestions = verif.get("fix_suggestions", []) or []
@@ -502,7 +506,22 @@ class Orchestrator:
                                 {"suggestions": suggestions})
                 self._emit_state(state_name, agent.name, "running", phase_id=_MAIN_PHASE_IDS[state_name], attempt=retries + 1)
                 try:
-                    fixed_result = agent.run(self.data)
+                    issues = verif.get("issues") or []
+                    previous_final = previous_output.get("final") or {}
+                    previous_failure = (previous_output.get("reason")
+                                        or previous_final.get("stderr") or "")
+                    # Feedback belongs only to this retry. Keep the shared
+                    # stage context free of it and omit previous code/output.
+                    retry_input = {**self.data, "retry_feedback": {
+                        "agent": agent.name,
+                        "state": state_name,
+                        "attempt": retries + 1,
+                        "issues": list(issues) if isinstance(issues, (list, tuple)) else [str(issues)],
+                        "fix_suggestions": list(suggestions) if isinstance(suggestions, (list, tuple)) else [str(suggestions)],
+                        "previous_failure": str(previous_failure)[:2000],
+                    }}
+                    fixed_result = agent.run(retry_input)
+                    previous_output = fixed_result
                     self._merge_result(state_name, fixed_result)
                     self._accumulate_llm_calls(fixed_result)
                     self._emit_agent_completion(state_name, agent, fixed_result, attempt=retries + 1)

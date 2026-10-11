@@ -185,17 +185,21 @@ def render_llm_settings():
 @st.cache_data(show_spinner=False, max_entries=8)
 def _preview_pdf_input(payload: bytes, mock_mode: bool):
     """Inspect uploaded bytes once; the backend independently verifies its file."""
-    from src.pdf_input import PDFInputError, PDFParserUnavailable, resolve_pdf_request
+    from frontend.pdf_entrypoint import load_pdf_input
+    pdf_module = load_pdf_input()
     temporary = ""
     try:
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as handle:
             handle.write(payload)
             temporary = handle.name
-        request = resolve_pdf_request({"pdf_path": temporary, "mock_mode": mock_mode})
-        return {"resolution": request.get("pdf_resolution", {})}
-    except PDFParserUnavailable:
+        document = pdf_module.extract_pdf_input(temporary)
+        request = pdf_module.resolve_pdf_request({"pdf_path": temporary, "mock_mode": mock_mode})
+        return {"resolution": request.get("pdf_resolution", {}),
+                "repository_links": list(document.repository_links),
+                "pdf_input": {"sha256": document.sha256, "pages": document.page_count}}
+    except pdf_module.PDFParserUnavailable:
         return {"parser_pending": True}
-    except PDFInputError as exc:
+    except pdf_module.PDFInputError as exc:
         return {"error": str(exc)}
     finally:
         if temporary:
@@ -248,6 +252,19 @@ def render_paper_input():
                 st.caption("该在线审核使用作者源码与项目适配证据。")
             else:
                 st.caption("将解析论文正文并核验资源；信息不足会明确报告，不能据占位代码认定复现。")
+            links = preview.get("repository_links", [])
+            if links:
+                primary = next((link for link in links if link.get("is_author_code")), None)
+                if primary:
+                    st.success("PDF 原文代码声明链接：" + primary["url"])
+                    st.caption(f"来源：第 {primary['page']} 页；将优先于模型猜测和关键词搜索。")
+                with st.expander("PDF 仓库链接提取依据"):
+                    for link in links[:12]:
+                        kind = {"author_code_statement": "代码公开声明", "reference": "参考文献",
+                                "repository_link": "仓库链接"}.get(link["evidence_type"], "仓库链接")
+                        st.markdown(f"[第 {link['page']} 页 · {kind}]({link['url']})")
+                        if link.get("context"):
+                            st.text(link["context"])
             if not preview.get("error"):
                 st.checkbox("在线核验匹配的作者代码与实验依据", value=True, key="pdf_llm_review")
     else:

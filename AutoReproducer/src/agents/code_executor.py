@@ -343,6 +343,70 @@ _DANGEROUS_PATTERNS = (
     (re.compile(r"\bshutil\.rmtree\b"), "shutil.rmtree 递归删除"),
 )
 
+def _has_dynamic_eval(tree: ast.AST) -> bool:
+    """Allow ordinary no-argument model.eval(), retaining builtin eval blocks.
+
+    This is a narrow false-positive fix for the existing static gate, not a
+    general Python sandbox. Dynamic receivers and eval arguments stay blocked.
+    """
+    nodes = list(ast.walk(tree))
+    builtin_names = {"builtins", "__builtins__"}
+    getattr_names = {"getattr"}
+    for node in nodes:
+        if isinstance(node, ast.Import):
+            builtin_names.update(alias.asname or alias.name for alias in node.names
+                                 if alias.name == "builtins")
+        elif isinstance(node, ast.ImportFrom) and node.module == "builtins":
+            if any(alias.name == "eval" for alias in node.names):
+                return True
+            getattr_names.update(alias.asname or alias.name for alias in node.names
+                                 if alias.name == "getattr")
+
+    # Retain the namespace identity for straightforward assignments as well as
+    # import aliases; reassignment never makes a builtin namespace trusted.
+    changed = True
+    while changed:
+        changed = False
+        for node in nodes:
+            if not isinstance(node, (ast.Assign, ast.AnnAssign, ast.NamedExpr)):
+                continue
+            value = node.value
+            if not isinstance(value, ast.Name) or value.id not in builtin_names:
+                continue
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for target in targets:
+                if isinstance(target, ast.Name) and target.id not in builtin_names:
+                    builtin_names.add(target.id)
+                    changed = True
+
+    def root_name(node):
+        while isinstance(node, ast.Attribute):
+            node = node.value
+        return node.id if isinstance(node, ast.Name) else None
+
+    for node in nodes:
+        if isinstance(node, ast.Name) and node.id == "eval" and isinstance(node.ctx, ast.Load):
+            return True
+        if isinstance(node, ast.Attribute) and node.attr == "eval":
+            if root_name(node.value) in builtin_names:
+                return True
+        if isinstance(node, ast.Subscript) and root_name(node.value) in builtin_names:
+            if isinstance(node.slice, ast.Constant) and node.slice.value == "eval":
+                return True
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if ((isinstance(func, ast.Name) and func.id in getattr_names) or
+                (isinstance(func, ast.Attribute) and func.attr == "getattr")):
+            if len(node.args) >= 2 and isinstance(node.args[1], ast.Constant):
+                if node.args[1].value == "eval":
+                    return True
+        if isinstance(func, ast.Attribute) and func.attr == "eval":
+            if node.args or node.keywords or root_name(func.value) is None:
+                return True
+    return False
+
+
 # 论文信息不足时的结果说明（报告与日志共用同一句话，避免两处措辞漂移）
 _BEST_EFFORT_REASON = (
     "论文的关键方法、数据或声明指标尚未充分确认，或本轮使用了 Mock 演示兜底；"
@@ -350,8 +414,8 @@ _BEST_EFFORT_REASON = (
 
 # 信息不足且模型两次都不给代码时使用的**本地兜底脚本**：保证"一定有代码、
 # 一定能执行、一定有输出"。三条硬约束（每条都有测试兜）：
-# 1. 纯标准库、确定性，且不含 `_DANGEROUS_PATTERNS` 的任何词——那是全文正则，
-#    连注释里出现 subprocess/eval/socket 之类都会让本地执行被拒；
+# 1. 纯标准库、确定性，且不含危险模式；除 eval 使用 AST 区分模型评估之外，
+#    其他模式仍是全文正则，连注释里出现 subprocess/socket 之类也会被拒；
 # 2. 打印内容避开 `_METRIC_PATTERNS` 的键名，且没有任何 `键 = 数值` 形式的行：
 #    占位数字一旦被下游 `_extract_metrics` 抓成"实测指标"，就会喂出假的复现
 #    结论（这也是本脚本刻意不打印 metrics 的原因）；
@@ -447,6 +511,7 @@ class CodeExecutorAgent(BaseAgent):
         self._execution_id = None
         self._execution_step_index = 0
         self._execution_run_state = None
+        self._retry_feedback = None
         # 最近一次依赖就绪的隔离安装目录（供执行时注入 PYTHONPATH）
         self._deps_dir: Optional[str] = None
         # 运行时自愈补装的隔离目录集合（data/deps/heal-<module>/），
@@ -630,6 +695,14 @@ class CodeExecutorAgent(BaseAgent):
             return result
 
     def _run(self, input_data: dict) -> dict:
+        # Feedback belongs to one agent invocation, never the following paper
+        # or another stage that happens to reuse the executor instance.
+        self._retry_feedback = None
+        feedback = input_data.get("retry_feedback")
+        if (isinstance(feedback, dict) and feedback.get("agent") == self.name
+                and feedback.get("state") == "EXECUTE_CODE"):
+            self._retry_feedback = {key: feedback.get(key) for key in (
+                "attempt", "issues", "fix_suggestions", "previous_failure")}
         # 仓库预设只能由 RepositoryRunner 跑整个仓库。单文件生成会丢掉多文件导入、
         # 作者入口和 train/eval 拆分，所以这里硬失败，绝不静默降级成 run.py。
         if input_data.get("experiment_profile"):
@@ -889,10 +962,13 @@ class CodeExecutorAgent(BaseAgent):
 3. 每一行都必须是合法 Python 代码，缩进与前文保持一致；
 4. 一直写到脚本真正结束为止：训练与评估完成，并打印出上面列出的指标。
 """
-        if insufficient:
+        if insufficient and self.mock_mode:
             prompt += """5. 论文信息不足也要给出可运行代码：不得回占位标记、不得
    留空；未给出的量用合成数据与默认值，并以 `# 假设: <内容>` 注释写明。
 """
+        elif insufficient:
+            prompt += f"5. {self._rule5(insufficient)}\n"
+        prompt += self._execution_constraints_prompt() + self._retry_feedback_prompt()
         return self.llm.chat(prompt, task="code_executor")
 
     @staticmethod
@@ -1026,6 +1102,50 @@ class CodeExecutorAgent(BaseAgent):
    用 json.dumps(..., allow_nan=False) 序列化；所有论文声明指标都须输出。
    unit 明确使用 percent、fraction 或原始单位，未知则留空；如实填写数据
    划分。信息不足的占位脚本不得编造指标，可省略这一行。
+""" + self._execution_constraints_prompt() + self._retry_feedback_prompt()
+
+    def _execution_constraints_prompt(self) -> str:
+        """Describe the real execution boundary before generating any code."""
+        if self.use_docker:
+            constraints = "\n【本轮执行模式】Docker 容器执行，遵守已配置的容器权限与网络策略。\n"
+        else:
+            constraints = """
+【本轮执行模式】本地执行，必须通过现有安全检查。
+不得使用 Python 内置 eval/exec、动态导入、命令/子进程执行或网络下载。
+数据加载只能读取已确认存在的本地文件；不得自动下载数据集，下载选项必须关闭。
+正常的无参数模型评估方法 model.eval() 应保留，它不属于内置动态执行。
+"""
+        if not self.mock_mode:
+            constraints += f"""若缺少真实本地数据或必要证据，明确说明缺口，并只输出
+`{_INSUFFICIENT_INFO_MARK}`（可附缺失内容的注释），不得拿合成数据替代论文数据。
+只有论文实验本身规定使用合成数据时才可按论文构造。不得伪造指标或绕过安全检查。
+"""
+        return constraints
+
+    def _retry_feedback_prompt(self) -> str:
+        feedback = self._retry_feedback
+        if not feedback:
+            return ""
+
+        def bounded_items(value):
+            items = value if isinstance(value, (list, tuple)) else [value]
+            return "\n".join(f"- {str(item)[:400]}" for item in items[:6] if item)
+
+        failure = feedback.get("previous_failure") or ""
+        if isinstance(failure, dict):
+            failure = {key: failure[key] for key in (
+                "reason", "stderr", "error", "exit_code", "success", "not_runnable", "stage")
+                if key in failure}
+        return f"""
+【本次重试反馈（第 {str(feedback.get('attempt') or '')[:20]} 次尝试）】
+上次实际失败摘要（可能发生在执行前，不能据此宣称已训练）：
+{str(failure)[:1200]}
+审查问题：
+{bounded_items(feedback.get('issues'))}
+修复建议：
+{bounded_items(feedback.get('fix_suggestions'))}
+针对这些问题修复并输出完整脚本；保留正常的 model.eval() 评估切换。
+不得为获得通过而移除安全检查、绕过执行边界、编造训练数据或指标。
 """
 
     def _rule5(self, insufficient: bool) -> str:
@@ -1249,12 +1369,20 @@ class CodeExecutorAgent(BaseAgent):
 
         仅针对本地无沙箱执行（_execute_code_local）：本地模式以完整用户权限
         运行 LLM 代码，明显危险的调用（命令执行/动态执行/网络外联/递归删除）
-        一律拒绝。正则兜底，非正式沙箱；生产复现不可信代码请用 Docker。
+        一律拒绝。eval 使用 AST 区分内置动态执行与无参数模型评估方法；
+        其他检查及无法解析时仍用正则兜底。非正式沙箱。
         """
         if not code:
             return None
+        try:
+            tree = ast.parse(code)
+        except (SyntaxError, ValueError, TypeError):
+            tree = None
         for pattern, label in _DANGEROUS_PATTERNS:
-            if pattern.search(code):
+            if label == "eval 动态执行" and tree is not None:
+                if _has_dynamic_eval(tree):
+                    return label
+            elif pattern.search(code):
                 return label
         return None
 

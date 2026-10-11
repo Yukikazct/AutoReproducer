@@ -1,4 +1,4 @@
-"""Validate an uploaded PDF and resolve only its actual first-page title.
+"""Validate an uploaded PDF and retain its visible identity and resource evidence.
 
 PDF parsers are imported lazily so the bootstrap can recover missing application
 dependencies. Text in the abstract, body or references cannot select a profile.
@@ -10,6 +10,10 @@ from pathlib import Path
 import re
 
 from src.title_routing import match_paper_title, resolve_title_request
+from src.repository_evidence import extract_repository_links
+
+
+PDF_INPUT_API_VERSION = 2
 
 
 class PDFInputError(ValueError):
@@ -28,6 +32,45 @@ class PDFInput:
     page_count: int
     sha256: str
     byte_size: int
+    repository_links: tuple = ()
+
+
+def _pypdf_page_content(page, page_number):
+    fragments = []
+
+    def remember_text(text, cm, tm, font, size):
+        if text.strip():
+            # PDF annotations and these transformed text origins share the
+            # bottom-left PDF coordinate system. Retain nearby lines as context.
+            x = tm[4] * cm[0] + tm[5] * cm[2] + cm[4]
+            y = tm[4] * cm[1] + tm[5] * cm[3] + cm[5]
+            fragments.append((x, y, text))
+
+    try:
+        text = page.extract_text(visitor_text=remember_text) or ""
+    except TypeError:  # Older compatible parsers may lack the visitor argument.
+        text = page.extract_text() or ""
+    annotations = []
+    for indirect in page.get("/Annots", ()):
+        try:
+            annotation = indirect.get_object()
+            action = annotation.get("/A", {})
+            action = action.get_object() if hasattr(action, "get_object") else action
+            uri = action.get("/URI", "")
+            if not isinstance(uri, str):
+                continue
+            rect = annotation.get("/Rect", ())
+            nearby = []
+            if len(rect) == 4:
+                bottom, top = min(float(rect[1]), float(rect[3])), max(float(rect[1]), float(rect[3]))
+                nearby = [fragment for fragment in fragments if bottom - 24 <= fragment[1] <= top + 24]
+            context = " ".join(fragment[2] for fragment in sorted(nearby, key=lambda item: (-item[1], item[0])))
+            annotations.append({"page": page_number, "raw_url": uri,
+                                "context": context or str(annotation.get("/Contents", ""))})
+        except Exception:
+            # A malformed optional annotation must not invalidate readable text.
+            continue
+    return text, annotations
 
 
 def _extract_pypdf(payload):
@@ -35,17 +78,30 @@ def _extract_pypdf(payload):
     reader = PdfReader(BytesIO(payload))
     if reader.is_encrypted and not reader.decrypt(""):
         raise PDFInputError("PDF 已加密，无法读取论文正文")
-    pages = [page.extract_text() or "" for page in reader.pages]
+    contents = [_pypdf_page_content(page, index) for index, page in enumerate(reader.pages, 1)]
+    pages = [content[0] for content in contents]
+    annotations = [annotation for content in contents for annotation in content[1]]
     metadata = reader.metadata or {}
-    return pages, str(metadata.get("/Title") or "")
+    return pages, str(metadata.get("/Title") or ""), annotations
 
 
 def _extract_pdfplumber(payload):
     import pdfplumber
     with pdfplumber.open(BytesIO(payload)) as document:
         pages = [page.extract_text() or "" for page in document.pages]
+        annotations = []
+        for number, page in enumerate(document.pages, 1):
+            try:
+                for link in page.hyperlinks:
+                    top = max(0, float(link["top"]) - 24)
+                    bottom = min(page.height, float(link["bottom"]) + 24)
+                    context = page.crop((0, top, page.width, bottom)).extract_text() or ""
+                    annotations.append({"page": number, "raw_url": link.get("uri", ""),
+                                        "context": context})
+            except Exception:
+                continue
         metadata = document.metadata or {}
-        return pages, str(metadata.get("Title") or "")
+        return pages, str(metadata.get("Title") or ""), annotations
 
 
 def extract_pdf_input(pdf_path):
@@ -60,7 +116,10 @@ def extract_pdf_input(pdf_path):
     unavailable, empty = 0, False
     for parser in (_extract_pypdf, _extract_pdfplumber):
         try:
-            pages, metadata_title = parser(payload)
+            extracted = parser(payload)
+            # Preserve the established two-field parser test/fallback contract.
+            pages, metadata_title = extracted[:2]
+            annotations = extracted[2] if len(extracted) > 2 else ()
         except ImportError:
             unavailable += 1
             continue
@@ -72,7 +131,8 @@ def extract_pdf_input(pdf_path):
             continue
         return PDFInput(text=text, first_page_text=pages[0] if pages else "",
                         metadata_title=metadata_title, page_count=len(pages),
-                        sha256=hashlib.sha256(payload).hexdigest(), byte_size=len(payload))
+                        sha256=hashlib.sha256(payload).hexdigest(), byte_size=len(payload),
+                        repository_links=tuple(extract_repository_links(pages, annotations)))
 
     if unavailable:
         raise PDFParserUnavailable("PDF 解析依赖缺失，需要自动准备应用运行环境后重试")

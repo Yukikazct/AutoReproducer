@@ -10,6 +10,7 @@ import re
 from typing import Dict
 from src.base_agent import BaseAgent
 from src.llm.llm_client import LLMClient
+from src.repository_evidence import extract_repository_links
 
 
 class PaperReaderAgent(BaseAgent):
@@ -56,6 +57,10 @@ class PaperReaderAgent(BaseAgent):
             pdf_text = (f"论文标题: {paper_title}\n"
                         "（未获取到论文正文，以下仅有标题）")
 
+        # The language-model viewport is intentionally bounded, but repository
+        # evidence comes from every page and link annotation, independently.
+        repository_links = list(pdf_input.repository_links) if pdf_input is not None else []
+
         prompt = f"""请从以下论文内容中提取结构化信息，返回JSON格式：
 {{
     "title": "论文标题",
@@ -79,6 +84,9 @@ MSE/MAE 等保留原始单位。单位未知时留空，不按数值大小猜百
 
 论文内容：
 {pdf_text[:3000]}
+
+从完整 PDF 确定性提取的仓库链接及上下文（引用链接不等于作者实现）：
+{json.dumps(repository_links[:12], ensure_ascii=False)}
 """
         llm_result = self.llm.chat(prompt, task="paper_reader")
         parsed = self._parse_json(llm_result)
@@ -92,6 +100,12 @@ MSE/MAE 等保留原始单位。单位未知时留空，不按数值大小猜百
             parsed["title"] = visible_title
         elif paper_title and pdf_input is None:
             parsed["title"] = paper_title
+        if pdf_input is not None:
+            # A guessed URL is not paper evidence. Only an actual author-code
+            # declaration can fill this field; weaker links remain candidates.
+            code_evidence = next((link for link in repository_links if link["is_author_code"]), None)
+            parsed["code_url"] = code_evidence["url"] if code_evidence else "未找到"
+            parsed["code_url_evidence"] = code_evidence
         # 透传"信息是否足以生成针对性复现代码"给下游
         # （CodeExecutor 据此拒绝编造代码，ResultValidator 据此判"无法验证"）
         if title_only and not getattr(self.llm, "mock_mode", False):
@@ -112,8 +126,8 @@ MSE/MAE 等保留原始单位。单位未知时留空，不按数值大小猜百
         result = {
             "paper_info": parsed,
             "raw_text": pdf_text,
-            "extracted_code_urls": re.findall(
-                r"https?://github\.com/[^\s\)\]}\"]+", pdf_text),
+            "extracted_code_urls": list(dict.fromkeys(link["url"] for link in repository_links)),
+            "extracted_repository_links": repository_links,
             "llm_calls": self._delta_llm_calls(),
         }
         if pdf_input is not None:
@@ -202,9 +216,11 @@ MSE/MAE 等保留原始单位。单位未知时留空，不按数值大小猜百
                 "")
             if title_line:
                 info["title"] = title_line.split(":", 1)[-1].strip() or info["title"]
-            code_urls = re.findall(r"https?://[^\s\)\]}\"]*github[^\s\)\]}\"]*", text)
-            if code_urls:
-                info["code_url"] = code_urls[0]
+            code_evidence = next((link for link in extract_repository_links([text])
+                                  if link["is_author_code"]), None)
+            if code_evidence:
+                info["code_url"] = code_evidence["url"]
+                info["code_url_evidence"] = code_evidence
             metrics_re = re.findall(
                 r"(?:accuracy|acc|准确率)\s*[:：]\s*([\d.]+)\s*(%)?", text,
                 re.IGNORECASE)
