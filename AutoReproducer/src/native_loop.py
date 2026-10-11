@@ -6,6 +6,21 @@ _NAME = re.compile(r'[A-Za-z][A-Za-z0-9_]{0,127}')
 _COMPARISONS = {'lt': ast.Lt, 'le': ast.LtE, 'gt': ast.Gt, 'ge': ast.GtE}
 
 
+def selector_expression(selector):
+    if isinstance(selector, str) and _NAME.fullmatch(selector):
+        return ast.Name(id=selector, ctx=ast.Load())
+    if (not isinstance(selector, dict) or set(selector) != {'name', 'keys'}
+            or not isinstance(selector['name'], str) or not _NAME.fullmatch(selector['name'])
+            or not isinstance(selector['keys'], list) or not 1 <= len(selector['keys']) <= 8):
+        raise ValueError('Validation metric must be an original identifier or fixed key selector')
+    expression = ast.Name(id=selector['name'], ctx=ast.Load())
+    for key in selector['keys']:
+        if not (type(key) is str and 1 <= len(key) <= 128 or type(key) is int and 0 <= key < 10000000):
+            raise ValueError('Validation metric key must be a fixed literal, without calls or slicing')
+        expression = ast.Subscript(value=expression, slice=ast.Constant(value=key), ctx=ast.Load())
+    return expression
+
+
 def resolve_module_loop(source, scope):
     if (not isinstance(scope, dict)
             or set(scope) not in ({'path', 'loop_counter', 'selection'},
@@ -17,9 +32,13 @@ def resolve_module_loop(source, scope):
             or selection.get('comparison') not in _COMPARISONS
             or selection.get('result_unit') not in {'fraction', 'percent'}):
         raise ValueError('Native selection needs a fixed validation comparison and reported result')
-    names = [scope['loop_counter'], *(selection[key] for key in ('validation_metric', 'best_metric', 'result'))]
+    counter = scope['loop_counter']
+    if not isinstance(counter, str) or not (counter == '_' or _NAME.fullmatch(counter)):
+        raise ValueError('Native loop counter must be an original identifier')
+    names = [selection[key] for key in ('best_metric', 'result')]
     if any(not isinstance(name, str) or not _NAME.fullmatch(name) for name in names):
         raise ValueError('Native loop and selection values must be original identifiers')
+    validation = selector_expression(selection['validation_metric'])
     tree = ast.parse(source)
     container, function_line = tree, None
     if 'function' in scope:
@@ -40,7 +59,7 @@ def resolve_module_loop(source, scope):
     guards = [node for node in ast.walk(loop) if isinstance(node, ast.If)
               and isinstance(node.test, ast.Compare) and len(node.test.ops) == 1
               and isinstance(node.test.ops[0], _COMPARISONS[selection['comparison']])
-              and isinstance(node.test.left, ast.Name) and node.test.left.id == selection['validation_metric']
+              and ast.dump(node.test.left) == ast.dump(validation)
               and isinstance(node.test.comparators[0], ast.Name)
               and node.test.comparators[0].id == selection['best_metric']]
     if len(guards) != 1:

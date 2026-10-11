@@ -649,10 +649,17 @@ def _effective_author_parameters(packet, step):
     for name, definition in definitions.items():
         if definition['required'] and name not in provided:
             raise PlanEvidenceError('Selected author command omitted a required option: ' + name)
+    from src.author_configuration import ConfigurationUnsupported, resolve_configured_parameters
+    entry = (Path(step.get('cwd', '.')) / argv[2 if argv[1] == '-u' else 1]).as_posix()
+    try:
+        definitions.update(resolve_configured_parameters(packet['repository']['files'], entry, definitions,
+                                                        packet['repository']['revision']))
+    except ConfigurationUnsupported as exc:
+        raise PlanEvidenceError(str(exc), category='runtime_unsupported') from exc
     return definitions
 
 
-def _requirements(value, citations, packet, device="cpu", step=None):
+def _requirements(value, citations, packet, device="cpu", step=None, *, datasets=None):
     if not isinstance(value, dict) or not isinstance(value.get("reason"), str) or not value["reason"].strip():
         raise PlanEvidenceError("Compatibility dependencies need an explicit explanation")
     refs = _references(value.get("citations"), citations, "repository")
@@ -709,6 +716,16 @@ def _requirements(value, citations, packet, device="cpu", step=None):
                     required.add(dependency)
                     import_evidence.append({**item, 'package':dependency, 'pin':dependency + '==' + pins[dependency],
                         'dependency_of': package, 'evidence_scope': 'reviewed_package_runtime_import'})
+        for loader in datasets or []:
+            if loader['kind'] == 'author_loader':
+                # Public Planetoid feature files contain scipy sparse matrices.
+                # Their original framework pickle loader needs scipy even when
+                # the author's Python files never directly import that package.
+                required.add('scipy')
+                import_evidence.append({'module': 'scipy', 'path': loader['path'],
+                    'sha256': loader['source_sha256'], 'package': 'scipy', 'pin': 'scipy==' + pins['scipy'],
+                    'dependency_of': 'torch-geometric', 'framework': loader['framework'],
+                    'evidence_scope': 'reviewed_planetoid_sparse_pickle_loading'})
         if unsupported:
             raise PlanEvidenceError('Author imports require packages outside the reviewed runtime: ' + ', '.join(sorted(set(unsupported))),
                                     category='runtime_unsupported')
@@ -722,7 +739,7 @@ def _requirements(value, citations, packet, device="cpu", step=None):
             "excluded_device_branches": excluded}
 
 
-def _datasets(items, citations, packet, workspace):
+def _datasets(items, citations, packet, workspace, *, selected_steps=None):
     if not isinstance(items, list) or not 1 <= len(items) <= 16:
         raise PlanEvidenceError("An experiment needs explicit full-data preparation evidence")
     result, targets = [], set()
@@ -771,8 +788,27 @@ def _datasets(items, citations, packet, workspace):
                 raise PlanEvidenceError("Prepared dataset cannot overwrite repository files")
             targets.add(name)
             accepted.update(url=url, target=name, sha256=sha, bytes=size)
+        elif item.get('kind') == 'author_loader':
+            from src.author_dataset_loader import compile_author_loader
+            if set(item) != {'kind', 'path', 'function', 'citations'} or not selected_steps:
+                raise PlanEvidenceError('Author loader declaration selects only an original path/function and source citations')
+            train = next(step for step in selected_steps if step['kind'] == 'train')
+            loader = compile_author_loader(item, packet['repository']['files'], workspace, train,
+                                           _effective_author_parameters(packet, train))
+            def cited(path, quote):
+                normalized = re.sub(r'\s+', ' ', quote).strip()
+                return any(ref.get('source') == 'repository' and ref.get('path') == path
+                           and normalized in re.sub(r'\s+', ' ', ref['quote']).strip() for ref in refs)
+            if not cited(loader['path'], loader['definition']) or not cited(loader['call']['path'], loader['call']['quote']):
+                raise PlanEvidenceError('Author data loading needs citations for its complete original function and selected call')
+            root = loader['root']
+            if (root in targets or any(name == root or name.startswith(root + '/') for name in packet['file_inventory'])
+                    or workspace_path(workspace, root, 'original loader root', forbid_git=True).exists()):
+                raise PlanEvidenceError('Original data loader root must be a fresh directory inside the author repository')
+            targets.add(root)
+            accepted.update(loader)
         else:
-            raise PlanEvidenceError("Dataset must be repository-bundled or independently prepared HTTPS bytes")
+            raise PlanEvidenceError('Dataset needs bundled files, evidenced HTTPS bytes, or a reviewed original author loader')
         result.append(accepted)
     return result
 
@@ -983,6 +1019,12 @@ def validate_plan(payload, packet, workspace):
             citations[identifier] = {'id':identifier, **declaration['source'], 'evidence_scope':'effective_author_argument'}
             parameters[name] = declaration['value']
             parameter_citations[name] = list(dict.fromkeys([*(parameter_citations.get(name) or []), identifier]))
+            binding = declaration.get('configuration_binding')
+            if binding:
+                for number, origin in enumerate([binding['call'], *binding['dictionaries']]):
+                    binding_id = identifier + '_binding_' + str(number)
+                    citations[binding_id] = {'id': binding_id, **origin, 'evidence_scope': 'effective_author_configuration'}
+                    parameter_citations[name].append(binding_id)
     for key, value in parameters.items():
         refs = _references(parameter_citations[key], citations)
         compiled = any(ref.get('evidence_scope')=='effective_author_argument' for ref in refs)
@@ -1012,15 +1054,19 @@ def validate_plan(payload, packet, workspace):
         accepted_metrics.append({"name": name, "reference": value, "unit": unit,
                                  "direction": direction, "tolerance_relative": RELATIVE_TOLERANCE,
                                  "citations": list(metric["citations"])})
+    selected_steps = _steps(payload.get('steps'), citations, packet, workspace)
+    selected_datasets = _datasets(payload.get('datasets'), citations, packet, workspace, selected_steps=selected_steps)
+    requirements_step = (next(step for step in selected_steps if step['kind'] == 'train')
+                         if packet.get('experiment_protocol') or any(item['kind'] == 'author_loader' for item in selected_datasets)
+                         else None)
     accepted = {"version": 1, "scope": payload["scope"], "repository": deepcopy(payload["repository"]),
                 "parameters": deepcopy(parameters), "parameter_citations": deepcopy(parameter_citations),
                 "citations": list(citations.values()), "claims": deepcopy(claims),
                 "requirements": _requirements(payload.get("requirements"), citations, packet,
                                               (payload.get("capture") or {}).get("device", "cpu"),
-                                              next((step for step in payload.get('steps', []) if step.get('kind') == 'train'), None)
-                                              if packet.get('experiment_protocol') else None),
-                "datasets": _datasets(payload.get("datasets"), citations, packet, workspace),
-                "steps": _steps(payload.get("steps"), citations, packet, workspace),
+                                              requirements_step, datasets=selected_datasets),
+                "datasets": selected_datasets,
+                "steps": selected_steps,
                 "metrics": accepted_metrics}
     capture = payload.get("capture")
     if not isinstance(capture, dict):
@@ -1099,6 +1145,11 @@ you do not need to copy PDF line breaks, ligatures or source code. A direct
 its quote must be verbatim. To establish only that a bundled file exists, use
 {id,source:'inventory',path,quote:path}; inventory cannot prove dataset identity,
 split sizes, parameters or metrics. Cite the README or loader for dataset usage.
+An original pure author loader can prepare public Planetoid Cora/CiteSeer/PubMed
+data using the frozen PyG runtime, optionally with its original NormalizeFeatures.
+Choose author_loader with only path/function/citations; the program resolves
+arguments and root from the actual selected CLI call. Cite the entire loader
+function and the selected entrypoint call. Never guess download hashes or URLs.
 source:'dataset' means ONLY a program-read file_inventory.dataset_evidence NPZ
 summary. A filename/pickle path is not a readable dataset summary.
 Reference metrics need PDF page citations containing the actual value and
@@ -1125,7 +1176,8 @@ JSON schema:
  parameters:{author_parameter:value},parameter_citations:{author_parameter:[ids]},
  requirements:{author:[verbatim requirement lines],compatibility:[name==version],reason,citations:[ids]},
  datasets:[{kind:'bundled',paths:[explicit snapshot files],citations:[ids]} OR
-           {kind:'https',url,target,sha256,bytes,citations:[ids]}],
+           {kind:'https',url,target,sha256,bytes,citations:[ids]} OR
+           {kind:'author_loader',path:'original loader Python file',function:'original pure loader function',citations:[complete function and selected call IDs]}],
  steps:[{id,kind:'train'|'eval',argv:['python','entry.py',...],cwd:'.',timeout_s:integer,citations:[ids]}],
  metrics:[{name:'accuracy'|'cross_entropy',reference:number,unit:'percent'|'fraction'|'scalar',
            direction:'maximize'|'minimize',tolerance_relative:0.05,citations:[ids]}],
@@ -1158,6 +1210,8 @@ Available reviewed pins:
         "result_unit:'fraction|percent'}}. Add function:'original_name' to that scope when the direct "
         "repetition loop belongs to a unique top-level synchronous function. The exact validation comparison and its direct test-result assignment "
         "must exist in the source. This observes the original best-validation weights before later training "
+        "A validation_metric may be a fixed {name,keys} selector when the source compares a result dictionary field. "
+        "The original repetition counter may be _. "
         "overwrites/deletes them; each complete native loop iteration must still finish. Never invent a repeat loop or seeds. A bundled NPZ split "
         "summary can be cited as {source:'dataset',path,quote} from file_inventory.dataset_evidence; "
         "the pipeline derives it from the actual immutable arrays, not model guesses. "
@@ -1173,7 +1227,9 @@ Available reviewed pins:
         "the count from all original labels in every run. Do not invent literal counts or fractions. "
         " Capture selectors are author identifiers, {name:'identifier',keys:['literal_dictionary_key',0]}, "
         "or {name:'identifier',attributes:['original_stored_field']}. Fields must be directly stored in "
-        "an ordinary instance dictionary and present in author source; properties/getters are unsupported. "
+        "an ordinary instance dictionary or the exact reviewed PyG Data GlobalStorage mapping, and present in author source. "
+        "Other properties/getters are unsupported. A complete PyG Data forward argument is preserved as the same "
+        "reviewed framework record with all original fields, not converted to a replacement algorithm. "
         "Only fixed access is allowed, never calls, slicing or generated expressions. "
         "Use the actual full author integer tensor/NumPy labels, not the last validation minibatch. "
         "output_alignment='full_dataset' means the forward returns all rows before test indexing. "
@@ -1404,7 +1460,8 @@ def _planning_diagnostics(payload, packet, workspace, primary):
                                    capture.get("device", "cpu") if isinstance(capture, dict) else "cpu",
                                    next((step for step in payload.get('steps', []) if isinstance(step,dict) and step.get('kind') == 'train'), None)
                                    if packet.get('experiment_protocol') else None),
-              lambda: _datasets(payload.get("datasets"), citations, packet, workspace),
+              lambda: _datasets(payload.get("datasets"), citations, packet, workspace,
+                                 selected_steps=_steps(payload.get('steps'), citations, packet, workspace)),
               lambda: _steps(payload.get("steps"), citations, packet, workspace),
               lambda: _validate_capture(payload.get("capture"), packet, workspace)]
     for check in checks:

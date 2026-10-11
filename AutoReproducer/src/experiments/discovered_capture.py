@@ -9,10 +9,11 @@ import importlib
 import json
 import os
 from pathlib import Path
+import re
 import runpy
 import sys
 
-from author_values import resolve_author_value
+from author_values import geometric_data_fields, resolve_author_value
 from split_counts import expected_from_census
 
 import torch
@@ -40,6 +41,11 @@ def check_sources(config):
         path = (WORKSPACE / name).resolve(strict=True)
         if not path.is_relative_to(WORKSPACE) or sha(path) != expected:
             raise ValueError("Author source or bundled input changed: " + name)
+    for name, record in config.get('data_files', {}).items():
+        path = (WORKSPACE / name).resolve(strict=True)
+        if (not path.is_relative_to(WORKSPACE) or sha(path) != record['sha256']
+                or path.stat().st_size != record['bytes']):
+            raise ValueError('Frozen original author dataset changed: ' + name)
 
 
 def load_native_operators(config):
@@ -140,6 +146,12 @@ def flatten(value, tensors):
     """Trace sparse author inputs via exact index/value components, never dense copies."""
     if value is None:
         return {'kind': 'none'}
+    fields = geometric_data_fields(value)
+    if fields is not None:
+        if (not 1 <= len(fields) <= 64 or any(not isinstance(key, str)
+                or not re.fullmatch(r'[A-Za-z][A-Za-z0-9_]{0,127}', key) for key in fields)):
+            raise ValueError('Author PyG Data must have a bounded complete mapping of original fields')
+        return {'kind': 'torch_geometric_data', 'fields': {key: flatten(item, tensors) for key, item in fields.items()}}
     if isinstance(value, torch.Tensor):
         def append(tensor):
             if len(tensors) >= 64:
@@ -178,6 +190,9 @@ def reconstruct(layout, tensors):
                                        tensors[layout["values"]], size=layout["size"])
     if layout["kind"] == "scalar":
         return layout["value"]
+    if layout['kind'] == 'torch_geometric_data':
+        from torch_geometric.data import Data
+        return Data(**{key: reconstruct(value, tensors) for key, value in layout['fields'].items()})
     items = [reconstruct(item, tensors) for item in layout["items"]]
     return tuple(items) if layout["kind"] == "tuple" else items
 
@@ -189,6 +204,49 @@ class FlattenedAuthor(torch.nn.Module):
 
     def forward(self, *tensors):
         return self.author_model(*(reconstruct(layout, tensors) for layout in self.layouts))
+
+
+def cpu_snapshot(model):
+    """Move copied parameters, buffers AND plain cached tensor trees to CPU."""
+    registered = [(module, dict(module._parameters), dict(module._buffers)) for module in model.modules()]
+    model.cpu()
+    memo, active = {}, set()
+    for module, parameters, buffers in registered:
+        for original, current in ((parameters, module._parameters), (buffers, module._buffers)):
+            for name, tensor in original.items():
+                if tensor is not None:
+                    memo[id(tensor)] = current[name]
+
+    def move(value, depth=0):
+        identifier = id(value)
+        if identifier in active:
+            raise ValueError('Copied model cache tensor tree contains a cycle')
+        if identifier in memo:
+            return memo[identifier]
+        if depth > 16:
+            raise ValueError('Copied model cache tensor tree exceeds the supported nesting bound')
+        if isinstance(value, torch.Tensor):
+            result = value.detach().cpu().clone()
+        elif type(value) in (list, tuple, dict):
+            active.add(identifier)
+            try:
+                if type(value) is dict:
+                    result = {key: move(item, depth + 1) for key, item in value.items()}
+                else:
+                    values = [move(item, depth + 1) for item in value]
+                    result = tuple(values) if type(value) is tuple else values
+            finally:
+                active.remove(identifier)
+        else:
+            return value
+        memo[identifier] = result
+        return result
+    for module in model.modules():
+        # Operate on an already copied module; never alter the training instance.
+        for name, value in list(vars(module).items()):
+            if name not in {'_parameters', '_buffers', '_modules'}:
+                vars(module)[name] = move(value)
+    return model
 
 
 def capture(config):
@@ -251,7 +309,7 @@ def capture(config):
                   if id(p) in parameters)
     if updates != contract["expected_optimizer_steps"] or not changed:
         raise ValueError("Observed model optimizer steps or actual parameter changes do not prove full training")
-    inputs = tuple(cpu_tensor(resolve_author_value(namespace, name)) for name in contract['forward_args'])
+    inputs = tuple(resolve_author_value(namespace, name) for name in contract['forward_args'])
     raw_labels = resolve_author_value(namespace, contract['labels'])
     labels = cpu_tensor(author_integer_tensor(raw_labels))
     indices = None if contract['test_indices'] is None else cpu_tensor(

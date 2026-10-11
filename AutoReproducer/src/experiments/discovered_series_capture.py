@@ -111,7 +111,7 @@ def capture_return(namespace, index, observers, script, config, retained=None):
             raise ValueError("Captured tensor inputs are absent or exceed the frozen memory bound")
         labels = labels.detach().cpu().clone()
         indices = None if indices is None else indices.detach().cpu().clone()
-        wrapper = FlattenedAuthor(model.cpu(), layouts).eval()
+        wrapper = FlattenedAuthor(_support.cpu_snapshot(model), layouts).eval()
         outputs = wrapper(*tensors)
         if (not torch.allclose(outputs, originals, atol=1e-6, rtol=1e-5)
                 or not torch.equal(outputs.argmax(1), originals.argmax(1))):

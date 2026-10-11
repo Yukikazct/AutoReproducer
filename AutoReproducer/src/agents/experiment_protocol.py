@@ -163,6 +163,7 @@ def validate_experiment_protocol(payload, packet, workspace):
     accepted['citations'] = list(citations.values())
     accepted['pdf_sha256'] = packet['pdf']['sha256']
     accepted['repository'] = {key:packet['repository'][key] for key in ('url','revision')}
+    accepted['effective_author_parameters'] = deepcopy(actual_parameters)
     accepted['protocol_sha256'] = _digest(_canonical(accepted).encode())
     if alignment['status'] != 'matched':
         raise PlanEvidenceError('Paper/repository experiment ' + alignment['status'] + ': ' + alignment['reason'],
@@ -250,8 +251,12 @@ class ExperimentProtocolAgent(BaseAgent):
                 'each at most 8 paths; a mixed request consumes both budgets. Do not invent unseen contents. '
                 'Training parameters should use actual author CLI/config names. All citations select evidence_excerpts IDs. '
                 'Use typed JSON numbers for counts/references/numeric parameters (the schema numbers are examples, '
-                'never defaults), and booleans for boolean parameters. Parameter names are argparse destination names, '
-                'without leading --. Copy each evidence ID exactly from the supplied map. '
+                'never defaults), and booleans for boolean parameters. CLI parameter names are argparse destination names, '
+                'without leading --. Literal dictionaries passed as **kwargs to an original selected function '
+                'are also compiled together with that function\'s defaults. Cite the dictionary, dataset lookup '
+                'and original call; do not substitute generic function defaults for selected dictionary overrides. '
+                'When a function setting shares a name with a CLI field, use function_name.parameter for the function setting. '
+                'Dynamic configuration expressions are unsupported. Copy each evidence ID exactly from the supplied map. '
                 'Do not copy quotations. Schema:\n' + _canonical(PROTOCOL_SCHEMA) + '\n'
                 + ('Prior schema/citation feedback:\n' + feedback + '\n' if feedback else '')
                 + 'Current remaining read rounds: text=' + str(2-text_requests)

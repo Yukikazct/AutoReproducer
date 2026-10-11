@@ -141,11 +141,20 @@ def prepare_plan_datasets(root, workspace, plan, snapshot, *, offline=False):
                             "download_source": None if cached else url, "cache_hit": cached,
                             "target": dataset["target"], "sha256": expected, "bytes": size,
                             "verified": True})
+        elif kind == 'author_loader':
+            source = workspace_path(workspace, dataset['path'], 'original data loader', must_exist=True, forbid_git=True)
+            if digest(source) != dataset['source_sha256']:
+                raise ValueError('原始数据加载器与固定作者源码不一致')
+            root_path = workspace_path(workspace, dataset['root'], 'original data root', forbid_git=True)
+            if root_path.exists():
+                raise ValueError('作者加载器不能覆盖已有数据目录')
+            records.append({'kind': kind, 'loader': deepcopy(dataset), 'verified': False, 'pending': True,
+                            'reason': '原始作者加载器将在冻结依赖准备完成后下载并校验真实数据'})
         else:
             raise ValueError("本次计划没有受支持的真实数据来源；不会生成合成替代数据")
     if not records:
         raise ValueError("没有完整、可校验的实验数据声明")
-    return {"kind": "real", "sources": records, "verified": True,
+    return {"kind": "real", "sources": records, "verified": all(record['verified'] for record in records),
             "sha256": spec_digest(records), "split": "由原文引用冻结的作者实验划分"}
 
 
@@ -424,7 +433,8 @@ class DiscoveredRepositoryReproduction:
             datasets = prepare_plan_datasets(self.root, workspace, plan, snapshot, offline=offline)
             data["dataset_provenance"] = datasets
             write_json(run_dir / "dataset.json", datasets)
-            event(phase, "success")
+            event(phase, 'success' if datasets['verified'] else 'waiting',
+                  '' if datasets['verified'] else '等待固定依赖就绪后执行原始作者数据加载器')
             self._execute_frozen(request, data, plan, snapshot, workspace, run_dir, environment, emit, event)
         except (KeyboardInterrupt, SystemExit) as exc:
             phase = getattr(exc, "reproduction_phase", phase)
@@ -514,6 +524,14 @@ class DiscoveredRepositoryReproduction:
             write_json(runtime_dir / "requirements.json", plan["requirements"]["compatibility"])
             for name in ("preflight.py", "requirements.json"):
                 generated[f"{CAPTURE_DIR}/{name}"] = digest(runtime_dir / name)
+            loaders = [item for item in plan['datasets'] if item['kind'] == 'author_loader']
+            if loaders:
+                preparation_source = Path(__file__).parent / 'experiments/author_dataset_prepare.py'
+                (runtime_dir / 'prepare_datasets.py').write_bytes(preparation_source.read_bytes())
+                write_json(runtime_dir / 'dataset_loaders.json', {'loaders': loaders,
+                    'source_files': snapshot['files'], 'offline': bool(request.get('offline'))})
+                for name in ('prepare_datasets.py', 'dataset_loaders.json'):
+                    generated[f'{CAPTURE_DIR}/{name}'] = digest(runtime_dir / name)
             write_json(run_dir / "adapter_manifest.json", {"files": generated,
                        "note": "原样保留作者源码；项目包装器仅记录训练、导出模型及独立评估"})
             verify_snapshot(workspace, snapshot, generated)
@@ -541,13 +559,21 @@ class DiscoveredRepositoryReproduction:
                         path = workspace_path(workspace, dataset["target"], "frozen real data", must_exist=True)
                         if digest(path) != dataset["sha256"] or path.stat().st_size != dataset["bytes"]:
                             raise ValueError("真实下载数据在执行期间发生变化")
+                    elif dataset['kind'] == 'author_loader' and dataset.get('verified') is True:
+                        for name, record in dataset['files'].items():
+                            path = workspace_path(workspace, name, 'frozen author data', must_exist=True, forbid_git=True)
+                            if digest(path) != record['sha256'] or path.stat().st_size != record['bytes']:
+                                raise ValueError('作者加载器下载或处理的真实数据在执行期间发生变化')
             verify_frozen_inputs()
             if request.get("prepare_only"):
                 data["execution"] = {"mode": "repository", "executed": False, "success": False,
                                      "repository_executed": False, "reason": "仅准备计划，尚未执行作者训练"}
                 data["validation"] = {"status": "prepared", "is_reproduced": None,
-                                      "result_level": "prepared", "reason": "源码、完整真实数据与协议已冻结，尚未执行训练"}
+                    "result_level": "prepared", "reason": ('源码与协议已冻结；作者加载器数据仍待依赖准备后下载，尚未执行训练'
+                    if loaders else '源码、完整真实数据与协议已冻结，尚未执行训练')}
                 event(phase, "success", "执行计划已准备，未安装或训练")
+                if loaders:
+                    event('prepare_dataset', 'skipped', '仅准备计划；作者加载器尚未下载真实数据')
                 for identifier in ("execute_repository", "verify_protocol"):
                     event(identifier, "skipped", "仅准备模式")
                 return
@@ -572,6 +598,52 @@ class DiscoveredRepositoryReproduction:
             data["native_preflight"] = probe
             verify_frozen_inputs()
             event(phase, "success")
+            if loaders:
+                phase = 'prepare_dataset'; event(phase, 'running')
+                dataset_step = [{'id': 'prepare_author_datasets', 'kind': 'check', 'required': True,
+                    'argv': ['python', '-u', f'{CAPTURE_DIR}/prepare_datasets.py'], 'cwd': '.', 'timeout_s': 600,
+                    'env': {'CUDA_VISIBLE_DEVICES': ''}, 'artifacts': [f'{CAPTURE_DIR}/prepared_datasets.json']}]
+                dataset_execution = self.runner.run(workspace, dataset_step,
+                    {**environment, 'auto_prepare': False, 'require_prepared': True}, on_event=progress)
+                data['dataset_preparation_execution'] = dataset_execution
+                write_json(run_dir / 'dataset_preparation_execution.json', dataset_execution)
+                if dataset_execution.get('success') is not True:
+                    raise RuntimeError('原始作者数据准备未完整结束：' + str(dataset_execution.get('reason') or
+                        dataset_execution.get('final', {}).get('stderr', ''))[-2000:])
+                prepared = read_json(runtime_dir / 'prepared_datasets.json')
+                records = prepared.get('sources')
+                if prepared.get('verified') is not True or not isinstance(records, list) or len(records) != len(loaders):
+                    raise ValueError('原始作者数据准备缺少全部加载器的完成证据')
+                for record, loader in zip(records, loaders):
+                    if record.get('verified') is not True or record.get('loader') != loader or not record.get('files'):
+                        raise ValueError('真实数据准备记录与冻结的原始加载器不一致')
+                    for name, value in record['files'].items():
+                        target = workspace_path(workspace, name, 'prepared author data', must_exist=True, forbid_git=True)
+                        if (not name.startswith(loader['root'] + '/') or name in snapshot['files']
+                                or type(value.get('bytes')) is not int or value['bytes'] <= 0
+                                or target.stat().st_size != value['bytes'] or digest(target) != value.get('sha256')):
+                            raise ValueError('作者加载器的真实文件在训练前未通过完整校验')
+                iterator = iter(records)
+                provenance = data['dataset_provenance']
+                provenance['sources'] = [next(iterator) if item['kind'] == 'author_loader' else item
+                                         for item in provenance['sources']]
+                provenance.update(verified=True, sha256=spec_digest(provenance['sources']))
+                write_json(run_dir / 'dataset.json', provenance)
+                capture_configuration = read_json(runtime_dir / 'config.json')
+                capture_configuration['data_files'] = {name: record for source in records for name, record in source['files'].items()}
+                write_json(runtime_dir / 'config.json', capture_configuration)
+                for name in ('config.json', 'prepared_datasets.json'):
+                    generated[f'{CAPTURE_DIR}/{name}'] = digest(runtime_dir / name)
+                write_json(run_dir / 'adapter_manifest.json', {'files': generated,
+                    'note': '保留作者源码；数据由原始加载器下载并在训练前冻结，包装器仅捕获与独立评估'})
+                execution_plan = build_plan(profile='discovered_author_experiment', spec_sha256=data['spec_sha256'],
+                    workspace=workspace, repository=plan['repository'], dataset=provenance, steps=steps)
+                data['execution_plan'] = execution_plan
+                write_json(run_dir / 'execution_plan.json', execution_plan)
+                verify_frozen_inputs()
+                event(phase, 'success')
+            if data['dataset_provenance'].get('verified') is not True:
+                raise ValueError('完整真实数据尚未冻结，不能开始作者训练')
             if request.get("prepare_environment"):
                 data["execution"] = {"mode": "repository", "executed": False, "success": False,
                                      "repository_executed": False, "reason": "环境已准备，尚未执行作者训练"}

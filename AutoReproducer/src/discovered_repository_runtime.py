@@ -24,7 +24,7 @@ SINGLE_CAPTURE_SCHEMA = {
 SERIES_CAPTURE_SCHEMA = {
     **SINGLE_CAPTURE_SCHEMA,
     "kind": "torch_classification_series", "device": "cpu|cuda",
-    "scope": "{path, function} for a unique top-level function's natural return; OR {path, function?:'unique top-level function containing the repetition loop', loop_counter, selection:{validation_metric,comparison:'lt|le|gt|ge',best_metric,result,result_unit:'fraction|percent'}} for an original repetition loop",
+    "scope": "{path, function} for a unique top-level function's natural return; OR {path, function?:'unique top-level function containing the repetition loop', loop_counter:'original identifier (including _) ', selection:{validation_metric:'original identifier OR {name,keys} fixed dict/list selector',comparison:'lt|le|gt|ge',best_metric,result,result_unit:'fraction|percent'}} for an original repetition loop",
     "forward_args": ["author_local_or_global_tensor_tree_or_scalar_selector"],
     "expected_runs": "positive_source_cited_integer",
     "expected_test_samples": "ordered source-cited integer list OR {kind:'stratified_remainder',mode:'dense|sparse',rate_source:{path,function},sampler_source:{path,function}}; the complete original split functions must be cited, fractions are compiled from their source",

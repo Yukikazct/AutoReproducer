@@ -3,6 +3,7 @@ from copy import deepcopy
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
 import shutil
 import zipfile
@@ -110,7 +111,8 @@ def run_series(root, device="cpu", mutate=None):
     environment = native_environment()
     if device == "cuda":
         cache = cuda_dependency_cache()
-        environment["PYTHONPATH"] = str(cache)
+        extra = environment.get('AUTOREPRO_TEST_CUDA_DEPS', '')
+        environment["PYTHONPATH"] = str(cache) + (os.pathsep + extra if extra else '')
         environment.pop("CUDA_VISIBLE_DEVICES", None)
     log_root = root / "owned_logs"
     log_root.mkdir()
