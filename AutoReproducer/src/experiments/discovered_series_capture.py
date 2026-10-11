@@ -14,7 +14,7 @@ import sys
 
 import numpy as np
 import torch
-from native_loop import resolve_module_loop
+from native_loop import resolve_module_loop, resolve_function_selection
 
 _support_path = Path(__file__).resolve().with_name("common.py")
 _support_spec = importlib.util.spec_from_file_location("_autorepro_capture_support", _support_path)
@@ -136,9 +136,10 @@ def capture_return(namespace, index, observers, script, config, retained=None):
     if census is not None:
         record['split_census'] = census
     if retained is not None:
-        record.update(natural_return=False, native_loop_completed=True, author_loop_counter=index,
-            validation_selection={'source': contract['scope']['selection'],
-                'accuracy': retained['accuracy'], 'optimizer_steps': retained['optimizer_steps']})
+        record['validation_selection'] = {'source': contract['scope']['selection'],
+                'accuracy': retained['accuracy'], 'optimizer_steps': retained['optimizer_steps']}
+        if 'loop_counter' in contract['scope']:
+            record.update(natural_return=False, native_loop_completed=True, author_loop_counter=index)
     print(f"AUTHOR_NATIVE_RUN_CAPTURED index={index} steps={updates} test_samples={expected}", flush=True)
     return record
 
@@ -158,14 +159,17 @@ def capture(config):
         raise ValueError("Author entrypoint or capture scope escaped the workspace")
     tree = ast.parse(scope_path.read_text(encoding="utf-8"))
     module_loop = 'loop_counter' in contract['scope']
+    function_selection = not module_loop and 'selection' in contract['scope']
     if module_loop:
         loop = resolve_module_loop(scope_path.read_text('utf-8'), contract['scope'])
     else:
         target = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
                       and node.name == contract["scope"]["function"])
         first_line = min([target.lineno] + [node.lineno for node in target.decorator_list])
+        if function_selection:
+            loop = resolve_function_selection(scope_path.read_text('utf-8'), contract['scope'])
     observers, runs, return_instructions = {}, [], {}
-    loop_state = {'pending': False, 'retained': None}
+    loop_state = {'pending': False, 'retained': None, 'frame': None}
 
     def before(optimizer, args, kwargs):
         key = id(optimizer)
@@ -193,13 +197,19 @@ def capture(config):
         if rule["kind"] == "author_epoch_counter" and rule["epoch_counter"] not in frame.f_locals:
             raise ValueError("Author completion counter must come from the observed function's actual locals")
         namespace = {**frame.f_globals, **frame.f_locals}
-        runs.append(capture_return(namespace, len(runs), observers, script, config))
+        if function_selection and loop_state['retained'] is None:
+            raise ValueError('Complete native function returned without an original validation-selected model')
+        runs.append(capture_return(namespace, len(runs), observers, script, config,
+                                   retained=loop_state['retained'] if function_selection else None))
+        if function_selection:
+            loop_state.update(retained=None, pending=False, frame=None)
 
     @preserve_rng()
     def retain_selected(namespace):
-        counter = namespace[contract['scope']['loop_counter']]
-        if type(counter) is not int or counter != len(runs) or counter >= contract['expected_runs']:
-            raise ValueError('Native module loop counter does not match the frozen complete repetition order')
+        if module_loop:
+            counter = namespace[contract['scope']['loop_counter']]
+            if type(counter) is not int or counter != len(runs) or counter >= contract['expected_runs']:
+                raise ValueError('Native module loop counter does not match the frozen complete repetition order')
         model = resolve_author_value(namespace, contract['model'])
         if not isinstance(model, torch.nn.Module):
             raise ValueError('Validation selection does not expose the actual author model')
@@ -240,18 +250,27 @@ def capture(config):
                 loop_state['pending'] = False
             if inside_assignment:
                 loop_state['pending'] = True
-            if line == loop['loop_line'] and loop_state['retained'] is not None:
+            if module_loop and line == loop['loop_line'] and loop_state['retained'] is not None:
                 if namespace[contract['scope']['loop_counter']] != len(runs):
                     raise ValueError('Original module loop did not finish the selected repetition in order')
                 runs.append(capture_return(namespace, len(runs), observers, script, config,
                                            retained=loop_state['retained']))
                 loop_state['retained'] = None
+        elif event == 'return' and function_selection and loop_state['pending']:
+            if frame.f_lasti in {item.offset for item in dis.get_instructions(frame.f_code)
+                                if item.opname in {'RETURN_VALUE', 'RETURN_CONST'}}:
+                retain_selected({**frame.f_globals, **frame.f_locals})
+            loop_state['pending'] = False
         return trace_module
 
     def trace(frame, event, result):
         if (event == 'call' and frame.f_code.co_name == loop['scope_name']
                 and frame.f_code.co_filename == str(scope_path)
                 and (loop['function_line'] is None or frame.f_code.co_firstlineno == loop['function_line'])):
+            if function_selection:
+                if loop_state['frame'] is not None:
+                    raise ValueError('Native selected training function must not be recursive or overlapping')
+                loop_state['frame'] = frame
             return trace_module
         return None
 
@@ -262,9 +281,9 @@ def capture(config):
     sys.path.insert(0, str(script.parent))
     sys.argv = [str(script), *argv[position + 1:]]
     try:
-        if module_loop:
+        if module_loop or function_selection:
             sys.settrace(trace)
-        else:
+        if not module_loop:
             sys.setprofile(profile)
         runpy.run_path(str(script), run_name="__main__")
     finally:

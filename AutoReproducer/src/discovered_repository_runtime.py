@@ -24,7 +24,7 @@ SINGLE_CAPTURE_SCHEMA = {
 SERIES_CAPTURE_SCHEMA = {
     **SINGLE_CAPTURE_SCHEMA,
     "kind": "torch_classification_series", "device": "cpu|cuda",
-    "scope": "{path, function} for a unique top-level function's natural return; OR {path, function?:'unique top-level function containing the repetition loop', loop_counter:'original identifier (including _) ', selection:{validation_metric:'original identifier OR {name,keys} fixed dict/list selector',comparison:'lt|le|gt|ge',best_metric,result,result_unit:'fraction|percent'}} for an original repetition loop",
+    "scope": "{path, function, selection?} for one complete native run per unique top-level function's natural return, optionally retaining weights at an original validation selection; OR {path, function?:'unique top-level function containing the repetition loop', loop_counter:'original identifier (including _) ', selection:{validation_metric:'original identifier OR {name,keys} fixed dict/list selector',comparison:'lt|le|gt|ge',best_metric,result,result_unit:'fraction|percent'}} for an original repetition loop",
     "forward_args": ["author_local_or_global_tensor_tree_or_scalar_selector"],
     "expected_runs": "positive_source_cited_integer",
     "expected_test_samples": "ordered source-cited integer list OR {kind:'stratified_remainder',mode:'dense|sparse',rate_source:{path,function},sampler_source:{path,function}}; the complete original split functions must be cited, fractions are compiled from their source",
@@ -172,13 +172,16 @@ def validate_capture(capture, packet, workspace, *, selected_steps=None, selecte
             from src.native_loop import resolve_module_loop
             resolve_module_loop(packet['repository']['files'][scope['path']]['text'], scope)
         else:
-            if (set(scope) != {'path','function'} or not isinstance(scope['function'], str)
+            if (set(scope) not in ({'path','function'}, {'path','function','selection'}) or not isinstance(scope['function'], str)
                     or not _IDENTIFIER.fullmatch(scope['function'])):
                 raise ValueError('Capture scope must name an original function or module loop')
             functions = [node for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
                          and node.name == scope["function"]]
             if len(functions) != 1 or functions[0] not in tree.body or isinstance(functions[0], ast.AsyncFunctionDef):
                 raise ValueError("Capture scope must resolve to one unique synchronous top-level author function")
+            if 'selection' in scope:
+                from src.native_loop import resolve_function_selection
+                resolve_function_selection(packet['repository']['files'][scope['path']]['text'], scope)
         completion = capture["completion"]
         if not isinstance(completion, dict):
             raise ValueError("Series completion must have a fixed, non-executable rule")
@@ -406,10 +409,10 @@ def verify_series_receipts(contract, root, capture, metrics):
                 or evaluated.get("predictions_match") is not True
                 or evaluated.get("numpy_torch_crosscheck") is not True):
             raise ValueError("A native repetition lacks complete training or independent full-test evidence")
-        if loop:
+        if 'selection' in contract['scope']:
             selection = run.get('validation_selection') or {}
             value, selected_steps = selection.get('accuracy'), selection.get('optimizer_steps')
-            if (run.get('author_loop_counter') != index or selection.get('source') != contract['scope']['selection']
+            if ((loop and run.get('author_loop_counter') != index) or selection.get('source') != contract['scope']['selection']
                     or type(selected_steps) is not int or not 0 < selected_steps <= steps
                     or type(value) not in (int, float) or not math.isfinite(value) or not 0 <= value <= 1
                     or not math.isclose(value, evaluated.get('accuracy', float('nan')), rel_tol=1e-10, abs_tol=1e-8)):

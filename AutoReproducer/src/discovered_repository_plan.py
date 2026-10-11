@@ -1216,7 +1216,11 @@ Available reviewed pins:
     ) + "\nReviewed CUDA pins (only source-required CUDA execution):\n" + _canonical(CUDA_COMPATIBILITY_PINS) + (
         "\nA native entrypoint containing all repetitions may use torch_classification_series. "
         "Capture a unique author function's final locals at its natural return; preserve all native "
-        "splits, runs and early-stop rules. Alternatively capture an original repetition loop "
+        "splits, runs and early-stop rules. When that function only retains a best-validation test scalar, "
+        "use scope:{path,function,selection:{validation_metric,comparison,best_metric,result,result_unit}} "
+        "to retain matching weights at the original validation assignment and still await the complete natural "
+        "function return for each original native run. Do not label an epoch loop as a repetition loop. "
+        "Alternatively capture an original repetition loop "
         "via scope:{path,loop_counter,selection:{validation_metric,comparison:'lt|le|gt|ge',best_metric,result,"
         "result_unit:'fraction|percent'}}. Add function:'original_name' to that scope when the direct "
         "repetition loop belongs to a unique top-level synchronous function. The exact validation comparison and its direct test-result assignment "
@@ -1368,6 +1372,10 @@ weights used for the reported test result, for EVERY native repetition. A best
 validation test scalar can use the program's source-resolved selection snapshot
 even when the author saves no checkpoint. For a loop capture verify the original
 branch and matching model; author checkpoint files are not required. A scalar
+inside a unique top-level function can use scope:{path,function,selection} to
+retain matching weights at the original assignment and complete ONE full
+native run at each natural return. Verify the original callers execute every
+required run. An epoch iteration is not a complete native repetition. A scalar
 without either a supported original selection snapshot or a corresponding
 retained/restored model remains insufficient. Do not substitute final weights
 or choose by test performance.
