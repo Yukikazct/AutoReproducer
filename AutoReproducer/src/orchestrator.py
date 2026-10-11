@@ -104,6 +104,19 @@ class Orchestrator:
         """
         self.on_event = on_event
         self.state, self.error = "INIT", None
+        from src.pdf_input import PDFInputError, resolve_pdf_request
+        try:
+            input_data = resolve_pdf_request({**input_data, "mock_mode": self.mock_mode})
+        except PDFInputError as exc:
+            self.data = {"pdf_path": input_data.get("pdf_path", ""),
+                         "paper_title": input_data.get("paper_title", ""),
+                         "pdf_input": {"readable": False, "reason": str(exc)}}
+            self._emit_state("READ_PAPER", "PaperReader", "error",
+                             phase_id="generate_reader", reason=str(exc), outcome="invalid_pdf")
+            self._fail("READ_PAPER", str(exc))
+            return self.get_result()
+        from src.title_routing import resolve_title_request
+        input_data = resolve_title_request({**input_data, "mock_mode": self.mock_mode})
         if input_data.get("experiment_profile"):
             if self.mock_mode:
                 self.data = {}
@@ -117,6 +130,10 @@ class Orchestrator:
                          if "enable_optimization" not in input_data and self.enable_optimization
                          else input_data), on_event=on_event)
                 self.state, self.data, self.error = result["state"], result["data"], result["error"]
+                if input_data.get("title_resolution"):
+                    self.data["title_resolution"] = input_data["title_resolution"]
+                if input_data.get("pdf_resolution"):
+                    self.data["pdf_resolution"] = input_data["pdf_resolution"]
             self._emit_state(self.state, "", "error" if self.error else "success")
             return self.get_result()
         self.logger.log("Orchestrator", "start_pipeline", "START",
@@ -130,6 +147,11 @@ class Orchestrator:
             "corpus_paper": input_data.get("corpus_paper"),
             "preferred_repo_url": input_data.get("preferred_repo_url", ""),
             "code_repo_url": input_data.get("code_repo_url", ""),
+            "reproduction_scope": "user_supplied_code" if input_data.get("code") else (
+                "mock_demo" if self.mock_mode else "generated_reconstruction"),
+            "execution_source": "user_supplied_code" if input_data.get("code") else (
+                "mock_demo" if self.mock_mode else "llm_generated"),
+            "repository_executed": False,
             "verifications": [],
             "fix_records": [],
             "optimization": self._reserved_optimization(input_data),
@@ -153,8 +175,12 @@ class Orchestrator:
             ("VALIDATE", self.agents["validator"]),
         ]
         if self.on_event:
+            planned = self._generic_plan(pipeline)
+            if (not self.mock_mode and self.data.get("pdf_path")
+                    and not self.data.get("code") and not self.data.get("corpus_paper")):
+                planned = planned[:4]
             self.on_event({"type": "pipeline_plan", "pipeline": "generic",
-                           "stages": self._generic_plan(pipeline)})
+                           "stages": planned})
 
         for state_name, agent in pipeline:
             self.state = state_name
@@ -168,11 +194,6 @@ class Orchestrator:
                 result = agent.run(self.data)
                 self._merge_result(state_name, result)
                 self._accumulate_llm_calls(result)
-
-                # 三层存储：FIND_RESOURCES 后按需懒加载代码/数据集/权重
-                # 到 L0（失败不阻断流水线，仅告警）
-                if state_name == "FIND_RESOURCES":
-                    self._fetch_resources()
 
                 # Docker 真实模式：BUILD_ENV 产出配置后即真实构建镜像，
                 # 成功把 image_tag 透传给 EXECUTE_CODE；失败不阻断（slim 降级）
@@ -196,6 +217,20 @@ class Orchestrator:
                 main_completed = True
                 # Prompt-Free 验证 + 修正闭环
                 self._verify_step(state_name, agent, result)
+
+                if state_name == "FIND_RESOURCES":
+                    # The final reviewed Finder output owns the selection.
+                    # Never fetch an earlier attempt or replace author code
+                    # with a generated single-file smoke experiment.
+                    if (not self.mock_mode and self.data.get("pdf_path")
+                            and not self.data.get("code") and not self.data.get("corpus_paper")):
+                        reviews = [item for item in self.data["verifications"]
+                                   if item["state"] == "FIND_RESOURCES"]
+                        if not reviews or reviews[-1].get("pass") is not True:
+                            raise RuntimeError("作者仓库发现结果未通过最终审查，未启动实验")
+                        self.logger.end_plan(state_name)
+                        return self._run_discovered_repository(input_data)
+                    self._fetch_resources()
 
                 self.logger.log("Orchestrator", f"exit_{state_name}", "SUCCESS",
                                 f"完成阶段: {state_name}")
@@ -243,7 +278,7 @@ class Orchestrator:
         return self.get_result()
 
     def _emit_execution_event(self, event):
-        if self.on_event and event.get("type") in {"execution_step", "execution_output"}:
+        if self.on_event and event.get("type") in {"execution_step", "execution_output", "execution_run"}:
             self.on_event({**event, "phase_id": _MAIN_PHASE_IDS["EXECUTE_CODE"]})
 
     def _emit_state(self, state, agent, status, *, phase_id=None, attempt=None, reason=None, outcome=None):
@@ -254,6 +289,35 @@ class Orchestrator:
             self.on_event(event)
 
     # ---------------- 内部流程 ----------------
+
+    def _run_discovered_repository(self, input_data):
+        from src.discovered_repository_reproduction import DiscoveredRepositoryReproduction
+        previous = self.data
+
+        def emit(event):
+            if not self.on_event:
+                return
+            if event.get("type") == "pipeline_plan":
+                # Retain observed parsing/discovery rows, remove the obsolete
+                # generated-code stages from this request's remaining plan.
+                initial = self._generic_plan([
+                    ("READ_PAPER", self.agents["reader"]),
+                    ("FIND_RESOURCES", self.agents["finder"]),
+                ])[:4]
+                event = {**event, "stages": initial + event.get("stages", [])}
+            self.on_event(event)
+
+        result = DiscoveredRepositoryReproduction(
+            self.resource_manager.data_root, self.logger, self.use_docker,
+            llm=self.llm).run({**input_data, **previous, "mock_mode": False}, on_event=emit)
+        self.state, self.error = result["state"], result.get("error")
+        self.data = {**previous, **result["data"]}
+        for key in ("verifications", "fix_records"):
+            self.data[key] = result["data"].get(key, previous.get(key, []))
+        self.data["total_llm_calls"] = (previous.get("total_llm_calls", 0)
+                                        + result["data"].get("total_llm_calls", 0))
+        self._emit_state(self.state, "", "error" if self.error else "success")
+        return self.get_result()
 
     def _generic_plan(self, pipeline):
         titles = {"READ_PAPER": "论文解析", "FIND_RESOURCES": "资源定位",
@@ -306,12 +370,19 @@ class Orchestrator:
         if state_name == "READ_PAPER":
             self.data["paper_info"] = result.get("paper_info", {})
             self.data["raw_text"] = result.get("raw_text", "")
+            self.data["extracted_code_urls"] = result.get("extracted_code_urls", [])
+            self.data["extracted_repository_links"] = result.get("extracted_repository_links", [])
+            if result.get("pdf_input"):
+                self.data["pdf_input"] = result["pdf_input"]
         elif state_name == "FIND_RESOURCES":
             self.data["resources"] = result.get("resources", {})
         elif state_name == "BUILD_ENV":
             self.data["env_config"] = result.get("env_config", {})
         elif state_name == "EXECUTE_CODE":
             self.data["execution"] = result
+            for key in ("reproduction_scope", "execution_source", "repository_executed"):
+                if key in result:
+                    self.data[key] = result[key]
             if result.get("effective_env_config"):
                 self.data["env_config"] = result["effective_env_config"]
         elif state_name == "VALIDATE":
@@ -468,6 +539,7 @@ class Orchestrator:
                             {"issues": verif.get("issues", [])})
             # 修正闭环：预算内重试一次（生成->验证->修正->再验证）
             retries = 0
+            previous_output = result
             while retries < MAX_FIX_RETRIES and not verif.get("pass", False):
                 retries += 1
                 suggestions = verif.get("fix_suggestions", []) or []
@@ -476,7 +548,22 @@ class Orchestrator:
                                 {"suggestions": suggestions})
                 self._emit_state(state_name, agent.name, "running", phase_id=_MAIN_PHASE_IDS[state_name], attempt=retries + 1)
                 try:
-                    fixed_result = agent.run(self.data)
+                    issues = verif.get("issues") or []
+                    previous_final = previous_output.get("final") or {}
+                    previous_failure = (previous_output.get("reason")
+                                        or previous_final.get("stderr") or "")
+                    # Feedback belongs only to this retry. Keep the shared
+                    # stage context free of it and omit previous code/output.
+                    retry_input = {**self.data, "retry_feedback": {
+                        "agent": agent.name,
+                        "state": state_name,
+                        "attempt": retries + 1,
+                        "issues": list(issues) if isinstance(issues, (list, tuple)) else [str(issues)],
+                        "fix_suggestions": list(suggestions) if isinstance(suggestions, (list, tuple)) else [str(suggestions)],
+                        "previous_failure": str(previous_failure)[:2000],
+                    }}
+                    fixed_result = agent.run(retry_input)
+                    previous_output = fixed_result
                     self._merge_result(state_name, fixed_result)
                     self._accumulate_llm_calls(fixed_result)
                     self._emit_agent_completion(state_name, agent, fixed_result, attempt=retries + 1)

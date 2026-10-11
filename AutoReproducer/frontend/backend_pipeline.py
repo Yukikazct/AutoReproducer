@@ -21,13 +21,34 @@ import os
 import shutil
 import threading
 import time
+import uuid
+from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-from src.orchestrator import Orchestrator
 from src.llm.llm_client import LLMClient
 from src.audit.audit_logger import AuditLogger
+
+
+# Contract checked by the web loader before starting a new background thread.
+BACKEND_API_VERSION = 4
+
+
+def __getattr__(name):
+    # Recovery must remain importable when the host is missing app dependencies
+    # such as filelock. Preserve the exported class for subclassing and callers
+    # that explicitly request it, while deferring the full agent graph import.
+    if name != "Orchestrator":
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    from src.orchestrator import Orchestrator as implementation
+    globals()[name] = implementation
+    return implementation
+
+
+def _create_orchestrator(*args, **kwargs):
+    implementation = globals().get("Orchestrator") or __getattr__("Orchestrator")
+    return implementation(*args, **kwargs)
 
 # ---------------- 流水线 Agent 定义（与前端卡片一致） ----------------
 
@@ -49,11 +70,12 @@ VERIFIER_NAME = "🛡️ Verifier"
 class ProgressStore:
     """将流水线进度事件写入 JSON Lines 文件，供前端轮询读取。"""
 
-    def __init__(self, path: str):
+    def __init__(self, path: str, *, reset: bool = True):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         # 清空旧内容（每次复现从零开始）
-        self.path.write_text("", encoding="utf-8")
+        if reset:
+            self.path.write_text("", encoding="utf-8")
         self._lock = threading.Lock()
         self._start_ts = time.time()
 
@@ -70,219 +92,8 @@ class ProgressStore:
 
     @staticmethod
     def read_snapshot(path: str) -> Dict[str, Any]:
-        """读取并聚合进度文件为前端渲染视图（不可用时返回空视图）。"""
-        p = Path(path)
-        view: Dict[str, Any] = {
-            "state": "INIT", "agent_status": {}, "logs": [],
-            "result": None, "done": False, "error": None,
-            "running": True, "updated_at": "",
-            "execution_output": "", "repository_step": "",
-            "execution_context": {}, "repository_step_label": "",
-            "active_executions": [],
-            "pipeline_stages": [],
-        }
-        stages: Dict[str, Dict[str, Any]] = {}
-        stage_order: List[str] = []
-        legacy_latest: Dict[tuple, str] = {}
-        has_plan = False
-        legacy_repository = False
-        execution_numbers: Dict[str, int] = {}
-        executions: Dict[tuple, Dict[str, Any]] = {}
-        output_key = None
-        labeled_output = False
-
-        def execution_context(event: Dict[str, Any]) -> Dict[str, Any]:
-            identifier = event.get("execution_id")
-            identifier = identifier if isinstance(identifier, str) else ""
-            index = event.get("step_index")
-            index = index if type(index) is int and index > 0 else None
-            previous = executions.get((identifier, index if identifier else None), {})
-            step_id = event.get("step_id", previous.get("step_id", ""))
-            step_id = step_id if isinstance(step_id, str) else ""
-            count = event.get("step_count", previous.get("step_count"))
-            count = count if type(count) is int and count > 0 and (index is None or count >= index) else None
-            number = None
-            label = "代码执行"
-            if identifier:
-                number = execution_numbers.setdefault(identifier, len(execution_numbers) + 1)
-                label += f" · 第 {number} 轮"
-                if index is not None:
-                    label += f" · 步骤 {index}" + (f"/{count}" if count is not None else "")
-            elif step_id:
-                label += " · " + step_id
-            return {"execution_id": identifier, "round_number": number, "step_id": step_id,
-                    "step_index": index, "step_count": count, "label": label,
-                    "phase_id": event.get("phase_id", previous.get("phase_id", "")),
-                    "status": event.get("status", previous.get("status", ""))}
-
-        def output_boundary(context: Dict[str, Any]) -> None:
-            nonlocal output_key, labeled_output
-            identifier = context["execution_id"]
-            key = (identifier, context["step_index"] if identifier else context["step_id"])
-            # Pure legacy streams keep their original text. A mixed stream gets
-            # an explicit anonymous boundary instead of borrowing a newer ID.
-            if key != output_key and (identifier or labeled_output):
-                view["execution_output"] = (view["execution_output"] + f"\n── {context['label']} ──\n")[-16000:]
-            output_key = key
-            labeled_output = labeled_output or bool(identifier)
-
-        def apply_stage(identifier: str, event: Dict[str, Any]) -> None:
-            if identifier not in stages:
-                stages[identifier] = {"id": identifier, "agent": event.get("agent", ""),
-                                      "title": event.get("title", event.get("agent", identifier)),
-                                      "description": event.get("description", ""), "status": "waiting"}
-                stage_order.append(identifier)
-            row = stages[identifier]
-            status = event.get("status", "waiting")
-            if status == "running":
-                # A bounded correction starts a fresh attempt on the same row.
-                row.pop("reason", None)
-                row.pop("outcome", None)
-            row["status"] = status
-            for key in ("agent", "state", "attempt", "calls", "reason", "outcome"):
-                if key in event:
-                    row[key] = event[key]
-
-        def finish_pending(reason: str, failed: bool) -> None:
-            known_failure = any(row["status"] == "error" for row in stages.values())
-            for row in stages.values():
-                if row["status"] == "waiting":
-                    row.update(status="blocked", reason=reason)
-                elif row["status"] == "running":
-                    # A pipeline-level failure cannot identify a second failed
-                    # phase when an explicit phase error is already available.
-                    # Running also means it started, so never label it unexecuted.
-                    row.update(status="error" if failed and not known_failure else "blocked",
-                               reason="流水线已终止，本阶段未正常结束，未收到完成结果")
-                    agent = row.get("agent", "")
-                    if agent and view["agent_status"].get(agent) == "running":
-                        view["agent_status"][agent] = row["status"]
-
-        if not p.exists():
-            return view
-        try:
-            lines = p.read_text(encoding="utf-8").splitlines()
-        except OSError:
-            return view
-        for ln in lines:
-            ln = ln.strip()
-            if not ln:
-                continue
-            try:
-                ev = json.loads(ln)
-            except json.JSONDecodeError:
-                continue
-            etype = ev.get("type")
-            if etype == "pipeline_plan":
-                planned = ev.get("stages")
-                if not isinstance(planned, list):
-                    continue
-                has_plan = True
-                planned_order = []
-                for stage in planned:
-                    if not isinstance(stage, dict) or not isinstance(stage.get("id"), str):
-                        continue
-                    identifier = stage["id"]
-                    if identifier in planned_order:
-                        continue
-                    # select_experiment may already have finished before this
-                    # profile-specific plan is available; keep observed state.
-                    observed = stages.get(identifier, {})
-                    stages[identifier] = {**stage, **observed}
-                    stages[identifier].setdefault("status", "waiting")
-                    for key in ("agent", "title", "description"):
-                        if key in stage:
-                            stages[identifier][key] = stage[key]
-                    planned_order.append(identifier)
-                stage_order = planned_order + [identifier for identifier in stage_order
-                                               if identifier not in planned_order]
-            elif etype == "state":
-                view["state"] = ev.get("state", view["state"])
-                agent = ev.get("agent", "")
-                if agent:
-                    view["agent_status"][agent] = ev.get("status", "waiting")
-                    identifier = ev.get("phase_id")
-                    if identifier:
-                        apply_stage(identifier, ev)
-                    elif not has_plan and ev.get("status") != "waiting":
-                        # Historical files have no phase IDs. Preserve event
-                        # order and each running-after-terminal occurrence,
-                        # rather than pretending that role cards are stages.
-                        pair = (ev.get("state", ""), agent)
-                        identifier = legacy_latest.get(pair)
-                        previous = stages.get(identifier, {}) if identifier else {}
-                        if not identifier or (ev.get("status") == "running" and
-                                              previous.get("status") in {"success", "error", "skipped", "blocked"}):
-                            identifier = f"legacy_{len(stages) + 1}"
-                            legacy_latest[pair] = identifier
-                            title = {"READ_PAPER": "论文解析", "FIND_RESOURCES": "资源准备",
-                                     "BUILD_ENV": "环境分析与准备", "EXECUTE_CODE": "代码执行",
-                                     "VALIDATE": "结果验证", "GENERATE_REPORT": "报告生成"}.get(pair[0], pair[0] or agent)
-                            if agent.endswith("Optimizer"):
-                                title = "智能优化（未启用）" if ev.get("status") == "skipped" else "智能优化"
-                            elif agent.endswith("Verifier"):
-                                title += "质量核验"
-                            elif agent.endswith("SourceLoader"):
-                                title = "加载公开证据"
-                                legacy_repository = True
-                            apply_stage(identifier, {**ev, "title": title,
-                                "description": "依据历史进度事件的真实出现顺序恢复"})
-                        else:
-                            apply_stage(identifier, ev)
-            elif etype == "log":
-                lg = ev.get("log")
-                if isinstance(lg, dict):
-                    view["logs"].append(lg)
-            elif etype in {"repository_step", "execution_step"}:
-                if not view["running"]:
-                    continue  # A delayed worker cannot reopen a terminal pipeline.
-                view["repository_step"] = ev.get("step_id", "")
-                context = execution_context(ev)
-                key = (context["execution_id"], context["step_index"] if context["execution_id"] else None)
-                executions[key] = context
-                if context["status"] == "running":
-                    output_boundary(context)
-                view["execution_context"] = context
-                view["repository_step_label"] = context["label"]
-                legacy_repository = legacy_repository or etype == "repository_step"
-            elif etype in {"repository_output", "execution_output"}:
-                # A bounded live viewport; complete streams remain in run logs/report.
-                context = execution_context(ev)
-                text = ev.get("text", "")
-                if text:
-                    output_boundary(context)
-                    view["execution_output"] = (view["execution_output"] + text)[-16000:]
-            elif etype == "done":
-                view["done"] = True
-                view["running"] = False
-                view["result"] = ev.get("result")
-                legacy_repository = legacy_repository or bool(
-                    ((view["result"] or {}).get("data") or {}).get("experiment_spec"))
-                view["state"] = (ev.get("result") or {}).get(
-                    "state", view["state"]) or view["state"]
-                failed = view["state"] == "ERROR"
-                finish_pending("上游阶段失败，本阶段未执行" if failed else
-                               "流水线已结束，本阶段未执行", failed)
-            elif etype == "error":
-                view["error"] = ev.get("error")
-                view["running"] = False
-                view["state"] = "ERROR"
-                finish_pending("流水线异常终止，本阶段未执行", True)
-            view["updated_at"] = ev.get("at", view["updated_at"])
-        view["pipeline_stages"] = [stages[identifier] for identifier in stage_order]
-        if not view["running"]:
-            for context in executions.values():
-                if context["status"] == "running":
-                    context["status"] = "interrupted"
-        view["active_executions"] = [context for context in executions.values() if context["status"] == "running"]
-        if not has_plan and legacy_repository:
-            for row in view["pipeline_stages"]:
-                if row.get("agent", "").endswith("Verifier"):
-                    if row.get("state") == "BUILD_ENV":
-                        row["title"] = "训练前证据预审"
-                    elif row.get("state") == "VALIDATE":
-                        row["title"] = "训练后核验"
-        return view
+        from frontend.progress_state import read_progress_snapshot
+        return read_progress_snapshot(path)
 
 
 # ---------------- 后台流水线执行 ----------------
@@ -291,6 +102,19 @@ def _emit_state(store: ProgressStore, state: str, agent: str,
                 status: str) -> None:
     store.emit({"type": "state", "state": state,
                 "agent": agent, "status": status})
+
+
+def _reject_pdf_input(store: ProgressStore, reason: str) -> Dict[str, Any]:
+    """Reject unreadable evidence before resource search or code generation."""
+    store.emit({"type": "pipeline_plan", "stages": [
+        {"id": "read_paper", "agent": "📖 PaperReader", "title": "论文解析", "status": "waiting"}]})
+    store.emit({"type": "state", "state": "READ_PAPER", "agent": "📖 PaperReader",
+                "phase_id": "read_paper", "status": "error", "reason": reason})
+    result = {"state": "ERROR", "error": reason,
+              "data": {"pdf_input": {"status": "rejected", "reason": reason}},
+              "audit_logs": [], "audit_stats": {}, "report_path": "", "session_id": ""}
+    store.emit({"type": "done", "result": result})
+    return result
 
 
 def run_pipeline_core(progress_path: str,
@@ -310,14 +134,65 @@ def run_pipeline_core(progress_path: str,
                       max_candidates: int = 3,
                       budget_seconds: int = 7200,
                       prepare_only: bool = False,
-                      offline: bool = False) -> Dict[str, Any]:
+                      offline: bool = False,
+                      title_resolution: Optional[dict] = None,
+                      pdf_resolution: Optional[dict] = None,
+                      _managed_runtime: bool = False,
+                      _append_progress: bool = False,
+                      _runtime_preparation: Optional[dict] = None) -> Dict[str, Any]:
     """后台执行完整复现流水线（复现 -> 验证 -> 优化 -> 报告）。
 
     与前端解耦：不触碰 st.session_state，进度实时写入 progress_path；
     返回最终 result（与 app.py 旧 run_pipeline 结构一致，供 done 事件与
     前端结果摘要复用）。临时 PDF 由调用方负责清理。
     """
-    store = ProgressStore(progress_path)
+    store = ProgressStore(progress_path, reset=not _append_progress)
+    from src.title_routing import resolve_title_request
+    resolved = {"paper_title": paper_title, "pdf_path": pdf_path,
+                "corpus_paper": corpus_paper, "mock_mode": mock_mode,
+                "experiment_profile": experiment_profile}
+    pdf_parser_reason = None
+    if pdf_path:
+        from src.pdf_input import resolve_pdf_request, PDFInputError, PDFParserUnavailable
+        try:
+            resolved = resolve_pdf_request(resolved)
+            paper_title = resolved.get("paper_title", paper_title)
+            pdf_resolution = resolved.get("pdf_resolution")
+        except PDFParserUnavailable as exc:
+            if not _managed_runtime and not mock_mode and not use_docker:
+                pdf_parser_reason = str(exc)
+            else:
+                return _reject_pdf_input(store, str(exc))
+        except PDFInputError as exc:
+            return _reject_pdf_input(store, str(exc))
+    resolved = resolve_title_request(resolved)
+    experiment_profile = resolved.get("experiment_profile")
+    title_resolution = title_resolution or resolved.get("title_resolution")
+    if title_resolution:
+        store.emit({"type": "title_resolution", **title_resolution})
+    if pdf_resolution:
+        store.emit({"type": "pdf_resolution", **pdf_resolution})
+    if not mock_mode and not use_docker and not _managed_runtime:
+        from src.runtime_preparation import runtime_requirement
+        reason = pdf_parser_reason or runtime_requirement()
+        if reason:
+            request = {
+                "progress_path": str(Path(progress_path).resolve()),
+                "paper_title": paper_title, "pdf_path": pdf_path,
+                "corpus_paper": corpus_paper, "model_name": model_name,
+                "base_url": base_url, "api_key": api_key, "mock_mode": mock_mode,
+                "max_trials": max_trials, "use_docker": use_docker,
+                "workspace_dir": workspace_dir, "experiment_profile": experiment_profile,
+                "use_llm_review": use_llm_review,
+                "allow_result_summary_review": allow_result_summary_review,
+                "enable_optimization": enable_optimization,
+                "prepare_environment": prepare_environment, "optimization_mode": optimization_mode,
+                "max_candidates": max_candidates, "budget_seconds": budget_seconds,
+                "prepare_only": prepare_only, "offline": offline,
+                "title_resolution": title_resolution,
+                "pdf_resolution": pdf_resolution,
+            }
+            return _run_prepared_pipeline(store, request, reason)
     state: Dict[str, Any] = {"current": "INIT"}
     running: Dict[str, Any] = {"value": True}
     pdf_path = pdf_path or ""
@@ -351,7 +226,7 @@ def run_pipeline_core(progress_path: str,
         base_url=base_url,
         api_key=api_key,
     )
-    orchestrator = Orchestrator(llm_client=llm, mock_mode=mock_mode,
+    orchestrator = _create_orchestrator(llm_client=llm, mock_mode=mock_mode,
                                 logger=logger, max_trials=max_trials,
                                 use_docker=use_docker,
                                 workspace_dir=workspace_dir)
@@ -365,7 +240,7 @@ def run_pipeline_core(progress_path: str,
         if event.get("type") == "state":
             _set_current(event["state"])
             store.emit({**event, "agent": display_names.get(event.get("agent"), event.get("agent", ""))})
-        elif event.get("type") in {"repository_step", "repository_output", "execution_step", "execution_output"}:
+        elif event.get("type") in {"repository_step", "repository_output", "execution_step", "execution_output", "execution_run", "repository_environment"}:
             store.emit(event)
         elif event.get("type") == "pipeline_plan":
             store.emit({**event, "stages": [
@@ -383,6 +258,8 @@ def run_pipeline_core(progress_path: str,
             "enable_optimization": enable_optimization,
             "prepare_environment": prepare_environment, "optimization_mode": optimization_mode,
             "max_candidates": max_candidates, "budget_seconds": budget_seconds,
+            "title_resolution": title_resolution,
+            "pdf_resolution": pdf_resolution,
         }, on_event=_on_event)
         data = outcome["data"]
         error_msg = outcome.get("error")
@@ -392,6 +269,12 @@ def run_pipeline_core(progress_path: str,
         logger.log("Orchestrator", "run", "ERROR", error_msg)
         data = getattr(orchestrator, "data", {})
         _set_current("ERROR")
+    if _runtime_preparation:
+        data["runtime_preparation"] = _runtime_preparation
+    if title_resolution:
+        data["title_resolution"] = title_resolution
+    if pdf_resolution:
+        data["pdf_resolution"] = pdf_resolution
     _emit_new_logs()
 
 # 报告落盘（供历史记录与下载）
@@ -459,6 +342,99 @@ def run_pipeline_core(progress_path: str,
     return _mark_result(result)
 
 
+def _run_prepared_pipeline(store: ProgressStore, request: dict, reason: str) -> dict:
+    """Recover the host, then continue this reproduction in an owned interpreter.
+
+    Only the request pipe carries credentials. The existing progress file remains
+    the single source of truth for the page throughout recovery and training.
+    """
+    from src.runtime_preparation import (
+        prepare_runtime, run_owned_process, safe_runtime_diagnostic,
+        PRESET_WORKER_PREPARATION_ALLOWANCE_S,
+    )
+    stage = {"id": "prepare_runtime", "agent": "🔧 EnvBuilder",
+             "title": "自动准备运行环境", "description": reason, "status": "waiting"}
+    store.emit({"type": "pipeline_plan", "pipeline": "repository" if request.get("experiment_profile") else "generic", "stages": [stage]})
+    def state(status, message):
+        store.emit({"type": "state", "state": "BUILD_ENV", "agent": stage["agent"],
+                    "phase_id": stage["id"], "status": status, "reason": message})
+    state("running", reason)
+    metadata = None
+    worker_id = "worker_" + uuid.uuid4().hex
+    worker_started = False
+    worker_cleaned = False
+    worker_finished = False
+
+    def confirmed_cleanup():
+        nonlocal worker_cleaned
+        worker_cleaned = True
+
+    def finish_worker(status):
+        nonlocal worker_finished
+        if not worker_started or worker_finished:
+            return
+        # Only the process owner can confirm cleanup after its retained job has
+        # closed. A stale child's log cannot prove that its processes exited.
+        if worker_cleaned:
+            snapshot = ProgressStore.read_snapshot(str(store.path))
+            for run in snapshot.get("active_runs", []):
+                store.emit({"type": "execution_run", "execution_id": run["execution_id"],
+                            "phase_id": run.get("phase_id", ""), "status": "interrupted",
+                            "cleanup_confirmed": True,
+                            "reason": "持有者进程已退出并清理，但未返回本轮执行终态"})
+        store.emit({"type": "pipeline_worker", "worker_id": worker_id,
+                    "status": status, "cleanup_confirmed": worker_cleaned})
+        worker_finished = worker_cleaned
+
+    effective_key = request.get("api_key") or os.environ.get("LLM_API_KEY", "")
+    try:
+        prepared = prepare_runtime(Path(__file__).resolve().parents[1],
+                                   offline=request.get("offline", False),
+                                   progress_callback=store.emit)
+        metadata = asdict(prepared)
+        state("success", "兼容运行环境已就绪，继续本次复现")
+        store.emit({"type": "runtime_preparation", "status": "success", **metadata})
+        payload = {**request, "api_key": effective_key,
+                   "_managed_runtime": True, "_append_progress": True,
+                   "_runtime_preparation": metadata}
+        worker_env = os.environ.copy()
+        worker_env.pop("LLM_API_KEY", None)
+        worker_started = True
+        store.emit({"type": "pipeline_worker", "worker_id": worker_id, "status": "running"})
+        completed = run_owned_process(
+            [prepared.executable, "-X", "utf8", "-m", "frontend.preset_worker"],
+            cwd=Path(__file__).resolve().parents[1], input=json.dumps(payload), env=worker_env,
+            timeout_s=max(7200, int(request.get("budget_seconds", 7200))) + PRESET_WORKER_PREPARATION_ALLOWANCE_S,
+            on_cleanup=confirmed_cleanup,
+        )
+        # Normal return also carries the run_owned_process cleanup contract.
+        worker_cleaned = True
+        finish_worker("success" if completed.returncode == 0 else "error")
+        snapshot = ProgressStore.read_snapshot(str(store.path))
+        if snapshot.get("done") and isinstance(snapshot.get("result"), dict):
+            return snapshot["result"]
+        if snapshot.get("error"):
+            raise RuntimeError(snapshot["error"])
+        diagnostic = safe_runtime_diagnostic(completed.stderr or completed.stdout)
+        raise RuntimeError(f"安全运行环境进程未返回完整结果（退出码 {completed.returncode}）：{diagnostic[-1600:]}")
+    except (Exception, KeyboardInterrupt) as exc:
+        finish_worker("interrupted" if isinstance(exc, KeyboardInterrupt) else "error")
+        message = safe_runtime_diagnostic(exc)
+        if effective_key:
+            message = message.replace(effective_key, "[REDACTED]")
+        if metadata is None:
+            state("error", message)
+        else:
+            store.emit({"type": "error", "error": message})
+        result = {"state": "ERROR", "error": message,
+                  "data": {"runtime_preparation": metadata or {"status": "failed", "reason": message}},
+                  "audit_logs": [], "audit_stats": {}, "report_path": "", "session_id": ""}
+        store.emit({"type": "done", "result": result})
+        if isinstance(exc, KeyboardInterrupt):
+            raise
+        return result
+
+
 def run_pipeline_background(progress_path: str, *,
                             paper_title: str = "", pdf_path: str = "",
                             corpus_paper: Optional[str] = None,
@@ -477,6 +453,8 @@ def run_pipeline_background(progress_path: str, *,
                             budget_seconds: int = 7200,
                             prepare_only: bool = False,
                             offline: bool = False,
+                            title_resolution: Optional[dict] = None,
+                            pdf_resolution: Optional[dict] = None,
                             cleanup_pdf: bool = True,
                             on_done=None) -> threading.Thread:
     """启动后台线程执行流水线；返回守护线程句柄。
@@ -496,7 +474,8 @@ def run_pipeline_background(progress_path: str, *,
                 prepare_only=prepare_only, offline=offline, use_llm_review=use_llm_review,
                 allow_result_summary_review=allow_result_summary_review,
                 enable_optimization=enable_optimization, prepare_environment=prepare_environment,
-                optimization_mode=optimization_mode, max_candidates=max_candidates, budget_seconds=budget_seconds)
+                optimization_mode=optimization_mode, max_candidates=max_candidates, budget_seconds=budget_seconds,
+                title_resolution=title_resolution, pdf_resolution=pdf_resolution)
             if on_done:
                 try:
                     on_done(result)

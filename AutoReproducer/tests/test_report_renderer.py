@@ -114,3 +114,30 @@ def test_legacy_image_decompression_bomb_is_rejected_without_breaking_report(tmp
 
 def test_malformed_legacy_base64_is_rejected(tmp_path):
     assert report_image_bytes("data:image/png;base64,====", tmp_path / "legacy.md") is None
+
+
+def test_report_display_removes_decorations_without_altering_evidence_or_download(tmp_path):
+    report = (
+        "# 📋 实验报告\n\n- **✅ 结果**: 通过\n"
+        "- ⚠️ 限制: 仅此实验\n\n"
+        "```python\nprint('✅ 原始执行输出')\n```\n\n"
+        "~~~text\n⚠️ 原始诊断\n~~~\n\n"
+        "`checkpoint_✅.pt` · $x \\in \\mathbb{R}, x ≥ 0$\n"
+        "$$\n\\text{✅} = 1\n$$\n\n"
+        "[源码](https://example.org/✅/code)\n"
+    )
+    st = Mock()
+    path = tmp_path / "report.md"
+    render_report(report, path, st_module=st)
+    displayed = "".join(call.args[0] for call in st.markdown.call_args_list)
+    assert "# 实验报告" in displayed
+    assert "**结果**: 通过" in displayed
+    assert "- 限制: 仅此实验" in displayed
+    for evidence in (
+        "print('✅ 原始执行输出')", "⚠️ 原始诊断", "`checkpoint_✅.pt`",
+        "$x \\in \\mathbb{R}, x ≥ 0$", "\\text{✅} = 1",
+        "[源码](https://example.org/✅/code)",
+    ):
+        assert evidence in displayed
+    with zipfile.ZipFile(io.BytesIO(build_report_bundle(report, path))) as archive:
+        assert archive.read("report.md").decode("utf-8") == report

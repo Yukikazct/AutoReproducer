@@ -6,6 +6,7 @@ reports/*.md
 .env
 *.env
 .env.*
+.streamlit/secrets.toml
 
 # Python 缓存
 __pycache__/

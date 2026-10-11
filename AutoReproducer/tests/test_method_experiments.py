@@ -79,12 +79,13 @@ def test_advice_prompt_uses_actual_split_without_holdout_scores(monkeypatch, tmp
 
 
 def test_advice_timeout_is_bounded_and_does_not_claim_gain(monkeypatch):
+    from src.runtime_preparation import RuntimePreparationTimeout
     llm = SimpleNamespace(mock_mode=False, base_url="https://example.org", model="test", api_key="private", call_count=0)
     def timeout(*args, **kwargs):
         assert "private" not in str(args)
-        assert kwargs["timeout"] == 2
-        raise subprocess.TimeoutExpired(args[0], 2)
-    monkeypatch.setattr("src.method_advice.subprocess.run", timeout)
+        assert kwargs["timeout_s"] == 2
+        raise RuntimePreparationTimeout("owned API process cleaned after timeout")
+    monkeypatch.setattr("src.runtime_preparation.run_owned_process", timeout)
     result = suggest(llm, method_profile("siren_camera_quick"), {
         "metrics_comparison": {"actual": {"psnr": 28}}, "training_summary": {},
         "protocol_pass": True, "independent_metrics_pass": True}, SOURCES, 2)

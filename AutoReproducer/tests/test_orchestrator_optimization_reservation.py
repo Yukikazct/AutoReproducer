@@ -65,7 +65,9 @@ def test_reserved_flag_never_runs_optimization_or_creates_workspace(tmp_path, re
 @pytest.mark.parametrize("constructed,input_flag,expected", [(True, False, False), (False, True, True)])
 def test_run_flag_overrides_constructor_reservation(tmp_path, constructed, input_flag, expected):
     orch = pipeline(tmp_path, requested=constructed)
-    result = orch.run({"pdf_path": "provided-paper.pdf", "enable_optimization": input_flag})
+    # This test concerns reservation flags, not PDF parsing. A nonexistent file
+    # is now deliberately rejected before any generic pipeline work.
+    result = orch.run({"paper_title": "Public paper", "enable_optimization": input_flag})
     assert result["data"]["optimization"]["requested"] is expected
     assert result["data"]["optimization"]["available"] is False
     orch.agents["optimizer"].run.assert_not_called()

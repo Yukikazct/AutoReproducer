@@ -44,6 +44,31 @@ def test_catchable_termination_restores_original_handler():
     assert signal.getsignal(signal.SIGTERM)==before
 
 
+def test_failed_native_job_close_retains_handle_until_successful_retry(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    import src.process_lifecycle as lifecycle
+
+    failure = OSError(6, "job handle close failed")
+    native_error = Mock(return_value=failure)
+    monkeypatch.setattr(lifecycle.ctypes, "get_last_error", lambda: 6, raising=False)
+    monkeypatch.setattr(lifecycle.ctypes, "WinError", native_error, raising=False)
+    job = lifecycle.ProcessJob.__new__(lifecycle.ProcessJob)
+    job.handle = 123
+    job.api = SimpleNamespace(CloseHandle=Mock(side_effect=[0, 1]))
+
+    with pytest.raises(OSError) as raised:
+        job.close()
+    assert raised.value is failure
+    native_error.assert_called_once_with(6)
+    assert job.handle == 123, "a failed close must retain the owned job"
+
+    job.close()
+    assert job.handle is None
+    job.close()
+    assert job.api.CloseHandle.call_args_list == [((123,), {}), ((123,), {})]
+
+
 def wait_file(path,timeout=12):
     deadline=time.monotonic()+timeout
     while time.monotonic()<deadline:

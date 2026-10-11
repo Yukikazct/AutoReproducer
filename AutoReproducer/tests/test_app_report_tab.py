@@ -159,7 +159,7 @@ def test_saved_report_figures_are_rendered_as_native_images(tmp_path, monkeypatc
     import inspect
     import streamlit as st
     if "on_change" in inspect.signature(st.tabs).parameters:
-        app.session_state["workspace_tabs"] = "📂 历史记录"
+        app.session_state["workspace_tabs"] = "历史记录"
         app.run()
     else:
         app.button(key="history_load").click().run()

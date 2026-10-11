@@ -52,7 +52,7 @@ def _open_history(app):
     if load is not None:
         load.click().run()
     else:
-        app.session_state["workspace_tabs"] = "📂 历史记录"
+        app.session_state["workspace_tabs"] = "历史记录"
         app.run()
     assert not app.exception
     return app

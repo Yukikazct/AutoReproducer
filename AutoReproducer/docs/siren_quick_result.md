@@ -24,7 +24,7 @@ PSNR/MSE 衡量本张训练图像的拟合。结果为 `method_experiment_comple
 
 ## 重跑
 
-在应用目录执行，先准备环境：
+在应用目录可直接运行快速档，系统会先自动准备和检查环境。也可提前预热，单独完成源码、数据、依赖及设备检查：
 
 ```powershell
 python scripts/reproduce_repository.py --profile siren_camera_quick --prepare-environment
@@ -33,15 +33,15 @@ python scripts/reproduce_repository.py --profile siren_camera_quick --prepare-en
 使用已在本机配置的 `LLM_API_KEY`、`LLM_BASE_URL`、`LLM_MODEL` 执行快速档：
 
 ```powershell
-python scripts/reproduce_repository.py --profile siren_camera_quick --offline --optimization suggest
+python scripts/reproduce_repository.py --profile siren_camera_quick --optimization suggest
 ```
 
-不需要 API 时省略 `--optimization suggest`，仍会产生真实基线与图表。新增的准备环境操作会安装依赖并检查设备；旧 `--prepare-only` 仍仅准备源码、数据与命令。
+不需要 API 时省略 `--optimization suggest`，仍会产生真实基线与图表。`--prepare-environment` 是可选预热，`--prepare-only` 仍仅准备源码、数据与命令。已有可核验源码、数据及健康兼容依赖缓存时可明确添加 `--offline`；离线缓存缺失或损坏时停止，禁止在线下载安装。
 
-网页选择本预设，先执行“准备实验环境”，再选择“运行实验”和“真实基线 + 智能建议”。完整模式可额外启用运行前四阶段在线分析；其 API 等待不属于本次快速档验收结果。
+网页选择本预设，可直接选择“运行实验”和“真实基线 + 智能建议”，或先用“准备实验环境”预热。完整模式可额外启用运行前四阶段在线分析；其 API 等待不属于上方 10 月 8 日快速档验收结果。
 
 ## 建议与失败行为
 
 建议仅可改变事前允许的一个学习率或首层频率参数，每条包含假设、成本、验证方法和可逐字核对的作者来源。所有建议均为尚未验证；`optimized=False`。真实优化需要独立训练/验证/留出协议及两种子确认。
 
-建议 API 以子进程强制限时 45 秒，失败保留基线。缺环境时不自动安装，缓存繁忙时不排队；训练超时不会降低分辨率、步数或复用历史产物。其他设备与网络条件须重新实测，首次安装不在五分钟承诺内。
+建议 API 以子进程强制限时 45 秒，失败保留基线。正式运行自动安装缺失的冻结依赖、检查原生包并重建坏缓存，准备阶段的依赖缓存锁最多等待 60 秒；默认公共镜像不可用时回退官方源，参数与版本约束不变。训练超时不会降低分辨率、步数或复用历史产物。上方三次耗时属于 10 月 8 日已准备环境的记录；其他设备与网络条件须重新实测，首次安装不在五分钟承诺内。

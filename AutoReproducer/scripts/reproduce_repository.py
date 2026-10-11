@@ -8,11 +8,16 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.orchestrator import Orchestrator
 from src.repository_profiles import PROFILE_LABELS
 from src.llm.llm_client import LLMClient
 from frontend.llm_config import resolve_llm_config
 from src.process_lifecycle import termination_signals, watch_parent_session
+
+
+def Orchestrator(*args, **kwargs):
+    # A bare compatible Python can bootstrap before importing app dependencies.
+    from src.orchestrator import Orchestrator as implementation
+    return implementation(*args, **kwargs)
 
 
 @watch_parent_session()
@@ -41,6 +46,50 @@ def main(argv=None):
     if args.result_review and not args.llm_review:
         parser.error("--result-review requires --llm-review")
 
+    # Resolve hidden input before handing control to a noninteractive worker.
+    # Python older than 3.11 can still bootstrap without tomllib.
+    try:
+        from src.local_llm_settings import load_local_llm_settings
+    except ModuleNotFoundError as exc:
+        if exc.name != "tomllib":
+            raise
+    else:
+        load_local_llm_settings()
+    use_llm_review = args.llm_review and not (args.prepare_only or args.prepare_environment)
+    needs_llm = use_llm_review or (args.optimization != "off" and not (args.prepare_only or args.prepare_environment))
+    token = ""
+    if needs_llm:
+        token = os.environ.get("LLM_API_KEY") or (getpass.getpass("API Key (hidden): ") if sys.stdin.isatty() else "")
+
+    from src.runtime_preparation import runtime_requirement, prepare_runtime, run_owned_process, safe_runtime_diagnostic
+    from src.runtime_preparation import PRESET_WORKER_PREPARATION_ALLOWANCE_S
+    reason = runtime_requirement()
+    if reason:
+        print(reason, flush=True)
+        prepared = prepare_runtime(Path(__file__).resolve().parents[1], offline=args.offline,
+            progress_callback=lambda event: print(event.get("message", ""), flush=True))
+        forwarded = list(argv) if argv is not None else sys.argv[1:]
+        worker_env = os.environ.copy()
+        if token:
+            worker_env["LLM_API_KEY"] = token
+        print("安全运行环境已就绪，正在执行预设；结束后输出完整结果。", flush=True)
+        completed = run_owned_process(
+            [prepared.executable, "-X", "utf8", str(Path(__file__).resolve()), *forwarded],
+            cwd=Path(__file__).resolve().parents[1],
+            timeout_s=max(7200, args.budget_seconds) + PRESET_WORKER_PREPARATION_ALLOWANCE_S,
+            env=worker_env,
+        )
+        def private_output(value):
+            for name in ("LLM_API_KEY", "GITHUB_TOKEN", "GH_TOKEN", "AUTOREPRO_GITHUB_TOKEN"):
+                if worker_env.get(name):
+                    value = value.replace(worker_env[name], "[REDACTED]")
+            return value
+        if completed.stdout:
+            print(private_output(completed.stdout), end="", flush=True)
+        if completed.stderr:
+            print(safe_runtime_diagnostic(private_output(completed.stderr)), end="", file=sys.stderr, flush=True)
+        return completed.returncode
+
     def progress(event):
         if event.get("type") == "state":
             print(f"[{event['state']}] {event.get('agent', '')}: {event.get('status', '')}", flush=True)
@@ -48,9 +97,7 @@ def main(argv=None):
             print(event.get("text", ""), end="", flush=True)
 
     llm = None
-    use_llm_review = args.llm_review and not (args.prepare_only or args.prepare_environment)
-    if use_llm_review or (args.optimization != "off" and not (args.prepare_only or args.prepare_environment)):
-        token = os.environ.get("LLM_API_KEY") or (getpass.getpass("API Key (hidden): ") if sys.stdin.isatty() else "")
+    if needs_llm:
         cfg = resolve_llm_config(api_key=token)
         llm = LLMClient(**cfg, mock_mode=False, timeout=120, max_tokens=8192)
         del token, cfg

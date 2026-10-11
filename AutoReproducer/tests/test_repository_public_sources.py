@@ -1,6 +1,7 @@
 """Public source provenance/containment tests; no HTTP, API, or training."""
 import hashlib
 import json
+import urllib.error
 from unittest.mock import Mock, call
 
 import pytest
@@ -13,9 +14,11 @@ from src.repository_public_sources import (
     PAPER_SECTIONS,
     PAPER_URL,
     PUBLIC_REPOSITORY_FILES,
+    PublicSourceDownloadError,
     RepositoryPublicSources,
     download_public_document,
     extract_author_comment,
+    extract_author_comment_html,
     extract_paper_sections,
 )
 
@@ -446,3 +449,302 @@ def test_comment_download_limit_uses_the_same_controlled_download_layer(tmp_path
         builder.cache_author_comments(offline=False)
     transport.assert_called_once_with(AUTHOR_COMMENTS[1331937601]["api_url"], max_bytes=8, timeout_s=30)
     assert not (builder.cache_dir / "issuecomment-1331937601.json").exists()
+
+
+def issue_document(comment_id, *, body="原始公开评论\r\nNew precise Markdown <img src='https://example.org/not-fetched.png'>"):
+    spec = AUTHOR_COMMENTS[comment_id]
+    repository = {"nameWithOwner": "cure-lab/LTSF-Linear", "isPrivate": False}
+    node = {"__typename": "IssueComment", "databaseId": comment_id,
+            "url": spec["html_url"], "issue": {"number": spec["issue"]},
+            "repository": repository.copy(), "author": {"login": "public-author"},
+            "authorAssociation": "MEMBER", "body": body,
+            "bodyHTML": "DO_NOT_REPLACE_THE_ORIGINAL_BODY",
+            "privateMetadata": "UNSENT_WEB_METADATA"}
+    issue = {"number": spec["issue"], "url": spec["web_url"],
+             "repository": repository,
+             "timelineItems": {"edges": [{"node": node}]},
+             "backTimelineItems": {"edges": [{"node": node.copy()}]}}
+    return {"payload": {"issueViewerRoute": {"data": {"repository": {"issue": issue}}}}}
+
+
+def issue_html(document):
+    return ('<!doctype html><html><script>UNSENT_EXECUTABLE_SCRIPT</script>'
+            '<script type="application/json" data-target="react-app.embeddedData">'
+            + json.dumps(document, ensure_ascii=False)
+            + '</script></html>').encode("utf-8")
+
+
+def rate_limit_error(url, *, status=403, retry_after=None):
+    headers = {"X-RateLimit-Limit": "60", "X-RateLimit-Remaining": "0",
+               "X-RateLimit-Reset": "1791619200"}
+    if retry_after is not None:
+        headers["Retry-After"] = retry_after
+    return urllib.error.HTTPError(url, status, "PRIVATE_CREDENTIAL_NEVER_PRINT", headers, None)
+
+
+@pytest.mark.parametrize("error", [urllib.error.URLError("PRIVATE_PROXY_KEY"),
+                                 TimeoutError("PRIVATE_CONNECTION_INFO"),
+                                 urllib.error.HTTPError(PAPER_URL, 503, "PRIVATE_REASON", {}, None)])
+def test_transient_download_retries_are_bounded_and_succeed(error):
+    transport = Mock(side_effect=[error, error, b"real published bytes"])
+    sleep = Mock()
+    assert download_public_document(PAPER_URL, transport=transport, sleep=sleep) == b"real published bytes"
+    assert transport.call_count == 3
+    assert sleep.call_args_list == [call(1), call(2)]
+
+
+def test_exhausted_network_retries_report_context_without_credentials():
+    transport = Mock(side_effect=urllib.error.URLError("PRIVATE_PROXY_KEY"))
+    sleep = Mock()
+    with pytest.raises(PublicSourceDownloadError) as failure:
+        download_public_document(PAPER_URL, transport=transport, sleep=sleep)
+    assert failure.value.attempts == transport.call_count == 3
+    assert PAPER_URL in str(failure.value)
+    assert "PRIVATE" not in str(failure.value)
+    assert "PRIVATE" not in json.dumps(failure.value.as_dict())
+    assert sleep.call_args_list == [call(1), call(2)]
+
+
+def test_github_exhausted_quota_reports_reset_and_does_not_wait():
+    url = AUTHOR_COMMENTS[1331937601]["api_url"]
+    transport = Mock(side_effect=rate_limit_error(url))
+    sleep = Mock()
+    with pytest.raises(PublicSourceDownloadError) as failure:
+        download_public_document(url, transport=transport, sleep=sleep)
+    diagnostic = failure.value
+    assert diagnostic.status == 403 and diagnostic.rate_limited
+    assert diagnostic.attempts == 1
+    assert "剩余 0/60" in str(diagnostic)
+    assert "UTC" in diagnostic.rate_reset_utc
+    assert "PRIVATE" not in str(diagnostic)
+    transport.assert_called_once()
+    sleep.assert_not_called()
+
+
+@pytest.mark.parametrize("status", [400, 401, 404, 429])
+def test_permanent_failure_or_long_server_delay_is_not_retried(status):
+    url = AUTHOR_COMMENTS[1331937601]["api_url"]
+    transport = Mock(side_effect=rate_limit_error(url, status=status, retry_after="3600"))
+    sleep = Mock()
+    with pytest.raises(PublicSourceDownloadError):
+        download_public_document(url, transport=transport, sleep=sleep)
+    transport.assert_called_once()
+    sleep.assert_not_called()
+
+
+def test_short_retry_after_is_respected_without_exceeding_retry_budget():
+    url = AUTHOR_COMMENTS[1331937601]["api_url"]
+    transport = Mock(side_effect=[rate_limit_error(url, status=429, retry_after="4"), b"published bytes"])
+    sleep = Mock()
+    assert download_public_document(url, transport=transport, sleep=sleep) == b"published bytes"
+    sleep.assert_called_once_with(4)
+
+
+def test_github_token_is_only_sent_to_exact_api_and_not_injected_transport(monkeypatch):
+    requests = []
+
+    class Response:
+        status = 200
+
+        def __init__(self, url):
+            self.url = url
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def geturl(self):
+            return self.url
+
+        def read(self, limit):
+            return b"published"
+
+    def open_request(request, **kwargs):
+        requests.append(request)
+        return Response(request.full_url)
+
+    monkeypatch.setenv("GITHUB_TOKEN", "PRIVATE_GITHUB_TOKEN")
+    monkeypatch.delenv("AUTOREPRO_GITHUB_TOKEN", raising=False)
+    opener = Mock(open=Mock(side_effect=open_request))
+    monkeypatch.setattr("src.repository_public_sources.urllib.request.build_opener", Mock(return_value=opener))
+    spec = AUTHOR_COMMENTS[1331937601]
+    for url in (spec["api_url"], spec["web_url"], PAPER_URL):
+        assert download_public_document(url) == b"published"
+    assert requests[0].get_header("Authorization") == "Bearer PRIVATE_GITHUB_TOKEN"
+    assert all(request.get_header("Authorization") is None for request in requests[1:])
+    transport = Mock(return_value=b"published")
+    download_public_document(spec["api_url"], transport=transport)
+    transport.assert_called_once_with(spec["api_url"], max_bytes=MAX_DOCUMENT_BYTES, timeout_s=30)
+
+
+def test_html_fallback_recovers_exact_comment_and_retains_original_provenance_offline(tmp_path):
+    documents = {spec["web_url"]: issue_html(issue_document(comment_id))
+                 for comment_id, spec in AUTHOR_COMMENTS.items()}
+
+    def transport(url, **kwargs):
+        if url in documents:
+            return documents[url]
+        raise rate_limit_error(url)
+
+    transport = Mock(side_effect=transport)
+    builder = RepositoryPublicSources(tmp_path / "cache", transport=transport)
+    sources, manifests = builder.cache_author_comments(offline=False)
+    assert transport.call_args_list == [
+        invocation for spec in AUTHOR_COMMENTS.values()
+        for invocation in (call(spec["api_url"], max_bytes=MAX_COMMENT_BYTES, timeout_s=30),
+                           call(spec["web_url"], max_bytes=MAX_DOCUMENT_BYTES, timeout_s=30))]
+    for source, manifest in zip(sources, manifests):
+        spec = AUTHOR_COMMENTS[manifest["id"]]
+        assert source["text"] == issue_document(manifest["id"])["payload"]["issueViewerRoute"]["data"]["repository"]["issue"]["timelineItems"]["edges"][0]["node"]["body"]
+        assert "DO_NOT_REPLACE" not in source["text"]
+        assert "UNSENT" not in json.dumps(source)
+        assert manifest["origin"] == manifest["source_format"] == "github_issue_html"
+        assert manifest["retrieval_url"] == spec["web_url"]
+        assert manifest["source_sha256"] == digest(documents[spec["web_url"]])
+        assert manifest["source_bytes"] == len(documents[spec["web_url"]])
+        assert manifest["recovery"]["rate_limited"]
+        assert manifest["author_association"] == "MEMBER"
+        assert "PRIVATE" not in json.dumps(manifest)
+        assert (builder.cache_dir / f"issuecomment-{manifest['id']}.source.html").read_bytes() == documents[spec["web_url"]]
+    transport.reset_mock()
+    assert builder.cache_author_comments(offline=True) == (sources, manifests)
+    transport.assert_not_called()
+
+
+@pytest.mark.parametrize("tamper", ["raw_html", "missing_raw", "source_hash", "source_bytes", "retrieval_url", "normalized_body"])
+def test_html_fallback_cache_rejects_tampering_without_redownload(tmp_path, tamper):
+    def transport(url, **kwargs):
+        for comment_id, spec in AUTHOR_COMMENTS.items():
+            if url == spec["web_url"]:
+                return issue_html(issue_document(comment_id))
+        raise rate_limit_error(url)
+
+    transport = Mock(side_effect=transport)
+    builder = RepositoryPublicSources(tmp_path / "cache", transport=transport)
+    builder.cache_author_comments(offline=False)
+    raw_path = builder.cache_dir / "issuecomment-1331937601.source.html"
+    metadata_path = builder.cache_dir / "issuecomment-1331937601.manifest.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    if tamper == "raw_html":
+        raw_path.write_bytes(raw_path.read_bytes() + b"tampered")
+    elif tamper == "missing_raw":
+        raw_path.unlink()
+    elif tamper == "normalized_body":
+        normalized_path = builder.cache_dir / "issuecomment-1331937601.json"
+        content = comment_document(1331937601, body="A body that does not match published HTML")
+        normalized_path.write_bytes(content)
+        metadata.update(sha256=digest(content), bytes=len(content))
+    else:
+        metadata[tamper if tamper != "source_hash" else "source_sha256"] = "tampered"
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+    transport.reset_mock()
+    with pytest.raises(ValueError, match="缓存"):
+        builder.cache_author_comments(offline=False)
+    transport.assert_not_called()
+
+
+@pytest.mark.parametrize("field,value", [
+    ("number", 99), ("url", "https://github.com/impostor/repo/issues/33"),
+    ("nameWithOwner", "impostor/repo"), ("isPrivate", True),
+    ("comment_url", "https://github.com/impostor/repo/issues/33#issuecomment-1331937601"),
+    ("comment_issue", 39), ("comment_repository", "impostor/repo"),
+    ("authorAssociation", "NONE"), ("author", {"login": ""}), ("body", ""),
+    ("databaseId", 42),
+])
+def test_html_comment_identity_author_attribution_and_original_body_are_required(field, value):
+    document = issue_document(1331937601)
+    issue = document["payload"]["issueViewerRoute"]["data"]["repository"]["issue"]
+    node = issue["timelineItems"]["edges"][0]["node"]
+    issue.pop("backTimelineItems")
+    if field in {"number", "url"}:
+        issue[field] = value
+    elif field in {"nameWithOwner", "isPrivate"}:
+        issue["repository"][field] = value
+    elif field == "comment_url":
+        node["url"] = value
+    elif field == "comment_issue":
+        node["issue"]["number"] = value
+    elif field == "comment_repository":
+        node["repository"]["nameWithOwner"] = value
+    else:
+        node[field] = value
+    with pytest.raises(ValueError):
+        extract_author_comment_html(issue_html(document), 1331937601)
+
+
+def test_html_conflicting_duplicate_comment_is_rejected():
+    document = issue_document(1331937601)
+    issue = document["payload"]["issueViewerRoute"]["data"]["repository"]["issue"]
+    issue["backTimelineItems"]["edges"][0]["node"]["body"] = "conflicting body"
+    with pytest.raises(ValueError, match="不一致的重复"):
+        extract_author_comment_html(issue_html(document), 1331937601)
+
+
+def test_invalid_api_json_is_not_silently_replaced_by_html(tmp_path):
+    transport = Mock(return_value=b'{"body":"unattributed"}')
+    builder = RepositoryPublicSources(tmp_path / "cache", transport=transport)
+    with pytest.raises(ValueError):
+        builder.cache_author_comments(offline=False)
+    transport.assert_called_once()
+    assert not (builder.cache_dir / "issuecomment-1331937601.json").exists()
+
+
+def test_both_comment_download_paths_fail_with_clear_safe_diagnostics(tmp_path):
+    transport = Mock(side_effect=lambda url, **kwargs: (_ for _ in ()).throw(rate_limit_error(url)))
+    builder = RepositoryPublicSources(tmp_path / "cache", transport=transport)
+    with pytest.raises(RuntimeError, match="作者评论自动恢复失败") as failure:
+        builder.cache_author_comments(offline=False)
+    assert "REST:" in str(failure.value) and "官方网页:" in str(failure.value)
+    assert "PRIVATE" not in str(failure.value)
+    assert transport.call_count == 2
+    assert not (builder.cache_dir / "issuecomment-1331937601.json").exists()
+
+
+def test_recovered_comments_enter_complete_public_packet_without_retrieval_metadata(public_workspace, paper_html, tmp_path):
+    def transport(url, **kwargs):
+        if url == PAPER_URL:
+            return paper_html
+        for comment_id, spec in AUTHOR_COMMENTS.items():
+            if url == spec["web_url"]:
+                return issue_html(issue_document(comment_id))
+        raise rate_limit_error(url)
+
+    transport = Mock(side_effect=transport)
+    builder = RepositoryPublicSources(tmp_path / "cache", transport=transport)
+    packet = builder.build_packet(*public_workspace, offline=False)
+    assert len(packet["sources"]) == len(PAPER_SECTIONS) + len(PUBLIC_REPOSITORY_FILES) + len(AUTHOR_COMMENTS)
+    rendered = json.dumps(packet)
+    assert "原始公开评论" in json.dumps(packet, ensure_ascii=False)
+    for forbidden in ("UNSENT", "PRIVATE", "source_format", "recovery", "rate_remaining", "source_sha256"):
+        assert forbidden not in rendered
+    manifest = json.loads(builder.manifest_path.read_text(encoding="utf-8"))
+    assert all(item["source_format"] == "github_issue_html" for item in manifest["author_comments"])
+    transport.reset_mock()
+    assert builder.build_packet(*public_workspace, offline=True) == packet
+    transport.assert_not_called()
+
+
+@pytest.mark.parametrize("url", [
+    "https://github.com/cure-lab/LTSF-Linear/issues/33?expand=1",
+    "https://github.com/cure-lab/LTSF-Linear/issues/99",
+    "https://github.com/cure-lab/LTSF-Linear/issues/33#issuecomment-1331937601",
+    "https://github.com.evil.example/cure-lab/LTSF-Linear/issues/33",
+    "https://api.github.com/repos/cure-lab/LTSF-Linear/issues/comments/1331937601?x=1",
+])
+def test_new_web_fallback_allowlist_remains_exact(url):
+    transport = Mock()
+    with pytest.raises(ValueError, match="白名单"):
+        download_public_document(url, transport=transport)
+    transport.assert_not_called()
+
+
+@pytest.mark.parametrize("options", [{"max_attempts": 4}, {"max_attempts": True},
+                                    {"retry_delay_s": 6}, {"retry_delay_s": float("inf")},
+                                    {"timeout_s": float("nan")}])
+def test_download_retry_and_time_budgets_cannot_be_disabled(options):
+    transport = Mock()
+    with pytest.raises(ValueError):
+        download_public_document(PAPER_URL, transport=transport, **options)
+    transport.assert_not_called()

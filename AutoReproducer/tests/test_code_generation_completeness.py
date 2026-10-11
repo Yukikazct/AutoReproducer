@@ -479,7 +479,7 @@ class TestReportSurfacesBestEffort:
 
         assert "✅ 成功（尽力而为：论文信息不足）" in report
         assert "不是论文结论" in report              # 防误读的关键句
-        assert "系统本地兜底脚本" in report
+        assert "Mock 本地演示脚本" in report
         assert "假设: 自变量在 [-1, 1] 上均匀取值" in report
         assert "⚠️ 无法核对" in report
         assert "指标差异" not in report               # 无可比对项，不重复印理由
@@ -587,7 +587,7 @@ class TestPrompts:
     # ---- 信息不足路径（insufficient=True）----
 
     def _insufficient_prompt(self, paper_info=None):
-        return CodeExecutorAgent(LLMClient(mock_mode=True)) \
+        return CodeExecutorAgent(LLMClient(mock_mode=True), mock_mode=True) \
             ._generate_code_prompt(paper_info if paper_info is not None else {},
                                    True)
 

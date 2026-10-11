@@ -53,6 +53,9 @@ def get_adapter(profile) -> ExperimentAdapter:
     if name == "neural_ode":
         from src.method_adapters import NeuralODEAdapter
         return NeuralODEAdapter()
+    if name == "rezero":
+        from src.rezero_adapter import ReZeroAdapter
+        return ReZeroAdapter()
     if name not in _ADAPTERS:
         raise ValueError(f"未注册的论文适配器: {name}")
     return _ADAPTERS[name]()

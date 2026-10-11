@@ -30,10 +30,12 @@
 ## 重跑
 
 ```powershell
+# 可选：提前完成环境准备和检查
 python scripts/reproduce_repository.py --profile neural_ode_spiral --prepare-environment
-python scripts/reproduce_repository.py --profile neural_ode_spiral --offline --optimization suggest
+# 直接运行也会自动准备和检查环境
+python scripts/reproduce_repository.py --profile neural_ode_spiral --optimization suggest
 ```
 
-API 使用本机配置的 `LLM_API_KEY`、`LLM_BASE_URL`、`LLM_MODEL`。省略优化选项即可不调用 API。原始报告、checkpoint、数组和核验结果位于本机 `data/runs/<运行编号>/`；这些运行产物不随 Git 分发。
+API 使用本机配置的 `LLM_API_KEY`、`LLM_BASE_URL`、`LLM_MODEL`。省略优化选项即可不调用 API。默认运行自动取得固定作者源码、准备冻结依赖并做原生健康检查；源码及健康兼容依赖缓存已有时可明确添加 `--offline`，离线缺失或损坏即停止，禁止在线下载安装。原始报告、checkpoint、数组和核验结果位于本机 `data/runs/<运行编号>/`；这些运行产物不随 Git 分发。上方实测仍为 10 月 8 日记录。
 
 新增初值的验证/留出评估属于单独的优化扩展，固定初值、种子和验收门槛，结论不与上述全轨迹拟合误差混用。

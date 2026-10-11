@@ -10,11 +10,17 @@ from __future__ import annotations
 import hashlib
 from html.parser import HTMLParser
 import json
+import math
+import os
 from pathlib import Path
 import re
+import time
 from typing import Callable, Mapping
+import urllib.error
 import urllib.request
 import uuid
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 
 from src.repository_profiles import PAPER_TITLE, REPO_SHA, REPO_URL
 
@@ -23,6 +29,8 @@ MAX_DOCUMENT_BYTES = 2 * 1024 * 1024
 MAX_COMMENT_BYTES = 64 * 1024
 MAX_REPOSITORY_FILE_BYTES = 256 * 1024
 MAX_PACKET_CHARACTERS = 120_000
+MAX_DOWNLOAD_ATTEMPTS = 3
+MAX_RETRY_DELAY_S = 5
 
 PUBLIC_REPOSITORY_FILES = {
     "README.md": "repo_readme",
@@ -50,8 +58,11 @@ for _comment_id, _spec in AUTHOR_COMMENTS.items():
     _spec["id"] = _comment_id
     _spec["api_url"] = f"https://api.github.com/repos/cure-lab/LTSF-Linear/issues/comments/{_comment_id}"
     _spec["html_url"] = f"{REPO_URL}/issues/{_spec['issue']}#issuecomment-{_comment_id}"
+    _spec["web_url"] = f"{REPO_URL}/issues/{_spec['issue']}"
     _spec["issue_url"] = f"https://api.github.com/repos/cure-lab/LTSF-Linear/issues/{_spec['issue']}"
-PUBLIC_DOWNLOAD_URLS = {PAPER_URL, *(spec["api_url"] for spec in AUTHOR_COMMENTS.values())}
+PUBLIC_DOWNLOAD_URLS = {PAPER_URL, *(spec["api_url"] for spec in AUTHOR_COMMENTS.values()),
+                        *(spec["web_url"] for spec in AUTHOR_COMMENTS.values())}
+GITHUB_API_URLS = {spec["api_url"] for spec in AUTHOR_COMMENTS.values()}
 
 
 def _digest(content: bytes) -> str:
@@ -87,15 +98,126 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         raise ValueError("公开来源下载不允许重定向")
 
 
+class PublicSourceDownloadError(RuntimeError):
+    """A credential-free, bounded-download diagnostic usable by recovery."""
+
+    def __init__(self, url: str, *, status: int | None = None,
+                 attempts: int = 1, rate_limited: bool = False,
+                 retry_after_s: float | None = None, rate_limit: str | None = None,
+                 rate_remaining: str | None = None, rate_reset_utc: str | None = None,
+                 retryable: bool = False):
+        self.url = url
+        self.status = status
+        self.attempts = attempts
+        self.rate_limited = rate_limited
+        self.retry_after_s = retry_after_s
+        self.rate_limit = rate_limit
+        self.rate_remaining = rate_remaining
+        self.rate_reset_utc = rate_reset_utc
+        self.retryable = retryable
+        detail = f"HTTP {status}" if status is not None else "网络连接或超时错误"
+        if rate_limited:
+            detail += "，GitHub/API 请求限额已触发"
+        if rate_remaining is not None and rate_limit is not None:
+            detail += f"（剩余 {rate_remaining}/{rate_limit}）"
+        if rate_reset_utc is not None:
+            detail += f"，额度重置于 {rate_reset_utc}"
+        if retry_after_s is not None:
+            detail += f"，服务端建议 {retry_after_s:g} 秒后重试"
+        super().__init__(f"公开来源下载失败: {url}: {detail}；已尝试 {attempts} 次")
+
+    def as_dict(self) -> dict:
+        return {key: value for key, value in {
+            "url": self.url, "status": self.status, "attempts": self.attempts,
+            "rate_limited": self.rate_limited, "retry_after_s": self.retry_after_s,
+            "rate_limit": self.rate_limit, "rate_remaining": self.rate_remaining,
+            "rate_reset_utc": self.rate_reset_utc,
+        }.items() if value is not None}
+
+
+def _header_number(headers, name: str) -> str | None:
+    value = headers.get(name) if headers is not None else None
+    return value if isinstance(value, str) and re.fullmatch(r"\d{1,12}", value) else None
+
+
+def _download_error(url: str, error, attempts: int) -> PublicSourceDownloadError:
+    if not isinstance(error, urllib.error.HTTPError):
+        return PublicSourceDownloadError(url, attempts=attempts, retryable=True)
+    headers = error.headers
+    limit = _header_number(headers, "X-RateLimit-Limit")
+    remaining = _header_number(headers, "X-RateLimit-Remaining")
+    reset = _header_number(headers, "X-RateLimit-Reset")
+    reset_utc = None
+    if reset is not None:
+        try:
+            reset_utc = datetime.fromtimestamp(int(reset), timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        except (OverflowError, OSError, ValueError):
+            pass
+    retry_after = headers.get("Retry-After") if headers is not None else None
+    retry_after_s = None
+    if isinstance(retry_after, str):
+        try:
+            retry_after_s = float(retry_after)
+        except ValueError:
+            try:
+                retry_date = parsedate_to_datetime(retry_after)
+                retry_after_s = max(0, retry_date.timestamp() - time.time())
+            except (TypeError, ValueError, OverflowError):
+                pass
+        if retry_after_s is not None and (not math.isfinite(retry_after_s) or retry_after_s < 0):
+            retry_after_s = None
+    rate_limited = error.code == 429 or (error.code == 403 and (remaining == "0" or retry_after_s is not None))
+    return PublicSourceDownloadError(
+        url, status=error.code, attempts=attempts, rate_limited=rate_limited,
+        retry_after_s=retry_after_s, rate_limit=limit, rate_remaining=remaining,
+        rate_reset_utc=reset_utc,
+        retryable=error.code in {408, 429, 500, 502, 503, 504})
+
+
+def _download_once(url: str, *, max_bytes: int, timeout_s: float,
+                   transport: Callable | None, github_token: str | None) -> bytes:
+    if transport is not None:
+        return transport(url, max_bytes=max_bytes, timeout_s=timeout_s)
+    headers = {"User-Agent": "AutoReproducer/1.0"}
+    if url in GITHUB_API_URLS:
+        headers["Accept"] = "application/vnd.github+json"
+        # Authentication is sent only to the exact approved API URLs, never
+        # paper/web hosts, redirects, injected transports, logs or manifests.
+        token = github_token
+        if token is None:
+            token = next((os.environ.get(name) for name in
+                          ("AUTOREPRO_GITHUB_TOKEN", "GITHUB_TOKEN", "GH_TOKEN")
+                          if os.environ.get(name)), None)
+        if isinstance(token, str) and token.strip() and "\r" not in token and "\n" not in token:
+            headers["Authorization"] = f"Bearer {token.strip()}"
+    else:
+        headers["Accept"] = "text/html"
+    request = urllib.request.Request(url, headers=headers)
+    opener = urllib.request.build_opener(_NoRedirect())
+    with opener.open(request, timeout=timeout_s) as response:
+        if response.geturl() != url:
+            raise ValueError("公开来源响应URL不在白名单")
+        if response.status != 200:
+            raise urllib.error.HTTPError(url, response.status, "unexpected status", response.headers, None)
+        return response.read(max_bytes + 1)
+
+
 def download_public_document(url: str, *, offline: bool = False,
                              max_bytes: int = MAX_DOCUMENT_BYTES,
                              timeout_s: float = 30,
-                             transport: Callable | None = None) -> bytes:
+                             transport: Callable | None = None,
+                             max_attempts: int = MAX_DOWNLOAD_ATTEMPTS,
+                             retry_delay_s: float = 1,
+                             sleep: Callable = time.sleep,
+                             github_token: str | None = None) -> bytes:
     """Fetch an approved public paper/comment; an injected transport is testable.
 
     ``transport(url, max_bytes=..., timeout_s=...)`` returns bytes. Both real
     and injected transports are subject to the same URL, offline and size rules.
     The urllib implementation refuses redirects before another host is opened.
+    Transient failures receive at most three attempts; a long Retry-After or
+    exhausted GitHub quota returns immediately so an approved web source can
+    recover without waiting for the hourly API reset.
     """
     if url not in PUBLIC_DOWNLOAD_URLS:
         raise ValueError("公开来源URL不在白名单")
@@ -103,22 +225,32 @@ def download_public_document(url: str, *, offline: bool = False,
         raise RuntimeError("离线模式禁止下载公开来源")
     if not isinstance(max_bytes, int) or isinstance(max_bytes, bool) or max_bytes <= 0:
         raise ValueError("公开来源字节上限必须为正整数")
-    if timeout_s <= 0 or timeout_s > 120:
+    if not isinstance(timeout_s, (int, float)) or not math.isfinite(timeout_s) or timeout_s <= 0 or timeout_s > 120:
         raise ValueError("公开来源下载超时必须在0至120秒内")
-    if transport is not None:
-        content = transport(url, max_bytes=max_bytes, timeout_s=timeout_s)
-    else:
-        headers = {"User-Agent": "AutoReproducer/1.0"}
-        if url != PAPER_URL:
-            headers["Accept"] = "application/vnd.github+json"
-        request = urllib.request.Request(url, headers=headers)
-        opener = urllib.request.build_opener(_NoRedirect())
-        with opener.open(request, timeout=timeout_s) as response:
-            if response.geturl() != url:
-                raise ValueError("公开来源响应URL不在白名单")
-            if response.status != 200:
-                raise RuntimeError("公开来源下载响应失败")
-            content = response.read(max_bytes + 1)
+    if type(max_attempts) is not int or not 1 <= max_attempts <= MAX_DOWNLOAD_ATTEMPTS:
+        raise ValueError("公开来源下载最多允许1至3次尝试")
+    if not isinstance(retry_delay_s, (int, float)) or not math.isfinite(retry_delay_s) or not 0 <= retry_delay_s <= MAX_RETRY_DELAY_S:
+        raise ValueError("公开来源重试间隔必须在0至5秒内")
+    for attempt in range(1, max_attempts + 1):
+        try:
+            content = _download_once(url, max_bytes=max_bytes, timeout_s=timeout_s,
+                                     transport=transport, github_token=github_token)
+            break
+        except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError,
+                ConnectionError) as error:
+            diagnostic = _download_error(url, error, attempt)
+            if isinstance(error, urllib.error.HTTPError):
+                error.close()
+            # Do not expose HTTPError.reason, response bodies, or nested URL
+            # errors: these can contain an Authorization header or proxy key.
+            if (not diagnostic.retryable or attempt == max_attempts
+                    or (diagnostic.retry_after_s is not None
+                        and diagnostic.retry_after_s > MAX_RETRY_DELAY_S)):
+                raise diagnostic from None
+            delay = min(MAX_RETRY_DELAY_S, retry_delay_s * (2 ** (attempt - 1)))
+            if diagnostic.retry_after_s is not None:
+                delay = max(delay, diagnostic.retry_after_s)
+            sleep(delay)
     if not isinstance(content, bytes):
         raise TypeError("公开来源transport必须返回bytes")
     if len(content) > max_bytes:
@@ -302,6 +434,104 @@ def extract_author_comment(content: bytes, comment_id: int) -> tuple[dict, dict]
     return source, provenance
 
 
+class _GitHubEmbeddedDataParser(HTMLParser):
+    """Read inert public JSON only; never interpret scripts or rendered text."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=False)
+        self.documents: list[str] = []
+        self.parts: list[str] | None = None
+
+    def handle_starttag(self, tag, attrs):
+        attributes = dict(attrs)
+        if (tag == "script" and attributes.get("type") == "application/json"
+                and attributes.get("data-target") == "react-app.embeddedData"):
+            if self.parts is not None or len(self.documents) >= 4:
+                raise ValueError("公开GitHub网页内嵌数据结构无效")
+            self.parts = []
+
+    def handle_data(self, data):
+        if self.parts is not None:
+            self.parts.append(data)
+
+    def handle_endtag(self, tag):
+        if tag == "script" and self.parts is not None:
+            self.documents.append("".join(self.parts))
+            self.parts = None
+
+
+def extract_author_comment_html(content: bytes, comment_id: int) -> bytes:
+    """Extract the exact Markdown from GitHub's official public issue page.
+
+    A normalized comment document remains compatible with the REST cache, but
+    is explicitly attributed to the separately retained/hash-checked raw HTML.
+    Repository identity, issue number/URL, exact comment URL/id, public status
+    and member association all come from the published embedded data. BodyHTML
+    or adjacent discussion is never substituted for a missing original body.
+    """
+    spec = AUTHOR_COMMENTS.get(comment_id)
+    if spec is None:
+        raise ValueError("作者评论不在白名单")
+    parser = _GitHubEmbeddedDataParser()
+    try:
+        parser.feed(content.decode("utf-8"))
+        parser.close()
+    except UnicodeDecodeError as error:
+        raise ValueError("公开GitHub网页必须为UTF-8") from error
+    matches = []
+    for document in parser.documents:
+        try:
+            data = json.loads(document)
+            issue = data["payload"]["issueViewerRoute"]["data"]["repository"]["issue"]
+        except (ValueError, KeyError, TypeError):
+            continue
+        if not isinstance(issue, dict):
+            raise ValueError("公开GitHub网页issue数据结构无效")
+        repository = issue.get("repository") if isinstance(issue, dict) else None
+        if (type(issue.get("number")) is not int or issue["number"] != spec["issue"]
+                or issue.get("url") != spec["web_url"]
+                or not isinstance(repository, dict)
+                or repository.get("nameWithOwner") != "cure-lab/LTSF-Linear"
+                or repository.get("isPrivate") is not False):
+            raise ValueError("公开GitHub网页来源与固定仓库/issue locator不一致")
+        for timeline_name in ("timelineItems", "backTimelineItems"):
+            timeline = issue.get(timeline_name)
+            edges = timeline.get("edges") if isinstance(timeline, dict) else None
+            if not isinstance(edges, list):
+                continue
+            for edge in edges:
+                node = edge.get("node") if isinstance(edge, dict) else None
+                if not isinstance(node, dict) or node.get("databaseId") != comment_id:
+                    continue
+                comment_issue = node.get("issue")
+                comment_repository = node.get("repository")
+                author = node.get("author")
+                if (node.get("__typename") != "IssueComment"
+                        or type(node.get("databaseId")) is not int
+                        or node.get("url") != spec["html_url"]
+                        or not isinstance(comment_issue, dict)
+                        or type(comment_issue.get("number")) is not int
+                        or comment_issue["number"] != spec["issue"]
+                        or not isinstance(comment_repository, dict)
+                        or comment_repository.get("nameWithOwner") != "cure-lab/LTSF-Linear"
+                        or comment_repository.get("isPrivate") is not False
+                        or not isinstance(author, dict)):
+                    raise ValueError("公开GitHub网页评论与固定作者locator不一致")
+                comment = {"id": comment_id, "url": spec["api_url"],
+                           "html_url": node["url"], "issue_url": spec["issue_url"],
+                           "user": {"login": author.get("login")},
+                           "author_association": node.get("authorAssociation"),
+                           "body": node.get("body")}
+                normalized = json.dumps(comment, ensure_ascii=False, sort_keys=True).encode("utf-8")
+                extract_author_comment(normalized, comment_id)
+                matches.append(normalized)
+    if not matches:
+        raise ValueError("公开GitHub网页缺少指定作者评论的原始正文/署名")
+    if any(document != matches[0] for document in matches[1:]):
+        raise ValueError("公开GitHub网页包含不一致的重复作者评论")
+    return matches[0]
+
+
 class RepositoryPublicSources:
     def __init__(self, cache_dir: str | Path, *, transport: Callable | None = None,
                  max_document_bytes: int = MAX_DOCUMENT_BYTES,
@@ -318,6 +548,26 @@ class RepositoryPublicSources:
         self.max_repository_file_bytes = max_repository_file_bytes
         self.max_packet_characters = max_packet_characters
         self.manifest_path = self.cache_dir / "packet_manifest.json"
+
+    def _comment_html_provenance(self, content: bytes, comment_id: int) -> dict:
+        return {"source_format": "github_issue_html",
+                "retrieval_url": AUTHOR_COMMENTS[comment_id]["web_url"],
+                "source_sha256": _digest(content), "source_bytes": len(content)}
+
+    def _cached_html_comment(self, metadata: dict, comment_id: int,
+                             normalized: bytes) -> dict:
+        raw_path = self.cache_dir / f"issuecomment-{comment_id}.source.html"
+        if not raw_path.is_file():
+            raise ValueError("公开作者评论网页缓存缺少原始来源HTML")
+        raw = _read_limited(raw_path, self.max_document_bytes)
+        expected = self._comment_html_provenance(raw, comment_id)
+        if (metadata.get("origin") != "github_issue_html"
+                or any(metadata.get(key) != value for key, value in expected.items())
+                or extract_author_comment_html(raw, comment_id) != normalized):
+            raise ValueError("公开作者评论网页缓存来源或哈希校验失败")
+        if "recovery" in metadata:
+            expected["recovery"] = metadata["recovery"]
+        return expected
 
     def _paper(self, *, offline: bool, paper_path: str | Path | None) -> tuple[bytes, dict]:
         cache_path = self.cache_dir / "paper.html"
@@ -365,6 +615,8 @@ class RepositoryPublicSources:
         for comment_id, spec in AUTHOR_COMMENTS.items():
             cache_path = self.cache_dir / f"issuecomment-{comment_id}.json"
             metadata_path = self.cache_dir / f"issuecomment-{comment_id}.manifest.json"
+            raw_html = None
+            extra_provenance = {}
             if comment_id in paths:
                 content = _read_limited(Path(paths[comment_id]), self.max_comment_bytes)
                 origin = "verified_local_public_comment"
@@ -379,16 +631,39 @@ class RepositoryPublicSources:
                         or metadata.get("bytes") != len(content)):
                     raise ValueError("公开作者评论缓存来源或哈希校验失败")
                 origin = metadata.get("origin", "verified_public_cache")
+                if (origin == "github_issue_html"
+                        or metadata.get("source_format") == "github_issue_html"):
+                    extra_provenance = self._cached_html_comment(metadata, comment_id, content)
                 publish = False
             else:
-                content = download_public_document(spec["api_url"], offline=offline,
-                                                   max_bytes=self.max_comment_bytes,
-                                                   transport=self.transport)
-                origin = "https_download"
+                try:
+                    content = download_public_document(spec["api_url"], offline=offline,
+                                                       max_bytes=self.max_comment_bytes,
+                                                       transport=self.transport)
+                    origin = "https_download"
+                except PublicSourceDownloadError as api_error:
+                    # This is the same authentic comment published on the
+                    # author's official GitHub issue, not a missing-evidence
+                    # bypass. Integrity/size errors never invoke this fallback.
+                    try:
+                        raw_html = download_public_document(
+                            spec["web_url"], offline=offline,
+                            max_bytes=self.max_document_bytes, transport=self.transport)
+                    except PublicSourceDownloadError as web_error:
+                        raise RuntimeError(f"作者评论自动恢复失败；REST: {api_error}；官方网页: {web_error}") from None
+                    content = extract_author_comment_html(raw_html, comment_id)
+                    if len(content) > self.max_comment_bytes:
+                        raise ValueError("公开作者评论超过字节上限")
+                    origin = "github_issue_html"
+                    extra_provenance = self._comment_html_provenance(raw_html, comment_id)
+                    extra_provenance["recovery"] = api_error.as_dict()
                 publish = True
             source, provenance = extract_author_comment(content, comment_id)
             provenance["origin"] = origin
+            provenance.update(extra_provenance)
             if publish:
+                if raw_html is not None:
+                    _write_bytes(self.cache_dir / f"issuecomment-{comment_id}.source.html", raw_html)
                 _write_bytes(cache_path, content)
                 _write_json(metadata_path, provenance)
             sources.append(source)

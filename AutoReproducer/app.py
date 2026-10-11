@@ -8,6 +8,7 @@
   （OpenAI 兼容端点 / Key / 模型真实生效）。
 """
 import inspect
+import importlib
 import os
 import sys
 import tempfile
@@ -20,13 +21,18 @@ import streamlit as st
 # 添加项目根目录到路径
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from src.local_llm_settings import load_local_llm_settings
+load_local_llm_settings()
+
 from src.orchestrator import Orchestrator
 from src.llm.llm_client import LLMClient
 from src.audit.audit_logger import AuditLogger
 from src.base_agent import BaseAgent
 from src.corpus import list_papers
-from src.repository_profiles import PROFILE_LABELS, PAPER_TITLE, get_profile
+from src.repository_profiles import PAPER_TITLE
+from src.title_routing import resolve_title_request
 from src.method_budget import CONFIRMATION_RESERVE_SECONDS, optimization_budget_error
+from frontend.display_text import display_text
 from frontend.report_renderer import render_report, build_report_bundle
 from frontend.llm_config import (
     CONNECT_TEST_TIMEOUT,
@@ -34,10 +40,23 @@ from frontend.llm_config import (
     config_missing,
     test_llm_connection,
 )
-from frontend.backend_pipeline import (
-    ProgressStore,
-    run_pipeline_background,
-)
+from frontend import pipeline_entrypoint
+from frontend import repository_entrypoint
+
+if getattr(repository_entrypoint, "REPOSITORY_ENTRYPOINT_API_VERSION", 0) != 2:
+    repository_entrypoint = importlib.reload(repository_entrypoint)
+
+PROFILE_LABELS = repository_entrypoint.profile_labels()
+get_profile = repository_entrypoint.get_profile
+
+# Only refresh the small loader. Older active pipeline modules keep their globals.
+if pipeline_entrypoint.BACKEND_API_VERSION != 4:
+    pipeline_entrypoint = importlib.reload(pipeline_entrypoint)
+
+_pipeline_backend = pipeline_entrypoint.load_backend_pipeline()
+ProgressStore = _pipeline_backend.ProgressStore
+run_pipeline_background = repository_entrypoint.background_entrypoint(
+    _pipeline_backend.run_pipeline_background)
 from frontend.history_manager import (
     list_sessions,
     collect_storage_snapshot,
@@ -60,8 +79,8 @@ except ImportError:
 
 # 页面配置
 st.set_page_config(
-    page_title="AutoReproducer - 论文自动复现系统",
-    page_icon="🔬",
+    page_title="AutoReproducer | 论文复现工作台",
+    page_icon=str(Path(__file__).resolve().parent / "frontend" / "favicon.png"),
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -118,7 +137,7 @@ if snap:
 @st.fragment
 def render_llm_settings():
     """配置和连接测试局部刷新，反馈直接显示在按钮旁。"""
-    with st.expander("🔗 LLM API 配置", expanded=not st.session_state.mock_mode):
+    with st.expander("LLM API 配置", expanded=not st.session_state.mock_mode):
         base_url = st.text_input(
             "API 地址（OpenAI 兼容）",
             value=os.environ.get("LLM_BASE_URL", "https://api.deepseek.com"),
@@ -145,7 +164,7 @@ def render_llm_settings():
 
         st.markdown("---")
         test_clicked = st.button(
-            "🔌 测试 AI 连接", key="test_llm_connection",
+            "测试 AI 连接", key="test_llm_connection",
             disabled=st.session_state.mock_mode,
             use_container_width=True,
             help="真实调用一次 LLM API，验证地址/Key/模型配置可用")
@@ -158,7 +177,7 @@ def render_llm_settings():
                     base_url, api_key, model_name)
 
         if st.session_state.mock_mode:
-            st.caption("🧪 Mock 模式不调用真实 LLM，连接测试不可用；"
+            st.caption("Mock 模式不调用真实 LLM，连接测试不可用；"
                        "关闭 Mock 开关后可输入 API 并测试")
         else:
             result = st.session_state.connection_result
@@ -172,6 +191,32 @@ def render_llm_settings():
                        "（输入留空时回退环境变量）")
 
 
+@st.cache_data(show_spinner=False, max_entries=8)
+def _preview_pdf_input(payload: bytes, mock_mode: bool):
+    """Inspect uploaded bytes once; the backend independently verifies its file."""
+    pdf_module = repository_entrypoint.load_pdf_input()
+    temporary = ""
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as handle:
+            handle.write(payload)
+            temporary = handle.name
+        document = pdf_module.extract_pdf_input(temporary)
+        request = pdf_module.resolve_pdf_request({"pdf_path": temporary, "mock_mode": mock_mode})
+        return {"resolution": request.get("pdf_resolution", {}),
+                "repository_links": list(document.repository_links),
+                "pdf_input": {"sha256": document.sha256, "pages": document.page_count}}
+    except pdf_module.PDFParserUnavailable:
+        return {"parser_pending": True}
+    except pdf_module.PDFInputError as exc:
+        return {"error": str(exc)}
+    finally:
+        if temporary:
+            try:
+                os.unlink(temporary)
+            except OSError:
+                pass
+
+
 @st.fragment
 def render_paper_input():
     """只刷新论文输入；点击启动时主页面重新读取最新选项。"""
@@ -182,6 +227,19 @@ def render_paper_input():
         st.session_state.paper_title = st.text_input(
             "论文标题", value=st.session_state.paper_title,
             placeholder="输入论文标题...", key="paper_title_input")
+        match = resolve_title_request({"paper_title": st.session_state.paper_title,
+                    "mock_mode": st.session_state.mock_mode,
+                    "corpus_paper": None if st.session_state.get("corpus_paper_select", "无") == "无"
+                                    else st.session_state.get("corpus_paper_select")})
+        if match.get("title_resolution"):
+            selected = get_profile(match["experiment_profile"])
+            st.success("已匹配官方作者仓库：" + selected["repository"]["url"])
+            st.markdown(f"[论文]({selected['paper']['url']}) · [作者代码]({selected['repository']['url']})")
+            st.caption("将核验固定版本并执行：" + selected["label"])
+            if selected.get("adapter_id"):
+                st.caption("结论限于选定官方方法实验；论文完整基准需要另行适配。")
+            st.caption("该在线审核使用作者源码与项目适配证据。")
+            st.checkbox("在线核验匹配的作者代码与实验依据", value=True, key="title_llm_review")
     elif input_mode == "上传PDF":
         uploaded_file = st.file_uploader(
             "上传PDF文件", type=["pdf"], key="pdf_uploader",
@@ -191,9 +249,47 @@ def render_paper_input():
         else:
             st.success(f"已上传：{uploaded_file.name}"
                        f"（{format_size(uploaded_file.size)}）")
+            preview = _preview_pdf_input(uploaded_file.getvalue(), st.session_state.mock_mode)
+            if preview.get("error"):
+                st.error(preview["error"])
+            elif preview.get("resolution"):
+                selected = get_profile(preview["resolution"]["profile"])
+                resolution = preview["resolution"]
+                if resolution.get("source") == "pdf_author_code_repository":
+                    st.success("PDF 原文作者代码声明已匹配实验：" + resolution["discovery_repository_url"])
+                    st.caption("作者主仓库与实际训练仓库分别记录；经 ReZero-examples 的 README 定位训练仓库："
+                               + resolution["training_repository_url"])
+                    with st.expander("作者仓库到训练实验的引用链"):
+                        for hop in resolution["repository_relationship"]["hops"]:
+                            st.markdown(f"[{hop['repository_url']} · README 第 {hop['line']} 行]"
+                                        f"({hop['source_url']}) → [{hop['target_repository_url']}]"
+                                        f"({hop['linked_url']})")
+                            st.text(hop["quote"])
+                else:
+                    st.success("PDF 首页已匹配作者仓库：" + selected["repository"]["url"])
+                st.markdown(f"[论文]({selected['paper']['url']}) · [作者代码]({selected['repository']['url']})")
+                st.caption("将执行：" + selected["label"] + "；结论按该实验的验收范围给出。")
+                st.caption("该在线审核使用作者源码与项目适配证据。")
+            else:
+                st.caption("将解析论文正文并核验资源；信息不足会明确报告，不能据占位代码认定复现。")
+            links = preview.get("repository_links", [])
+            if links:
+                primary = next((link for link in links if link.get("is_author_code")), None)
+                if primary:
+                    st.success("PDF 原文代码声明链接：" + primary["url"])
+                    st.caption(f"来源：第 {primary['page']} 页；将优先于模型猜测和关键词搜索。")
+                with st.expander("PDF 仓库链接提取依据"):
+                    for link in links[:12]:
+                        kind = {"author_code_statement": "代码公开声明", "reference": "参考文献",
+                                "repository_link": "仓库链接"}.get(link["evidence_type"], "仓库链接")
+                        st.markdown(f"[第 {link['page']} 页 · {kind}]({link['url']})")
+                        if link.get("context"):
+                            st.text(link["context"])
+            if not preview.get("error"):
+                st.checkbox("在线核验匹配的作者代码与实验依据", value=True, key="pdf_llm_review")
     else:
         st.selectbox("真实论文实验", list(PROFILE_LABELS),
-                     format_func=lambda key: PROFILE_LABELS[key], key="experiment_profile")
+                     format_func=lambda key: display_text(PROFILE_LABELS[key]), key="experiment_profile")
         selected = get_profile(st.session_state.experiment_profile)
         st.caption(selected["paper"]["title"])
         st.markdown(f"[论文]({selected['paper']['url']}) · [作者代码]({selected['repository']['url']})")
@@ -215,7 +311,7 @@ def render_paper_input():
                     budget_error = optimization_budget_error(minutes * 60)
                     if budget_error:
                         st.warning(budget_error)
-            st.caption("先选择“准备实验环境”并运行一次；准备完成后再运行实验。"
+            st.caption("运行时会自动准备缺失环境、检查依赖并修复缓存；也可单独准备环境。"
                        "快速档目标为五分钟，建议尚未实测有效；验证建议使用独立长任务预算。"
                        "智能建议会把指标与训练摘要交给已配置的 API。")
             return
@@ -230,18 +326,18 @@ def render_paper_input():
 with st.sidebar:
     st.markdown("""
     <div class="sidebar-brand">
-        <span class="brand-icon">✳</span>
-        <div><strong>AutoReproducer</strong><small>RESEARCH WORKSPACE</small></div>
+        <span class="brand-icon" aria-hidden="true">AR</span>
+        <div><strong>AutoReproducer</strong><small>论文复现与实验核验</small></div>
     </div>
     <div class="sidebar-intro">配置复现任务</div>
-    <p class="sidebar-help">选择运行模式、提交论文，然后启动研究流水线。</p>
+    <p class="sidebar-help">设置运行环境与论文来源，提交可追踪的复现实验。</p>
     """, unsafe_allow_html=True)
 
 # 模式选择
     st.session_state.mock_mode = st.toggle(
-        "🧪 Mock模式（无需API）",
+        "Mock 演示模式（无需 API）",
         value=st.session_state.mock_mode,
-        help="启用Mock模式可直接演示，无需连接任何LLM服务")
+        help="演示界面与流程，不执行真实论文实验或调用模型服务")
 
     # Docker 沙箱执行开关（真实模式生效）。
     # 默认**关闭**：容器沙箱的代价是每次运行都要在容器里现装依赖（tmpfs 随
@@ -255,7 +351,7 @@ with st.sidebar:
         st.session_state.docker_probe = None       # None = 尚未探测
 
     # 引擎存活探测：CLI 二进制在 PATH 上 ≠ Docker Desktop 的引擎在跑。
-    # 只看 `shutil.which("docker")` 会把「装了没启动」报成「✅ 已就绪」，
+    # 只看 `shutil.which("docker")` 会把「装了没启动」报成「已就绪」，
     # 随后 `docker run` 甩出 npipe 原始报错（用户实测踩到）。
     # 只在真实模式探测：Mock 模式不执行代码、用不上 Docker，也不必让
     # Mock 用例背上真实探测。结果缓存进 session_state —— 每轮 rerun 都
@@ -272,22 +368,22 @@ with st.sidebar:
             st.session_state.use_docker = False
 
     st.session_state.use_docker = st.toggle(
-        "🐳 Docker 沙箱执行（真实模式）",
+        "Docker 沙箱执行（真实模式）",
         value=st.session_state.use_docker,
         disabled=st.session_state.mock_mode or not docker_available,
         help="真实模式下启用 Docker 隔离执行：依赖在容器内安装，"
              "不污染本机环境；未安装 Docker 或 Mock 模式时自动降级为本地隔离执行")
     if st.session_state.mock_mode:
-        st.caption("🧪 Mock 模式不执行真实代码，无需 Docker")
+        st.caption("Mock 模式不执行真实代码，无需 Docker")
     elif not docker_available:
-        st.caption(f"⚠️ {docker_reason}，将使用本地隔离执行（依赖安装在隔离目录）")
-        if st.button("🔄 重新检测 Docker", key="docker_recheck",
+        st.caption(f"{docker_reason}，将使用本地隔离执行（依赖安装在隔离目录）")
+        if st.button("重新检测 Docker", key="docker_recheck",
                      use_container_width=True,
                      help="启动 Docker Desktop 后点此重新探测，无需刷新页面"):
             st.session_state.docker_probe = None
             st.rerun()
     else:
-        st.caption("✅ Docker 已就绪 ("
+        st.caption("Docker 已就绪 ("
                    + ("将使用容器沙箱，首跑会在容器内安装依赖，偏慢"
                       if st.session_state.use_docker
                       else "未启用容器沙箱，将使用本地隔离执行")
@@ -330,14 +426,36 @@ with st.sidebar:
         st.caption(f"当前任务会使用 {corpus_paper} 的依赖和参考指标。"
                    "仅运行上传的 PDF 时，请将语料对照设为“无”。")
 
+    title_resolution = None
+    if input_mode == "论文标题":
+        match = resolve_title_request({"paper_title": st.session_state.paper_title,
+                                      "corpus_paper": corpus_paper,
+                                      "mock_mode": st.session_state.mock_mode})
+        if match.get("title_resolution"):
+            experiment_profile = match["experiment_profile"]
+            title_resolution = match["title_resolution"]
+            # Title input runs the matched baseline. Preset controls belong to
+            # that input mode and must not leak a previous long optimization.
+            method_selected = False
+            requires_api = bool(st.session_state.get("title_llm_review", True))
+    elif input_mode == "上传PDF" and uploaded_file and not corpus_paper:
+        preview = _preview_pdf_input(uploaded_file.getvalue(), st.session_state.mock_mode)
+        if preview.get("resolution"):
+            # The backend re-reads the immutable upload and rebuilds its evidence.
+            # Choosing the reviewed route here also selects the fresh worker when
+            # this Streamlit process still owns cached earlier adapters.
+            experiment_profile = preview["resolution"]["profile"]
+            method_selected = False
+            requires_api = bool(st.session_state.get("pdf_llm_review", True))
+
     # 启动 / 重置按钮
     col1, col2 = st.columns(2)
     with col1:
-        start_btn = st.button("🚀 开始复现", type="primary",
+        start_btn = st.button("开始复现", type="primary",
                               use_container_width=True,
                               disabled=st.session_state.running)
     with col2:
-        reset_btn = st.button("🔄 重置", use_container_width=True,
+        reset_btn = st.button("重置", use_container_width=True,
                               disabled=st.session_state.running)
         if st.session_state.running:
             st.caption("任务结束后可重置")
@@ -346,18 +464,9 @@ with st.sidebar:
     st.markdown("---")
     st.markdown('<div class="sidebar-section-label"><span>03</span> 系统状态</div>',
                 unsafe_allow_html=True)
-    state_colors = {
-        "INIT": "⚪", "READ_PAPER": "📖", "FIND_RESOURCES": "🔍",
-        "BUILD_ENV": "🔧", "EXECUTE_CODE": "⚡", "VALIDATE": "✅",
-        "OPTIMIZING": "🧪", "OPTIMIZED": "🏆",
-        "OPTIMIZE": "🧪",
-        "GENERATE_REPORT": "📝", "COMPLETED": "🎉", "ERROR": "❌",
-    }
     st.markdown(
-        f'<div class="sidebar-status"><span class="status-pulse"></span>'
-        f'<span>当前状态</span><strong>'
-        f'{state_colors.get(st.session_state.current_state, "⚪")} '
-        f'{escape(st.session_state.current_state)}</strong></div>',
+        f'<div class="sidebar-status"><span>当前状态</span>'
+        f'<strong>{escape(st.session_state.current_state)}</strong></div>',
         unsafe_allow_html=True)
 
 
@@ -407,9 +516,9 @@ if start_btn and not st.session_state.running:
         if (requires_api and not st.session_state.mock_mode
                 and not (api_key.strip()
                          or os.environ.get("LLM_API_KEY", "").strip())):
-            st.warning("⚠️ 未填写 API Key：如果上游服务需要鉴权"
+            st.warning("未填写 API Key：如果上游服务需要鉴权"
                        "（如 DeepSeek/OpenAI），调用会返回 401 错误文本；"
-                       "建议先在侧边栏填写 Key 并点击「🔌 测试 AI 连接」验证。")
+                       "建议先在侧边栏填写 Key 并点击「测试 AI 连接」验证。")
         tmp_pdf = _save_uploaded_pdf(uploaded_file) if uploaded_file else ""
         progress_file = _new_progress_file()
         st.session_state.progress_file = progress_file
@@ -426,16 +535,19 @@ if start_btn and not st.session_state.running:
             paper_title=pt, pdf_path=tmp_pdf,
             corpus_paper=corpus_paper,
             experiment_profile=experiment_profile,
-            prepare_only=(st.session_state.get("method_action") == "仅准备源码和命令" if method_selected else
+            title_resolution=title_resolution,
+            prepare_only=False if title_resolution or tmp_pdf else (st.session_state.get("method_action") == "仅准备源码和命令" if method_selected else
                           bool(st.session_state.get("repository_prepare_only")) if experiment_profile else False),
             prepare_environment=method_selected and st.session_state.get("method_action") == "准备实验环境",
             optimization_mode=st.session_state.get("method_optimization", "off") if method_selected else "off",
             max_candidates=int(st.session_state.get("method_max_candidates", 3)),
             budget_seconds=int(st.session_state.get("method_budget_minutes", 120)) * 60,
-            use_llm_review=(bool(st.session_state.get("method_llm_review")) if method_selected else
+            use_llm_review=(bool(st.session_state.get("title_llm_review", True)) if title_resolution else
+                             bool(st.session_state.get("pdf_llm_review", True)) if tmp_pdf else
+                            bool(st.session_state.get("method_llm_review")) if method_selected else
                             bool(st.session_state.get("repository_llm_review")) if experiment_profile else False),
             allow_result_summary_review=(bool(st.session_state.get("repository_result_review"))
-                                         if experiment_profile else False),
+                                         if experiment_profile and not title_resolution and not tmp_pdf else False),
             model_name=model_name, base_url=base_url,
             api_key=api_key,
             mock_mode=st.session_state.mock_mode,
@@ -444,7 +556,7 @@ if start_btn and not st.session_state.running:
                         and docker_available
                         and st.session_state.use_docker),
             cleanup_pdf=True)   # 临时 PDF 由后台线程负责删除
-        st.session_state.workspace_tabs = "📋 流水线状态"
+        st.session_state.workspace_tabs = "流水线状态"
         st.rerun()
 
 # 重置按钮处理
@@ -478,19 +590,13 @@ _hero_status = ("running" if st.session_state.running else
 st.markdown(f"""
 <div class="hero">
     <div class="hero-top">
-        <span class="hero-eyebrow"><span class="eyebrow-dot"></span> AUTO REPRODUCER / 研究工作台</span>
+        <span class="hero-eyebrow">AUTOREPRODUCER / RESEARCH WORKSPACE</span>
         <span class="hero-status hero-status-{_hero_status}">{escape(_state_label)}</span>
     </div>
     <div class="hero-content">
         <div>
-            <h1>让研究成果，<br><span>被可靠地复现。</span></h1>
-            <p>从论文解析到实验执行、结果核验与报告生成，<br>在一个工作台中追踪完整的复现过程。</p>
-        </div>
-        <div class="hero-visual" aria-hidden="true">
-            <div class="visual-orbit orbit-one"></div><div class="visual-orbit orbit-two"></div>
-            <div class="visual-core">✳</div>
-            <span class="visual-node node-one"></span><span class="visual-node node-two"></span>
-            <span class="visual-node node-three"></span>
+            <h1>论文复现工作台</h1>
+            <p>依据论文与作者代码组织实验，记录执行过程、独立评估与复现结论。</p>
         </div>
     </div>
     <div class="hero-steps"><span><b>01</b> 解析论文</span><i>→</i><span><b>02</b> 准备实验</span><i>→</i><span><b>03</b> 执行与核验</span><i>→</i><span><b>04</b> 生成报告</span></div>
@@ -499,26 +605,29 @@ st.markdown(f"""
 
 # 新版 Streamlit 支持按所选标签延迟执行；旧版保留显式加载入口。
 _lazy_tabs = "on_change" in inspect.signature(st.tabs).parameters
+_previous_tab = st.session_state.get("workspace_tabs", "")
+if _previous_tab and display_text(_previous_tab) != _previous_tab:
+    st.session_state.workspace_tabs = display_text(_previous_tab)
 _tab_options = {"key": "workspace_tabs", "on_change": "rerun"} if _lazy_tabs else {}
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "📋 流水线状态", "📄 复现报告", "📜 审计日志", "🔍 状态机", "📂 历史记录",
+    "流水线状态", "复现报告", "审计日志", "状态机", "历史记录",
 ], **_tab_options)
 
 # ===== Tab 1: 流水线状态 =====
 with tab1:
-    st.markdown("""<div class="section-heading"><div><span class="section-kicker">LIVE PIPELINE</span>
+    st.markdown("""<div class="section-heading"><div><span class="section-kicker">01 / EXPERIMENT WORKFLOW</span>
     <h2>复现流水线</h2><p>按实际执行顺序追踪各阶段；同一 Agent 的不同任务分别显示。</p></div>
     <span class="section-aside">准备 · 执行 · 核验 · 报告</span></div>""",
                 unsafe_allow_html=True)
 
     # ---------- 后台复现实时进度（轮询进度文件） ----------
     if snap and snap.get("error"):
-        st.error(f"❌ 后台流水线异常: {snap['error']}")
+        st.error(f"后台流水线异常: {snap['error']}")
 
     if st.session_state.running and pf:
         if st_autorefresh is not None:
             st_autorefresh(interval=2000, key=f"ar_{pf}")
-            st.info("🔄 复现流水线正在后台运行，页面每 2 秒自动刷新，"
+            st.info("复现流水线正在后台运行，页面每 2 秒自动刷新，"
                     "实时展示各阶段进度。")
         else:
             st.warning("未安装 streamlit-autorefresh，页面不会自动刷新；"
@@ -527,10 +636,24 @@ with tab1:
     stages = st.session_state.pipeline_stages
     execution_context = (snap or {}).get("execution_context") or {}
     active_executions = (snap or {}).get("active_executions") or []
+    active_runs = (snap or {}).get("active_runs") or []
+    active_workers = (snap or {}).get("active_workers") or []
+    pdf_source = (snap or {}).get("pdf_resolution") or {}
+    if pdf_source:
+        selected = get_profile(pdf_source["profile"])
+        st.caption("已根据 PDF 首页核验论文：" + pdf_source["title"])
+        st.markdown(f"作者仓库：[源码]({selected['repository']['url']}) · PDF SHA-256：`{pdf_source['sha256']}`")
+    has_method_study = any(stage["id"] == "method_advice" and stage.get("status") != "skipped"
+                           for stage in stages)
     if st.session_state.running and stages:
-        st.info("整体任务仍在运行。单个阶段或步骤完成，不代表整个复现任务已结束。")
+        st.info("整体任务仍在运行：代码仍在执行。" if active_executions else
+                "整体任务仍在运行：执行轮次尚未结束，正在等待后续步骤或清理。" if active_runs else
+                "整体任务仍在运行：等待后台进程返回并完成清理。" if active_workers and (snap or {}).get("finalization_pending") else
+                "整体任务仍在运行。单个阶段或步骤完成，不代表整个复现任务已结束。")
         for context in active_executions:
             st.caption("当前执行：" + context["label"])
+    if (snap or {}).get("finalization_pending"):
+        st.warning("已收到流水线结束请求，正在等待所属执行退出并清理；尚未确认任务结束。")
     agent_cards = []
     for i, stage in enumerate(stages):
         status = stage.get("status", "waiting")
@@ -542,12 +665,40 @@ with tab1:
         elif status == "error" and stage.get("outcome") == "execution_failed":
             status_text = "执行失败"
         status_class = status if status in {"success", "error", "running"} else "waiting"
-        title = stage.get("title", stage.get("agent", "执行阶段"))
-        desc = stage.get("description", "")
+        title = display_text(stage.get("title", stage.get("agent", "执行阶段")))
+        desc = display_text(stage.get("description", ""))
+        agent = display_text(stage.get("agent", ""))
+        phase_executions = [context for context in active_executions
+                            if context.get("phase_id") == stage["id"]]
+        phase_runs = [run for run in active_runs if run.get("phase_id") == stage["id"]]
         # Historical plans may call this role "complete training". Its actual
         # responsibility is code execution, regardless of the paper or commands.
-        if stage.get("agent") in {"CodeExecutor", "⚡ CodeExecutor"}:
+        if agent == "CodeExecutor":
             title = "代码执行"
+            if has_method_study and stage["id"] == "execute_repository":
+                title = "基线代码执行"
+                desc = "基线训练与测试；后续优化试验在下方单独显示。"
+                if status == "success":
+                    status_text = "基线执行完成"
+            elif status == "success" and st.session_state.running and active_executions:
+                title = "代码执行（此前轮次）"
+                status_text = "此前轮次完成"
+        if has_method_study and stage["id"] == "verify_protocol":
+            title = "基线协议与产物核验"
+            desc = "核验基线轮次的协议与产物。"
+            if status == "success":
+                status_text = "基线核验完成"
+        if stage["id"] == "method_advice" and status == "running" and phase_executions:
+            title = "优化试验：代码执行"
+            status_text = "代码执行中"
+            agent += " · CodeExecutor"
+            desc = "正在执行优化试验代码，当前轮次完成后继续后续处理。"
+        elif stage["id"] == "method_advice" and status == "running" and phase_runs:
+            title = "优化试验：执行轮次未结束"
+            status_text = "执行轮次未结束"
+            agent += " · CodeExecutor"
+        if stage.get("completion_pending"):
+            status_text = "结束确认中"
         details = []
         if stage.get("attempt", 0) > 1:
             details.append(f"第 {stage['attempt']} 次尝试")
@@ -559,10 +710,11 @@ with tab1:
             details.append(outcome)
         if stage.get("reason"):
             details.append(str(stage["reason"]))
+        if stage.get("completion_reason"):
+            details.append(stage["completion_reason"])
         if status == "running":
-            details.extend("当前执行：" + context["label"] for context in active_executions
-                           if context.get("phase_id") == stage["id"])
-        detail_text = escape(" · ".join(details)).replace("\r", "").replace("\n", "<br>")
+            details.extend("当前执行：" + context["label"] for context in phase_executions)
+        detail_text = escape(display_text(" · ".join(details))).replace("\r", "").replace("\n", "<br>")
         detail_html = f'<p>{detail_text}</p>' if details else ""
         # 连续 HTML 不插入空行，避免 Markdown 将后续卡片识别为缩进代码块。
         agent_cards.append(
@@ -570,7 +722,7 @@ with tab1:
             f'<div class="agent-top"><span class="agent-index">{i + 1:02d} / {len(stages):02d}</span>'
             f'<span class="agent-status">{status_text}</span></div>'
             f'<div class="agent-name">{escape(title)}</div>'
-            f'<div class="agent-title">{escape(stage.get("agent", ""))}</div>'
+            f'<div class="agent-title">{escape(agent)}</div>'
             f'<p>{escape(desc)}</p>{detail_html}</div>')
     if agent_cards:
         st.markdown('<div class="agent-grid">' + ''.join(card.strip() for card in agent_cards) + '</div>',
@@ -578,13 +730,24 @@ with tab1:
         completed = sum(stage.get("status") == "success" for stage in stages)
         enabled_count = sum(stage.get("status") != "skipped" for stage in stages)
         progress = completed / enabled_count if enabled_count else 0
-        st.progress(progress, text=f"阶段完成: {completed}/{enabled_count}（复现结论以数值验收为准）")
+        task_status = "整体任务仍在运行；" if st.session_state.running else ""
+        st.progress(progress, text=f"阶段完成: {completed}/{enabled_count}（{task_status}复现结论以数值验收为准）")
         st.caption("上方仅按阶段计数，不代表耗时比例；执行轮数和步骤数以实际运行记录为准。")
+        with st.expander("各部分结束判定"):
+            st.caption("阶段负责人返回结果，且所属执行轮次退出并完成清理，才确认该部分结束。"
+                       "步骤间隙、日志中的最终轮数和完成请求都不能代替结束确认。")
+            st.table([{"阶段": display_text(stage.get("title", stage["id"])),
+                       "结束条件": display_text(stage.get("completion_rule", "负责人返回结果且所属执行全部结束")),
+                       "结束已确认": "是" if stage.get("completion_confirmed") else "否"}
+                      for stage in stages])
     else:
         st.info("启动后将按实际执行顺序显示阶段状态。")
     if snap and snap.get("execution_output"):
         with st.expander("代码执行输出（最近16000字符）", expanded=True):
-            if execution_context:
+            if active_executions:
+                for context in active_executions:
+                    st.caption(f"正在执行：{context['label']} · 进行中")
+            elif execution_context:
                 context_status = {"running": "进行中", "success": "本步骤完成", "error": "失败",
                                   "interrupted": "未正常结束"}.get(
                     execution_context.get("status"), "")
@@ -597,7 +760,7 @@ with tab1:
     if st.session_state.result:
         result = st.session_state.result
         st.markdown("---")
-        st.markdown("### 📊 运行摘要")
+        st.markdown("### 运行摘要")
         stats = result.get("audit_stats", {})
         c1, c2, c3, c4, c5 = st.columns(5)
         c1.metric("总步骤数", stats.get("total_steps", 0))
@@ -613,7 +776,22 @@ with tab1:
                 st.error("实验未通过：" + validation.get("reason", "查看报告和执行日志"))
             elif validation.get("status") == "not_reproduced":
                 st.warning("完整实验已运行，论文数值验收未通过：" + validation.get("reason", "查看指标差异"))
-            elif validation.get("status") in {"prepared", "environment_prepared", "inconclusive", "smoke_passed"}:
+            elif validation.get("status") == "reference_not_met":
+                st.warning("选定论文实验已完成，独立评估数值未达到固定参考：" + validation.get("reason", "查看指标差异"))
+                if (data.get("experiment_spec") or {}).get("adapter_id") == "rezero":
+                    accuracy = ((validation.get("metrics_comparison") or {}).get("actual") or {}).get("top1_accuracy_pct")
+                    if type(accuracy) in (int, float):
+                        st.caption(f"完整 CIFAR-10 测试集 Top-1：{accuracy:.2f}% / 固定验收参考：94.00%。")
+                    st.caption("本次代码执行与协议核验已完成；数值未通过不等于代码执行失败。")
+            elif validation.get("status") == "insufficient_evidence":
+                st.warning("论文证据不足，尚未完成论文实验：" + validation.get("reason", "缺少可核验实现"))
+            elif validation.get("status") == "best_effort":
+                st.warning("已尝试按现有证据重建代码，但不能判定论文复现：" + validation.get("reason", "缺少完整实验协议"))
+            elif validation.get("status") in {"no_reference_metrics", "inconclusive"}:
+                st.warning("复现结论无法验收：" + validation.get("reason", "缺少论文指标或完整执行证据"))
+            elif validation.get("status") in {"not_runnable", "execution_incomplete", "execution_failed"}:
+                st.warning("论文实验未完成：" + validation.get("reason", "代码未运行或执行证据不完整"))
+            elif validation.get("status") in {"prepared", "environment_prepared", "smoke_passed"}:
                 st.info(validation.get("reason", "流程已结束，请查看实验结论"))
             elif validation.get("status") == "method_experiment_completed":
                 optimization = data.get("optimization") or {}
@@ -641,15 +819,19 @@ with tab1:
             elif validation.get("status") == "quality_target_not_met":
                 st.warning("方法实验已运行，但未达到预设工程效果门槛。")
             elif validation.get("is_reproduced") is True:
-                st.success("🎉 完整实验已完成，论文数值验收通过！")
+                if (data.get("experiment_spec") or {}).get("adapter_id") == "rezero":
+                    st.success("ReZero CIFAR-10 完整实验已完成，独立数值验收通过。")
+                    st.caption("本结论限于 ReZero PreActResNet18 的 CIFAR-10 超收敛实验，不覆盖 enwiki8 或整篇论文。")
+                else:
+                    st.success("完整实验已完成，论文数值验收通过。")
             else:
                 st.info("流水线已结束，请查看报告中的复现结论。")
         elif result.get("state") == "ERROR":
-            st.error(f"❌ 流程出错: {result.get('error', '未知错误')}")
+            st.error(f"流程出错: {result.get('error', '未知错误')}")
 
 # ===== Tab 2: 复现报告 =====
 with tab2:
-    st.markdown('<div class="section-heading"><div><span class="section-kicker">RESEARCH OUTPUT</span><h2>复现报告</h2><p>查看实验结论、执行证据与验证结果。</p></div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-heading"><div><span class="section-kicker">02 / REPRODUCTION REPORT</span><h2>复现报告</h2><p>查看实验结论、执行证据与验证结果。</p></div></div>', unsafe_allow_html=True)
     if st.session_state.result and st.session_state.result.get("data", {}).get("report"):
         report = st.session_state.result["data"]["report"]
         # 深色 IDE 面板渲染已回滚（见 CHANGELOG [2026.09.20-12]）：
@@ -658,19 +840,19 @@ with tab2:
         report_path = result.get("report_path") or result["data"].get("report_path")
         render_report(report, report_path, st_module=st)
     else:
-        st.markdown('<div class="empty-state"><span>▤</span><div class="empty-title">报告将在这里生成</div><p>在左侧提交论文并启动复现，完成后即可查看实验报告。</p></div>', unsafe_allow_html=True)
+        st.markdown('<div class="empty-state"><div class="empty-title">报告将在这里生成</div><p>在左侧提交论文并启动复现，完成后即可查看实验报告。</p></div>', unsafe_allow_html=True)
 
 # ===== Tab 3: 审计日志 =====
 with tab3:
-    st.markdown('<div class="section-heading"><div><span class="section-kicker">TRACE & EVIDENCE</span><h2>审计日志</h2><p>按 Agent 和状态筛选，查看每一步的运行记录。</p></div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-heading"><div><span class="section-kicker">03 / AUDIT TRAIL</span><h2>审计日志</h2><p>按 Agent 和状态筛选，查看每一步的运行记录。</p></div></div>', unsafe_allow_html=True)
     if st.session_state.logs:
         col1, col2 = st.columns(2)
         with col1:
             filter_agent = st.selectbox(
-                "按Agent筛选",
+                "按执行角色筛选",
                 ["全部"] + sorted(
                     set(l.get("agent", "") for l in st.session_state.logs)),
-                key="filter_agent_tab3")
+                key="filter_agent_tab3", format_func=display_text)
         with col2:
             filter_status = st.selectbox(
                 "按状态筛选",
@@ -686,20 +868,20 @@ with tab3:
                              if l.get("status") == filter_status]
 
         for log in filtered_logs:
-            status_color = {"SUCCESS": "🟢", "ERROR": "🔴", "START": "🟡",
-                            "RUNNING": "🔄", "WARNING": "🟠"}.get(
-                                log.get("status", ""), "⚪")
+            status_label = {"SUCCESS": "完成", "ERROR": "错误", "START": "开始",
+                            "RUNNING": "运行中", "WARNING": "需注意"}.get(
+                                log.get("status", ""), log.get("status", "记录"))
             with st.expander(
-                f"{status_color} [{log.get('elapsed_sec', 0):.1f}s] "
-                f"{log.get('agent', '?')} - {log.get('action', '?')}"
+                f"{status_label} · {log.get('elapsed_sec', 0):.1f} s · "
+                f"{display_text(log.get('agent', '?'))} · {display_text(log.get('action', '?'))}"
             ):
                 st.json(log)
     else:
-        st.markdown('<div class="empty-state"><span>≡</span><div class="empty-title">暂无运行记录</div><p>启动复现后，这里会记录各 Agent 的执行过程。</p></div>', unsafe_allow_html=True)
+        st.markdown('<div class="empty-state"><div class="empty-title">暂无运行记录</div><p>启动复现后，这里会记录各 Agent 的执行过程。</p></div>', unsafe_allow_html=True)
 
 # ===== Tab 4: 状态机 =====
 with tab4:
-    st.markdown('<div class="section-heading"><div><span class="section-kicker">WORKFLOW MAP</span><h2>状态机定义</h2><p>系统通过有限状态机管理 Agent 的流转与异常恢复。</p></div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-heading"><div><span class="section-kicker">04 / STATE TRANSITIONS</span><h2>状态机定义</h2><p>系统通过有限状态机管理 Agent 的流转与异常恢复。</p></div></div>', unsafe_allow_html=True)
     state_info = """
 ```mermaid
 stateDiagram-v2
@@ -729,7 +911,7 @@ stateDiagram-v2
         {"状态": "READ_PAPER", "说明": "解析论文PDF/标题,提取结构化信息", "Agent": "PaperReader"},
         {"状态": "FIND_RESOURCES", "说明": "查找代码仓库和数据集", "Agent": "ResourceFinder"},
         {"状态": "BUILD_ENV", "说明": "构建环境 + 5轮依赖诊断", "Agent": "EnvBuilder"},
-        {"状态": "EXECUTE_CODE", "说明": "smoke+full 双阶段执行", "Agent": "CodeExecutor"},
+        {"状态": "EXECUTE_CODE", "说明": "冒烟检查与完整实验执行", "Agent": "CodeExecutor"},
         {"状态": "VALIDATE", "说明": "验证结果与论文一致性", "Agent": "ResultValidator"},
         {"状态": "GENERATE_REPORT", "说明": "生成Markdown复现报告", "Agent": "ReportGenerator"},
         {"状态": "COMPLETED", "说明": "流水线完成", "Agent": "—"},
@@ -742,7 +924,7 @@ stateDiagram-v2
 # ===== Tab 5: 历史记录 =====
 def render_history():
     """历史页按需加载，目录统计在本次会话中复用，刷新或清理后更新。"""
-    st.markdown('<div class="section-heading"><div><span class="section-kicker">ARCHIVE & STORAGE</span><h2>复现历史与存储</h2><p>回顾已运行的会话，并管理实验产物与缓存。</p></div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-heading"><div><span class="section-kicker">05 / EXPERIMENT ARCHIVE</span><h2>复现历史与存储</h2><p>回顾已运行的会话，并管理实验产物与缓存。</p></div></div>', unsafe_allow_html=True)
 
     # 删除类操作的反馈：必须跨 rerun 传递。删除后紧跟 st.rerun()，
     # 当次运行的 st.success 会被新一次运行整棵树丢弃，用户看不到任何提示。
@@ -761,7 +943,7 @@ def render_history():
             with open(rp, "r", encoding="utf-8") as fh:
                 report_content = fh.read()
             st.download_button(
-                "⬇️ 下载本次复现报告",
+                "下载本次复现报告",
                 data=report_content,
                 file_name=os.path.basename(rp),
                 mime="text/markdown",
@@ -769,7 +951,7 @@ def render_history():
             )
             try:
                 bundle = build_report_bundle(report_content, rp)
-                st.download_button("⬇️ 下载报告和图片（ZIP）", data=bundle,
+                st.download_button("下载报告和图片（ZIP）", data=bundle,
                                    file_name=Path(rp).stem + ".zip", mime="application/zip",
                                    use_container_width=True)
             except ValueError as exc:
@@ -777,8 +959,8 @@ def render_history():
 
 # -- 存储仪表板 --
     # -- 资源下载/安装监控 --
-    with st.expander("📡 资源下载与安装监控", expanded=True):
-        if st.button("🔄 刷新资源状态", key="resource_refresh",
+    with st.expander("资源下载与安装监控", expanded=True):
+        if st.button("刷新资源状态", key="resource_refresh",
                      use_container_width=True):
             st.session_state.pop("_history_storage", None)
         if "_history_storage" not in st.session_state:
@@ -818,7 +1000,7 @@ def render_history():
                 use_container_width=True, hide_index=True)
 
     # -- 存储仪表板 --
-    st.markdown("#### 💾 存储占用")
+    st.markdown("#### 存储占用")
     try:
         storage = snapshot["storage"]
         cols = st.columns(3)
@@ -844,7 +1026,7 @@ def render_history():
         st.error(f"获取存储统计失败: {e}")
 
     # -- 一键清理 --
-    with st.expander("🧹 清理管理"):
+    with st.expander("清理管理"):
         keep_days = st.slider("保留 runtime 文件天数", 1, 30, 7)
         if st.button("清理过期/终态 runtime 文件", use_container_width=True,
                      help="删除已结束复现（done/error）遗留的进度文件，以及超过保留天数的旧进度文件"):
@@ -856,7 +1038,7 @@ def render_history():
 
         # -- 依赖缓存：不随历史记录一起删（跨会话共享，删了要重新下载） --
         st.markdown("---")
-        st.markdown("**📦 依赖缓存**（跨会话共享，不随历史记录删除）")
+        st.markdown("**依赖缓存**（跨会话共享，不随历史记录删除）")
         st.caption("隔离安装按**依赖清单内容**哈希寻址，同一份依赖跨论文复用。"
                    "删掉后下次执行同一依赖要重新下载安装，因此不并入"
                    "「清空历史」；需要腾空间时才在这里单独清。")
@@ -898,7 +1080,7 @@ def render_history():
             confirm_deps = st.checkbox(
                 "我确认删除所选依赖缓存（下次执行同一依赖需重新下载安装）",
                 key="confirm_deps_del")
-            if st.button(f"🗑️ 删除所选 {len(picked_deps)} 个依赖目录",
+            if st.button(f"删除所选 {len(picked_deps)} 个依赖目录",
                          key="deps_del_btn", use_container_width=True,
                          type="secondary",
                          disabled=not picked_deps or not confirm_deps):
@@ -915,11 +1097,11 @@ def render_history():
             st.caption("暂无依赖缓存。")
 
         st.markdown("---")
-        st.markdown("**🗑️ 历史会话清理**（危险操作，请谨慎）")
+        st.markdown("**历史会话清理**（危险操作，请谨慎）")
         confirm_clear = st.checkbox(
             "我确认清空全部历史复现会话（实验账本/审计日志/复现报告/runtime 进度）",
             key="confirm_clear_all")
-        if st.button("🧹 清空全部历史", use_container_width=True,
+        if st.button("清空全部历史", use_container_width=True,
                      type="secondary",
                      disabled=not confirm_clear):
             removed, freed = clear_sessions()
@@ -931,7 +1113,7 @@ def render_history():
             st.rerun()
 
     # -- 历史会话列表 --
-    st.markdown("#### 📋 历史复现会话")
+    st.markdown("#### 历史复现会话")
     try:
         sessions = list_sessions()
         if not sessions:
@@ -963,12 +1145,12 @@ def render_history():
             # 必须在下方 checkbox 实例化「之前」写 session_state：Streamlit
             # 不允许在 widget 创建后修改它的状态（会抛 StreamlitAPIException）。
             b1, b2, _pad = st.columns([1, 1, 3])
-            if b1.button("☑️ 全选可见", key="hist_select_all",
+            if b1.button("全选可见", key="hist_select_all",
                          use_container_width=True, disabled=not visible):
                 for s in visible:
                     st.session_state[f"hist_chk_{s['session_id']}"] = True
                 st.rerun()
-            if b2.button("▫️ 清除选择", key="hist_clear_sel",
+            if b2.button("清除选择", key="hist_clear_sel",
                          use_container_width=True):
                 for s in sessions:   # 含被筛选隐藏的，不留幽灵勾选
                     st.session_state[f"hist_chk_{s['session_id']}"] = False
@@ -977,7 +1159,7 @@ def render_history():
             st.caption(f"共 {len(sessions)} 条 · 可见 {len(visible)} 条"
                        f"（勾选左侧方框即可，无需展开）")
             if any(s.get("state") == "RUNNING" for s in visible):
-                st.caption("⚠️ 可见列表含 RUNNING 会话：多为异常中断的残留；"
+                st.caption("可见列表含 RUNNING 会话：多为异常中断的残留；"
                            "若该复现仍在运行，删除会丢失它的记录"
                            "（被占用的文件自动跳过）。")
 
@@ -986,9 +1168,9 @@ def render_history():
             else:
                 for sess in visible:
                     sid = sess["session_id"]
-                    title = sess.get("paper_title", "未知论文")
+                    title = display_text(sess.get("paper_title", "未知论文"))
                     state = sess.get("state", "未知")
-                    state_icon = {"COMPLETED": "✅", "ERROR": "❌"}.get(state, "⏳")
+                    state_label = {"COMPLETED": "已结束", "ERROR": "异常", "RUNNING": "运行中"}.get(state, state)
                     duration = sess.get("duration_sec", 0)
                     llm_calls = sess.get("llm_calls", 0)
                     log_entries = sess.get("log_entries", 0)
@@ -999,7 +1181,7 @@ def render_history():
                     c_chk.checkbox(f"选择 {sid}", key=f"hist_chk_{sid}",
                                    label_visibility="collapsed")
                     with c_body.expander(
-                            f"{state_icon} [{sid}] {title[:40] or '无标题'}..."):
+                            f"{state_label} · {title[:40] or '无标题'}{'…' if len(title) > 40 else ''} · {sid}"):
                         m1, m2, m3 = st.columns(3)
                         m1.metric("状态", state)
                         m2.metric("耗时", f"{duration:.1f}s")
@@ -1011,7 +1193,7 @@ def render_history():
                             with open(report_path, "r", encoding="utf-8") as fh:
                                 report_data = fh.read()
                             st.download_button(
-                                "⬇️ 下载报告",
+                                "下载报告",
                                 data=report_data,
                                 file_name=os.path.basename(report_path),
                                 mime="text/markdown",
@@ -1035,7 +1217,7 @@ def render_history():
                         confirm_del = st.checkbox(
                             "确认删除本会话（账本/日志/报告/progress 一并删除）",
                             key=f"confirm_del_{sid}")
-                        if st.button("🗑️ 删除本会话", key=f"del_btn_{sid}",
+                        if st.button("删除本会话", key=f"del_btn_{sid}",
                                      type="secondary",
                                      disabled=not confirm_del):
                             removed, freed = delete_session(sid)
@@ -1049,7 +1231,7 @@ def render_history():
                 # 已选必须在循环「之后」统计：checkbox 的勾选值在 widget
                 # 实例化时才写入 session_state，循环前算会滞后一次交互。
                 st.markdown("---")
-                st.markdown("**🗑️ 批量删除所选会话**（危险操作，请谨慎）")
+                st.markdown("**批量删除所选会话**（危险操作，请谨慎）")
                 selected = [
                     s for s in visible
                     if st.session_state.get(f"hist_chk_{s['session_id']}", False)
@@ -1060,7 +1242,7 @@ def render_history():
                 confirm_batch = st.checkbox(
                     "我确认批量删除以上所选会话（账本/日志/报告/progress 一并删除）",
                     key="confirm_batch_del")
-                if st.button(f"🗑️ 删除所选 {len(selected)} 条",
+                if st.button(f"删除所选 {len(selected)} 条",
                              key="batch_del_btn", type="secondary",
                              disabled=not selected or not confirm_batch):
                     with st.spinner("正在删除..."):
@@ -1091,6 +1273,6 @@ with tab5:
 # 底部信息
 st.markdown("""
 <div class="app-footer">
-    <span>✳ AutoReproducer</span><span>v0.2.0 · 让复现过程清晰可见</span>
+    <span>AutoReproducer</span><span>论文复现实验管理 · v0.2.0</span>
 </div>
 """, unsafe_allow_html=True)

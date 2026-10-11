@@ -42,6 +42,7 @@ def test_method_interruption_preserves_verified_baseline_and_final_run_state(tmp
     adapter=SimpleNamespace(prepare_dataset=Mock(return_value={}),materialize=Mock(return_value={}),
         public_sources=Mock(return_value=[]),
         steps=Mock(return_value=[{'id':'train','argv':['python','-c','print(1)']}]),
+        verify_environment=Mock(),
         verify=Mock(return_value=baseline))
     monkeypatch.setattr('src.method_reproduction.get_adapter',lambda p:adapter)
     def export(root,profile,workspace,**kwargs):

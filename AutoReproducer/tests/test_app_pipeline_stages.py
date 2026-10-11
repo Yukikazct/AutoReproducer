@@ -157,7 +157,7 @@ def test_arbitrary_execution_steps_show_task_running_after_one_phase_finishes(ap
     load(app, path)
     html = cards(app)
     assert "作者完整训练与测试" not in html
-    assert "代码执行" in html and "本阶段完成" in html
+    assert "代码执行（此前轮次）" in html and "此前轮次完成" in html
     assert "当前执行：代码执行 · 第 1 轮 · 步骤 2" in html
     assert any("整体任务仍在运行" in notice.value for notice in app.info)
     assert any("整体任务运行中" in item.value for item in app.markdown)

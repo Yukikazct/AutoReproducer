@@ -293,52 +293,92 @@ class RepositoryRunner:
         except (OSError, ValueError, subprocess.SubprocessError) as exc:
             diagnostic = str(exc)
         finally:
-            if process is not None:
-                if job is not None:
+            try:
+                if process is not None:
+                    if job is not None:
+                        job.close()
+                    if not group_killed:
+                        cleanup = self._kill_group(process)
+                        if cleanup:
+                            cleanup_errors.append(cleanup)
+                    process.wait(timeout=5)
+                elif job is not None:
                     job.close()
-                if not group_killed:
-                    cleanup = self._kill_group(process)
-                    if cleanup:
-                        cleanup_errors.append(cleanup)
-                process.wait(timeout=5)
-            elif job is not None:
-                job.close()
-        stdout = stdout_path.read_text(encoding="utf-8", errors="replace") if stdout_path.exists() else ""
-        raw_stderr = stderr_path.read_text(encoding="utf-8", errors="replace") if stderr_path.exists() else ""
-        stderr, phase = CodeExecutorAgent._decode_docker_phase(raw_stderr)
-        timed_out = timed_out or bool(phase.get("timeout"))
+            except BaseException:
+                if interrupted is None:
+                    raise
         if interrupted is not None:
-            timed_out, exit_code = False, 130
-        elif timed_out:
-            exit_code = 124
-            diagnostic = f"repository step {step['id']} timed out after {step['timeout_s']:g}s"
-        if cleanup_errors:
-            diagnostic += ("; " if diagnostic else "") + "; ".join(cleanup_errors)
-            if exit_code == 0:
-                exit_code = -2
-        if diagnostic:
-            stderr += ("\n" if stderr and not stderr.endswith("\n") else "") + diagnostic + "\n"
-            with stderr_path.open("a", encoding="utf-8") as stream:
-                stream.write(diagnostic + "\n")
-        if not stdout_path.exists():
-            stdout_path.write_text("", encoding="utf-8")
-        record.update(success=exit_code == 0, exit_code=exit_code, stdout=stdout,
-                      stderr=stderr, timed_out=timed_out, cancelled=interrupted is not None,
-                      elapsed_s=round(time.monotonic() - started, 3))
-        # Declared evidence is captured whatever the verdict was; a failed step's
-        # partial output is often the thing a later diagnosis needs.
-        record["artifacts"] = self._capture(root, run_dir, step, emit) if step["artifacts"] else []
-        (run_dir / f"{step['id']}.json").write_text(
-            json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
-        emit({"type": "repository_step", "step_id": step["id"],
-              "status": "interrupted" if interrupted is not None else "success" if record["success"] else "error", **record})
-        if interrupted is not None:
+            # Retain a cancellation record even if later artifact/log bookkeeping
+            # fails; those failures must not replace the caller's interruption.
+            record.update(success=False, exit_code=130, stdout="", stderr=diagnostic,
+                          timed_out=False, cancelled=True, artifacts=[])
             interrupted.repository_step_record = record
+        try:
+            stdout = stdout_path.read_text(encoding="utf-8", errors="replace") if stdout_path.exists() else ""
+            raw_stderr = stderr_path.read_text(encoding="utf-8", errors="replace") if stderr_path.exists() else ""
+            stderr, phase = CodeExecutorAgent._decode_docker_phase(raw_stderr)
+            timed_out = timed_out or bool(phase.get("timeout"))
+            if interrupted is not None:
+                timed_out, exit_code = False, 130
+            elif timed_out:
+                exit_code = 124
+                diagnostic = f"repository step {step['id']} timed out after {step['timeout_s']:g}s"
+            if cleanup_errors:
+                diagnostic += ("; " if diagnostic else "") + "; ".join(cleanup_errors)
+                if exit_code == 0:
+                    exit_code = -2
+            if diagnostic:
+                stderr += ("\n" if stderr and not stderr.endswith("\n") else "") + diagnostic + "\n"
+                with stderr_path.open("a", encoding="utf-8") as stream:
+                    stream.write(diagnostic + "\n")
+            if not stdout_path.exists():
+                stdout_path.write_text("", encoding="utf-8")
+            record.update(success=exit_code == 0, exit_code=exit_code, stdout=stdout,
+                          stderr=stderr, timed_out=timed_out, cancelled=interrupted is not None,
+                          elapsed_s=round(time.monotonic() - started, 3))
+            # Declared evidence is captured whatever the verdict was; a failed step's
+            # partial output is often the thing a later diagnosis needs.
+            record["artifacts"] = self._capture(root, run_dir, step, emit) if step["artifacts"] else []
+            (run_dir / f"{step['id']}.json").write_text(
+                json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
+            emit({"type": "repository_step", "step_id": step["id"],
+                  "status": "interrupted" if interrupted is not None else "success" if record["success"] else "error", **record})
+        except BaseException:
+            if interrupted is None:
+                raise
+        if interrupted is not None:
             raise interrupted
         return record
 
     @termination_signals()
     def run(self, workspace, steps, env_config, use_docker=False, on_event=None):
+        """Emit an invocation verdict after dependency cleanup and result collection."""
+        invocation = {"execution_id": None, "emit": None}
+        result, failure = None, None
+        try:
+            result = self._run_invocation(workspace, steps, env_config, use_docker,
+                                          on_event, invocation=invocation)
+            return result
+        except BaseException as exc:
+            failure = exc
+            raise
+        finally:
+            if invocation["execution_id"] is not None:
+                status = ("interrupted" if isinstance(failure, (KeyboardInterrupt, SystemExit))
+                          or (result is not None and (result.get("cancelled") or result.get("interrupted")))
+                          else "error" if failure is not None
+                          else "success" if result is not None and result.get("success") is True
+                          else "error")
+                try:
+                    invocation["emit"]({"type": "execution_run",
+                                        "execution_id": invocation["execution_id"],
+                                        "status": status})
+                except BaseException:
+                    if failure is None:
+                        raise
+
+    def _run_invocation(self, workspace, steps, env_config, use_docker=False,
+                        on_event=None, *, invocation):
         """Execute the plan's argv steps in order; halt at the first required failure.
 
         Accepts either a validated ExecutionPlan or a bare reviewed step list.
@@ -360,11 +400,16 @@ class RepositoryRunner:
                 except Exception as exc:
                     warnings.append(f"progress callback failed: {exc}")
 
+        invocation["emit"] = emit
+
         def reject(reason, code=-2):
             result.update(not_runnable=True, reason=reason)
             result["final"] = {"stage": "full", "success": False, "executed": False,
                                "exit_code": code, "stdout": "", "stderr": reason,
                                "timed_out": code == 124}
+            if "run_dir" in result:
+                (Path(result["run_dir"]) / "execution.json").write_text(
+                    json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
             return result
 
         if use_docker:
@@ -386,6 +431,9 @@ class RepositoryRunner:
             run_dir = records_root / uuid.uuid4().hex
             run_dir.mkdir()
             result["run_dir"] = str(run_dir)
+            invocation["execution_id"] = run_dir.name
+            emit({"type": "execution_run", "execution_id": run_dir.name,
+                  "status": "running"})
             self.executor.env_config = dict(env_config or {})
             # Native wheels cannot be shared across Python ABIs or machines.
             runtime = runtime_fingerprint()
@@ -396,13 +444,41 @@ class RepositoryRunner:
             self.executor._heal_dirs.clear()
             prepare_dir = run_dir / "environment_prepare"
             prepare_dir.mkdir()
+            preparation_started = time.monotonic()
+            observed_preparation = bool(self.executor.env_config.get("auto_prepare") or
+                                        self.executor.env_config.get("dependency_health_check"))
+            def save_environment(status, reason="", *, notify=True):
+                config = self.executor.env_config
+                environment = {"python": sys.version, "executable": sys.executable,
+                               "platform": sys.platform, "runtime": runtime,
+                               "dependencies_path": self.executor._deps_dir,
+                               "requirements_txt": config.get("requirements_txt", ""),
+                               "preparation_path": str(prepare_dir), "status": status,
+                               "preparation_elapsed_s": time.monotonic() - preparation_started,
+                               **{name: config.get(name, []) for name in (
+                                   "dependency_install_attempts", "dependency_health_attempts", "dependency_cache_repairs")}}
+                if reason:
+                    environment["reason"] = reason
+                result["environment"] = environment
+                result["effective_env_config"] = config
+                (run_dir / "environment.json").write_text(
+                    json.dumps(environment, ensure_ascii=False, indent=2), encoding="utf-8")
+                if observed_preparation and notify:
+                    emit({"type": "repository_environment", "execution_id": run_dir.name,
+                          "step_id": "environment_prepare", "step_index": 0, "step_count": len(planned),
+                          "status": status, "reason": reason, "environment": environment})
+            save_environment("running")
             with self.executor.dependency_scope(timeout=self.executor.env_config.get("cache_lock_timeout_s")):
-                if self.executor.env_config.get("require_prepared"):
+                if (self.executor.env_config.get("require_prepared")
+                        and not self.executor.env_config.get("auto_prepare")):
                     cached = self.cached_environment(self.executor.env_config)
                     if not (cached / ".ready").is_file():
-                        return reject("实验环境尚未准备，请先准备实验环境；本次未安装或训练", -4)
-                    self.executor._deps_dir = str(cached)
-                    deps_error = None
+                        deps_error = "实验环境尚未准备，请先准备实验环境；本次未安装或训练"
+                    else:
+                        deps_error = self.executor._check_local_dependency_health(
+                            cached, self.executor.env_config["requirements_txt"], "cached")
+                        if not deps_error:
+                            self.executor._deps_dir = str(cached)
                 else:
                     deps_error = self.executor._ensure_local_deps(str(prepare_dir))
                 # The legacy helper's process-cache fast path does not set the
@@ -414,15 +490,12 @@ class RepositoryRunner:
                     cached_deps = deps_root / reqs_digest(requirements)
                     if (cached_deps / ".ready").is_file():
                         self.executor._deps_dir = str(cached_deps)
-                result["environment"] = {"python": sys.version, "executable": sys.executable,
-                                         "platform": sys.platform,
-                                         "dependencies_path": self.executor._deps_dir,
-                                         "requirements_txt": self.executor.env_config.get("requirements_txt", ""),
-                                         "preparation_path": str(prepare_dir)}
-                (run_dir / "environment.json").write_text(
-                    json.dumps(result["environment"], ensure_ascii=False, indent=2), encoding="utf-8")
+                save_environment("error" if deps_error else "success", deps_error or "")
                 if deps_error:
                     return reject(deps_error, -4)
+                if (self.executor.env_config.get("exclude_environment_preparation_from_deadline")
+                        and self.executor.env_config.get("deadline_monotonic") is not None):
+                    self.executor.env_config["deadline_monotonic"] += result["environment"]["preparation_elapsed_s"]
                 # Linear halt: the first required failure stops everything after it.
                 # A dependency graph is unnecessary because reviewed plans schedule each
                 # step after its prerequisites; the authoring order is the running order.
@@ -468,9 +541,12 @@ class RepositoryRunner:
                         for later in planned[step_index+1:]:
                             skipped.append({"id": later["id"], "not_run": "interrupted",
                                             "blocked_by": step["id"], "required": later["required"]})
-                        from src.method_adapters import write_json
-                        write_json(run_dir / "execution.json", result)
                         exc.execution = result
+                        try:
+                            from src.method_adapters import write_json
+                            write_json(run_dir / "execution.json", result)
+                        except BaseException:
+                            pass
                         raise
                     attempts.append(record)
                     result["executed"] = result["executed"] or record["executed"]
@@ -504,12 +580,23 @@ class RepositoryRunner:
             result["final"] = dict(record or {"stage": "full", "success": False, "executed": False,
                                              "exit_code": 130, "cancelled": True, "timed_out": False,
                                              "stdout": "", "stderr": "repository execution interrupted"})
-            if "run_dir" in result:
-                (Path(result["run_dir"]) / "execution.json").write_text(
-                    json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
             exc.execution = result
+            try:
+                if result.get("environment", {}).get("status") == "running":
+                    save_environment("interrupted", "实验环境准备已中断", notify=False)
+                if "run_dir" in result:
+                    (Path(result["run_dir"]) / "execution.json").write_text(
+                        json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+            except BaseException:
+                # Cancellation keeps its original identity even when persisting
+                # the interrupted result or environment also fails.
+                pass
             raise
         except DependencyCacheBusy as exc:
+            if "run_dir" in result:
+                save_environment("error", str(exc))
             return reject(str(exc), -4)
         except (OSError, ValueError, TypeError) as exc:
+            if result.get("environment", {}).get("status") == "running":
+                save_environment("error", str(exc))
             return reject(str(exc))

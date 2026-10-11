@@ -2,6 +2,8 @@
 
 接续 [10 月 8 日检查点](implementation_checkpoint_20261008.md) 与 #21、#23、#24。旧实验和原始建议未改写；本次创建独立工作区，重新完成真实训练、API 调用和独立评价。可分发的数值摘要见 [JSON](benchmarks/resumed_validation_20261009.json)，完整数组、检查点、原始建议及日志仍保存在本机 `data/runs/`。
 
+当前运行行为已在 2026-10-10 更新：Store 启动环境会自动切换到标准 CPython，正式预设自动准备和修复缺失环境，详见[自动准备与恢复](cross_platform_runtime.md)。下文 Store 拒绝与环境准备检查保留为 10 月 9 日版本的实测历史，不作为当前操作步骤。
+
 ## Neural ODE：确认完成，但未验证稳定提升
 
 运行 `repository_8a04f219d3b44f4db8be053b9d4d0e69`，Windows x64、Python 3.11.9、固定 torchdiffeq commit `657943acefa826ef04c025ebeb1ff5e9d60dc268`、PyTorch 2.5.1 CPU。总耗时 689.360 秒，真实 `deepseek-chat` 调用 1 次。
