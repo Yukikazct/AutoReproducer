@@ -48,6 +48,44 @@ def test_changed_capture_source_rejected(experiment):
         validate_capture(experiment["proposal"]["capture"], experiment["packet"], experiment["workspace"])
 
 
+def test_dotted_stored_fields_and_same_size_series_are_format_normalization(tmp_path):
+    from test_discovered_repository_series import series_fixture
+    from test_graph_author_capture import use_pyg_function_loop
+    fixture = series_fixture(tmp_path)
+    use_pyg_function_loop(fixture)
+    packet = build_evidence_packet(fixture['pdf'], fixture['workspace'], fixture['snapshot'])
+    capture = deepcopy(fixture['proposal']['capture'])
+    capture.update(labels='bundle.y', test_indices='bundle.indices', expected_test_samples=4)
+    original = deepcopy(capture)
+    normalized = validate_capture(capture, packet, fixture['workspace'])
+    assert normalized['labels'] == {'name': 'bundle', 'attributes': ['y']}
+    assert normalized['test_indices'] == {'name': 'bundle', 'attributes': ['indices']}
+    assert normalized['expected_test_samples'] == [4] * capture['expected_runs']
+    assert capture == original
+    for selector in ('bundle.y()', 'bundle.y[0]', 'bundle.__dict__', 'bundle.missing'):
+        invalid = deepcopy(capture)
+        invalid['labels'] = selector
+        with pytest.raises(ValueError):
+            validate_capture(invalid, packet, fixture['workspace'])
+
+
+def test_one_based_author_epochs_compile_actual_completion_count(tmp_path):
+    from test_discovered_repository_series import series_fixture
+    from test_discovered_module_loop import use_function_loop
+    fixture = series_fixture(tmp_path)
+    use_function_loop(fixture)
+    path = fixture['workspace'] / 'train.py'
+    source = path.read_text('utf-8').replace('range(args.epochs)', 'range(1, args.epochs + 1)')
+    path.write_text(source, encoding='utf-8')
+    fixture['snapshot']['files'][path.name] = hashlib.sha256(path.read_bytes()).hexdigest()
+    packet = build_evidence_packet(fixture['pdf'], fixture['workspace'], fixture['snapshot'])
+    capture = deepcopy(fixture['proposal']['capture'])
+    capture['completion']['epoch_offset'] = 1  # Model's usual zero-based assumption.
+    result = validate_capture(capture, packet, fixture['workspace'])
+    assert result['completion']['epoch_offset'] == 0
+    assert capture['completion']['epoch_offset'] == 1
+
+
 def native_environment():
     environment = dict(os.environ)
     dependencies = environment.get("AUTOREPRO_TEST_CPU_DEPS")

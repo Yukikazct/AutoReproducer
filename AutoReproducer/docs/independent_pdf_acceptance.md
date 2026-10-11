@@ -2,6 +2,8 @@
 
 最终验收必须使用未参与当前实现修复的新论文 PDF。DeepXDE、ReZero 和 DLinear 已用于开发或排查，只能作为回归样本，不能证明通用流程通过最终验收。
 
+2026-10-11 的 DAGNN 论文《Towards Deeper Graph Neural Networks》在 `b9d5219` 冻结后获取，原 PDF 为 <https://arxiv.org/pdf/2007.09296>，7,333,332 字节，SHA-256 为 `221f0885de41ffc6732da7b540d1bfbca8972da04a125ff0c8f6b16a3604c81b`。真实网页任务 `progress_1791725239608.jsonl` 阅读全部 57,978 个提取字符，阅读与资源审查、作者仓库 `divelab/DeeperGNN` 的身份确认通过，固定 commit `4d22a7d37800b0acbb5701bc341da2c6b5452bd2`。实验协议模型认为作者只保留验证选中的测试标量、未保存权重，直接返回 insufficient；当前运行机制已支持在原始比较分支完成赋值后保留实际权重，但判别器没有正确使用这一能力。原失败完整保留于 `repository_324d906b394f4241acbe44b80bf6305d`，未训练，终态无活动 worker 或执行进程。后续通过程序从实际 AST 列出支持的原生选择点，把源码、分支、作用域和哈希提供给判别器；不能自动覆盖负向协议或声称运行完成。该 PDF 已转为回归样本，修复后的最终验收必须更换论文。
+
 2026-10-11 的 JacobiConv 论文《How Powerful are Spectral Graph Neural Networks》在 `0b2a771` 冻结后获取。v1 未包含可提取的 GitHub 链接，停在上传预览，未创建后台任务；保持产品不变后取得 v2，SHA-256 为 `8a2020af117fd55687eb70c427baf5cd3ebf02ba9458836f7e6b3e120a2d3ba7`。真实网页任务 `progress_1791721398954.jsonl` 完整阅读 77,788 个字符，阅读与资源审查、固定作者仓库 `GraphPKU/JacobiConv` 核验通过，实验协议阶段因 README 的 `--dataset $dataset` 有限枚举模板未被命令校验支持而失败。训练未启动，终态活动 worker 和执行进程均为零。后续修复只允许绑定到同一入口命令及其紧邻明确枚举的字面值，不放宽协议、重复次数或指标验收。该论文已退役，下一次验收必须更换论文。
 
 命令模板修复的 99 项相关测试通过。对上述退役样本保存的真实提案进行程序回归，模板校验通过后，协议仍拒绝 `lr1`：作者通过按数据集索引的配置字典向原始函数传入训练设置，而当前参数编译仅支持 argparse 字段。该后续问题单独保留于 `command_template_regression_followup.json`，未启动训练；不能把模板修复或此回归说成完整协议通过。

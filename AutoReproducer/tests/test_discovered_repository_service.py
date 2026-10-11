@@ -68,10 +68,15 @@ def use_preinstalled_cache(monkeypatch, runner, cache):
     monkeypatch.setattr(runner.runner, "cached_environment", lambda _config: cache)
 
 
-@pytest.mark.parametrize("family,steps,samples", [("signals", 40, 4), ("pairs", 60, 8)])
+@pytest.mark.parametrize("family,steps,samples,dependency_warning", [
+    ("signals", 40, 4, False), ("pairs", 60, 8, False), ("signals", 40, 4, True)])
 def test_two_actual_author_entrypoints_complete_service_and_report(
-        tmp_path, monkeypatch, cpu_dependency_cache, family, steps, samples):
-    fixture, runner, request, llm = setup_service(tmp_path, monkeypatch, family)
+        tmp_path, monkeypatch, cpu_dependency_cache, family, steps, samples, dependency_warning):
+    review = accepted_review()
+    if dependency_warning:
+        review['checks']['dependency_compatibility'].update(passed=False, severity='warning',
+            reason='Reviewed modern versions require actual runtime API verification.')
+    fixture, runner, request, llm = setup_service(tmp_path, monkeypatch, family, review=review)
     use_preinstalled_cache(monkeypatch, runner, cpu_dependency_cache)
     processes, events = [], []
     popen = subprocess.Popen
@@ -127,6 +132,23 @@ def test_two_actual_author_entrypoints_complete_service_and_report(
     assert "fixed test split" in report
     assert str(samples) in report and str(steps) in report
     assert "最多10轮" not in report
+    if dependency_warning:
+        assert frozen['semantic_review']['checks']['dependency_compatibility']['passed'] is False
+        assert '警告，须实际运行验证' in report
+
+
+def test_dependency_warning_cannot_skip_failed_runtime_preflight(tmp_path, monkeypatch):
+    review = accepted_review()
+    review['checks']['dependency_compatibility'].update(passed=False, severity='warning',
+        reason='Reviewed modern versions require actual runtime API verification.')
+    _, runner, request, _ = setup_service(tmp_path, monkeypatch, review=review)
+    runner.runner.run = Mock(return_value={'success': False, 'reason': 'Actual native operation failed'})
+    result = runner.run(request)
+    assert result['state'] == 'ERROR'
+    assert result['data']['repository_executed'] is False
+    assert result['data']['validation']['is_reproduced'] is None
+    runner.runner.run.assert_called_once()
+    assert runner.runner.run.call_args.args[1][0]['id'] == 'native_preflight'
 
 
 def test_rejected_semantics_retains_audit_and_never_starts_runtime(tmp_path, monkeypatch):

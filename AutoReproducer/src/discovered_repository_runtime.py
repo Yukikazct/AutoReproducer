@@ -57,10 +57,50 @@ def _selector_names(selector):
     return [selector['name']]
 
 
+def _normalize_stored_selector(selector):
+    """Translate dotted field notation to the existing raw-storage selector.
+
+    Never evaluate an expression or invoke getattr/property access. The same
+    pinned-source and runtime direct-storage checks apply after translation.
+    """
+    if isinstance(selector, str):
+        parts = selector.split('.')
+        if 2 <= len(parts) <= 9 and all(_IDENTIFIER.fullmatch(part) for part in parts):
+            return {'name': parts[0], 'attributes': parts[1:]}
+    return selector
+
+
+def _source_epoch_offset(tree, counter):
+    """Compile the zero/one-based count for an unambiguous original range."""
+    from src.native_loop import owned_nodes
+    loops = [node for node in owned_nodes(tree) if isinstance(node, ast.For)
+             and isinstance(node.target, ast.Name) and node.target.id == counter]
+    if len(loops) != 1:
+        return None
+    iterator = loops[0].iter
+    if (not isinstance(iterator, ast.Call) or not isinstance(iterator.func, ast.Name)
+            or iterator.func.id != 'range' or iterator.keywords or not 1 <= len(iterator.args) <= 3):
+        return None
+    start = iterator.args[0] if len(iterator.args) > 1 else ast.Constant(value=0)
+    if not isinstance(start, ast.Constant) or type(start.value) is not int or start.value not in {0, 1}:
+        return None
+    if len(iterator.args) == 3:
+        step = iterator.args[2]
+        if not isinstance(step, ast.Constant) or type(step.value) is not int or step.value != 1:
+            return None
+    return 1 - start.value
+
+
 def validate_capture(capture, packet, workspace, *, selected_steps=None, selected_citations=None):
     """Only named author globals are selectable; no expressions or new programs."""
     if not isinstance(capture, dict) or capture.get("kind") not in {"torch_classification", "torch_classification_series"}:
         raise ValueError("Only full-test PyTorch classification capture is supported")
+    capture = deepcopy(capture)
+    for key in ('model', 'labels', 'test_indices'):
+        if key in capture:
+            capture[key] = _normalize_stored_selector(capture[key])
+    if isinstance(capture.get('forward_args'), list):
+        capture['forward_args'] = [_normalize_stored_selector(value) for value in capture['forward_args']]
     required = {"kind", "model", "forward_args", "labels", "test_indices",
                 "expected_optimizer_steps", "expected_test_samples", "reported_metric", "citations"}
     series = capture["kind"] == "torch_classification_series"
@@ -100,6 +140,10 @@ def validate_capture(capture, packet, workspace, *, selected_steps=None, selecte
         if capture["device"] not in {"cpu", "cuda"} or capture["aggregation"] != "mean":
             raise ValueError("Native series needs a fixed device and all-run mean aggregation")
         runs, samples = capture["expected_runs"], capture["expected_test_samples"]
+        # A scalar asserts the same complete test size for EVERY native run.
+        # Each real capture and independent evaluation still verifies that size.
+        if type(samples) is int and type(runs) is int and 1 <= runs <= 100:
+            samples = capture['expected_test_samples'] = [samples] * runs
         derived = isinstance(samples, dict) and samples.get('kind') == 'stratified_remainder'
         if (type(runs) is not int or not 1 <= runs <= 100 or
                 (not derived and (not isinstance(samples, list) or len(samples) != runs
@@ -149,6 +193,11 @@ def validate_capture(capture, packet, workspace, *, selected_steps=None, selecte
                     or type(completion["updates_per_epoch"]) is not int
                     or not 0 < completion["updates_per_epoch"] <= capture["expected_optimizer_steps"]):
                 raise ValueError("Author epoch completion needs a local counter and fixed source-backed multiplier")
+            container = next((node for node in tree.body if isinstance(node, ast.FunctionDef)
+                              and node.name == scope.get('function')), tree)
+            offset = _source_epoch_offset(container, completion['epoch_counter'])
+            if offset is not None:
+                completion['epoch_offset'] = offset
         else:
             raise ValueError("Unknown native series completion rule")
     reported = capture.get("reported_metric")

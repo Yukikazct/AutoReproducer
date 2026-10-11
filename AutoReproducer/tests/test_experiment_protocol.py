@@ -41,6 +41,37 @@ def test_selected_experiment_binds_command_numbers_repetitions_and_device(tmp_pa
             bind_plan_to_protocol(changed, protocol)
 
 
+def test_author_training_defaults_do_not_require_duplicate_paper_details(tmp_path):
+    fixture, packet, raw, _ = protocol_fixture(tmp_path)
+    kinds = planner._planning_view(packet)['evidence_excerpts']
+    raw['training']['citations'] = [key for key in raw['training']['citations']
+                                   if kinds[key]['source'] == 'repository']
+    protocol = validate_experiment_protocol(raw, packet, fixture['workspace'])
+    assert protocol['training']['citations'] == raw['training']['citations']
+    assert protocol['effective_author_parameters']['epochs']['value'] == 40
+    raw['training']['parameters'][0].update(name='epochs', value=7)
+    with pytest.raises(planner.PlanEvidenceError, match='actual author command/default: epochs'):
+        validate_experiment_protocol(raw, packet, fixture['workspace'])
+
+
+def test_training_still_requires_actual_repository_evidence(tmp_path):
+    fixture, packet, raw, _ = protocol_fixture(tmp_path)
+    kinds = planner._planning_view(packet)['evidence_excerpts']
+    raw['training']['citations'] = [key for key in raw['training']['citations']
+                                   if kinds[key]['source'] == 'pdf']
+    with pytest.raises(planner.PlanEvidenceError, match='repository'):
+        validate_experiment_protocol(raw, packet, fixture['workspace'])
+
+
+@pytest.mark.parametrize('unit', ['runs', 'epochs', 'seeds', 'nodes', 'samples', 'classes'])
+def test_pdf_extracted_count_joined_to_known_unit_is_numerical_evidence(unit):
+    assert planner._has_value(100, [{'source': 'pdf', 'quote': 'We use 100' + unit + '.'}])
+    assert not planner._has_value(100, [{'source': 'repository', 'quote': 'name = 100' + unit}])
+    assert not planner._has_value(100, [{'source': 'pdf', 'quote': 'We use 1000' + unit + '.'}])
+    assert not planner._has_value(100, [{'source': 'pdf', 'quote': 'config_100' + unit}])
+    assert not planner._has_value(100, [{'source': 'pdf', 'quote': '100' + unit + '_file'}])
+
+
 def test_protocol_reads_missing_pinned_experiment_sources_before_deciding(tmp_path):
     fixture, packet, raw, _ = protocol_fixture(tmp_path)
     source = packet['repository']['files'].pop('train.py')
@@ -245,11 +276,14 @@ def test_best_validation_scalar_does_not_authorize_final_model_capture(tmp_path)
     assert 'matching model' in llm.calls[1][0] or 'corresponding retained/restored model' in llm.calls[1][0]
 
 
-def test_model_selection_audit_requires_original_pdf_context_and_source_flow(tmp_path):
+def test_model_selection_audit_can_use_source_details_with_separate_paper_context(tmp_path):
     fixture, packet, raw, protocol = protocol_fixture(tmp_path)
     packet['experiment_protocol'] = protocol
     review = accepted_review()
     review['checks']['model_selection_and_evaluation_weights']['citations'] = ['script']
+    plan = planner.propose_plan(PlannedLLM(fixture['proposal'], review), packet, fixture['workspace'])
+    assert plan['semantic_review']['accepted'] is True
+    review['checks']['model_selection_and_evaluation_weights']['citations'] = ['paper_protocol']
     with pytest.raises(planner.PlanEvidenceError, match='original source evidence: model_selection'):
         planner.propose_plan(PlannedLLM(fixture['proposal'], review), packet, fixture['workspace'])
 

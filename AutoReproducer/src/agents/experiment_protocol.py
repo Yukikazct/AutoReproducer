@@ -18,7 +18,7 @@ PROTOCOL_SCHEMA = {
                 'preprocessing': 'source-defined preprocessing', 'citations': ['PDF and repository evidence IDs']},
     'training': {'description': 'full optimizer, epochs and early-stop procedure',
                  'parameters': [{'name': 'parameter', 'value': 0, 'citations': ['evidence IDs']}],
-                 'citations': ['PDF and repository evidence IDs']},
+                 'citations': ['repository optimizer/config/default evidence IDs; PDF if explicit']},
     'model_selection': {'policy': 'best_validation|last_epoch|author_defined',
                         'criterion': 'exact validation criterion, or no selection for last epoch',
                         'evaluation_weights': 'how author code retains/restores the weights actually evaluated',
@@ -91,12 +91,16 @@ def validate_experiment_protocol(payload, packet, workspace):
     if len(unique) > 100:
         raise PlanEvidenceError('Experiment protocol exceeds its citation bound')
     citations = _citations({'citations': [{'id': key, 'evidence_id': key} for key in unique]}, packet, workspace)
-    for key in ('method', 'dataset', 'training', 'repetitions', 'alignment'):
+    for key in ('method', 'dataset', 'repetitions', 'alignment'):
         try:
             _references(payload[key]['citations'], citations, 'pdf')
             _references(payload[key]['citations'], citations, 'repository')
         except PlanEvidenceError as exc:
             raise PlanEvidenceError(f'Experiment protocol {key}: {exc}') from exc
+    # Author implementation details need not be repeated in the paper. The
+    # selected experiment context remains tied to both sources above, and the
+    # actual values are checked against the original command/defaults below.
+    _references(payload['training']['citations'], citations, 'repository')
     # The paper need not repeat the checkpoint implementation. Its experiment
     # context is checked against this source policy by the independent review.
     _references(payload['model_selection']['citations'], citations, 'repository')
@@ -228,8 +232,16 @@ class ExperimentProtocolAgent(BaseAgent):
                 'Use explicit source relationships; a single invocation is insufficient for a paper mean over N runs. '
                 'Separate training termination from model selection: early stopping does not establish which '
                 'weights are evaluated. Trace the original criterion and checkpoint save/load or model retention. '
-                'If the author only keeps a best-validation test scalar but cannot expose its matching model, '
-                'do not substitute the final-epoch model for independent evaluation. Never select weights by test performance. '
+                'program_detected_native_selections lists AST-resolved original branches supported by the runtime. '
+                'A listed snapshot_after_original_validation_result_assignment captures the matching model at that '
+                'original selection point; author_checkpoint_required=false means author checkpoint files are NOT '
+                'required. Do not reject weight availability merely because the author only stores the selected test '
+                'scalar when this supported source branch can expose its model and full inputs. Establish the actual '
+                'model/inputs, validation criterion, result meaning/unit and all repetitions from the source. '
+                'When using that supported option, model_selection.evaluation_weights should explain both the '
+                'author\'s reported scalar policy and the project snapshot at the same original assignment. '
+                'When no supported selection snapshot or original retained/restored model exists, weight availability '
+                'remains insufficient. Do not substitute the final-epoch model. Never select weights by test performance. '
                 'An original repetition loop at module level or directly inside a unique top-level function, '
                 'with an unambiguous validation comparison and a direct '
                 'test-result assignment can be observed to retain the actual model at that selection point, even if '
@@ -250,6 +262,16 @@ class ExperimentProtocolAgent(BaseAgent):
                 'Two source-reading rounds and two separate NPZ summary rounds are available, '
                 'each at most 8 paths; a mixed request consumes both budgets. Do not invent unseen contents. '
                 'Training parameters should use actual author CLI/config names. All citations select evidence_excerpts IDs. '
+                'Required citation kinds are enforced separately for EACH field: method, dataset, '
+                'repetitions and alignment each need at least one PDF ID AND one repository ID. Training needs '
+                'repository IDs for the actual optimizer/config/defaults; PDF IDs are optional when the paper '
+                'states those details. If the paper omits a training implementation detail, use the applicable '
+                'author source default rather than reject it for missing PDF evidence. An explicit paper/code '
+                'conflict still requires rejection. Do not claim source-only defaults were printed in the paper. Individual training '
+                'parameters may cite their actual repository source alone. model_selection and implementation '
+                'need repository IDs; metrics need PDF IDs. A citation in alignment does not satisfy another '
+                'field\'s source requirements. If repair feedback names a missing source kind, repair that named '
+                'field\'s citations from its actual supporting excerpts. Do not repeat its missing-kind list. '
                 'Use typed JSON numbers for counts/references/numeric parameters (the schema numbers are examples, '
                 'never defaults), and booleans for boolean parameters. CLI parameter names are argparse destination names, '
                 'without leading --. Literal dictionaries passed as **kwargs to an original selected function '

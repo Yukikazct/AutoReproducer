@@ -171,6 +171,85 @@ def test_incomplete_or_uncertain_semantic_review_cannot_accept(experiment, chang
     assert len(llm.calls) == 2
 
 
+def test_dependency_uncertainty_can_defer_to_mandatory_runtime_checks(experiment):
+    review = accepted_review()
+    review['accepted'] = False
+    review['checks']['dependency_compatibility'].update(passed=False, severity='warning',
+        reason='Modern reviewed pins cover the imports; actual API compatibility needs runtime verification.')
+    llm = PlannedLLM(experiment['proposal'], review)
+    plan = planner.propose_plan(llm, experiment['packet'], experiment['workspace'])
+    audit = plan['semantic_review']
+    assert audit['accepted'] is True
+    assert audit['checks']['dependency_compatibility']['passed'] is False
+    assert audit['checks']['dependency_compatibility']['severity'] == 'warning'
+    assert audit['deferred_checks'] == ['dependency_compatibility']
+    assert audit['checks']['dependency_compatibility']['verification_stage'] == 'runtime_preparation_and_execution'
+    assert audit['model_aggregate_verdict'] is False
+    assert len(llm.calls) == 2
+
+
+def test_review_can_cite_actual_original_excerpt_ids_instead_of_planner_aliases(experiment):
+    excerpts = planner._planning_excerpts(experiment['packet'])
+    review = accepted_review()
+    pdf_id = next(key for key, ref in excerpts.items() if ref['source'] == 'pdf')
+    repo_id = next(key for key, ref in excerpts.items() if ref['source'] == 'repository')
+    review['checks']['same_experiment']['citations'] = [pdf_id, repo_id]
+    review['checks']['model_selection_and_evaluation_weights']['citations'] = [repo_id]
+    result = planner.propose_plan(PlannedLLM(experiment['proposal'], review), experiment['packet'], experiment['workspace'])
+    assert result['semantic_review']['checks']['same_experiment']['citations'] == [pdf_id, repo_id]
+    citations = {item['id']: item for item in result['citations']}
+    assert citations[pdf_id]['quote'] == excerpts[pdf_id]['quote']
+    assert citations[repo_id]['quote'] == excerpts[repo_id]['quote']
+    assert citations[repo_id]['revision'] == experiment['packet']['repository']['revision']
+    assert citations[pdf_id]['pdf_sha256'] == experiment['packet']['pdf']['sha256']
+
+
+def test_original_review_ids_still_require_unchanged_pinned_sources(experiment):
+    plan = validate(experiment)
+    excerpts = planner._planning_excerpts(experiment['packet'])
+    repo_id = next(key for key, ref in excerpts.items() if ref['source'] == 'repository')
+    review = accepted_review()
+    review['checks']['dependency_compatibility']['citations'] = [repo_id]
+    path = experiment['workspace'] / excerpts[repo_id]['path']
+    path.write_bytes(path.read_bytes() + b'\nchanged')
+    with pytest.raises(planner.PlanEvidenceError, match='changed'):
+        planner.review_plan(PlannedLLM(experiment['proposal'], review), plan, experiment['packet'], experiment['workspace'])
+
+
+@pytest.mark.parametrize('gate', list(planner._SEMANTIC_GATES.keys()))
+def test_known_incompatibility_or_experiment_failure_still_blocks(experiment, gate):
+    review = accepted_review()
+    review['checks'][gate].update(passed=False, severity='blocking',
+                                  reason='Original evidence contradicts this selected experiment.')
+    with pytest.raises(planner.PlanEvidenceError, match='semantic review'):
+        planner.propose_plan(PlannedLLM(experiment['proposal'], review), experiment['packet'], experiment['workspace'])
+
+
+@pytest.mark.parametrize('gate', [gate for gate in planner._SEMANTIC_GATES if gate != 'dependency_compatibility'])
+def test_protocol_failure_cannot_be_downgraded_to_warning(experiment, gate):
+    review = accepted_review()
+    review['checks'][gate].update(passed=False, severity='warning',
+                                  reason='Original evidence contradicts this selected experiment.')
+    with pytest.raises(planner.PlanEvidenceError, match='semantic review'):
+        planner.propose_plan(PlannedLLM(experiment['proposal'], review), experiment['packet'], experiment['workspace'])
+
+
+@pytest.mark.parametrize('change', [
+    lambda c: c.update(citations=['invented']),
+    lambda c: c.update(citations=['paper_results']),
+    lambda c: c.update(reason=''),
+    lambda c: c.update(severity=['warning']),
+    lambda c: c.update(passed='false'),
+])
+def test_deferred_dependency_warning_still_requires_typed_source_evidence(experiment, change):
+    review = accepted_review()
+    check = review['checks']['dependency_compatibility']
+    check.update(passed=False, severity='warning')
+    change(check)
+    with pytest.raises(planner.PlanEvidenceError):
+        planner.propose_plan(PlannedLLM(experiment['proposal'], review), experiment['packet'], experiment['workspace'])
+
+
 def test_quote_repairs_are_bounded_and_review_happens_only_after_validation(experiment):
     invalid = deepcopy(experiment["proposal"])
     invalid["citations"][1]["quote"] = "This quote was hallucinated."

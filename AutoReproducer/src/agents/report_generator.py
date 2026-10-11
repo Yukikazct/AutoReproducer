@@ -271,7 +271,8 @@ def _discovered_plan_lines(data):
         lines += ["", "**执行前独立协议审查**", "",
                   "- **状态**: " + ("通过" if review.get("accepted") is True else "未通过")]
         for name, check in (review.get("checks") or {}).items():
-            lines.append("- " + _markdown_text(name) + "：" + _markdown_text(_txt(check.get("reason"))))
+            status = "警告，须实际运行验证；" if check.get('severity') == 'warning' else ''
+            lines.append("- " + _markdown_text(name) + "：" + status + _markdown_text(_txt(check.get("reason"))))
     lines += ["", "**计划引用原文**", ""]
     for citation in plan.get("citations", []):
         location = (f"PDF 第 {citation.get('page')} 页" if citation.get("source") == "pdf"
