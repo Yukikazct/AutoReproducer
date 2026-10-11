@@ -10,7 +10,7 @@ import re
 from typing import Dict
 from src.base_agent import BaseAgent
 from src.llm.llm_client import LLMClient
-from src.repository_evidence import extract_repository_links
+from src.repository_evidence import extract_repository_links, normalize_repository_url
 
 
 READING_TEXT_LIMIT = 120000
@@ -157,7 +157,8 @@ MSE/MAE 等保留原始单位。单位未知时留空，不按数值大小猜百
         if isinstance(feedback, dict) and feedback.get("agent") == self.name:
             prompt += ("\n上一轮审查反馈（只依据上述实际原文修正；无证据的建议不能执行）：\n"
                        + json.dumps(feedback, ensure_ascii=False))
-        llm_result = self.llm.chat(prompt, task="paper_reader")
+        llm_result = self.llm.chat(prompt, task="paper_reader", system_prompt=(
+            self.repository_system_prompt if purpose == 'repository_discovery' else self.system_prompt))
         parsed = self._parse_json(llm_result)
         if not parsed or not parsed.get("title"):
             parsed = self._fallback_extract(pdf_text, paper_title)
@@ -170,11 +171,18 @@ MSE/MAE 等保留原始单位。单位未知时留空，不按数值大小猜百
         elif paper_title and pdf_input is None:
             parsed["title"] = paper_title
         if pdf_input is not None:
-            # A guessed URL is not paper evidence. Only an actual author-code
-            # declaration can fill this field; weaker links remain candidates.
+            # Lexical declaration recognition is a ranking hint, not an
+            # authorship verdict. Keep a real non-reference PDF candidate so
+            # the semantic Git/PDF review can determine its relationship.
             code_evidence = next((link for link in repository_links if link["is_author_code"]), None)
+            candidates = [link for link in repository_links if link.get('evidence_type') != 'reference']
+            proposed = normalize_repository_url(parsed.get('code_url', ''))
+            if code_evidence is None:
+                code_evidence = next((link for link in candidates if link['url'].casefold() == proposed.casefold()),
+                                     candidates[0] if candidates else None)
             parsed["code_url"] = code_evidence["url"] if code_evidence else "未找到"
             parsed["code_url_evidence"] = code_evidence
+            parsed['code_url_identity'] = 'unverified_candidate' if code_evidence else 'not_found'
         # 透传"信息是否足以生成针对性复现代码"给下游
         # （CodeExecutor 据此拒绝编造代码，ResultValidator 据此判"无法验证"）
         if title_only and not getattr(self.llm, "mock_mode", False):

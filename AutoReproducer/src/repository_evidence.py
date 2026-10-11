@@ -36,12 +36,12 @@ def _declaration_pattern(pattern):
 
 
 _AUTHOR_CODE = re.compile(_declaration_pattern(
-    r"(?<![\w])(?:\d{1,3})?(?:source\s+code|our\s+(?:code|implementation|software|library)|"
-    r"(?:code|implementation|software|library)(?:\s+for\s+[^.!?]{1,80})?)"
+    r"(?<![\w])(?:\d{1,3})?(?:source\s+code(?:s)?|our\s+(?:code(?:s)?|implementation(?:s)?|software|library)|"
+    r"(?:code(?:s)?|implementation(?:s)?|software|library)(?:\s+for\s+[^.!?]{1,80})?)"
     r"\s+(?:(?:is|are|was|has\s+been|can\s+be|will\s+be)\s+)?"
     r"(?:publicly\s+|freely\s+|openly\s+)?(?:available|published|released|provided|found|downloaded|accessed)\b"
     r"|\b(?:we|the\s+authors)\s+(?:also\s+)?(?:release|provide|publish|open[- ]source)\b"
-    r"[^.!?]{0,100}\b(?:code|implementation|software|library)\b"
+    r"[^.!?]{0,100}\b(?:code(?:s)?|implementation(?:s)?|software|library)\b"
     # Footnote extraction can join the marker directly to "Code". A labelled
     # code-for-project link is an explicit declaration even without "available".
     r"|(?<![\w])(?:\d{1,3})?(?:source\s+code|code|implementation|software|library)"
@@ -51,8 +51,8 @@ _AUTHOR_CODE = re.compile(_declaration_pattern(
     r"|(?<![\w])(?:\d{1,3})?(?:source\s+code|our\s+(?:code|implementation|software|library))"
     r"\s+(?:at|on)\s*:?[ \t\r\n]*(?=(?:https?://)?(?:www\.)?github\.com/)"), re.I)
 _EXTERNAL_CODE = re.compile(_declaration_pattern(
-    r"\b(?:third(?:-\s*|\s+)party|prior\s+work|previous\s+work|baseline\s+(?:source\s+)?(?:code|implementation))\b"
-    r"|\b(?:code|implementation)\s+for\s+(?:the\s+)?baseline\b"), re.I)
+    r"\b(?:third(?:-\s*|\s+)party|prior\s+work|previous\s+work|baseline\s+(?:source\s+)?(?:code|implementation)(?:s)?)\b"
+    r"|\b(?:code|implementation)(?:s)?\s+for\s+(?:the\s+)?baseline\b"), re.I)
 _NON_REPOSITORY_OWNERS = {
     "about", "collections", "contact", "enterprise", "events", "explore",
     "features", "issues", "join", "login", "marketplace", "new", "notifications",

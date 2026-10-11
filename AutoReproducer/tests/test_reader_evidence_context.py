@@ -84,3 +84,21 @@ def test_repository_reader_does_not_require_experimental_metrics(monkeypatch):
     VerifierAgent(llm).run({'agent_name': 'PaperReader', 'output': output,
                           'system_prompt': PaperReaderAgent.repository_system_prompt})
     assert '本阶段不要求数据集' in llm.calls[1][0]
+
+
+def test_reader_preserves_real_candidate_when_lexical_authorship_is_unconfirmed(monkeypatch):
+    import src.pdf_input as pdf_input
+    url = 'https://github.com/authors/method'
+    link = {'url': url, 'page': 3, 'source': 'pdf_text', 'context': 'Project repository: ' + url,
+            'is_author_code': False, 'evidence_type': 'repository_link'}
+    doc = SimpleNamespace(text='Title\nProject repository: ' + url, repository_links=[link],
+                          sha256='a'*64, page_count=3, byte_size=3000)
+    monkeypatch.setattr(pdf_input, 'extract_pdf_input', lambda _: doc)
+    monkeypatch.setattr(pdf_input, 'supported_pdf_title', lambda _: 'Paper Title')
+    llm = RecordingLLM()
+    output = PaperReaderAgent(llm).run({'pdf_path':'actual.pdf', 'reading_purpose':'repository_discovery'})
+    assert output['paper_info']['code_url'] == url
+    assert output['paper_info']['code_url_evidence'] == link
+    assert output['paper_info']['code_url_identity'] == 'unverified_candidate'
+    assert output['extracted_repository_links'][0]['is_author_code'] is False
+    assert llm.calls[0][1]['system_prompt'] == PaperReaderAgent.repository_system_prompt

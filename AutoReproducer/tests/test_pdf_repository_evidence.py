@@ -74,6 +74,20 @@ def test_direct_source_labels_do_not_promote_references_or_unrelated_links(text)
     assert not extract_repository_links([text])[0]["is_author_code"]
 
 
+@pytest.mark.parametrize('declaration', ['Codes are released on', 'Our implementations are available at',
+                                         'We provide codes at', 'Source codes are publicly available at'])
+def test_plural_code_declarations_keep_original_locations_without_claiming_author_identity(declaration):
+    records = extract_repository_links([declaration + ' https://github.com/authors/method'])
+    assert records[0]['is_author_code'] and records[0]['page'] == 1
+    assert records[0]['context'].startswith(declaration)
+
+
+@pytest.mark.parametrize('declaration', ['Baseline codes are released on',
+                                         'Implementations for the baseline are available at'])
+def test_plural_baseline_code_declarations_stay_unverified(declaration):
+    assert not extract_repository_links([declaration + ' https://github.com/baselines/method'])[0]['is_author_code']
+
+
 @pytest.mark.parametrize("declaration", [
     "Code is avail-\nable at:", "Code is avail- able at:",
     "Our implemen-\ntation is publicly avail-\nable at:",
