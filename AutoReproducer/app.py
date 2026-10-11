@@ -9,6 +9,7 @@
 """
 import inspect
 import importlib
+import hashlib
 import os
 import sys
 import tempfile
@@ -292,6 +293,19 @@ def render_paper_input():
                             st.text(link["context"])
             if not preview.get("error"):
                 st.checkbox("在线核验匹配的作者代码与实验依据", value=True, key="pdf_llm_review")
+                from frontend.repository_fallback import fallback_for_pdf, repository_widget_key
+                pdf_hash = (preview.get("pdf_input") or {}).get("sha256", "")
+                fallback = fallback_for_pdf(st.session_state.result, pdf_hash)
+                if fallback:
+                    st.warning("自动仓库确认未通过，可手动补充 GitHub 仓库后重试。")
+                    st.caption("未确认原因：" + fallback.get("reason", "缺少足够证据"))
+                    previous_identity = ((st.session_state.result or {}).get("data", {}).get("resources") or {}).get("repository_identity") or {}
+                    previous_url = (((st.session_state.result or {}).get("data", {}).get("resources") or {}).get("code_repo_url", "")
+                                    if previous_identity.get("source") == "user_supplied_pinned_git_llm_review" else "")
+                    st.text_input("补充 GitHub 仓库", key=repository_widget_key(pdf_hash), value=previous_url,
+                                  placeholder="https://github.com/owner/repository",
+                                  disabled=st.session_state.running)
+                    st.caption("填写后点击“开始复现”。系统将核对论文与仓库；报告记录为用户提供，作者身份另行标明。")
     else:
         st.selectbox("真实论文实验", list(PROFILE_LABELS),
                      format_func=lambda key: display_text(PROFILE_LABELS[key]), key="experiment_profile")
@@ -411,6 +425,12 @@ with st.sidebar:
                      if input_mode == "上传PDF" else None)
     experiment_profile = (st.session_state.get("experiment_profile")
                           if input_mode == "官方仓库预设" else None)
+    manual_repo_url, manual_repo_error = "", ""
+    if uploaded_file and not st.session_state.mock_mode:
+        from frontend.repository_fallback import manual_repository, repository_widget_key
+        uploaded_hash = hashlib.sha256(uploaded_file.getvalue()).hexdigest()
+        manual_repo_url, manual_repo_error = manual_repository(
+            st.session_state.get(repository_widget_key(uploaded_hash), ""))
     method_selected = bool(experiment_profile and get_profile(experiment_profile).get("adapter_id") in {"siren", "neural_ode"})
     requires_api = not experiment_profile or (
         bool(st.session_state.get("repository_llm_review"))
@@ -445,7 +465,7 @@ with st.sidebar:
             requires_api = bool(st.session_state.get("title_llm_review", True))
     elif input_mode == "上传PDF" and uploaded_file and not corpus_paper:
         preview = _preview_pdf_input(uploaded_file.getvalue(), st.session_state.mock_mode)
-        if preview.get("resolution"):
+        if preview.get("resolution") and not manual_repo_url:
             # The backend re-reads the immutable upload and rebuilds its evidence.
             # Choosing the reviewed route here also selects the fresh worker when
             # this Streamlit process still owns cached earlier adapters.
@@ -502,6 +522,8 @@ if start_btn and not st.session_state.running:
                     and st.session_state.get("method_optimization") == "validate" else "")
     if experiment_profile and st.session_state.mock_mode:
         st.sidebar.error("官方仓库预设需要关闭 Mock 模式，才能执行真实论文代码。")
+    elif manual_repo_error:
+        st.sidebar.error(manual_repo_error)
     elif experiment_profile and st.session_state.use_docker:
         st.sidebar.error("本轮官方仓库预设使用本地执行；请关闭 Docker 开关后运行。")
     elif not experiment_profile and not pt and not uploaded_file:
@@ -538,6 +560,7 @@ if start_btn and not st.session_state.running:
         run_pipeline_background(
             progress_file,
             paper_title=pt, pdf_path=tmp_pdf,
+            **({"preferred_repo_url": manual_repo_url} if manual_repo_url else {}),
             corpus_paper=corpus_paper,
             experiment_profile=experiment_profile,
             title_resolution=title_resolution,

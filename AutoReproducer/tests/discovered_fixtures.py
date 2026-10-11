@@ -184,10 +184,15 @@ def identity_review(view):
         excerpts = view["evidence_excerpts"]
         pdf_id = next(key for key in excerpts if key.startswith("pdf_p"))
         repo_id = next(key for key in excerpts if key.startswith("repo_"))
-        return {"verdict": "author_repository", "reason": "Invented fixture sources describe the same author experiment.",
+        review = {"verdict": "author_repository", "reason": "Invented fixture sources describe the same author experiment.",
                 "checks": {gate: {"passed": True, "reason": "Fixture paper and pinned README agree.",
                     "citations": ["pdf_link_0" if gate == "author_implementation" else pdf_id, repo_id]}
                     for gate in ("paper_identity", "author_implementation", "method_alignment")}}
+        if view.get("repository_input", {}).get("source") == "user_supplied":
+            review["verdict"] = "matching_repository"
+            review["checks"]["author_implementation"] = {"passed": False,
+                "reason": "The invented fixture has no independent author ownership evidence.", "citations": []}
+        return review
     pdf = view["pdf"]["pages"][0]
     link = view["pdf"]["repository_links"][0]
     path, readme = next(iter(view["repository"]["files"].items()))

@@ -459,6 +459,9 @@ class ReportGeneratorAgent(BaseAgent):
             lines += [f"- **仓库关联证据**: {identity.get('reason', '未核验')}",
                       f"- **发现来源**: {identity.get('source', '未记录')}",
                       "- **执行范围**: 定位仓库是资源发现结果；是否运行仓库由下方执行对象和实际步骤确认。"]
+            if identity.get("source") == "user_supplied_pinned_git_llm_review":
+                lines += ["- **仓库提供方式**: 用户在自动确认失败后手动提供",
+                          "- **作者身份**: " + ("经证据确认" if identity.get("author_identity_confirmed") else "未确认；仅确认论文与实现内容匹配")]
         review = identity.get("review") or {}
         if review.get("accepted"):
             lines += [f"- **仓库语义核验**: {review.get('verdict', '')}",
@@ -491,7 +494,7 @@ class ReportGeneratorAgent(BaseAgent):
         repository = data.get("repository") or {}
         spec = data.get("experiment_spec") or {}
         if spec:
-            lines += ["### 官方仓库实验来源",
+            lines += ["### 用户提供的仓库实验来源" if identity.get("source") == "user_supplied_pinned_git_llm_review" else "### 官方仓库实验来源",
                       f"- **实验定义**: {spec.get('label', spec.get('id', ''))}",
                       f"- **论文版本/参考位置**: {paper_info.get('reference_source', '')}",
                       f"- **固定源码版本**: `{repository.get('resolved_sha', '未获取')}`",

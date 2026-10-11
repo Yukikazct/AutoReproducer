@@ -43,6 +43,14 @@ def author_repository_input(request, *, require_author=True):
     if expected and expected != document.sha256:
         raise ValueError("PDF 在资源发现后发生变化，不能继续原仓库计划")
     resources = request.get("resources") or {}
+    manual = request.get("preferred_repo_url") or ""
+    if manual and not require_author:
+        selected = normalize_repository_url(manual)
+        if not selected:
+            raise ValueError("用户提供的 GitHub 仓库地址无效")
+        return document, selected, {"url": selected, "raw_url": manual, "page": None,
+            "source": "user_supplied", "context": "用户在自动确认失败后补充的仓库地址",
+            "evidence_type": "user_supplied_repository", "is_author_code": False}
     selected = normalize_repository_url((resources.get("repo_discovery") or {}).get("selected_repo")
                                         or resources.get("code_repo_url") or resources.get("selected_repo") or "")
     if not selected:
@@ -247,7 +255,7 @@ class DiscoveredRepositoryReproduction:
         from src.discovered_repository_plan import build_evidence_packet, propose_plan
         started = time.monotonic()
         emit = on_event or (lambda event: None)
-        phases = [("prepare_repository", "FIND_RESOURCES", "ResourceFinder", "核验 PDF 作者来源与固定仓库"),
+        phases = [("prepare_repository", "FIND_RESOURCES", "ResourceFinder", "核验论文与 Git 仓库并固定源码版本"),
                   ("plan_repository", "READ_PAPER", "PaperReader", "依据论文与源码冻结实验计划"),
                   ("prepare_dataset", "FIND_RESOURCES", "ResourceFinder", "准备完整真实数据"),
                   ("prepare_environment", "BUILD_ENV", "EnvBuilder", "准备依赖并进行原生运算检查"),
@@ -281,16 +289,22 @@ class DiscoveredRepositoryReproduction:
                 raise ValueError("通用作者仓库执行当前需要本地受控进程模式")
             from src.agents.repository_verifier import RepositoryVerifierAgent
             document, url, evidence = author_repository_input(request, require_author=False)
+            manual = evidence["source"] == "user_supplied"
+            if manual:
+                data["execution_source"] = "user_supplied_repository"
+                data["resources"].update(code_repo_url=url, selected_repo=url, selection_evidence=deepcopy(evidence),
+                    repository_identity={"status": "user_supplied_unconfirmed", "source": "user_supplied_pinned_git_llm_review",
+                        "author_identity_confirmed": False, "reason": "用户补充的仓库，论文与实现关系尚未核验", "evidence": deepcopy(evidence)})
             data["pdf_input"] = {"sha256": document.sha256, "pages": document.page_count,
                                  "bytes": document.byte_size, "readable": True}
             pin = (data["resources"].get("repo_discovery") or {}).get("pinned_revision", "")
             offline = bool(request.get("offline"))
-            candidates = [evidence, *sorted(document.repository_links,
+            candidates = [evidence] if manual else [evidence, *sorted(document.repository_links,
                           key=lambda link: not link.get("is_author_code"))]
             unique, seen = [], set()
             for link in candidates:
                 if (link.get("evidence_type") != "reference"
-                        and link.get("source") in {"pdf_text", "pdf_annotation"}
+                        and link.get("source") in {"pdf_text", "pdf_annotation", "user_supplied"}
                         and link["url"].casefold() not in seen):
                     unique.append(link)
                     seen.add(link["url"].casefold())
@@ -310,6 +324,8 @@ class DiscoveredRepositoryReproduction:
                     attempt.update(revision=revision, archive_sha256=snapshot.get("archive_sha256"),
                                    workspace=str(workspace.resolve()))
                     packet = build_evidence_packet(request["pdf_path"], workspace, snapshot, for_identity_review=True)
+                    if manual:
+                        packet["repository_input"] = {"source": "user_supplied", "url": url}
                     if packet["pdf"]["sha256"] != document.sha256:
                         raise ValueError("原始 PDF 在仓库准备期间发生变化，不能使用不同论文继续规划")
                     write_json(run_dir / f"repository_identity_packet_{index + 1}.json", packet)
@@ -327,11 +343,14 @@ class DiscoveredRepositoryReproduction:
                     write_json(run_dir / "repository_identity_attempts.json", attempts)
             data["repository_identity_attempts"] = attempts
             if review is None:
-                raise ValueError("候选仓库与论文的作者实现关系未确认；未启动实验。"
+                raise ValueError(("用户提供的仓库与论文实现内容未确认匹配；未启动实验。" if manual
+                                 else "候选仓库与论文的作者实现关系未确认；未启动实验。")
                                  + "；".join(attempt.get("error", "") for attempt in attempts))
             evidence["semantic_review"] = review
             data["resources"].update(code_repo_url=url, selected_repo=url, selection_evidence=evidence,
-                repository_identity={"status": "author_verified", "source": "pdf_pinned_git_llm_review",
+                repository_identity={"status": "user_supplied_verified" if manual else "author_verified",
+                                     "source": "user_supplied_pinned_git_llm_review" if manual else "pdf_pinned_git_llm_review",
+                                     "author_identity_confirmed": review["author_identity_confirmed"],
                                      "reason": review["reason"], "evidence": deepcopy(evidence), "review": review})
             data["resources"].setdefault("repo_discovery", {}).update(
                 selected_repo=url, pinned_revision=revision, repository_identity=data["resources"]["repository_identity"])
@@ -369,7 +388,8 @@ class DiscoveredRepositoryReproduction:
             environment["offline"] = offline
             data["env_config"] = deepcopy(environment)
             data["experiment_spec"] = {"id": "discovered_author_experiment", "adapter_id": "discovered",
-                "label": "依据本次 PDF 与固定作者源码生成的实验计划", "repository": plan["repository"],
+                "label": "依据本次 PDF 与用户提供的固定仓库生成的实验计划" if manual else "依据本次 PDF 与固定作者源码生成的实验计划",
+                "repository": plan["repository"],
                 "paper": deepcopy(data["paper_info"]), "parameters": plan.get("parameters", {}),
                 "environment": deepcopy(environment), "validation": {"scope": "selected_paper_experiment",
                     "note": "本次论文与作者源码引文确定实验范围；独立指标与完整执行证据共同决定结果。"}}
@@ -393,6 +413,15 @@ class DiscoveredRepositoryReproduction:
         except Exception as exc:
             phase = getattr(exc, "reproduction_phase", phase)
             error = str(exc)
+            if phase == "prepare_repository":
+                try:
+                    fallback_pdf = extract_pdf_input(request["pdf_path"])
+                    data["pdf_input"] = {"sha256": fallback_pdf.sha256, "pages": fallback_pdf.page_count,
+                                         "bytes": fallback_pdf.byte_size, "readable": True}
+                    data["repository_fallback"] = {"available": True, "pdf_sha256": fallback_pdf.sha256,
+                        "reason": error, "action": "用户可补充 GitHub 仓库地址，重新核对论文与仓库后重试"}
+                except (ValueError, OSError, KeyError):
+                    pass
             if getattr(exc, "planning_evidence", None) is not None:
                 data["plan_rejection"] = deepcopy(exc.planning_evidence)
                 write_json(run_dir / "plan_rejection.json", data["plan_rejection"])

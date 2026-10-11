@@ -137,6 +137,7 @@ def run_pipeline_core(progress_path: str,
                       offline: bool = False,
                       title_resolution: Optional[dict] = None,
                       pdf_resolution: Optional[dict] = None,
+                      preferred_repo_url: str = "",
                       _managed_runtime: bool = False,
                       _append_progress: bool = False,
                       _runtime_preparation: Optional[dict] = None) -> Dict[str, Any]:
@@ -149,6 +150,7 @@ def run_pipeline_core(progress_path: str,
     store = ProgressStore(progress_path, reset=not _append_progress)
     from src.title_routing import resolve_title_request
     resolved = {"paper_title": paper_title, "pdf_path": pdf_path,
+                "preferred_repo_url": preferred_repo_url,
                 "corpus_paper": corpus_paper, "mock_mode": mock_mode,
                 "experiment_profile": experiment_profile}
     pdf_parser_reason = None
@@ -179,6 +181,7 @@ def run_pipeline_core(progress_path: str,
             request = {
                 "progress_path": str(Path(progress_path).resolve()),
                 "paper_title": paper_title, "pdf_path": pdf_path,
+                "preferred_repo_url": preferred_repo_url,
                 "corpus_paper": corpus_paper, "model_name": model_name,
                 "base_url": base_url, "api_key": api_key, "mock_mode": mock_mode,
                 "max_trials": max_trials, "use_docker": use_docker,
@@ -251,6 +254,7 @@ def run_pipeline_core(progress_path: str,
     try:
         outcome = orchestrator.run({
             "paper_title": paper_title, "pdf_path": pdf_path,
+            "preferred_repo_url": preferred_repo_url,
             "corpus_paper": corpus_paper, "experiment_profile": experiment_profile,
             "prepare_only": prepare_only, "offline": offline,
             "use_llm_review": use_llm_review,
@@ -455,6 +459,7 @@ def run_pipeline_background(progress_path: str, *,
                             offline: bool = False,
                             title_resolution: Optional[dict] = None,
                             pdf_resolution: Optional[dict] = None,
+                            preferred_repo_url: str = "",
                             cleanup_pdf: bool = True,
                             on_done=None) -> threading.Thread:
     """启动后台线程执行流水线；返回守护线程句柄。
@@ -467,6 +472,7 @@ def run_pipeline_background(progress_path: str, *,
         try:
             result = run_pipeline_core(
                 progress_path, paper_title=paper_title, pdf_path=pdf_path,
+                preferred_repo_url=preferred_repo_url,
                 corpus_paper=corpus_paper, model_name=model_name,
                 base_url=base_url, api_key=api_key, mock_mode=mock_mode,
                 max_trials=max_trials, use_docker=use_docker,

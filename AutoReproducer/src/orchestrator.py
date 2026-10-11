@@ -590,6 +590,10 @@ class Orchestrator:
         """进入 ERROR 状态并记录日志。"""
         self.state = "ERROR"
         self.error = message
+        if stage == "FIND_RESOURCES" and self.data.get("pdf_path") and not self.mock_mode:
+            self.data["repository_fallback"] = {"available": True,
+                "pdf_sha256": (self.data.get("pdf_input") or {}).get("sha256"),
+                "reason": message, "action": "用户可补充 GitHub 仓库地址后重试"}
         self.logger.log("Orchestrator", stage, "ERROR", f"阶段失败: {message}")
 
     def _accumulate_llm_calls(self, result: dict) -> None:

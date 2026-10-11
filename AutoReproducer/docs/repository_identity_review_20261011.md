@@ -12,3 +12,5 @@
 | Improving Graph Neural Networks with Simple Architecture Design | 在线拉取 graphdml-uiuc-jlu/geom-gcn，commit `1124af17444d7fd09686504ec46caa3f39f4f632` | third_party；确认只是数据划分来源，不允许启动作者实验 |
 
 上述 PDF 已用于此前排查，仅属于仓库关联的正反例回归。它们不构成独立新 PDF 的完整实验验收，也不足以证明在广泛论文上的识别准确率提升。最终成功仍须使用另一篇论文，通过真实网页上传、完整作者实验、独立评估和事前数值标准。
+
+自动确认失败后，前端允许用户补充当前 PDF 的 GitHub 仓库并重试。该输入独立记录为 `user_supplied`，不能冒充 PDF 原文链接；后台重新校验实际 PDF 和固定仓库。论文身份与方法不匹配仍拒绝执行。内容匹配但作者身份缺少证据时，标为 `matching_repository` 和 `author_identity_confirmed=false`，执行来源记为 `user_supplied_repository`，报告明确说明作者身份未确认。用户地址不能跳过完整实验、计划引用、真实数据和独立数值检查。2026-10-11 的真实 API 回归中，手动传入 SSGC 地址仍保留 `selection_source=user_supplied`，作者身份由实际 PDF 声明与固定 README 的证据另行确认。
