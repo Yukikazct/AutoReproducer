@@ -48,6 +48,44 @@ def test_changed_capture_source_rejected(experiment):
         validate_capture(experiment["proposal"]["capture"], experiment["packet"], experiment["workspace"])
 
 
+def test_dotted_stored_fields_and_same_size_series_are_format_normalization(tmp_path):
+    from test_discovered_repository_series import series_fixture
+    from test_graph_author_capture import use_pyg_function_loop
+    fixture = series_fixture(tmp_path)
+    use_pyg_function_loop(fixture)
+    packet = build_evidence_packet(fixture['pdf'], fixture['workspace'], fixture['snapshot'])
+    capture = deepcopy(fixture['proposal']['capture'])
+    capture.update(labels='bundle.y', test_indices='bundle.indices', expected_test_samples=4)
+    original = deepcopy(capture)
+    normalized = validate_capture(capture, packet, fixture['workspace'])
+    assert normalized['labels'] == {'name': 'bundle', 'attributes': ['y']}
+    assert normalized['test_indices'] == {'name': 'bundle', 'attributes': ['indices']}
+    assert normalized['expected_test_samples'] == [4] * capture['expected_runs']
+    assert capture == original
+    for selector in ('bundle.y()', 'bundle.y[0]', 'bundle.__dict__', 'bundle.missing'):
+        invalid = deepcopy(capture)
+        invalid['labels'] = selector
+        with pytest.raises(ValueError):
+            validate_capture(invalid, packet, fixture['workspace'])
+
+
+def test_one_based_author_epochs_compile_actual_completion_count(tmp_path):
+    from test_discovered_repository_series import series_fixture
+    from test_discovered_module_loop import use_function_loop
+    fixture = series_fixture(tmp_path)
+    use_function_loop(fixture)
+    path = fixture['workspace'] / 'train.py'
+    source = path.read_text('utf-8').replace('range(args.epochs)', 'range(1, args.epochs + 1)')
+    path.write_text(source, encoding='utf-8')
+    fixture['snapshot']['files'][path.name] = hashlib.sha256(path.read_bytes()).hexdigest()
+    packet = build_evidence_packet(fixture['pdf'], fixture['workspace'], fixture['snapshot'])
+    capture = deepcopy(fixture['proposal']['capture'])
+    capture['completion']['epoch_offset'] = 1  # Model's usual zero-based assumption.
+    result = validate_capture(capture, packet, fixture['workspace'])
+    assert result['completion']['epoch_offset'] == 0
+    assert capture['completion']['epoch_offset'] == 1
+
+
 def native_environment():
     environment = dict(os.environ)
     dependencies = environment.get("AUTOREPRO_TEST_CPU_DEPS")
@@ -118,6 +156,67 @@ def test_second_unregistered_layout_multiple_inputs_complete_labels(tmp_path):
     assert result["is_reproduced"] is True
     assert result["capture"]["optimizer_steps"] == 60
     assert result["capture"]["test_samples"] == 8
+
+
+@pytest.mark.parametrize('layout', ['coo', 'csr'])
+def test_sparse_author_inputs_preserve_forward_and_fresh_metrics(tmp_path, layout):
+    def sparse_model(fixture):
+        root = fixture['workspace']
+        model = (root / 'author_model.py').read_text('utf-8')
+        model = model.replace('forward(self, features)', 'forward(self, features, adj)')
+        model = model.replace('self.linear(features)', 'self.linear(torch.sparse.mm(adj, features))')
+        script = (root / 'train.py').read_text('utf-8')
+        creation = ("nodes = torch.arange(len(features)).repeat(2)\n"
+                    "adj = torch.sparse_coo_tensor(torch.stack([nodes, nodes]), "
+                    "torch.full((len(nodes),), 0.5), (len(features), len(features)))\n")
+        if layout == 'csr':
+            creation += 'adj = adj.to_sparse_csr()\n'
+        script = script.replace('model = SignalModel()', creation + 'model = SignalModel()')
+        script = script.replace('model(features[:8])', 'model(features, adj)[:8]')
+        script = script.replace('model(features)', 'model(features, adj)')
+        for name, text in {'train.py': script, 'author_model.py': model}.items():
+            (root / name).write_text(text, encoding='utf-8')
+            fixture['snapshot']['files'][name] = hashlib.sha256((root / name).read_bytes()).hexdigest()
+            next(item for item in fixture['proposal']['citations'] if item.get('path') == name)['quote'] = text
+        fixture['proposal']['capture']['forward_args'].append('adj')
+    fixture, plan, digest, _, execution = run_fixture(tmp_path, mutate=sparse_model)
+    result = verify_capture(plan, fixture['workspace'], execution, digest)
+    assert result['is_reproduced'] and result['independent_metrics']['predictions_match']
+    assert result['independent_metrics']['numpy_torch_crosscheck']
+
+
+def test_external_sparse_operators_register_in_fresh_evaluator(tmp_path):
+    """Use a real extension op, including a fresh process with no author import."""
+    def extension_model(fixture):
+        root = fixture['workspace']
+        model = (root / 'author_model.py').read_text('utf-8')
+        model = model.replace('import torch\n', 'import torch\nfrom torch_sparse import SparseTensor\n')
+        model = model.replace('self.linear(features)',
+            'self.linear(SparseTensor.eye(features.shape[0], device=features.device).matmul(features))')
+        path = root / 'author_model.py'
+        path.write_text(model, encoding='utf-8')
+        fixture['snapshot']['files']['author_model.py'] = hashlib.sha256(path.read_bytes()).hexdigest()
+        next(item for item in fixture['proposal']['citations'] if item['id'] == 'model')['quote'] = model
+        fixture['proposal']['requirements']['compatibility'].append('torch-sparse==0.6.18+pt25cpu')
+        fixture['proposal']['requirements']['citations'].append('model')
+    fixture, plan, digest, manifest, execution = run_fixture(tmp_path, mutate=extension_model)
+    config = read_json(fixture['workspace'] / '_autorepro_capture/config.json')
+    assert 'torch_sparse' in config['operator_imports']
+    assert '_autorepro_capture/author_values.py' in manifest['files']
+    assert verify_capture(plan, fixture['workspace'], execution, digest)['is_reproduced']
+    environment = native_environment()
+    exported = fixture['workspace'] / '_autorepro_capture/model.pt'
+    inspection = subprocess.run([sys.executable, '-c',
+        'import torch; import torch_sparse; import sys; '
+        'print(torch.jit.load(sys.argv[1]).inlined_graph)', str(exported)],
+        env=environment, capture_output=True, text=True, encoding='utf-8', timeout=30)
+    assert inspection.returncode == 0, inspection.stderr
+    assert 'torch_sparse::spmm_sum' in inspection.stdout
+    config['operator_imports'] = []
+    write_json(fixture['workspace'] / '_autorepro_capture/config.json', config)
+    missing = invoke(fixture['workspace'], 'evaluate', environment)
+    assert missing.returncode != 0
+    assert 'torch_sparse::spmm_sum' in missing.stderr
 
 
 @pytest.mark.parametrize("layout", ["entrypoint_class", "torch_builtin"])

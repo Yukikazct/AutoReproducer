@@ -2,6 +2,7 @@
 from copy import deepcopy
 import hashlib
 import json
+from unittest.mock import Mock
 
 import pytest
 
@@ -22,6 +23,26 @@ def experiment(tmp_path, monkeypatch):
 
 def validate(fixture, proposal=None):
     return planner.validate_plan(proposal or fixture["proposal"], fixture["packet"], fixture["workspace"])
+
+
+def test_protocol_evidence_reuses_reader_recovered_pages_without_reparsing(tmp_path, monkeypatch):
+    import src.pdf_input as pdf_input
+    fixture = make_experiment(tmp_path)
+    original, title, annotations = pdf_input._extract_pypdf(fixture['pdf'].read_bytes())
+    primary = [*original[:-1], original[-1] + '\nModel 73:25\x062:50']
+    secondary = [*original[:-1], original[-1] + '\nModel 73.25±2.50']
+    primary_parser = Mock(return_value=(primary, title, annotations))
+    secondary_parser = Mock(return_value=(secondary, title, annotations))
+    monkeypatch.setattr(pdf_input, '_extract_pypdf', primary_parser)
+    monkeypatch.setattr(pdf_input, '_extract_pdfplumber', secondary_parser)
+    packet = planner.build_evidence_packet(fixture['pdf'], fixture['workspace'], fixture['snapshot'])
+    assert [p['text'] for p in packet['pdf']['pages']] == secondary
+    assert all(p['sha256'] == hashlib.sha256(p['text'].encode()).hexdigest() for p in packet['pdf']['pages'])
+    primary_parser.assert_called_once_with(fixture['pdf'].read_bytes())
+    secondary_parser.assert_called_once_with(fixture['pdf'].read_bytes())
+    refs = [ref for ref in planner._planning_view(packet)['evidence_excerpts'].values()
+            if ref['source'] == 'pdf' and ref['page'] == len(secondary)]
+    assert planner._has_value(73.25, refs)
 
 
 @pytest.mark.parametrize("family", ["signals", "pairs"])
@@ -150,6 +171,85 @@ def test_incomplete_or_uncertain_semantic_review_cannot_accept(experiment, chang
     assert len(llm.calls) == 2
 
 
+def test_dependency_uncertainty_can_defer_to_mandatory_runtime_checks(experiment):
+    review = accepted_review()
+    review['accepted'] = False
+    review['checks']['dependency_compatibility'].update(passed=False, severity='warning',
+        reason='Modern reviewed pins cover the imports; actual API compatibility needs runtime verification.')
+    llm = PlannedLLM(experiment['proposal'], review)
+    plan = planner.propose_plan(llm, experiment['packet'], experiment['workspace'])
+    audit = plan['semantic_review']
+    assert audit['accepted'] is True
+    assert audit['checks']['dependency_compatibility']['passed'] is False
+    assert audit['checks']['dependency_compatibility']['severity'] == 'warning'
+    assert audit['deferred_checks'] == ['dependency_compatibility']
+    assert audit['checks']['dependency_compatibility']['verification_stage'] == 'runtime_preparation_and_execution'
+    assert audit['model_aggregate_verdict'] is False
+    assert len(llm.calls) == 2
+
+
+def test_review_can_cite_actual_original_excerpt_ids_instead_of_planner_aliases(experiment):
+    excerpts = planner._planning_excerpts(experiment['packet'])
+    review = accepted_review()
+    pdf_id = next(key for key, ref in excerpts.items() if ref['source'] == 'pdf')
+    repo_id = next(key for key, ref in excerpts.items() if ref['source'] == 'repository')
+    review['checks']['same_experiment']['citations'] = [pdf_id, repo_id]
+    review['checks']['model_selection_and_evaluation_weights']['citations'] = [repo_id]
+    result = planner.propose_plan(PlannedLLM(experiment['proposal'], review), experiment['packet'], experiment['workspace'])
+    assert result['semantic_review']['checks']['same_experiment']['citations'] == [pdf_id, repo_id]
+    citations = {item['id']: item for item in result['citations']}
+    assert citations[pdf_id]['quote'] == excerpts[pdf_id]['quote']
+    assert citations[repo_id]['quote'] == excerpts[repo_id]['quote']
+    assert citations[repo_id]['revision'] == experiment['packet']['repository']['revision']
+    assert citations[pdf_id]['pdf_sha256'] == experiment['packet']['pdf']['sha256']
+
+
+def test_original_review_ids_still_require_unchanged_pinned_sources(experiment):
+    plan = validate(experiment)
+    excerpts = planner._planning_excerpts(experiment['packet'])
+    repo_id = next(key for key, ref in excerpts.items() if ref['source'] == 'repository')
+    review = accepted_review()
+    review['checks']['dependency_compatibility']['citations'] = [repo_id]
+    path = experiment['workspace'] / excerpts[repo_id]['path']
+    path.write_bytes(path.read_bytes() + b'\nchanged')
+    with pytest.raises(planner.PlanEvidenceError, match='changed'):
+        planner.review_plan(PlannedLLM(experiment['proposal'], review), plan, experiment['packet'], experiment['workspace'])
+
+
+@pytest.mark.parametrize('gate', list(planner._SEMANTIC_GATES.keys()))
+def test_known_incompatibility_or_experiment_failure_still_blocks(experiment, gate):
+    review = accepted_review()
+    review['checks'][gate].update(passed=False, severity='blocking',
+                                  reason='Original evidence contradicts this selected experiment.')
+    with pytest.raises(planner.PlanEvidenceError, match='semantic review'):
+        planner.propose_plan(PlannedLLM(experiment['proposal'], review), experiment['packet'], experiment['workspace'])
+
+
+@pytest.mark.parametrize('gate', [gate for gate in planner._SEMANTIC_GATES if gate != 'dependency_compatibility'])
+def test_protocol_failure_cannot_be_downgraded_to_warning(experiment, gate):
+    review = accepted_review()
+    review['checks'][gate].update(passed=False, severity='warning',
+                                  reason='Original evidence contradicts this selected experiment.')
+    with pytest.raises(planner.PlanEvidenceError, match='semantic review'):
+        planner.propose_plan(PlannedLLM(experiment['proposal'], review), experiment['packet'], experiment['workspace'])
+
+
+@pytest.mark.parametrize('change', [
+    lambda c: c.update(citations=['invented']),
+    lambda c: c.update(citations=['paper_results']),
+    lambda c: c.update(reason=''),
+    lambda c: c.update(severity=['warning']),
+    lambda c: c.update(passed='false'),
+])
+def test_deferred_dependency_warning_still_requires_typed_source_evidence(experiment, change):
+    review = accepted_review()
+    check = review['checks']['dependency_compatibility']
+    check.update(passed=False, severity='warning')
+    change(check)
+    with pytest.raises(planner.PlanEvidenceError):
+        planner.propose_plan(PlannedLLM(experiment['proposal'], review), experiment['packet'], experiment['workspace'])
+
+
 def test_quote_repairs_are_bounded_and_review_happens_only_after_validation(experiment):
     invalid = deepcopy(experiment["proposal"])
     invalid["citations"][1]["quote"] = "This quote was hallucinated."
@@ -228,3 +328,53 @@ def test_binary_text_suffix_is_skipped_without_hiding_real_source_mutation(exper
     (fixture["workspace"] / "train.py").write_text("changed", encoding="utf-8")
     with pytest.raises(planner.PlanEvidenceError, match="changed after snapshot"):
         planner.build_evidence_packet(fixture["pdf"], fixture["workspace"], fixture["snapshot"])
+
+
+def test_dependency_markdown_formatting_restores_original_without_changing_versions(experiment):
+    fixture = experiment
+    path = fixture['workspace'] / 'requirements.txt'
+    path.write_text('- `torch==1.13.1`\n', encoding='utf-8')
+    fixture['snapshot']['files']['requirements.txt'] = hashlib.sha256(path.read_bytes()).hexdigest()
+    fixture['packet'] = planner.build_evidence_packet(fixture['pdf'], fixture['workspace'], fixture['snapshot'])
+    proposal = deepcopy(fixture['proposal'])
+    next(item for item in proposal['citations'] if item['id'] == 'requirements')['quote'] = path.read_text('utf-8')
+    accepted = validate(fixture, proposal)
+    assert accepted['requirements']['author'] == ['- `torch==1.13.1`']
+    proposal['requirements']['author'] = ['torch==1.13']
+    with pytest.raises(planner.PlanEvidenceError, match='Original dependencies'):
+        validate(fixture, proposal)
+
+
+def test_one_repair_receives_independent_dependency_and_capture_errors(experiment):
+    invalid = deepcopy(experiment['proposal'])
+    invalid['parameters']['epochs'] = 123456
+    invalid['requirements']['compatibility'].extend(['scipy==1.14.1', 'tqdm==4.67.1'])
+    invalid['capture'] = {'single_run': invalid['capture']}
+    llm = PlannedLLM(experiment['proposal'], prefixes=[invalid])
+    assert planner.propose_plan(llm, experiment['packet'], experiment['workspace'])['semantic_review']['accepted']
+    repair = llm.calls[1][0]
+    assert 'Parameter value is unsupported' in repair
+    assert 'scipy, tqdm' in repair
+
+
+@pytest.mark.parametrize('checks_pass', [False, True])
+def test_aggregate_is_derived_from_all_verified_checks_without_tuning(experiment, checks_pass):
+    from unittest.mock import Mock
+    inconsistent = accepted_review()
+    inconsistent['accepted'] = False
+    if not checks_pass:
+        inconsistent['accepted'] = True
+        inconsistent['checks']['same_experiment'].update(passed=False, reason='Paper method is a different variant.')
+    llm = Mock()
+    llm.chat.return_value = json.dumps(inconsistent)
+    candidate = validate(experiment)
+    if checks_pass:
+        result = planner.review_plan(llm, candidate, experiment['packet'])
+        assert result['semantic_review']['aggregate_verdict_consistent'] is False
+        assert result['semantic_review']['model_aggregate_verdict'] is False
+    else:
+        with pytest.raises(planner.PlanEvidenceError, match='different variant'):
+            planner.review_plan(llm, candidate, experiment['packet'])
+    assert llm.chat.call_count == 1
+    assert llm.chat.call_args.kwargs['task'] == 'discovered_repository_plan_review'
+    assert planner._canonical(candidate) in llm.chat.call_args.args[0]

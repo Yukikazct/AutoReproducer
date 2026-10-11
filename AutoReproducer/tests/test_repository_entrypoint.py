@@ -215,7 +215,7 @@ def test_app_upload_rezero_displays_grounded_training_route_and_runs_full_experi
     assert any("作者主仓库与实际训练仓库分别记录" in item.value and TRAINING in item.value for item in app.caption)
     assert not app.session_state["running"]
     assert capture.call_count == 0
-    start = next(button for button in app.button if button.label == "🚀 开始复现")
+    start = next(button for button in app.button if button.label == "开始复现")
     start.click().run()
     assert not app.exception
     request = capture.call_args.kwargs

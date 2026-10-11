@@ -40,6 +40,7 @@ class PDFInput:
     sha256: str
     byte_size: int
     repository_links: tuple = ()
+    page_texts: tuple = ()
 
 
 def _pypdf_page_content(page, page_number):
@@ -95,14 +96,15 @@ def _extract_pypdf(payload):
 def _extract_pdfplumber(payload):
     import pdfplumber
     with pdfplumber.open(BytesIO(payload)) as document:
-        pages = [page.extract_text() or "" for page in document.pages]
+        # Small-font captions and tables use word gaps below the default 3pt.
+        pages = [page.extract_text(x_tolerance=1) or "" for page in document.pages]
         annotations = []
         for number, page in enumerate(document.pages, 1):
             try:
                 for link in page.hyperlinks:
                     top = max(0, float(link["top"]) - 24)
                     bottom = min(page.height, float(link["bottom"]) + 24)
-                    context = page.crop((0, top, page.width, bottom)).extract_text() or ""
+                    context = page.crop((0, top, page.width, bottom)).extract_text(x_tolerance=1) or ""
                     annotations.append({"page": number, "raw_url": link.get("uri", ""),
                                         "context": context})
             except Exception:
@@ -111,8 +113,14 @@ def _extract_pdfplumber(payload):
         return pages, str(metadata.get("Title") or ""), annotations
 
 
+def _extraction_damage(text):
+    """Count undecoded glyphs, without guessing what a number should mean."""
+    return (sum(ord(char) < 32 and char not in '\n\r\t' or char == '\ufffd' for char in text)
+            + len(re.findall(r'\(cid:\d+\)', text)))
+
+
 def extract_pdf_input(pdf_path):
-    """Read one immutable byte snapshot, trying a second parser on empty text."""
+    """Read immutable bytes; retry unreadable glyphs without dropping pages."""
     try:
         payload = Path(pdf_path).read_bytes()
     except (OSError, TypeError, ValueError) as exc:
@@ -120,7 +128,8 @@ def extract_pdf_input(pdf_path):
     if b"%PDF-" not in payload[:1024]:
         raise PDFInputError("文件不是有效 PDF，本次未生成或运行代码")
 
-    unavailable, empty = 0, False
+    unavailable, empty, candidate = 0, False, None
+    annotation_sources = []
     for parser in (_extract_pypdf, _extract_pdfplumber):
         try:
             extracted = parser(payload)
@@ -136,10 +145,28 @@ def extract_pdf_input(pdf_path):
         if not text.strip():
             empty = True
             continue
-        return PDFInput(text=text, first_page_text=pages[0] if pages else "",
+        damage = _extraction_damage(text)
+        if candidate is not None:
+            prior_pages, _, _, prior_damage = candidate
+            # A cleaner caption cannot authorize omitting other readable pages.
+            if (len(pages) != len(prior_pages)
+                    or any(old.strip() and not new.strip() for old, new in zip(prior_pages, pages))
+                    or damage >= prior_damage):
+                continue
+        # Both parsers read the same bytes. Keep their original annotation
+        # contexts: column interleaving can obscure a declaration in one parser.
+        annotation_sources.extend(annotations)
+        candidate = (pages, metadata_title, annotations, damage)
+        if damage == 0:
+            break
+
+    if candidate is not None:
+        pages, metadata_title, annotations, _ = candidate
+        return PDFInput(text="\n".join(pages), first_page_text=pages[0] if pages else "",
                         metadata_title=metadata_title, page_count=len(pages),
                         sha256=hashlib.sha256(payload).hexdigest(), byte_size=len(payload),
-                        repository_links=tuple(extract_current_repository_links(pages, annotations)))
+                        repository_links=tuple(extract_current_repository_links(pages, annotation_sources)),
+                        page_texts=tuple(pages))
 
     if unavailable:
         raise PDFParserUnavailable("PDF 解析依赖缺失，需要自动准备应用运行环境后重试")

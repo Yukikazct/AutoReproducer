@@ -68,10 +68,15 @@ def use_preinstalled_cache(monkeypatch, runner, cache):
     monkeypatch.setattr(runner.runner, "cached_environment", lambda _config: cache)
 
 
-@pytest.mark.parametrize("family,steps,samples", [("signals", 40, 4), ("pairs", 60, 8)])
+@pytest.mark.parametrize("family,steps,samples,dependency_warning", [
+    ("signals", 40, 4, False), ("pairs", 60, 8, False), ("signals", 40, 4, True)])
 def test_two_actual_author_entrypoints_complete_service_and_report(
-        tmp_path, monkeypatch, cpu_dependency_cache, family, steps, samples):
-    fixture, runner, request, llm = setup_service(tmp_path, monkeypatch, family)
+        tmp_path, monkeypatch, cpu_dependency_cache, family, steps, samples, dependency_warning):
+    review = accepted_review()
+    if dependency_warning:
+        review['checks']['dependency_compatibility'].update(passed=False, severity='warning',
+            reason='Reviewed modern versions require actual runtime API verification.')
+    fixture, runner, request, llm = setup_service(tmp_path, monkeypatch, family, review=review)
     use_preinstalled_cache(monkeypatch, runner, cpu_dependency_cache)
     processes, events = [], []
     popen = subprocess.Popen
@@ -91,7 +96,10 @@ def test_two_actual_author_entrypoints_complete_service_and_report(
     assert validation["is_reproduced"] is True
     assert data["repository_executed"] is True
     assert validation["training_summary"] == {"optimizer_steps": steps, "steps_completed": steps,
-                                               "test_samples": samples, "complete": True}
+                                              "test_samples": samples, "complete": True,
+                                              "runs_completed": 1, "runs_required": 1}
+    assert all(validation['completion_checks'].values())
+    assert '各阶段完成依据' in data['report']
     assert validation["metrics_comparison"]["paper"]["accuracy"] == 100.0
     assert validation["metrics_comparison"]["actual"]["accuracy"] == 100.0
     assert validation["independent_metrics"]["numpy_torch_crosscheck"] is True
@@ -108,11 +116,11 @@ def test_two_actual_author_entrypoints_complete_service_and_report(
         assert digest(workspace / name) == sha
     last_phases = {event["phase_id"]: event["status"] for event in events
                    if event.get("type") == "state"}
-    assert len(last_phases) == 7 and set(last_phases.values()) == {"success"}
+    assert len(last_phases) == 8 and set(last_phases.values()) == {"success"}
     assert read_json(run_dir / "run_status.json")["status"] == "completed"
     with FileLock(str(run_dir / ".run.lock"), timeout=0):
         pass
-    assert llm.get_call_count() == 2
+    assert llm.get_call_count() == 4
     frozen = read_json(run_dir / "experiment_spec.json")["spec"]
     assert frozen == data["grounded_repository_plan"]
     assert frozen["semantic_review"]["accepted"] is True
@@ -124,6 +132,23 @@ def test_two_actual_author_entrypoints_complete_service_and_report(
     assert "fixed test split" in report
     assert str(samples) in report and str(steps) in report
     assert "最多10轮" not in report
+    if dependency_warning:
+        assert frozen['semantic_review']['checks']['dependency_compatibility']['passed'] is False
+        assert '警告，须实际运行验证' in report
+
+
+def test_dependency_warning_cannot_skip_failed_runtime_preflight(tmp_path, monkeypatch):
+    review = accepted_review()
+    review['checks']['dependency_compatibility'].update(passed=False, severity='warning',
+        reason='Reviewed modern versions require actual runtime API verification.')
+    _, runner, request, _ = setup_service(tmp_path, monkeypatch, review=review)
+    runner.runner.run = Mock(return_value={'success': False, 'reason': 'Actual native operation failed'})
+    result = runner.run(request)
+    assert result['state'] == 'ERROR'
+    assert result['data']['repository_executed'] is False
+    assert result['data']['validation']['is_reproduced'] is None
+    runner.runner.run.assert_called_once()
+    assert runner.runner.run.call_args.args[1][0]['id'] == 'native_preflight'
 
 
 def test_rejected_semantics_retains_audit_and_never_starts_runtime(tmp_path, monkeypatch):
@@ -178,7 +203,7 @@ def test_pdf_changed_during_repository_export_cannot_start_planning(tmp_path, mo
     runner.runner.run = Mock(side_effect=AssertionError("Changed PDF cannot execute"))
     result = runner.run(request)
     assert result["state"] == "ERROR"
-    assert result["data"]["validation"]["failure_phase"] == "plan_repository"
+    assert result["data"]["validation"]["failure_phase"] == "prepare_repository"
     assert "PDF" in result["error"] and "发生变化" in result["error"]
     assert "grounded_repository_plan" not in result["data"]
     assert llm.get_call_count() == 0
@@ -272,7 +297,7 @@ def test_requested_sources_survive_planning_rejection_without_hiding_reason(
     assert result["state"] == "ERROR"
     assert reason in result["error"]
     assert result["data"]["validation"]["failure_phase"] == "plan_repository"
-    assert llm.get_call_count() == 3
+    assert llm.get_call_count() == 5
     run_dir = Path(result["data"]["run_dir"])
     rejection = read_json(run_dir / "plan_rejection.json")
     assert rejection["semantic_review"]["checks"]["same_experiment"]["reason"] == reason
@@ -282,6 +307,17 @@ def test_requested_sources_survive_planning_rejection_without_hiding_reason(
         packet = read_json(run_dir / "source_packet.json")
         assert "author_model.py" in packet["repository"]["files"]
         assert "SignalModel" in packet["repository"]["files"]["author_model.py"]["text"]
+    runner.runner.run.assert_not_called()
+
+
+def test_exception_without_message_stays_error_and_cannot_report_completed(tmp_path, monkeypatch):
+    from src.agents.experiment_protocol import ExperimentProtocolAgent
+    _, runner, request, _ = setup_service(tmp_path, monkeypatch)
+    monkeypatch.setattr(ExperimentProtocolAgent, 'run', Mock(side_effect=ValueError()))
+    runner.runner.run = Mock(side_effect=AssertionError('Rejected protocol cannot execute'))
+    result = runner.run(request)
+    assert result['state'] == 'ERROR' and result['error'] == 'ValueError'
+    assert result['data']['validation']['failure_phase'] == 'select_experiment'
     runner.runner.run.assert_not_called()
 
 

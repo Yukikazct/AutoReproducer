@@ -135,6 +135,65 @@ def test_empty_primary_parser_uses_fallback_instead_of_returning_blank_text(monk
     fallback.assert_called_once_with(path.read_bytes())
 
 
+def test_undecoded_math_font_uses_complete_secondary_text_and_annotations(monkeypatch, tmp_path):
+    path = write_pdf(tmp_path / 'paper.pdf', [TITLE])
+    broken = ['Sample paper', 'Table 1\nModel 73:25\x062:50', 'Final appendix']
+    clean = ['Sample paper', 'Table 1\nModel 73.25±2.50', 'Final appendix']
+    link = {'page': 1, 'raw_url': 'https://github.com/example/paper',
+            'context': 'Our code is available at this link.'}
+    monkeypatch.setattr(pdf_input, '_extract_pypdf', Mock(return_value=(broken, '', [])))
+    monkeypatch.setattr(pdf_input, '_extract_pdfplumber', Mock(return_value=(clean, '', [link])))
+    document = pdf_input.extract_pdf_input(path)
+    assert document.text == '\n'.join(clean) and document.page_count == 3
+    assert document.page_texts == tuple(clean)
+    assert document.sha256 == hashlib.sha256(path.read_bytes()).hexdigest()
+    assert document.repository_links[0]['url'] == link['raw_url']
+
+
+def test_secondary_text_keeps_primary_annotation_context_from_same_bytes(monkeypatch, tmp_path):
+    path = write_pdf(tmp_path / 'paper.pdf', [TITLE])
+    link = {'page': 1, 'raw_url': 'https://github.com/example/paper',
+            'context': 'Our code is available at this link.'}
+    monkeypatch.setattr(pdf_input, '_extract_pypdf', Mock(return_value=(['Title\x06'], '', [link])))
+    interleaved = {**link, 'context': 'Our code is other column text available at this link.'}
+    monkeypatch.setattr(pdf_input, '_extract_pdfplumber', Mock(return_value=(['Title'], '', [interleaved])))
+    document = pdf_input.extract_pdf_input(path)
+    assert document.text == 'Title'
+    assert any(item['is_author_code'] and item['context'] == link['context']
+               for item in document.repository_links)
+
+
+@pytest.mark.parametrize('secondary', [
+    ['Sample paper', 'Table 1 Model 73.25±2.50'],
+    ['Sample paper', 'Table 1 Model 73.25±2.50', ''],
+    ['Sample paper', 'Table 1 Model 73:25\x062:50\x07', 'Final appendix'],
+])
+def test_glyph_recovery_cannot_drop_readable_pages_or_select_more_damage(monkeypatch, tmp_path, secondary):
+    path = write_pdf(tmp_path / 'paper.pdf', [TITLE])
+    primary = ['Sample paper', 'Table 1 Model 73:25\x062:50', 'Final appendix']
+    monkeypatch.setattr(pdf_input, '_extract_pypdf', Mock(return_value=(primary, '')))
+    monkeypatch.setattr(pdf_input, '_extract_pdfplumber', Mock(return_value=(secondary, '')))
+    assert pdf_input.extract_pdf_input(path).text == '\n'.join(primary)
+
+
+def test_missing_secondary_parser_retains_readable_primary_with_glyph_damage(monkeypatch, tmp_path):
+    path = write_pdf(tmp_path / 'paper.pdf', [TITLE])
+    primary = ['Sample paper\nModel 73:25\x062:50']
+    monkeypatch.setattr(pdf_input, '_extract_pypdf', Mock(return_value=(primary, '')))
+    monkeypatch.setattr(pdf_input, '_extract_pdfplumber', Mock(side_effect=ImportError('missing')))
+    assert pdf_input.extract_pdf_input(path).text == primary[0]
+
+
+def test_clean_ratios_and_times_are_never_rewritten_as_decimals(monkeypatch, tmp_path):
+    path = write_pdf(tmp_path / 'paper.pdf', [TITLE])
+    primary = ['Sample paper\nRatio 3:2; time 14:30; accuracy 73.25']
+    monkeypatch.setattr(pdf_input, '_extract_pypdf', Mock(return_value=(primary, '')))
+    fallback = Mock(side_effect=AssertionError('Clean text needs no recovery'))
+    monkeypatch.setattr(pdf_input, '_extract_pdfplumber', fallback)
+    assert pdf_input.extract_pdf_input(path).text == primary[0]
+    fallback.assert_not_called()
+
+
 def test_missing_parsers_distinguished_from_damaged_pdf(monkeypatch, tmp_path):
     path = write_pdf(tmp_path / "paper.pdf", [TITLE])
     for name in ("_extract_pypdf", "_extract_pdfplumber"):

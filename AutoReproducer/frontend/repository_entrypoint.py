@@ -97,6 +97,8 @@ def load_repository_backend():
 def background_entrypoint(previous_background):
     """New PDF requests get a fresh worker; active tasks retain their owner."""
     def dispatch(progress_path, **request):
+        if request.get("preferred_repo_url") and request.get("pdf_path") and not request.get("mock_mode"):
+            return load_repository_backend().run_pipeline_background(progress_path, **request)
         profile = request.get("experiment_profile")
         if not profile and request.get("pdf_path") and not request.get("mock_mode"):
             parser = load_pdf_input()

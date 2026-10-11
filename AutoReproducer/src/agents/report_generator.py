@@ -252,12 +252,27 @@ def _discovered_plan_lines(data):
         lines += ["- " + _markdown_text(_txt(step.get("id"))) + "，目录：" +
                   _markdown_text(_txt(step.get("cwd"))),
                   "```json", json.dumps(step.get("argv", []), ensure_ascii=False), "```"]
+    capture = plan.get('capture') or {}
+    protocol = plan.get('experiment_protocol') or data.get('experiment_protocol') or {}
+    selection = protocol.get('model_selection') or {}
+    rule = capture.get('completion') or {'kind': 'fixed_steps'}
+    training_rule = (f"每次完整执行 {capture.get('expected_optimizer_steps')} 次优化器更新" if rule.get('kind') == 'fixed_steps'
+        else f"作者原始停止规则；实际更新数须等于 ({rule.get('epoch_counter')} + {rule.get('epoch_offset')}) × {rule.get('updates_per_epoch')}，上限 {capture.get('expected_optimizer_steps')}")
+    lines += ['', '**各阶段完成依据**', '', '| 阶段 | 必须核对的证据 |', '|---|---|',
+              '| 训练 | ' + _markdown_text(training_rule) + '；作者进程正常退出 |',
+              '| 模型选择 | ' + _markdown_text(str(selection.get('policy', '按独立协议审查确定的作者规则'))
+                  + '；' + str(selection.get('criterion', '')) + '；' + str(selection.get('evaluation_weights', '实际捕获模型与作者报告一致'))) + ' |',
+              f"| 重复实验 | 完成全部 {capture.get('expected_runs', 1)} 次原生运行，每次均有训练和独立评估记录 |",
+              '| 测试数据 | 每次完整测试样本数：' + _markdown_text(str(capture.get('expected_test_samples'))) + '；标签、索引与模型输入对应 |',
+              '| 独立评估 | 新进程重载实际模型，重新推理；NumPy 与 PyTorch 计算交叉核验，全部重复按原协议汇总 |',
+              '| 数值验收 | 作者报告与独立评估一致，再按冻结论文参考值与容差判定；实验完成和数值达标分别记录 |']
     review = plan.get("semantic_review") or {}
     if review:
         lines += ["", "**执行前独立协议审查**", "",
                   "- **状态**: " + ("通过" if review.get("accepted") is True else "未通过")]
         for name, check in (review.get("checks") or {}).items():
-            lines.append("- " + _markdown_text(name) + "：" + _markdown_text(_txt(check.get("reason"))))
+            status = "警告，须实际运行验证；" if check.get('severity') == 'warning' else ''
+            lines.append("- " + _markdown_text(name) + "：" + status + _markdown_text(_txt(check.get("reason"))))
     lines += ["", "**计划引用原文**", ""]
     for citation in plan.get("citations", []):
         location = (f"PDF 第 {citation.get('page')} 页" if citation.get("source") == "pdf"
@@ -436,6 +451,14 @@ class ReportGeneratorAgent(BaseAgent):
                   f"- **数据集**: {paper_info.get('dataset', '未知')}",
                   f"- **{'作者公开参考指标' if is_rezero else '声明指标'}**: {paper_info.get('metrics', {})}",
                   ""]
+        coverage = data.get('reading_coverage') or {}
+        if coverage:
+            title_only = coverage.get('scope') == 'provided_title'
+            lines += [f"- **{'标题输入阅读' if title_only else '论文全文阅读'}**: {'完成' if coverage.get('complete') else '未完成'}；"
+                      f"{coverage.get('read_characters', 0)}/{coverage.get('total_characters', 0)} 字符；"
+                      f"{coverage.get('completed_batches', 0)}/{coverage.get('total_batches', 0)} 批",
+                      ("- **阅读范围**: 当前仅有标题，尚未取得论文全文。" if title_only else
+                       "- **阅读完成依据**: 连续覆盖全部提取文本，所有批次均返回有效结果；汇总笔记用于定位，实验判定引用原文。"), ""]
 
         # 2. 资源定位
         lines += ["## 2. 资源定位",
@@ -459,6 +482,19 @@ class ReportGeneratorAgent(BaseAgent):
             lines += [f"- **仓库关联证据**: {identity.get('reason', '未核验')}",
                       f"- **发现来源**: {identity.get('source', '未记录')}",
                       "- **执行范围**: 定位仓库是资源发现结果；是否运行仓库由下方执行对象和实际步骤确认。"]
+            if identity.get("source") == "user_supplied_pinned_git_llm_review":
+                lines += ["- **仓库提供方式**: 用户在自动确认失败后手动提供",
+                          "- **作者身份**: " + ("经证据确认" if identity.get("author_identity_confirmed") else "未确认；仅确认论文与实现内容匹配")]
+        review = identity.get("review") or {}
+        if review.get("accepted"):
+            lines += [f"- **仓库语义核验**: {review.get('verdict', '')}",
+                      f"- **核验 Git commit**: `{review.get('repository_revision', '')}`"]
+            for gate, check in (review.get("checks") or {}).items():
+                lines.append(f"- **{gate}**: " + _markdown_text(str(check.get("reason", ""))))
+                for citation in check.get("citations") or []:
+                    source = (f"PDF 第 {citation.get('page')} 页" if citation.get("source") == "pdf"
+                              else citation.get("url", citation.get("path", "")))
+                    lines.append("  - " + _markdown_text(source) + "：" + _markdown_text(str(citation.get("quote", ""))))
         evidence = resources.get("selection_evidence") or identity.get("evidence") or {}
         if evidence:
             page = evidence.get("page")
@@ -479,9 +515,21 @@ class ReportGeneratorAgent(BaseAgent):
         lines.append("")
 
         repository = data.get("repository") or {}
+        protocol = data.get('experiment_protocol') or {}
+        if protocol:
+            method, dataset = protocol.get('method', {}), protocol.get('dataset', {})
+            repetitions = protocol.get('repetitions', {})
+            lines += ['### 选定实验的协议判别',
+                      '- **方法与变体**: ' + _markdown_text(str(method.get('name', '')) + ' / ' + str(method.get('variant', ''))),
+                      '- **数据集与划分**: ' + _markdown_text(str(dataset.get('name', '')) + ' / ' + str(dataset.get('split', ''))),
+                      '- **预处理**: ' + _markdown_text(str(dataset.get('preprocessing', ''))),
+                      '- **训练协议**: ' + _markdown_text(str(protocol.get('training', {}).get('description', ''))),
+                      f"- **完整运行次数与汇总**: {repetitions.get('count')} / {repetitions.get('aggregation')}",
+                      '- **论文与源码对应关系**: ' + _markdown_text(str(protocol.get('alignment', {}).get('reason', ''))),
+                      f"- **协议 SHA-256**: `{protocol.get('protocol_sha256', '')}`", '']
         spec = data.get("experiment_spec") or {}
         if spec:
-            lines += ["### 官方仓库实验来源",
+            lines += ["### 用户提供的仓库实验来源" if identity.get("source") == "user_supplied_pinned_git_llm_review" else "### 官方仓库实验来源",
                       f"- **实验定义**: {spec.get('label', spec.get('id', ''))}",
                       f"- **论文版本/参考位置**: {paper_info.get('reference_source', '')}",
                       f"- **固定源码版本**: `{repository.get('resolved_sha', '未获取')}`",
@@ -952,14 +1000,14 @@ class ReportGeneratorAgent(BaseAgent):
             lines.append("- **修正闭环触发**: 0 次（各步骤一次通过）")
         lines.append("")
 
-        # 8. 审计与预算统计
-        lines += ["## 8. 审计与预算统计",
+        # 8. 审计与用量统计
+        lines += ["## 8. 审计与用量统计",
                   f"- **总步骤数**: {audit.get('total_steps', 'N/A')}",
                   f"- **成功步数**: {audit.get('success', 'N/A')}",
                   f"- **错误步数**: {audit.get('errors', 'N/A')}",
                   f"- **执行时长**: {audit.get('duration_sec', 'N/A')} 秒",
                   f"- **LLM 调用次数**: {audit.get('llm_calls', 0)} "
-                  f"（方案预算上限 100 次）",
+                  f"（用于用量审计；全文阅读不设总调用预算）",
                   "",
                   "---",
                   "*报告由 AutoReproducer 自动生成*"]

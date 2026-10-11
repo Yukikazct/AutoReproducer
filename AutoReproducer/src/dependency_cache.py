@@ -51,12 +51,14 @@ def reset_managed_environment(root, directory):
 
 
 DEPENDENCY_HEALTH_PROBE = r'''
-import importlib, importlib.metadata, json, re, sys
+import importlib, importlib.metadata, json, os, re, sys
 from pathlib import Path
 from packaging.specifiers import SpecifierSet
 
 target = Path(sys.argv[1]).resolve(strict=True)
 requirements = json.loads(sys.argv[2])
+if any(req['module'] == 'dgl' for req in requirements):
+    os.environ['DGLBACKEND'] = 'pytorch'
 sys.path.insert(0, str(target))
 canonical = lambda name: re.sub(r"[-_.]+", "-", name).lower()
 distributions = {}
@@ -112,6 +114,25 @@ if 'torchvision' in loaded:
     torch = loaded['torch']
     result = loaded['torchvision'].ops.nms(torch.tensor([[0., 0., 1., 1.]]), torch.tensor([1.]), .5)
     assert result.tolist() == [0]
+if 'torch_scatter' in loaded:
+    torch = loaded['torch']
+    assert loaded['torch_scatter'].scatter_add(torch.tensor([1., 2.]), torch.tensor([0, 0])).tolist() == [3.]
+if 'torch_sparse' in loaded:
+    torch = loaded['torch']
+    edge = torch.tensor([[0, 0], [1, 1]])
+    indices, values = loaded['torch_sparse'].coalesce(edge, torch.tensor([1., 2.]), 2, 2)
+    assert indices.tolist() == [[0], [1]] and values.tolist() == [3.]
+if 'torch_geometric' in loaded:
+    from torch_geometric.nn import APPNP
+    torch = loaded['torch']
+    output = APPNP(2, .1)(torch.tensor([[1.], [2.]]), torch.tensor([[0, 1], [1, 0]]))
+    assert output.shape == (2, 1) and torch.isfinite(output).all()
+if 'dgl' in loaded:
+    dgl, torch = loaded['dgl'], loaded['torch']
+    graph = dgl.graph(([0, 1], [1, 0]))
+    graph.ndata['x'] = torch.tensor([[1.], [2.]])
+    graph.update_all(dgl.function.copy_u('x', 'm'), dgl.function.sum('m', 'out'))
+    assert graph.ndata['out'].tolist() == [[2.], [1.]]
 print(json.dumps({'versions': {name: distributions[canonical(req['name'])].version
                               for name, req in [(r['module'], r) for r in requirements]}}))
 '''

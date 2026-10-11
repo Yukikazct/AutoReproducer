@@ -32,7 +32,7 @@ _REF = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_./-]{0,200}")
 _SHA = re.compile(r"[0-9a-f]{40}")
 
 
-def author_repository_input(request):
+def author_repository_input(request, *, require_author=True):
     """Re-read the actual PDF; preview flags alone never authorize execution."""
     if request.get("mock_mode") or request.get("code") or request.get("corpus_paper"):
         raise ValueError("作者仓库复现需要真实 PDF 输入，不能混用模拟、外部代码或语料预设")
@@ -43,17 +43,27 @@ def author_repository_input(request):
     if expected and expected != document.sha256:
         raise ValueError("PDF 在资源发现后发生变化，不能继续原仓库计划")
     resources = request.get("resources") or {}
+    manual = request.get("preferred_repo_url") or ""
+    if manual and not require_author:
+        selected = normalize_repository_url(manual)
+        if not selected:
+            raise ValueError("用户提供的 GitHub 仓库地址无效")
+        return document, selected, {"url": selected, "raw_url": manual, "page": None,
+            "source": "user_supplied", "context": "用户在自动确认失败后补充的仓库地址",
+            "evidence_type": "user_supplied_repository", "is_author_code": False}
     selected = normalize_repository_url((resources.get("repo_discovery") or {}).get("selected_repo")
                                         or resources.get("code_repo_url") or resources.get("selected_repo") or "")
     if not selected:
         raise ValueError("没有有效的作者 GitHub 仓库")
     evidence = next((link for link in document.repository_links
-                     if link.get("is_author_code") is True
-                     and link.get("evidence_type") == "author_code_statement"
+                     if (not require_author or (link.get("is_author_code") is True
+                         and link.get("evidence_type") == "author_code_statement"))
+                     and link.get("evidence_type") != "reference"
                      and link.get("source") in {"pdf_text", "pdf_annotation"}
                      and link["url"].casefold() == selected.casefold()), None)
     if evidence is None:
-        raise ValueError("原始 PDF 的作者代码声明没有确认所选仓库")
+        raise ValueError("原始 PDF 的作者代码声明没有确认所选仓库" if require_author
+                         else "所选仓库没有实际 PDF 中的非参考文献链接证据")
     return document, selected, deepcopy(evidence)
 
 
@@ -131,11 +141,20 @@ def prepare_plan_datasets(root, workspace, plan, snapshot, *, offline=False):
                             "download_source": None if cached else url, "cache_hit": cached,
                             "target": dataset["target"], "sha256": expected, "bytes": size,
                             "verified": True})
+        elif kind == 'author_loader':
+            source = workspace_path(workspace, dataset['path'], 'original data loader', must_exist=True, forbid_git=True)
+            if digest(source) != dataset['source_sha256']:
+                raise ValueError('原始数据加载器与固定作者源码不一致')
+            root_path = workspace_path(workspace, dataset['root'], 'original data root', forbid_git=True)
+            if root_path.exists():
+                raise ValueError('作者加载器不能覆盖已有数据目录')
+            records.append({'kind': kind, 'loader': deepcopy(dataset), 'verified': False, 'pending': True,
+                            'reason': '原始作者加载器将在冻结依赖准备完成后下载并校验真实数据'})
         else:
             raise ValueError("本次计划没有受支持的真实数据来源；不会生成合成替代数据")
     if not records:
         raise ValueError("没有完整、可校验的实验数据声明")
-    return {"kind": "real", "sources": records, "verified": True,
+    return {"kind": "real", "sources": records, "verified": all(record['verified'] for record in records),
             "sha256": spec_digest(records), "split": "由原文引用冻结的作者实验划分"}
 
 
@@ -147,16 +166,22 @@ def verify_snapshot(workspace, snapshot, generated):
 
 
 def environment_for_plan(plan):
-    from src.discovered_repository_plan import CPU_COMPATIBILITY_PINS, CPU_INDEX_URL
+    from src.discovered_repository_plan import (CPU_COMPATIBILITY_PINS, CPU_INDEX_URL,
+                                               CUDA_COMPATIBILITY_PINS, CUDA_INDEX_URL, GRAPH_WHEEL_LINKS)
+    device = (plan.get("capture") or {}).get("device", "cpu")
+    if device not in {"cpu", "cuda"}:
+        raise ValueError("作者执行设备不在已审阅环境中")
+    version_map = CUDA_COMPATIBILITY_PINS if device == "cuda" else CPU_COMPATIBILITY_PINS
+    index_url = CUDA_INDEX_URL if device == "cuda" else CPU_INDEX_URL
     requirements = plan.get("requirements") or {}
     pins = requirements.get("compatibility") or []
     checked = []
     for value in pins:
         match = re.fullmatch(r"([A-Za-z0-9][A-Za-z0-9_.-]*)==([A-Za-z0-9][A-Za-z0-9_.+-]*)", value)
         if not match:
-            raise ValueError("兼容环境必须使用已审阅的精确 CPU 依赖版本")
+            raise ValueError("兼容环境必须使用已审阅的精确依赖版本")
         name = re.sub(r"[-_.]+", "-", match[1]).lower()
-        known = {re.sub(r"[-_.]+", "-", key).lower(): version for key, version in CPU_COMPATIBILITY_PINS.items()}
+        known = {re.sub(r"[-_.]+", "-", key).lower(): version for key, version in version_map.items()}
         expected = str(known.get(name, ""))
         # The public map may store versions or complete requirements.
         expected = expected.split("==")[-1]
@@ -165,19 +190,26 @@ def environment_for_plan(plan):
         checked.append(value)
     if not checked:
         raise ValueError("缺少冻结的本次执行依赖")
-    return {"requirements_txt": f"--extra-index-url {CPU_INDEX_URL}\n" + "\n".join(checked) + "\n",
+    graph_wheels = any(value.split('==')[0] in {'torch-sparse', 'torch-scatter'} for value in checked)
+    wheel_options = f"--find-links {GRAPH_WHEEL_LINKS[device]}\n" if graph_wheels else ''
+    return {"requirements_txt": f"--extra-index-url {index_url}\n" + wheel_options + "\n".join(checked) + "\n",
             "author_requirements": deepcopy(requirements.get("author", [])),
             "compatibility_reason": requirements.get("reason", ""),
-            "note": "基于作者依赖与源码导入选择的项目 CPU 兼容环境；不是论文原始运行环境的等价声明。",
+            "note": f"基于作者依赖与源码导入选择的项目 {device.upper()} 兼容环境；不是论文原始运行环境的等价声明。",
             "auto_prepare": True, "dependency_health_check": True,
             "cache_lock_timeout_s": AUTO_PREPARATION_LOCK_TIMEOUT}
 
 
-_PREFLIGHT = '''import importlib, importlib.metadata, json, platform, sys
+_PREFLIGHT = '''import importlib, importlib.metadata, json, os, platform, sys
 from pathlib import Path
 root = Path(__file__).resolve().parent
 requirements = json.loads((root / "requirements.json").read_text(encoding="utf-8"))
-aliases = {"scikit-learn": "sklearn", "pillow": "PIL"}
+if any(pin.startswith('dgl==') for pin in requirements):
+    os.environ['DGLBACKEND'] = 'pytorch'
+aliases = {"scikit-learn": "sklearn", "pillow": "PIL", "tensorboardx": "tensorboardX",
+           "googledrivedownloader": "google_drive_downloader",
+           "torch-geometric": "torch_geometric", "torch-sparse": "torch_sparse",
+           "torch-scatter": "torch_scatter"}
 modules, versions = {}, {}
 for requirement in requirements:
     name, expected = requirement.split("==", 1)
@@ -188,14 +220,20 @@ for requirement in requirements:
     modules[name] = str(Path(module.__file__).resolve())
     versions[name] = actual
 import torch, numpy
-if torch.cuda.is_available():
+contract = json.loads((root / "config.json").read_text(encoding="utf-8"))["capture"]
+device = contract.get("device", "cpu")
+if device == "cpu" and torch.cuda.is_available():
     raise ValueError("Generic CPU contract unexpectedly exposes a CUDA device")
-x = torch.tensor([[1., 2.]], requires_grad=True)
+if device == "cuda" and not torch.cuda.is_available():
+    raise ValueError("Source-required CUDA execution has no usable native GPU")
+x = torch.tensor([[1., 2.]], requires_grad=True, device=device)
 (x @ x.T).sum().backward()
-if not numpy.isfinite(x.grad.numpy()).all():
-    raise ValueError("Native CPU operation failed")
+if not numpy.isfinite(x.grad.detach().cpu().numpy()).all():
+    raise ValueError("Native device operation failed")
 record = {"versions": versions, "modules": modules, "python": sys.version,
-          "platform": platform.platform(), "device": "cpu", "native_probe_pass": True}
+          "platform": platform.platform(), "device": device, "native_probe_pass": True}
+if device == "cuda":
+    record.update(cuda_version=torch.version.cuda, gpu_name=torch.cuda.get_device_name(0))
 (root / "preflight.json").write_text(json.dumps(record, indent=2), encoding="utf-8")
 print(json.dumps(record), flush=True)
 '''
@@ -230,10 +268,11 @@ class DiscoveredRepositoryReproduction:
 
     def _run(self, request, on_event, run_dir):
         from src.agents.report_generator import ReportGeneratorAgent
-        from src.discovered_repository_plan import build_evidence_packet, propose_plan
+        from src.discovered_repository_plan import build_evidence_packet, bind_full_paper_notes, propose_plan
         started = time.monotonic()
         emit = on_event or (lambda event: None)
-        phases = [("prepare_repository", "FIND_RESOURCES", "ResourceFinder", "核验 PDF 作者来源与固定仓库"),
+        phases = [("prepare_repository", "FIND_RESOURCES", "ResourceFinder", "核验论文与 Git 仓库并固定源码版本"),
+                  ("select_experiment", "READ_PAPER", "ExperimentProtocol", "判别论文实验方法与源码对应关系"),
                   ("plan_repository", "READ_PAPER", "PaperReader", "依据论文与源码冻结实验计划"),
                   ("prepare_dataset", "FIND_RESOURCES", "ResourceFinder", "准备完整真实数据"),
                   ("prepare_environment", "BUILD_ENV", "EnvBuilder", "准备依赖并进行原生运算检查"),
@@ -259,32 +298,102 @@ class DiscoveredRepositoryReproduction:
                 "reproduction_scope": "selected_paper_experiment", "execution_source": "author_repository",
                 "optimization": {"mode": "off", "available": False, "optimized": False,
                                  "status": "disabled", "reason": "运行已冻结作者实验协议"}}
+        for key in ('reading_coverage', 'reading_batches', 'reading_originals'):
+            if key in request:
+                data[key] = deepcopy(request[key])
         phase, error = "prepare_repository", None
         before_calls = self.llm.get_call_count() if self.llm else 0
         try:
             event(phase, "running")
             if self.use_docker:
                 raise ValueError("通用作者仓库执行当前需要本地受控进程模式")
-            document, url, evidence = author_repository_input(request)
+            from src.agents.repository_verifier import RepositoryVerifierAgent
+            document, url, evidence = author_repository_input(request, require_author=False)
+            manual = evidence["source"] == "user_supplied"
+            if manual:
+                data["execution_source"] = "user_supplied_repository"
+                data["resources"].update(code_repo_url=url, selected_repo=url, selection_evidence=deepcopy(evidence),
+                    repository_identity={"status": "user_supplied_unconfirmed", "source": "user_supplied_pinned_git_llm_review",
+                        "author_identity_confirmed": False, "reason": "用户补充的仓库，论文与实现关系尚未核验", "evidence": deepcopy(evidence)})
             data["pdf_input"] = {"sha256": document.sha256, "pages": document.page_count,
                                  "bytes": document.byte_size, "readable": True}
-            data["resources"].update(code_repo_url=url, selection_evidence=evidence,
-                repository_identity={"status": "paper_linked", "source": "pdf_author_code_statement",
-                                     "reason": "原始 PDF 的作者代码声明确认此仓库", "evidence": deepcopy(evidence)})
             pin = (data["resources"].get("repo_discovery") or {}).get("pinned_revision", "")
             offline = bool(request.get("offline"))
-            revision, pin_evidence = resolve_repository_revision(url, pin, offline=offline)
-            workspace = run_dir / "repo"
-            snapshot = export_repository(self.root, {"repository": {"url": url, "revision": revision}},
-                                         workspace, offline=offline, required_files=[])
-            if snapshot.get("resolved_sha") != revision or snapshot.get("url") != url:
-                raise ValueError("导出的仓库与所选作者来源或固定版本不一致")
+            candidates = [evidence] if manual else [evidence, *sorted(document.repository_links,
+                          key=lambda link: not link.get("is_author_code"))]
+            unique, seen = [], set()
+            for link in candidates:
+                if (link.get("evidence_type") != "reference"
+                        and link.get("source") in {"pdf_text", "pdf_annotation", "user_supplied"}
+                        and link["url"].casefold() not in seen):
+                    unique.append(link)
+                    seen.add(link["url"].casefold())
+            attempts, packet, review = [], None, None
+            for index, candidate in enumerate(unique[:3]):
+                candidate_url = candidate["url"]
+                attempt = {"repository_url": candidate_url, "accepted": False}
+                attempts.append(attempt)
+                try:
+                    revision, pin_evidence = resolve_repository_revision(
+                        candidate_url, pin if candidate_url.casefold() == url.casefold() else "", offline=offline)
+                    workspace = run_dir / ("repo" if index == 0 else f"candidate_repos/{index + 1}")
+                    snapshot = export_repository(self.root, {"repository": {"url": candidate_url, "revision": revision}},
+                                                 workspace, offline=offline, required_files=[])
+                    if snapshot.get("resolved_sha") != revision or snapshot.get("url") != candidate_url:
+                        raise ValueError("导出的仓库与所选作者来源或固定版本不一致")
+                    attempt.update(revision=revision, archive_sha256=snapshot.get("archive_sha256"),
+                                   workspace=str(workspace.resolve()))
+                    packet = build_evidence_packet(request["pdf_path"], workspace, snapshot, for_identity_review=True)
+                    bind_full_paper_notes(packet, request)
+                    if manual:
+                        packet["repository_input"] = {"source": "user_supplied", "url": url}
+                    if packet["pdf"]["sha256"] != document.sha256:
+                        raise ValueError("原始 PDF 在仓库准备期间发生变化，不能使用不同论文继续规划")
+                    write_json(run_dir / f"repository_identity_packet_{index + 1}.json", packet)
+                    review = RepositoryVerifierAgent(self.llm, self.logger).run(packet)
+                    attempt.update(accepted=True, review=review, revision=revision)
+                    url, evidence = candidate_url, deepcopy(candidate)
+                    packet["repository_identity_review"] = review
+                    packet["repository_identity_pending"] = False
+                    break
+                except Exception as exc:
+                    attempt.update(error=str(exc), review=getattr(exc, "repository_review", None))
+                    if digest(Path(request["pdf_path"])) != document.sha256:
+                        raise ValueError("原始 PDF 在仓库准备期间发生变化，不能继续") from exc
+                finally:
+                    write_json(run_dir / "repository_identity_attempts.json", attempts)
+            data["repository_identity_attempts"] = attempts
+            if review is None:
+                raise ValueError(("用户提供的仓库与论文实现内容未确认匹配；未启动实验。" if manual
+                                 else "候选仓库与论文的作者实现关系未确认；未启动实验。")
+                                 + "；".join(attempt.get("error", "") for attempt in attempts))
+            evidence["semantic_review"] = review
+            data["resources"].update(code_repo_url=url, selected_repo=url, selection_evidence=evidence,
+                repository_identity={"status": "user_supplied_verified" if manual else "author_verified",
+                                     "source": "user_supplied_pinned_git_llm_review" if manual else "pdf_pinned_git_llm_review",
+                                     "author_identity_confirmed": review["author_identity_confirmed"],
+                                     "reason": review["reason"], "evidence": deepcopy(evidence), "review": review})
+            data["resources"].setdefault("repo_discovery", {}).update(
+                selected_repo=url, pinned_revision=revision, repository_identity=data["resources"]["repository_identity"])
             data.update(repository=snapshot, revision_resolution=pin_evidence)
             write_json(run_dir / "repository.json", snapshot)
             event(phase, "success")
+            phase = "select_experiment"; event(phase, "running")
+            from src.agents.experiment_protocol import ExperimentProtocolAgent
+            try:
+                protocol = ExperimentProtocolAgent(self.llm, self.logger).run(packet, workspace)
+            except BaseException:
+                try:
+                    write_json(run_dir / 'source_packet.json', packet)
+                except Exception as persistence_error:
+                    data['source_packet_persistence_error'] = str(persistence_error)
+                raise
+            data['experiment_protocol'] = protocol
+            packet['experiment_protocol'] = protocol
+            write_json(run_dir / 'experiment_protocol.json', protocol)
+            event(phase, "success")
             phase = "plan_repository"; event(phase, "running")
-            packet = build_evidence_packet(request["pdf_path"], workspace, snapshot)
-            if packet["pdf"]["sha256"] != document.sha256:
+            if digest(Path(request["pdf_path"])) != document.sha256:
                 raise ValueError("原始 PDF 在仓库准备期间发生变化，不能使用不同论文继续规划")
             write_json(run_dir / "source_packet.json", packet)
             planning_error = None
@@ -314,7 +423,8 @@ class DiscoveredRepositoryReproduction:
             environment["offline"] = offline
             data["env_config"] = deepcopy(environment)
             data["experiment_spec"] = {"id": "discovered_author_experiment", "adapter_id": "discovered",
-                "label": "依据本次 PDF 与固定作者源码生成的实验计划", "repository": plan["repository"],
+                "label": "依据本次 PDF 与用户提供的固定仓库生成的实验计划" if manual else "依据本次 PDF 与固定作者源码生成的实验计划",
+                "repository": plan["repository"],
                 "paper": deepcopy(data["paper_info"]), "parameters": plan.get("parameters", {}),
                 "environment": deepcopy(environment), "validation": {"scope": "selected_paper_experiment",
                     "note": "本次论文与作者源码引文确定实验范围；独立指标与完整执行证据共同决定结果。"}}
@@ -323,7 +433,8 @@ class DiscoveredRepositoryReproduction:
             datasets = prepare_plan_datasets(self.root, workspace, plan, snapshot, offline=offline)
             data["dataset_provenance"] = datasets
             write_json(run_dir / "dataset.json", datasets)
-            event(phase, "success")
+            event(phase, 'success' if datasets['verified'] else 'waiting',
+                  '' if datasets['verified'] else '等待固定依赖就绪后执行原始作者数据加载器')
             self._execute_frozen(request, data, plan, snapshot, workspace, run_dir, environment, emit, event)
         except (KeyboardInterrupt, SystemExit) as exc:
             phase = getattr(exc, "reproduction_phase", phase)
@@ -337,12 +448,23 @@ class DiscoveredRepositoryReproduction:
             raise
         except Exception as exc:
             phase = getattr(exc, "reproduction_phase", phase)
-            error = str(exc)
+            error = str(exc) or type(exc).__name__
+            if phase == "prepare_repository":
+                try:
+                    fallback_pdf = extract_pdf_input(request["pdf_path"])
+                    data["pdf_input"] = {"sha256": fallback_pdf.sha256, "pages": fallback_pdf.page_count,
+                                         "bytes": fallback_pdf.byte_size, "readable": True}
+                    data["repository_fallback"] = {"available": True, "pdf_sha256": fallback_pdf.sha256,
+                        "reason": error, "action": "用户可补充 GitHub 仓库地址，重新核对论文与仓库后重试"}
+                except (ValueError, OSError, KeyError):
+                    pass
             if getattr(exc, "planning_evidence", None) is not None:
                 data["plan_rejection"] = deepcopy(exc.planning_evidence)
                 write_json(run_dir / "plan_rejection.json", data["plan_rejection"])
             data["validation"] = {"status": "execution_failed" if phase in {"execute_repository", "verify_protocol"}
                                   else "insufficient_evidence", "failure_phase": phase, "is_reproduced": None,
+                                  "failure_kind": getattr(exc, 'category', 'execution_failure' if phase in {'execute_repository','verify_protocol'}
+                                                          else 'runtime_error'),
                                   "result_level": "failed", "reason": error}
             data.setdefault("execution", {"mode": "repository", "executed": False, "success": False,
                                           "repository_executed": False})
@@ -402,6 +524,14 @@ class DiscoveredRepositoryReproduction:
             write_json(runtime_dir / "requirements.json", plan["requirements"]["compatibility"])
             for name in ("preflight.py", "requirements.json"):
                 generated[f"{CAPTURE_DIR}/{name}"] = digest(runtime_dir / name)
+            loaders = [item for item in plan['datasets'] if item['kind'] == 'author_loader']
+            if loaders:
+                preparation_source = Path(__file__).parent / 'experiments/author_dataset_prepare.py'
+                (runtime_dir / 'prepare_datasets.py').write_bytes(preparation_source.read_bytes())
+                write_json(runtime_dir / 'dataset_loaders.json', {'loaders': loaders,
+                    'source_files': snapshot['files'], 'offline': bool(request.get('offline'))})
+                for name in ('prepare_datasets.py', 'dataset_loaders.json'):
+                    generated[f'{CAPTURE_DIR}/{name}'] = digest(runtime_dir / name)
             write_json(run_dir / "adapter_manifest.json", {"files": generated,
                        "note": "原样保留作者源码；项目包装器仅记录训练、导出模型及独立评估"})
             verify_snapshot(workspace, snapshot, generated)
@@ -429,13 +559,21 @@ class DiscoveredRepositoryReproduction:
                         path = workspace_path(workspace, dataset["target"], "frozen real data", must_exist=True)
                         if digest(path) != dataset["sha256"] or path.stat().st_size != dataset["bytes"]:
                             raise ValueError("真实下载数据在执行期间发生变化")
+                    elif dataset['kind'] == 'author_loader' and dataset.get('verified') is True:
+                        for name, record in dataset['files'].items():
+                            path = workspace_path(workspace, name, 'frozen author data', must_exist=True, forbid_git=True)
+                            if digest(path) != record['sha256'] or path.stat().st_size != record['bytes']:
+                                raise ValueError('作者加载器下载或处理的真实数据在执行期间发生变化')
             verify_frozen_inputs()
             if request.get("prepare_only"):
                 data["execution"] = {"mode": "repository", "executed": False, "success": False,
                                      "repository_executed": False, "reason": "仅准备计划，尚未执行作者训练"}
                 data["validation"] = {"status": "prepared", "is_reproduced": None,
-                                      "result_level": "prepared", "reason": "源码、完整真实数据与协议已冻结，尚未执行训练"}
+                    "result_level": "prepared", "reason": ('源码与协议已冻结；作者加载器数据仍待依赖准备后下载，尚未执行训练'
+                    if loaders else '源码、完整真实数据与协议已冻结，尚未执行训练')}
                 event(phase, "success", "执行计划已准备，未安装或训练")
+                if loaders:
+                    event('prepare_dataset', 'skipped', '仅准备计划；作者加载器尚未下载真实数据')
                 for identifier in ("execute_repository", "verify_protocol"):
                     event(identifier, "skipped", "仅准备模式")
                 return
@@ -445,7 +583,8 @@ class DiscoveredRepositoryReproduction:
 
             preflight = [{"id": "native_preflight", "kind": "check", "required": True,
                           "argv": ["python", "-u", f"{CAPTURE_DIR}/preflight.py"], "cwd": ".",
-                          "timeout_s": 180, "env": {"CUDA_VISIBLE_DEVICES": ""},
+                          "timeout_s": 180, "env": {"CUDA_VISIBLE_DEVICES": ""}
+                              if plan["capture"].get("device", "cpu") == "cpu" else {},
                           "artifacts": [f"{CAPTURE_DIR}/preflight.json"]}]
             preparation = self.runner.run(workspace, preflight, environment, on_event=progress)
             data["environment_preparation"] = preparation
@@ -454,11 +593,57 @@ class DiscoveredRepositoryReproduction:
                 raise RuntimeError("依赖准备或原生导入/运算检查失败：" + str(
                     preparation.get("reason") or preparation.get("final", {}).get("stderr", ""))[-2000:])
             probe = read_json(runtime_dir / "preflight.json")
-            if probe.get("native_probe_pass") is not True or probe.get("device") != "cpu":
-                raise ValueError("原生 CPU 运算检查缺少成功证据")
+            if probe.get("native_probe_pass") is not True or probe.get("device") != plan["capture"].get("device", "cpu"):
+                raise ValueError("原生设备运算检查缺少成功证据")
             data["native_preflight"] = probe
             verify_frozen_inputs()
             event(phase, "success")
+            if loaders:
+                phase = 'prepare_dataset'; event(phase, 'running')
+                dataset_step = [{'id': 'prepare_author_datasets', 'kind': 'check', 'required': True,
+                    'argv': ['python', '-u', f'{CAPTURE_DIR}/prepare_datasets.py'], 'cwd': '.', 'timeout_s': 600,
+                    'env': {'CUDA_VISIBLE_DEVICES': ''}, 'artifacts': [f'{CAPTURE_DIR}/prepared_datasets.json']}]
+                dataset_execution = self.runner.run(workspace, dataset_step,
+                    {**environment, 'auto_prepare': False, 'require_prepared': True}, on_event=progress)
+                data['dataset_preparation_execution'] = dataset_execution
+                write_json(run_dir / 'dataset_preparation_execution.json', dataset_execution)
+                if dataset_execution.get('success') is not True:
+                    raise RuntimeError('原始作者数据准备未完整结束：' + str(dataset_execution.get('reason') or
+                        dataset_execution.get('final', {}).get('stderr', ''))[-2000:])
+                prepared = read_json(runtime_dir / 'prepared_datasets.json')
+                records = prepared.get('sources')
+                if prepared.get('verified') is not True or not isinstance(records, list) or len(records) != len(loaders):
+                    raise ValueError('原始作者数据准备缺少全部加载器的完成证据')
+                for record, loader in zip(records, loaders):
+                    if record.get('verified') is not True or record.get('loader') != loader or not record.get('files'):
+                        raise ValueError('真实数据准备记录与冻结的原始加载器不一致')
+                    for name, value in record['files'].items():
+                        target = workspace_path(workspace, name, 'prepared author data', must_exist=True, forbid_git=True)
+                        if (not name.startswith(loader['root'] + '/') or name in snapshot['files']
+                                or type(value.get('bytes')) is not int or value['bytes'] <= 0
+                                or target.stat().st_size != value['bytes'] or digest(target) != value.get('sha256')):
+                            raise ValueError('作者加载器的真实文件在训练前未通过完整校验')
+                iterator = iter(records)
+                provenance = data['dataset_provenance']
+                provenance['sources'] = [next(iterator) if item['kind'] == 'author_loader' else item
+                                         for item in provenance['sources']]
+                provenance.update(verified=True, sha256=spec_digest(provenance['sources']))
+                write_json(run_dir / 'dataset.json', provenance)
+                capture_configuration = read_json(runtime_dir / 'config.json')
+                capture_configuration['data_files'] = {name: record for source in records for name, record in source['files'].items()}
+                write_json(runtime_dir / 'config.json', capture_configuration)
+                for name in ('config.json', 'prepared_datasets.json'):
+                    generated[f'{CAPTURE_DIR}/{name}'] = digest(runtime_dir / name)
+                write_json(run_dir / 'adapter_manifest.json', {'files': generated,
+                    'note': '保留作者源码；数据由原始加载器下载并在训练前冻结，包装器仅捕获与独立评估'})
+                execution_plan = build_plan(profile='discovered_author_experiment', spec_sha256=data['spec_sha256'],
+                    workspace=workspace, repository=plan['repository'], dataset=provenance, steps=steps)
+                data['execution_plan'] = execution_plan
+                write_json(run_dir / 'execution_plan.json', execution_plan)
+                verify_frozen_inputs()
+                event(phase, 'success')
+            if data['dataset_provenance'].get('verified') is not True:
+                raise ValueError('完整真实数据尚未冻结，不能开始作者训练')
             if request.get("prepare_environment"):
                 data["execution"] = {"mode": "repository", "executed": False, "success": False,
                                      "repository_executed": False, "reason": "环境已准备，尚未执行作者训练"}

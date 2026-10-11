@@ -152,6 +152,8 @@ class Orchestrator:
             "execution_source": "user_supplied_code" if input_data.get("code") else (
                 "mock_demo" if self.mock_mode else "llm_generated"),
             "repository_executed": False,
+            "reading_purpose": "repository_discovery" if input_data.get("pdf_path")
+                and not input_data.get("code") and not input_data.get("corpus_paper") else "experiment",
             "verifications": [],
             "fix_records": [],
             "optimization": self._reserved_optimization(input_data),
@@ -217,6 +219,12 @@ class Orchestrator:
                 main_completed = True
                 # Prompt-Free 验证 + 修正闭环
                 self._verify_step(state_name, agent, result)
+
+                if state_name == "READ_PAPER" and not self.mock_mode:
+                    reviews = [item for item in self.data["verifications"]
+                               if item["state"] == "READ_PAPER"]
+                    if not reviews or reviews[-1].get("pass") is not True:
+                        raise RuntimeError("论文解析结果未通过最终审查，未启动资源实验")
 
                 if state_name == "FIND_RESOURCES":
                     # The final reviewed Finder output owns the selection.
@@ -337,7 +345,9 @@ class Orchestrator:
 
     def _emit_agent_completion(self, state_name, agent, result, attempt):
         status, reason, outcome = "success", None, "completed"
-        if state_name == "EXECUTE_CODE":
+        if state_name == 'READ_PAPER' and (result.get('reading_coverage') or {}).get('complete') is False:
+            status, reason, outcome = 'error', '论文全文阅读未完成', 'reading_incomplete'
+        elif state_name == "EXECUTE_CODE":
             final = (result or {}).get("final") or {}
             if (result.get("success") is False or result.get("not_runnable")
                     or final.get("success") is False or final.get("timed_out") or final.get("cancelled")
@@ -370,6 +380,9 @@ class Orchestrator:
         if state_name == "READ_PAPER":
             self.data["paper_info"] = result.get("paper_info", {})
             self.data["raw_text"] = result.get("raw_text", "")
+            for key in ('reading_context', 'reading_coverage', 'reading_batches', 'reading_originals'):
+                if key in result:
+                    self.data[key] = result[key]
             self.data["extracted_code_urls"] = result.get("extracted_code_urls", [])
             self.data["extracted_repository_links"] = result.get("extracted_repository_links", [])
             if result.get("pdf_input"):
@@ -510,7 +523,9 @@ class Orchestrator:
             try:
                 reviewed = verifier.run({
                     "agent_name": agent.name,
-                    "system_prompt": getattr(agent, "system_prompt", "") or agent.name,
+                    "system_prompt": (getattr(agent, "repository_system_prompt", "")
+                        if state_name in {"READ_PAPER", "FIND_RESOURCES"} and self.data.get("reading_purpose") == "repository_discovery"
+                        else getattr(agent, "system_prompt", "")) or agent.name,
                     "output": output,
                 })
                 accepted = bool(reviewed.get("pass"))
@@ -590,6 +605,10 @@ class Orchestrator:
         """进入 ERROR 状态并记录日志。"""
         self.state = "ERROR"
         self.error = message
+        if stage == "FIND_RESOURCES" and self.data.get("pdf_path") and not self.mock_mode:
+            self.data["repository_fallback"] = {"available": True,
+                "pdf_sha256": (self.data.get("pdf_input") or {}).get("sha256"),
+                "reason": message, "action": "用户可补充 GitHub 仓库地址后重试"}
         self.logger.log("Orchestrator", stage, "ERROR", f"阶段失败: {message}")
 
     def _accumulate_llm_calls(self, result: dict) -> None:

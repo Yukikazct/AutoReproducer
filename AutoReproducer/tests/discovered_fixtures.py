@@ -2,6 +2,7 @@
 from copy import deepcopy
 import hashlib
 import json
+import re
 
 from PyPDF2 import PdfWriter
 from PyPDF2.generic import DecodedStreamObject, DictionaryObject, NameObject
@@ -170,6 +171,75 @@ class PlannedLLM:
 
     def chat(self, prompt, **kwargs):
         self.calls.append((prompt, kwargs))
+        if kwargs["task"] == "repository_identity_review":
+            view = json.loads(prompt.split("Fetched evidence:\n", 1)[1])
+            return json.dumps(identity_review(view))
+        if kwargs['task'] == 'experiment_protocol':
+            return json.dumps(fixture_protocol(self.proposal, json.loads(prompt.split('Protocol evidence:\n', 1)[1])))
         if kwargs["task"] == "discovered_repository_plan_review":
             return json.dumps(self.review)
         return json.dumps(self.prefixes.pop(0) if self.prefixes else self.proposal)
+
+
+def fixture_protocol(proposal, view):
+    """Invented protocol data only tests the evidence and binding mechanics."""
+    excerpts = view['evidence_excerpts']
+    selected = {}
+    def selected_id(identifier):
+        if identifier in selected:
+            return selected[identifier]
+        citation = next(c for c in proposal['citations'] if c['id']==identifier)
+        if 'evidence_id' in citation:
+            selected[citation['id']] = citation['evidence_id']
+        else:
+            selected[citation['id']] = next(key for key, excerpt in excerpts.items()
+                if excerpt['source'] == citation['source'] and re.sub(r'\s+', ' ', citation['quote']).strip()
+                    in re.sub(r'\s+', ' ', excerpt['quote']).strip()
+                and excerpt.get('page') == citation.get('page') and excerpt.get('path') == citation.get('path'))
+        return selected[identifier]
+    def refs(ids):
+        return list(dict.fromkeys(selected_id(key) for key in ids))
+    both = refs(['paper_protocol', 'readme', 'script'])
+    step = next(step for step in proposal['steps'] if step['kind']=='train')
+    count = proposal['capture'].get('expected_runs', 1)
+    return {'version':1, 'method':{'name':'Fixture Linear','variant':'Fixture','citations':both},
+        'dataset':{'name':'Fixture Grid','split':'Full fixture test split','preprocessing':'Author fixture tensors','citations':both},
+        'training':{'description':'Full author fixture optimization', 'parameters':[
+            {'name':key,'value':value,'citations':refs(proposal['parameter_citations'][key])}
+            for key, value in proposal['parameters'].items()], 'citations':both},
+        'model_selection':{'policy':'last_epoch', 'criterion':'No model selection; evaluate final author weights.',
+                           'evaluation_weights':'The author evaluates the trained model after its full loop.',
+                           'citations':both},
+        'repetitions':{'count':count, 'aggregation':'mean' if count>1 else 'single','citations':both},
+        'metrics':[{**{k:m[k] for k in ('name','reference','unit')}, 'table_context':'Fixture row and test column',
+                    'citations':refs(m['citations'])} for m in proposal['metrics']],
+        'implementation':{'argv':step['argv'],'cwd':step['cwd'],'device':proposal['capture'].get('device','cpu'),
+                          'citations':refs(step['citations'])},
+        'alignment':{'status':'matched','reason':'Invented fixture sources agree on the selected full protocol.', 'citations':both}}
+
+
+def identity_review(view):
+    """Fixture verdict: verify citation mechanics, not real-world authorship."""
+    if "text" not in view["pdf"]["pages"][0]:
+        excerpts = view["evidence_excerpts"]
+        pdf_id = next(key for key in excerpts if key.startswith("pdf_p"))
+        repo_id = next(key for key in excerpts if key.startswith("repo_"))
+        review = {"verdict": "author_repository", "reason": "Invented fixture sources describe the same author experiment.",
+                "checks": {gate: {"passed": True, "reason": "Fixture paper and pinned README agree.",
+                    "citations": ["pdf_link_0" if gate == "author_implementation" else pdf_id, repo_id]}
+                    for gate in ("paper_identity", "author_implementation", "method_alignment")}}
+        if view.get("repository_input", {}).get("source") == "user_supplied":
+            review["verdict"] = "matching_repository"
+            review["checks"]["author_implementation"] = {"passed": False,
+                "reason": "The invented fixture has no independent author ownership evidence.", "citations": []}
+        return review
+    pdf = view["pdf"]["pages"][0]
+    link = view["pdf"]["repository_links"][0]
+    path, readme = next(iter(view["repository"]["files"].items()))
+    repository_quote = readme["text"].splitlines()[0]
+    return {"verdict": "author_repository", "reason": "Invented fixture sources describe the same author experiment.",
+            "checks": {gate: {"passed": True, "reason": "Fixture paper and actual pinned README agree.",
+                "citations": [{"source": "pdf", "page": link["page"] if gate == "author_implementation" else pdf["page"],
+                               "quote": link["context"] if gate == "author_implementation" else pdf["text"].splitlines()[0]},
+                              {"source": "repository", "path": path, "quote": repository_quote}]}
+                       for gate in ("paper_identity", "author_implementation", "method_alignment")}}
