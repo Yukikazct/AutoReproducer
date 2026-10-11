@@ -1,5 +1,33 @@
 # 独立新 PDF 验收规则
 
+## 2026-10-11 收尾：ChebNetII 规划失败，暂停新 PDF 验收
+
+按用户要求暂停继续寻找论文和训练，提交已验证修复，并将剩余问题提交为 GitHub issue。本轮尚无未参与修复的新 PDF 完整复现成功记录。
+
+最后一次真实网页测试使用《Convolutional Neural Networks on Graphs with Chebyshev Approximation, Revisited》。产品代码冻结为 `b4e164bd63ea44d5b55a897496836462770f012f`，冻结时间 `2026-10-11T14:18:36.834573+00:00`；随后从 <https://arxiv.org/pdf/2202.03580> 下载 20 页、713,026 字节的 PDF，SHA-256 为 `c32e1ebcd886611ff66293f211e7f1b9e1ffebc6668a4b853de3bc0d2f357e37`。
+
+全文阅读、资源定位审查、作者仓库身份确认及实验协议选择通过。仓库为 <https://github.com/ivam-he/ChebNetII>，固定 commit `ded6c18cbe9673234071031767d17826ad632aca`。选定 Table 6 的 ChebNetII/Cora 半监督随机划分实验：每类 20 个训练节点、500 个验证节点、1,000 个测试节点，保留作者全部 10 次运行、原始早停与验证损失选择规则。作者命令在 `main/` 执行：
+
+```text
+python training.py --net ChebNetII --dataset Cora --K 10 --prop_lr 0.001 --prop_wd 0.05 --dprate 0.8 --semi_rnd True
+```
+
+规划器两次选择 `main/dataset_loader.py:DataLoader` 的 `author_loader` 准备路径，确定性检查均返回：
+
+```text
+No validated author experiment plan: AuthorLoaderUnsupported: Loader module has an unreviewed top-level import
+```
+
+该模块还包含其它数据集的导入和类定义，超出当前纯加载器准备路径的支持范围；固定仓库却已包含 `main/data/cora/cora/raw/ind.cora.{x,y,tx,ty,allx,ally,graph,test.index}` 的全部 8 个原始文件。收尾修复向规划模型提供从真实文件清单推导的完整 bundled 数据选项，并在不支持的加载器反馈中指出这些路径。原加载器是否使用这些文件、实验划分和数量仍须原始源码审核，最终 bundled 文件仍逐个核对固定 SHA-256。该提示修复只完成机械回归，未再次调用真实 API 或训练，不能宣称 ChebNetII 已解决。
+
+本地失败任务为 `progress_1791728348815.jsonl`，实验目录为 `data/runs/repository_37defa7ddb6a426ca2135a3e050123a1/`；原始失败提案、协议、来源包及结果保留。网页终态为 ERROR，实验状态为 failed，终态活动 worker 和实验进程为零。训练、独立评估和数值验收均未开始。运行文件未上传；本记录仅公开必要摘要。
+
+收尾检查：使用本地标准 Python 3.11 执行 bundled 数据规划、通用计划、实验协议、作者加载器和加载准备链路测试，共 **159 passed**；`git diff --check` 通过。这些回归不代替真实论文复现验收。
+
+后续需验证真实规划是否正确使用作者已有数据、完善所选加载路径及其实际依赖支持，再冻结代码并换未参与修复的新 PDF 完成全部原生运行、独立模型重载和数值验收。ChebNetII 已转为回归样本。
+
+## 验收规则及先前记录
+
 最终验收必须使用未参与当前实现修复的新论文 PDF。DeepXDE、ReZero 和 DLinear 已用于开发或排查，只能作为回归样本，不能证明通用流程通过最终验收。
 
 2026-10-11 的 DAGNN 论文《Towards Deeper Graph Neural Networks》在 `b9d5219` 冻结后获取，原 PDF 为 <https://arxiv.org/pdf/2007.09296>，7,333,332 字节，SHA-256 为 `221f0885de41ffc6732da7b540d1bfbca8972da04a125ff0c8f6b16a3604c81b`。真实网页任务 `progress_1791725239608.jsonl` 阅读全部 57,978 个提取字符，阅读与资源审查、作者仓库 `divelab/DeeperGNN` 的身份确认通过，固定 commit `4d22a7d37800b0acbb5701bc341da2c6b5452bd2`。实验协议模型认为作者只保留验证选中的测试标量、未保存权重，直接返回 insufficient；当前运行机制已支持在原始比较分支完成赋值后保留实际权重，但判别器没有正确使用这一能力。原失败完整保留于 `repository_324d906b394f4241acbe44b80bf6305d`，未训练，终态无活动 worker 或执行进程。后续通过程序从实际 AST 列出支持的原生选择点，把源码、分支、作用域和哈希提供给判别器；不能自动覆盖负向协议或声称运行完成。该 PDF 已转为回归样本，修复后的最终验收必须更换论文。

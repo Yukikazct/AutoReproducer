@@ -305,6 +305,7 @@ def _planning_excerpts(packet):
 
 def _planning_view(packet):
     view = deepcopy(packet)
+    view['program_detected_bundled_planetoid'] = _bundled_planetoid_options(packet)
     view['source_catalog'] = {name: {'already_read': name in packet['repository']['files'],
                                    'bytes': entry['bytes']}
         for name, entry in packet['file_inventory'].items() if entry.get('text_available')}
@@ -323,6 +324,21 @@ def _planning_view(packet):
     from src.native_loop import discover_native_selections
     view['program_detected_native_selections'] = discover_native_selections(packet['repository']['files'])
     return view
+
+
+def _bundled_planetoid_options(packet):
+    """List complete raw file sets; usage/split still require source review."""
+    groups = {}
+    for name in packet['file_inventory']:
+        match = re.fullmatch(r'(.*/raw)/ind\.(cora|citeseer|pubmed)\.(x|y|tx|ty|allx|ally|graph|test\.index)', name)
+        if match:
+            root, dataset, suffix = match.groups()
+            groups.setdefault((root, dataset), {})[suffix] = name
+    required = {'x', 'y', 'tx', 'ty', 'allx', 'ally', 'graph', 'test.index'}
+    return [{'kind': 'bundled', 'dataset': dataset, 'raw_root': root,
+             'paths': [files[suffix] for suffix in sorted(required)],
+             'evidence_scope': 'complete_raw_file_inventory_only_original_loader_usage_still_requires_review'}
+            for (root, dataset), files in sorted(groups.items()) if set(files) == required]
 
 
 def bind_full_paper_notes(packet, reader_result):
@@ -804,8 +820,19 @@ def _datasets(items, citations, packet, workspace, *, selected_steps=None):
             if set(item) != {'kind', 'path', 'function', 'citations'} or not selected_steps:
                 raise PlanEvidenceError('Author loader declaration selects only an original path/function and source citations')
             train = next(step for step in selected_steps if step['kind'] == 'train')
-            loader = compile_author_loader(item, packet['repository']['files'], workspace, train,
-                                           _effective_author_parameters(packet, train))
+            try:
+                loader = compile_author_loader(item, packet['repository']['files'], workspace, train,
+                                               _effective_author_parameters(packet, train))
+            except ValueError as exc:
+                candidates = _bundled_planetoid_options(packet)
+                selected = (packet.get('experiment_protocol') or {}).get('dataset', {}).get('name', '').casefold()
+                candidates = [value for value in candidates if value['dataset'] == selected] or candidates
+                if candidates:
+                    raise PlanEvidenceError(str(exc) + '. The pinned repository already contains complete raw data sets: '
+                        + _canonical(candidates) + '. If the unchanged original loader uses the selected set, declare '
+                        'kind=bundled with its exact paths and repository source citations. No preparation import '
+                        'of this unsupported loader module is needed. Preserve the selected author command and split.') from exc
+                raise
             def cited(path, quote):
                 normalized = re.sub(r'\s+', ' ', quote).strip()
                 return any(ref.get('source') == 'repository' and ref.get('path') == path
@@ -1156,6 +1183,11 @@ you do not need to copy PDF line breaks, ligatures or source code. A direct
 its quote must be verbatim. To establish only that a bundled file exists, use
 {id,source:'inventory',path,quote:path}; inventory cannot prove dataset identity,
 split sizes, parameters or metrics. Cite the README or loader for dataset usage.
+program_detected_bundled_planetoid lists complete raw file sets already present
+in the fixed repository. If the selected original loader uses one of these sets,
+prefer kind=bundled with its exact paths and source citations over author_loader.
+This capability proves file presence only; verify dataset usage and the selected
+split from original source. Preserve the author command and all repetitions.
 An original pure author loader can prepare public Planetoid Cora/CiteSeer/PubMed
 data using the frozen PyG runtime, optionally with its original NormalizeFeatures.
 Choose author_loader with only path/function/citations; the program resolves
