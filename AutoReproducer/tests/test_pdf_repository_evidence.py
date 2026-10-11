@@ -55,6 +55,26 @@ def test_url_at_line_end_does_not_absorb_the_next_sentence():
 
 
 @pytest.mark.parametrize("declaration", [
+    "Source code at", "Source code on:", "Source\ncode at", "Our implementation at:",
+])
+def test_direct_author_source_labels_need_an_immediate_repository_target(declaration):
+    records = extract_repository_links(["Abstract\nComplete experiments.\n" + declaration
+                                        + " https://github.com/authors/research\nKEYWORDS\nGraph learning"])
+    assert records[0]["is_author_code"] is True
+    assert records[0]["evidence_type"] == "author_code_statement"
+
+
+@pytest.mark.parametrize("text", [
+    "References\n[1] Source code at https://github.com/cited/research",
+    "Third-party source code at https://github.com/cited/research",
+    "Baseline source code at https://github.com/cited/research",
+    "Source code at another site. A tool: https://github.com/cited/research",
+])
+def test_direct_source_labels_do_not_promote_references_or_unrelated_links(text):
+    assert not extract_repository_links([text])[0]["is_author_code"]
+
+
+@pytest.mark.parametrize("declaration", [
     "Code is avail-\nable at:", "Code is avail- able at:",
     "Our implemen-\ntation is publicly avail-\nable at:",
     "Our soft-\nware is re-\nleased at:", "Code is avail\u00adable at:",

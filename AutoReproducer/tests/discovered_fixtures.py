@@ -170,6 +170,31 @@ class PlannedLLM:
 
     def chat(self, prompt, **kwargs):
         self.calls.append((prompt, kwargs))
+        if kwargs["task"] == "repository_identity_review":
+            view = json.loads(prompt.split("Fetched evidence:\n", 1)[1])
+            return json.dumps(identity_review(view))
         if kwargs["task"] == "discovered_repository_plan_review":
             return json.dumps(self.review)
         return json.dumps(self.prefixes.pop(0) if self.prefixes else self.proposal)
+
+
+def identity_review(view):
+    """Fixture verdict: verify citation mechanics, not real-world authorship."""
+    if "text" not in view["pdf"]["pages"][0]:
+        excerpts = view["evidence_excerpts"]
+        pdf_id = next(key for key in excerpts if key.startswith("pdf_p"))
+        repo_id = next(key for key in excerpts if key.startswith("repo_"))
+        return {"verdict": "author_repository", "reason": "Invented fixture sources describe the same author experiment.",
+                "checks": {gate: {"passed": True, "reason": "Fixture paper and pinned README agree.",
+                    "citations": ["pdf_link_0" if gate == "author_implementation" else pdf_id, repo_id]}
+                    for gate in ("paper_identity", "author_implementation", "method_alignment")}}
+    pdf = view["pdf"]["pages"][0]
+    link = view["pdf"]["repository_links"][0]
+    path, readme = next(iter(view["repository"]["files"].items()))
+    repository_quote = readme["text"].splitlines()[0]
+    return {"verdict": "author_repository", "reason": "Invented fixture sources describe the same author experiment.",
+            "checks": {gate: {"passed": True, "reason": "Fixture paper and actual pinned README agree.",
+                "citations": [{"source": "pdf", "page": link["page"] if gate == "author_implementation" else pdf["page"],
+                               "quote": link["context"] if gate == "author_implementation" else pdf["text"].splitlines()[0]},
+                              {"source": "repository", "path": path, "quote": repository_quote}]}
+                       for gate in ("paper_identity", "author_implementation", "method_alignment")}}

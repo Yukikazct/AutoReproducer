@@ -278,6 +278,11 @@ def render_paper_input():
                 if primary:
                     st.success("PDF 原文代码声明链接：" + primary["url"])
                     st.caption(f"来源：第 {primary['page']} 页；将优先于模型猜测和关键词搜索。")
+                else:
+                    candidate = next((link for link in links if link.get("evidence_type") != "reference"), None)
+                    if candidate:
+                        st.info("PDF 仓库候选链接：" + candidate["url"])
+                st.caption("启动后将读取固定 Git 版本的 README、论文引用与文件目录，由 LLM 联合核验作者实现关系。")
                 with st.expander("PDF 仓库链接提取依据"):
                     for link in links[:12]:
                         kind = {"author_code_statement": "代码公开声明", "reference": "参考文献",

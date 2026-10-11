@@ -45,9 +45,13 @@ _AUTHOR_CODE = re.compile(_declaration_pattern(
     # Footnote extraction can join the marker directly to "Code". A labelled
     # code-for-project link is an explicit declaration even without "available".
     r"|(?<![\w])(?:\d{1,3})?(?:source\s+code|code|implementation|software|library)"
-    r"\s+for\s+[^.!?:]{1,140}:\s*(?=(?:https?://)?(?:www\.)?github\b)"), re.I)
+    r"\s+for\s+[^.!?:]{1,140}:\s*(?=(?:https?://)?(?:www\.)?github\b)"
+    # Abstracts also use a direct source label rather than a finite verb.
+    # Require its immediate repository target, not an arbitrary nearby link.
+    r"|(?<![\w])(?:\d{1,3})?(?:source\s+code|our\s+(?:code|implementation|software|library))"
+    r"\s+(?:at|on)\s*:?[ \t\r\n]*(?=(?:https?://)?(?:www\.)?github\.com/)"), re.I)
 _EXTERNAL_CODE = re.compile(_declaration_pattern(
-    r"\b(?:third(?:-\s*|\s+)party|prior\s+work|previous\s+work|baseline\s+(?:code|implementation))\b"
+    r"\b(?:third(?:-\s*|\s+)party|prior\s+work|previous\s+work|baseline\s+(?:source\s+)?(?:code|implementation))\b"
     r"|\b(?:code|implementation)\s+for\s+(?:the\s+)?baseline\b"), re.I)
 _NON_REPOSITORY_OWNERS = {
     "about", "collections", "contact", "enterprise", "events", "explore",

@@ -32,7 +32,7 @@ _REF = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_./-]{0,200}")
 _SHA = re.compile(r"[0-9a-f]{40}")
 
 
-def author_repository_input(request):
+def author_repository_input(request, *, require_author=True):
     """Re-read the actual PDF; preview flags alone never authorize execution."""
     if request.get("mock_mode") or request.get("code") or request.get("corpus_paper"):
         raise ValueError("作者仓库复现需要真实 PDF 输入，不能混用模拟、外部代码或语料预设")
@@ -48,12 +48,14 @@ def author_repository_input(request):
     if not selected:
         raise ValueError("没有有效的作者 GitHub 仓库")
     evidence = next((link for link in document.repository_links
-                     if link.get("is_author_code") is True
-                     and link.get("evidence_type") == "author_code_statement"
+                     if (not require_author or (link.get("is_author_code") is True
+                         and link.get("evidence_type") == "author_code_statement"))
+                     and link.get("evidence_type") != "reference"
                      and link.get("source") in {"pdf_text", "pdf_annotation"}
                      and link["url"].casefold() == selected.casefold()), None)
     if evidence is None:
-        raise ValueError("原始 PDF 的作者代码声明没有确认所选仓库")
+        raise ValueError("原始 PDF 的作者代码声明没有确认所选仓库" if require_author
+                         else "所选仓库没有实际 PDF 中的非参考文献链接证据")
     return document, selected, deepcopy(evidence)
 
 
@@ -277,26 +279,67 @@ class DiscoveredRepositoryReproduction:
             event(phase, "running")
             if self.use_docker:
                 raise ValueError("通用作者仓库执行当前需要本地受控进程模式")
-            document, url, evidence = author_repository_input(request)
+            from src.agents.repository_verifier import RepositoryVerifierAgent
+            document, url, evidence = author_repository_input(request, require_author=False)
             data["pdf_input"] = {"sha256": document.sha256, "pages": document.page_count,
                                  "bytes": document.byte_size, "readable": True}
-            data["resources"].update(code_repo_url=url, selection_evidence=evidence,
-                repository_identity={"status": "paper_linked", "source": "pdf_author_code_statement",
-                                     "reason": "原始 PDF 的作者代码声明确认此仓库", "evidence": deepcopy(evidence)})
             pin = (data["resources"].get("repo_discovery") or {}).get("pinned_revision", "")
             offline = bool(request.get("offline"))
-            revision, pin_evidence = resolve_repository_revision(url, pin, offline=offline)
-            workspace = run_dir / "repo"
-            snapshot = export_repository(self.root, {"repository": {"url": url, "revision": revision}},
-                                         workspace, offline=offline, required_files=[])
-            if snapshot.get("resolved_sha") != revision or snapshot.get("url") != url:
-                raise ValueError("导出的仓库与所选作者来源或固定版本不一致")
+            candidates = [evidence, *sorted(document.repository_links,
+                          key=lambda link: not link.get("is_author_code"))]
+            unique, seen = [], set()
+            for link in candidates:
+                if (link.get("evidence_type") != "reference"
+                        and link.get("source") in {"pdf_text", "pdf_annotation"}
+                        and link["url"].casefold() not in seen):
+                    unique.append(link)
+                    seen.add(link["url"].casefold())
+            attempts, packet, review = [], None, None
+            for index, candidate in enumerate(unique[:3]):
+                candidate_url = candidate["url"]
+                attempt = {"repository_url": candidate_url, "accepted": False}
+                attempts.append(attempt)
+                try:
+                    revision, pin_evidence = resolve_repository_revision(
+                        candidate_url, pin if candidate_url.casefold() == url.casefold() else "", offline=offline)
+                    workspace = run_dir / ("repo" if index == 0 else f"candidate_repos/{index + 1}")
+                    snapshot = export_repository(self.root, {"repository": {"url": candidate_url, "revision": revision}},
+                                                 workspace, offline=offline, required_files=[])
+                    if snapshot.get("resolved_sha") != revision or snapshot.get("url") != candidate_url:
+                        raise ValueError("导出的仓库与所选作者来源或固定版本不一致")
+                    attempt.update(revision=revision, archive_sha256=snapshot.get("archive_sha256"),
+                                   workspace=str(workspace.resolve()))
+                    packet = build_evidence_packet(request["pdf_path"], workspace, snapshot, for_identity_review=True)
+                    if packet["pdf"]["sha256"] != document.sha256:
+                        raise ValueError("原始 PDF 在仓库准备期间发生变化，不能使用不同论文继续规划")
+                    write_json(run_dir / f"repository_identity_packet_{index + 1}.json", packet)
+                    review = RepositoryVerifierAgent(self.llm, self.logger).run(packet)
+                    attempt.update(accepted=True, review=review, revision=revision)
+                    url, evidence = candidate_url, deepcopy(candidate)
+                    packet["repository_identity_review"] = review
+                    packet["repository_identity_pending"] = False
+                    break
+                except Exception as exc:
+                    attempt.update(error=str(exc), review=getattr(exc, "repository_review", None))
+                    if digest(Path(request["pdf_path"])) != document.sha256:
+                        raise ValueError("原始 PDF 在仓库准备期间发生变化，不能继续") from exc
+                finally:
+                    write_json(run_dir / "repository_identity_attempts.json", attempts)
+            data["repository_identity_attempts"] = attempts
+            if review is None:
+                raise ValueError("候选仓库与论文的作者实现关系未确认；未启动实验。"
+                                 + "；".join(attempt.get("error", "") for attempt in attempts))
+            evidence["semantic_review"] = review
+            data["resources"].update(code_repo_url=url, selected_repo=url, selection_evidence=evidence,
+                repository_identity={"status": "author_verified", "source": "pdf_pinned_git_llm_review",
+                                     "reason": review["reason"], "evidence": deepcopy(evidence), "review": review})
+            data["resources"].setdefault("repo_discovery", {}).update(
+                selected_repo=url, pinned_revision=revision, repository_identity=data["resources"]["repository_identity"])
             data.update(repository=snapshot, revision_resolution=pin_evidence)
             write_json(run_dir / "repository.json", snapshot)
             event(phase, "success")
             phase = "plan_repository"; event(phase, "running")
-            packet = build_evidence_packet(request["pdf_path"], workspace, snapshot)
-            if packet["pdf"]["sha256"] != document.sha256:
+            if digest(Path(request["pdf_path"])) != document.sha256:
                 raise ValueError("原始 PDF 在仓库准备期间发生变化，不能使用不同论文继续规划")
             write_json(run_dir / "source_packet.json", packet)
             planning_error = None

@@ -459,6 +459,16 @@ class ReportGeneratorAgent(BaseAgent):
             lines += [f"- **仓库关联证据**: {identity.get('reason', '未核验')}",
                       f"- **发现来源**: {identity.get('source', '未记录')}",
                       "- **执行范围**: 定位仓库是资源发现结果；是否运行仓库由下方执行对象和实际步骤确认。"]
+        review = identity.get("review") or {}
+        if review.get("accepted"):
+            lines += [f"- **仓库语义核验**: {review.get('verdict', '')}",
+                      f"- **核验 Git commit**: `{review.get('repository_revision', '')}`"]
+            for gate, check in (review.get("checks") or {}).items():
+                lines.append(f"- **{gate}**: " + _markdown_text(str(check.get("reason", ""))))
+                for citation in check.get("citations") or []:
+                    source = (f"PDF 第 {citation.get('page')} 页" if citation.get("source") == "pdf"
+                              else citation.get("url", citation.get("path", "")))
+                    lines.append("  - " + _markdown_text(source) + "：" + _markdown_text(str(citation.get("quote", ""))))
         evidence = resources.get("selection_evidence") or identity.get("evidence") or {}
         if evidence:
             page = evidence.get("page")

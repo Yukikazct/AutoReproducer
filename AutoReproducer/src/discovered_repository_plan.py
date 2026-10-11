@@ -33,7 +33,7 @@ _SHA = re.compile(r"[0-9a-f]{64}")
 _ID = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,63}")
 _NUMBER = re.compile(r"(?<![\w.])[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?(?![\w.])")
 _PACKAGE_IMPORTS = {"scikit-learn": "sklearn", "pillow": "PIL"}
-_TEXT_SUFFIXES = {".py", ".md", ".rst", ".txt", ".toml", ".yaml", ".yml", ".sh"}
+_TEXT_SUFFIXES = {".py", ".md", ".rst", ".txt", ".toml", ".yaml", ".yml", ".sh", ".cff"}
 _FORBIDDEN_FLAGS = {"--smoke", "--dry-run", "--fast-dev-run", "--limit-train-batches",
                     "--limit-test-batches", "--subset", "--max-samples"}
 
@@ -65,7 +65,7 @@ def _text_candidate(name):
 def _priority(name):
     lower = name.lower()
     base = Path(lower).name
-    if base.startswith("readme"):
+    if base.startswith("readme") or base == "citation.cff":
         return 0, len(Path(name).parts), name
     if "requirement" in base or base in {"pyproject.toml", "setup.py", "setup.cfg", "environment.yml"}:
         return 1, len(Path(name).parts), name
@@ -128,7 +128,8 @@ def _read_dataset_summary(workspace, name, expected):
     return {"text": text, "sha256": expected, "evidence_sha256": _digest(text.encode())}
 
 
-def build_evidence_packet(pdf_path, workspace, snapshot, *, max_files=32, max_source_bytes=180000):
+def build_evidence_packet(pdf_path, workspace, snapshot, *, max_files=32, max_source_bytes=180000,
+                          for_identity_review=False):
     """Keep every PDF page and bounded, hash-checked source; omit local paths."""
     from src.pdf_input import _extract_pypdf, _extract_pdfplumber, extract_pdf_input
     raw = Path(pdf_path).read_bytes()
@@ -190,11 +191,13 @@ def build_evidence_packet(pdf_path, workspace, snapshot, *, max_files=32, max_so
         size += source["bytes"]
     if not selected:
         raise PlanEvidenceError("No readable author repository evidence")
-    if not any(link.get("is_author_code") is True and link.get("url", "").casefold() == url.casefold()
-               for link in document.repository_links):
+    if not for_identity_review and not any(
+            link.get("is_author_code") is True and link.get("url", "").casefold() == url.casefold()
+            for link in document.repository_links):
         raise PlanEvidenceError("The PDF must directly declare this repository as its own author code")
     return {
         "version": 1,
+        "repository_identity_pending": bool(for_identity_review),
         "pdf": {"sha256": document.sha256, "bytes": len(raw),
                 "pages": [{"page": i, "text": text, "sha256": _digest(text.encode("utf-8"))}
                           for i, text in enumerate(pages, 1)],
@@ -816,6 +819,11 @@ def propose_plan(llm, packet, workspace, *, max_attempts=2):
     ``packet`` gains any requested source files; callers persist it AFTER this
     function returns so the frozen evidence digest includes the same sources.
     """
+    if packet.get("repository_identity_pending"):
+        raise PlanEvidenceError("Author repository identity has not been verified; cannot plan execution")
+    if packet.get("repository_identity_review"):
+        from src.agents.repository_verifier import validate_identity_review
+        validate_identity_review(packet, packet["repository_identity_review"])
     if type(max_attempts) is not int or not 1 <= max_attempts <= 3:
         raise PlanEvidenceError("Planning repair attempts must be bounded")
     feedback, requests, failures, last_candidate = "", 0, 0, None

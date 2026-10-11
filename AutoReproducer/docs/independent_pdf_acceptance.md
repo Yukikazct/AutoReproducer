@@ -4,7 +4,7 @@
 
 1. 完成通用实现与回归验证，记录执行代码的 Git 版本和文件 SHA-256。
 2. 冻结后获取新的公开论文 PDF，记录下载地址、时间、字节数和 SHA-256。
-3. 从真实网页上传 PDF 并启动；通过原文作者代码声明定位仓库，不手工指定该论文预设、命令或参考指标。
+3. 从真实网页上传 PDF 并启动；从原文链接提取候选，由 Agent 联合核对实际 PDF 和固定 Git 仓库的 README、论文引用与目录，确认作者实现关系，不手工指定该论文预设、命令或参考指标。
 4. 系统核验并固定作者仓库版本，从原始论文和源码确定完整实验、依赖、真实数据、参数及数值验收规则。
 5. 执行作者训练入口，等待实际进程与子进程完成；检查优化器更新、完整测试划分和运行产物。独立进程重载实际模型，重新推理并计算指标。
 6. 同时满足执行、协议、独立指标及事前数值规则才算成功；单元测试、冒烟、源码发现或生成替代算法不算成功。结论只覆盖选定实验。
@@ -18,3 +18,5 @@
 第二个独立样本《Simple Spectral Graph Convolution》从 UNSW 公开存档取得，PDF SHA-256 为 `d00c9f89f873b11e7201bf249bb76ad698f0a2f1a6046a43a96064d8188d04a0`，在提交 `cbef881` 冻结之后通过网页上传。作者仓库 `allenhaozhu/SSGC` 发现和固定成功；训练前的计划引用因纯空白差异被拒绝，未执行训练。修复仅允许空白序列等价，最终保存匹配到的原文及模型原提案；字符、数值、页码和语义审查仍严格核验。46 项规划测试和 17 项服务/路由测试通过。该 PDF 已转为回归样本，不能作为最终成功证据；其论文十次运行均值也不能用一次训练代替。
 
 第三个独立样本《Adaptive Universal Generalized PageRank Graph Neural Network》于提交 `82d1b5e` 冻结后取得，原 PDF 为 <https://arxiv.org/pdf/2006.07988>，SHA-256 为 `ce84494f19fd6d74d1c2d19a9c4b5acfa5542a297cbcdd3755e5270bfcd2a942`。网页预览阶段未识别纯文本编号脚注：原文 `Our implementation is available online.1` 对应 `1https://github.com/jianhao2016/GPRGNN`，文件没有 URI annotation。已补齐无注释的行首编号链接和句号后的编号声明关联，并保持同页、唯一目标及非引用要求。83 项 PDF 相关测试通过，原文提取回归确认作者链接优先于第 6 页的第三方仓库。该样本未训练，已退役为回归样本。
+
+第四个独立样本《Improving Graph Neural Networks with Simple Architecture Design》在通用 CPU/CUDA 原生多次运行能力通过 103 项相关测试、提交 `87a47f0` 冻结后取得。原 PDF 为 <https://arxiv.org/pdf/2105.07634>，SHA-256 为 `0485a517bd4359d844c6dcad74bd8186ae1ebcdeb23110ca1b1191a29c7bd6dc`。真实浏览器上传后，第一页摘要的 `Source code at https://github.com/sunilkmaurya/FSGNN` 被提取为普通仓库链接，未确认作者代码声明，训练未启动。补齐直接来源标签的识别：必须紧邻 GitHub 链接，仍排除引用、第三方、基线和不相关链接。该 PDF 已退役，下一次最终验收必须使用另一篇论文。

@@ -112,7 +112,7 @@ def test_two_actual_author_entrypoints_complete_service_and_report(
     assert read_json(run_dir / "run_status.json")["status"] == "completed"
     with FileLock(str(run_dir / ".run.lock"), timeout=0):
         pass
-    assert llm.get_call_count() == 2
+    assert llm.get_call_count() == 3
     frozen = read_json(run_dir / "experiment_spec.json")["spec"]
     assert frozen == data["grounded_repository_plan"]
     assert frozen["semantic_review"]["accepted"] is True
@@ -178,7 +178,7 @@ def test_pdf_changed_during_repository_export_cannot_start_planning(tmp_path, mo
     runner.runner.run = Mock(side_effect=AssertionError("Changed PDF cannot execute"))
     result = runner.run(request)
     assert result["state"] == "ERROR"
-    assert result["data"]["validation"]["failure_phase"] == "plan_repository"
+    assert result["data"]["validation"]["failure_phase"] == "prepare_repository"
     assert "PDF" in result["error"] and "发生变化" in result["error"]
     assert "grounded_repository_plan" not in result["data"]
     assert llm.get_call_count() == 0
@@ -272,7 +272,7 @@ def test_requested_sources_survive_planning_rejection_without_hiding_reason(
     assert result["state"] == "ERROR"
     assert reason in result["error"]
     assert result["data"]["validation"]["failure_phase"] == "plan_repository"
-    assert llm.get_call_count() == 3
+    assert llm.get_call_count() == 4
     run_dir = Path(result["data"]["run_dir"])
     rejection = read_json(run_dir / "plan_rejection.json")
     assert rejection["semantic_review"]["checks"]["same_experiment"]["reason"] == reason
