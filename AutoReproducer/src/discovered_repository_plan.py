@@ -31,6 +31,7 @@ CPU_COMPATIBILITY_PINS = {
     "torch-sparse": "0.6.18+pt25cpu", "dgl": "1.1.2",
     "aiohttp": "3.10.10", "fsspec": "2024.10.0", "jinja2": "3.1.6",
     "psutil": "6.1.0", "pyparsing": "3.2.0",
+    "optuna": "3.6.1",
 }
 CUDA_INDEX_URL = "https://download.pytorch.org/whl/cu121"
 CUDA_COMPATIBILITY_PINS = {**{name: version for name, version in CPU_COMPATIBILITY_PINS.items() if name != 'dgl'},
@@ -986,11 +987,21 @@ def validate_plan(payload, packet, workspace):
     if not isinstance(capture, dict):
         raise PlanEvidenceError("Independent full-test capture is required")
     refs = _references(capture.get("citations"), citations, "repository")
+    capture = deepcopy(capture)
+    if (capture.get('kind') == 'torch_classification_series'
+            and isinstance(capture.get('expected_test_samples'), dict)):
+        from src.split_counts import compile_split_rule
+        train = next(step for step in accepted['steps'] if step['kind'] == 'train')
+        mode = _effective_author_parameters(packet, train).get('split', {}).get('value')
+        capture['expected_test_samples'] = compile_split_rule(capture['expected_test_samples'],
+            packet['repository']['files'], selected_mode=mode, references=refs)
     counts = ["expected_optimizer_steps", "expected_test_samples"]
     if capture.get("kind") == "torch_classification_series":
         counts.append("expected_runs")
     for field in counts:
         value = capture.get(field)
+        if field == 'expected_test_samples' and isinstance(value, dict):
+            continue  # Complete source algorithms and actual mode were compiled above.
         values = value if field == "expected_test_samples" and isinstance(value, list) else [value]
         if not values or any(type(v) is not int or v <= 0 or not _has_value(v, refs) for v in values):
             raise PlanEvidenceError(f"Independent capture needs source-backed {field}")
@@ -1009,7 +1020,9 @@ def validate_plan(payload, packet, workspace):
     if "accuracy" not in names:
         raise PlanEvidenceError("Independent classification acceptance needs the paper accuracy reference")
     # Import lazily: source discovery remains usable before torch is installed.
-    accepted["capture"] = _validate_capture(capture, packet, workspace)
+    capture_context = ({'selected_steps': accepted['steps'], 'selected_citations': list(citations.values())}
+                       if isinstance(capture.get('expected_test_samples'), dict) else {})
+    accepted["capture"] = _validate_capture(capture, packet, workspace, **capture_context)
     if packet.get('experiment_protocol'):
         from src.agents.experiment_protocol import bind_plan_to_protocol
         bind_plan_to_protocol(accepted, packet['experiment_protocol'])
@@ -1022,9 +1035,9 @@ def validate_plan(payload, packet, workspace):
     return accepted
 
 
-def _validate_capture(capture, packet, workspace):
+def _validate_capture(capture, packet, workspace, **context):
     from src.discovered_repository_runtime import validate_capture
-    return validate_capture(capture, packet, workspace)
+    return validate_capture(capture, packet, workspace, **context)
 
 
 _SYSTEM = """You plan execution of an unknown research repository from evidence.
@@ -1101,9 +1114,10 @@ Available reviewed pins:
     ) + "\nReviewed CUDA pins (only source-required CUDA execution):\n" + _canonical(CUDA_COMPATIBILITY_PINS) + (
         "\nA native entrypoint containing all repetitions may use torch_classification_series. "
         "Capture a unique author function's final locals at its natural return; preserve all native "
-        "splits, runs and early-stop rules. Alternatively capture an original top-level module loop "
+        "splits, runs and early-stop rules. Alternatively capture an original repetition loop "
         "via scope:{path,loop_counter,selection:{validation_metric,comparison:'lt|le|gt|ge',best_metric,result,"
-        "result_unit:'fraction|percent'}}. The exact validation comparison and its direct test-result assignment "
+        "result_unit:'fraction|percent'}}. Add function:'original_name' to that scope when the direct "
+        "repetition loop belongs to a unique top-level synchronous function. The exact validation comparison and its direct test-result assignment "
         "must exist in the source. This observes the original best-validation weights before later training "
         "overwrites/deletes them; each complete native loop iteration must still finish. Never invent a repeat loop or seeds. A bundled NPZ split "
         "summary can be cited as {source:'dataset',path,quote} from file_inventory.dataset_evidence; "
@@ -1113,8 +1127,15 @@ Available reviewed pins:
         "multiplied by the source-defined optimizer updates per epoch. Natural author returns or complete original module loop iterations and "
         "all native repetitions are mandatory. expected_test_samples is an ordered list with one "
         "complete original split count per run, supported by source or actual bundled dataset evidence."
-        " Capture selectors are author identifiers or {name:'identifier',keys:['literal_dictionary_key',0]}; "
-        "only fixed dictionary/list access is allowed, never calls, slicing or generated expressions. "
+        " If counts are computed by the original stratified per-class training and global validation "
+        "remainder algorithm, use expected_test_samples:{kind:'stratified_remainder',mode:'dense|sparse',"
+        "rate_source:{path,function},sampler_source:{path,function}}. Cite both complete original functions. "
+        "The program compiles their exact algorithm and selected command mode, then independently derives "
+        "the count from all original labels in every run. Do not invent literal counts or fractions. "
+        " Capture selectors are author identifiers, {name:'identifier',keys:['literal_dictionary_key',0]}, "
+        "or {name:'identifier',attributes:['original_stored_field']}. Fields must be directly stored in "
+        "an ordinary instance dictionary and present in author source; properties/getters are unsupported. "
+        "Only fixed access is allowed, never calls, slicing or generated expressions. "
         "Use the actual full author integer tensor/NumPy labels, not the last validation minibatch. "
         "output_alignment='full_dataset' means the forward returns all rows before test indexing. "
         "output_alignment='selected_test' means the author's forward already returns rows selected by "

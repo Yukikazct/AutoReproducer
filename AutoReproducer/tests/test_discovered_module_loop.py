@@ -89,6 +89,56 @@ class SignalModel(torch.nn.Module):
     fixture['proposal']['capture'].update(scope=deepcopy(SCOPE), forward_args=['features', 'nothing'])
 
 
+def use_function_loop(fixture):
+    use_module_loop(fixture)
+    start, end = SOURCE.index('for idx in range(3):'), SOURCE.index("assert final_results")
+    source = (SOURCE[:start] + 'def run_all():\n'
+              + '\n'.join('    ' + line for line in SOURCE[start:end].splitlines())
+              + '\nrun_all()\n' + SOURCE[end:])
+    source = source.replace('nothing = None', '''class AuthorInputs:
+    def __init__(self, x, y, ids):
+        self.features = x
+        self.labels = y
+        self.indices = ids
+bundle = AuthorInputs(features, labels, idx_test)
+nothing = None''')
+    path = fixture['workspace'] / 'train.py'
+    path.write_text(source, encoding='utf-8')
+    fixture['snapshot']['files']['train.py'] = hashlib.sha256(path.read_bytes()).hexdigest()
+    next(c for c in fixture['proposal']['citations'] if c.get('path') == 'train.py')['quote'] = source
+    field = lambda name: {'name': 'bundle', 'attributes': [name]}
+    fixture['proposal']['capture'].update(scope={**deepcopy(SCOPE), 'function': 'run_all'},
+        forward_args=[field('features'), 'nothing'], labels=field('labels'), test_indices=field('indices'))
+
+
+@pytest.mark.parametrize('device', ['cpu', 'cuda'])
+def test_function_native_loop_uses_stored_fields_and_actual_selected_models(tmp_path, device):
+    if device == 'cuda':
+        from test_discovered_repository_series import cuda_dependency_cache
+        cuda_dependency_cache()
+    fixture, plan, spec_hash, execution = run_series(tmp_path, device, use_function_loop)
+    result = verify_capture(plan, fixture['workspace'], execution, spec_hash)
+    assert result['is_reproduced'] is True
+    assert [r['optimizer_steps'] for r in result['capture']['runs']] == [8, 10, 12]
+    assert [r['accuracy'] for r in result['independent_metrics']['runs']] == [1.0, 1.0, 1.0]
+    assert all(r['validation_selection']['optimizer_steps'] < r['optimizer_steps']
+               for r in result['capture']['runs'])
+    assert plan['capture']['scope']['function'] == 'run_all'
+
+
+@pytest.mark.parametrize('change', [
+    lambda s: s.replace('def run_all():', 'async def run_all():'),
+    lambda s: s.replace('def run_all():', 'def another():\n    def run_all():'),
+    lambda s: s.replace('def run_all():', 'def run_all():\n    for idx in range(1):\n        pass'),
+])
+def test_function_scope_must_have_an_unambiguous_direct_loop(tmp_path, change):
+    fixture = series_fixture(tmp_path)
+    use_function_loop(fixture)
+    source = (fixture['workspace'] / 'train.py').read_text('utf-8')
+    with pytest.raises((ValueError, SyntaxError)):
+        resolve_module_loop(change(source), fixture['proposal']['capture']['scope'])
+
+
 @pytest.mark.parametrize('device', ['cpu', 'cuda'])
 def test_every_native_iteration_finishes_but_best_weights_are_evaluated(tmp_path, device):
     if device == 'cuda':

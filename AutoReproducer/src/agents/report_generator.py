@@ -999,14 +999,14 @@ class ReportGeneratorAgent(BaseAgent):
             lines.append("- **修正闭环触发**: 0 次（各步骤一次通过）")
         lines.append("")
 
-        # 8. 审计与预算统计
-        lines += ["## 8. 审计与预算统计",
+        # 8. 审计与用量统计
+        lines += ["## 8. 审计与用量统计",
                   f"- **总步骤数**: {audit.get('total_steps', 'N/A')}",
                   f"- **成功步数**: {audit.get('success', 'N/A')}",
                   f"- **错误步数**: {audit.get('errors', 'N/A')}",
                   f"- **执行时长**: {audit.get('duration_sec', 'N/A')} 秒",
                   f"- **LLM 调用次数**: {audit.get('llm_calls', 0)} "
-                  f"（方案预算上限 100 次）",
+                  f"（用于用量审计；全文阅读不设总调用预算）",
                   "",
                   "---",
                   "*报告由 AutoReproducer 自动生成*"]

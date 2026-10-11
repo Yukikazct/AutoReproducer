@@ -93,7 +93,7 @@ def capture_return(namespace, index, observers, script, config, retained=None):
     raw_indices = retained['indices'] if retained is not None else (None if contract['test_indices'] is None
         else resolve_author_value(namespace, contract['test_indices']))
     indices = None if raw_indices is None else author_integer_tensor(raw_indices)
-    expected = contract["expected_test_samples"][index]
+    expected, census = _support.expected_test_count(contract, index, labels)
     # Snapshot the model: observing a natural return must not change the
     # author's module mode, device or subsequent native program behavior.
     model = deepcopy(model).eval()
@@ -133,6 +133,8 @@ def capture_return(namespace, index, observers, script, config, retained=None):
               "output_alignment": contract.get('output_alignment', 'full_dataset'),
               "model_source": name, "model_source_sha256": config["source_files"][name],
               "files_sha256": {name: sha(ROOT / name) for name in artifact_names(index)}}
+    if census is not None:
+        record['split_census'] = census
     if retained is not None:
         record.update(natural_return=False, native_loop_completed=True, author_loop_counter=index,
             validation_selection={'source': contract['scope']['selection'],
@@ -247,8 +249,9 @@ def capture(config):
         return trace_module
 
     def trace(frame, event, result):
-        if (event == 'call' and frame.f_code.co_name == '<module>'
-                and frame.f_code.co_filename == str(scope_path)):
+        if (event == 'call' and frame.f_code.co_name == loop['scope_name']
+                and frame.f_code.co_filename == str(scope_path)
+                and (loop['function_line'] is None or frame.f_code.co_firstlineno == loop['function_line'])):
             return trace_module
         return None
 
@@ -285,6 +288,7 @@ def capture(config):
 
 def evaluate(config):
     check_sources(config)
+    _support.load_native_operators(config)
     receipt = read("capture.json")
     contract, runs = config["capture"], []
     if (receipt.get("pass") is not True or receipt["spec_sha256"] != config["spec_sha256"]
@@ -296,6 +300,9 @@ def evaluate(config):
             if captured["files_sha256"][name] != sha(ROOT / name):
                 raise ValueError("Native series artifact changed before fresh evaluation")
         tensors = torch.load(ROOT / tensor_file, map_location="cpu", weights_only=True)
+        expected_samples, census = _support.expected_test_count(contract, index, tensors['labels'])
+        if census is not None and census != captured.get('split_census'):
+            raise ValueError('Independent complete-label census differs from training')
         model = torch.jit.load(str(ROOT / model_file), map_location="cpu").eval()
         with torch.no_grad():
             output = model(*tensors["inputs"])
@@ -303,7 +310,7 @@ def evaluate(config):
                     or not torch.equal(output.argmax(1), tensors["outputs"].argmax(1))):
                 raise ValueError("Fresh series model changed the captured predictions")
             logits, labels = select(output, tensors["labels"], tensors["test_indices"],
-                                    contract['expected_test_samples'][index], contract.get('output_alignment', 'full_dataset'))
+                                    expected_samples, contract.get('output_alignment', 'full_dataset'))
             values, targets = logits.double().numpy(), labels.numpy()
             accuracy = float(np.mean(np.argmax(values, axis=1) == targets))
             shifted = values - np.max(values, axis=1, keepdims=True)
@@ -314,6 +321,8 @@ def evaluate(config):
                 raise ValueError("Independent native-run NumPy metrics disagree with PyTorch")
         runs.append({"index": index, "test_samples": len(labels), "accuracy": accuracy, "cross_entropy": loss,
                      "predictions_match": True, "numpy_torch_crosscheck": True})
+        if census is not None:
+            runs[-1]['split_census'] = census
         print(f"INDEPENDENT_NATIVE_RUN_EVALUATED index={index} accuracy={accuracy}", flush=True)
     check_sources(config)
     write("independent_metrics.json", {"version": 1, "pass": True, "spec_sha256": config["spec_sha256"],

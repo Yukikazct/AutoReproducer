@@ -147,6 +147,40 @@ def test_sparse_author_inputs_preserve_forward_and_fresh_metrics(tmp_path, layou
     assert result['independent_metrics']['numpy_torch_crosscheck']
 
 
+def test_external_sparse_operators_register_in_fresh_evaluator(tmp_path):
+    """Use a real extension op, including a fresh process with no author import."""
+    def extension_model(fixture):
+        root = fixture['workspace']
+        model = (root / 'author_model.py').read_text('utf-8')
+        model = model.replace('import torch\n', 'import torch\nfrom torch_sparse import SparseTensor\n')
+        model = model.replace('self.linear(features)',
+            'self.linear(SparseTensor.eye(features.shape[0], device=features.device).matmul(features))')
+        path = root / 'author_model.py'
+        path.write_text(model, encoding='utf-8')
+        fixture['snapshot']['files']['author_model.py'] = hashlib.sha256(path.read_bytes()).hexdigest()
+        next(item for item in fixture['proposal']['citations'] if item['id'] == 'model')['quote'] = model
+        fixture['proposal']['requirements']['compatibility'].append('torch-sparse==0.6.18+pt25cpu')
+        fixture['proposal']['requirements']['citations'].append('model')
+    fixture, plan, digest, manifest, execution = run_fixture(tmp_path, mutate=extension_model)
+    config = read_json(fixture['workspace'] / '_autorepro_capture/config.json')
+    assert 'torch_sparse' in config['operator_imports']
+    assert '_autorepro_capture/author_values.py' in manifest['files']
+    assert verify_capture(plan, fixture['workspace'], execution, digest)['is_reproduced']
+    environment = native_environment()
+    exported = fixture['workspace'] / '_autorepro_capture/model.pt'
+    inspection = subprocess.run([sys.executable, '-c',
+        'import torch; import torch_sparse; import sys; '
+        'print(torch.jit.load(sys.argv[1]).inlined_graph)', str(exported)],
+        env=environment, capture_output=True, text=True, encoding='utf-8', timeout=30)
+    assert inspection.returncode == 0, inspection.stderr
+    assert 'torch_sparse::spmm_sum' in inspection.stdout
+    config['operator_imports'] = []
+    write_json(fixture['workspace'] / '_autorepro_capture/config.json', config)
+    missing = invoke(fixture['workspace'], 'evaluate', environment)
+    assert missing.returncode != 0
+    assert 'torch_sparse::spmm_sum' in missing.stderr
+
+
 @pytest.mark.parametrize("layout", ["entrypoint_class", "torch_builtin"])
 def test_author_model_class_location_does_not_require_an_import_preset(tmp_path, layout):
     def change_model(fixture):

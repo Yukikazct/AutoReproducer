@@ -24,10 +24,10 @@ SINGLE_CAPTURE_SCHEMA = {
 SERIES_CAPTURE_SCHEMA = {
     **SINGLE_CAPTURE_SCHEMA,
     "kind": "torch_classification_series", "device": "cpu|cuda",
-    "scope": "{path, function} for a unique top-level function; OR {path, loop_counter, selection:{validation_metric,comparison:'lt|le|gt|ge',best_metric,result,result_unit:'fraction|percent'}} for an original module-level repetition loop",
+    "scope": "{path, function} for a unique top-level function's natural return; OR {path, function?:'unique top-level function containing the repetition loop', loop_counter, selection:{validation_metric,comparison:'lt|le|gt|ge',best_metric,result,result_unit:'fraction|percent'}} for an original repetition loop",
     "forward_args": ["author_local_or_global_tensor_tree_or_scalar_selector"],
     "expected_runs": "positive_source_cited_integer",
-    "expected_test_samples": ["one_source_cited_complete_test_count_per_native_run"],
+    "expected_test_samples": "ordered source-cited integer list OR {kind:'stratified_remainder',mode:'dense|sparse',rate_source:{path,function},sampler_source:{path,function}}; the complete original split functions must be cited, fractions are compiled from their source",
     "expected_optimizer_steps": "source_cited_per_run_maximum_optimizer_steps",
     "completion": {"kind": "fixed_steps OR author_epoch_counter",
                    "epoch_counter": "local_identifier_only_for_author_epoch_counter",
@@ -43,16 +43,21 @@ _IDENTIFIER = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,127}")
 def _selector_names(selector):
     if isinstance(selector, str):
         return [selector]
+    if (isinstance(selector, dict) and set(selector) == {'name', 'attributes'}
+            and isinstance(selector['name'], str) and isinstance(selector['attributes'], list)
+            and 1 <= len(selector['attributes']) <= 8
+            and all(isinstance(key, str) and _IDENTIFIER.fullmatch(key) for key in selector['attributes'])):
+        return [selector['name']]
     if (not isinstance(selector, dict) or set(selector) != {'name', 'keys'}
             or not isinstance(selector['name'], str) or not isinstance(selector['keys'], list)
             or not 1 <= len(selector['keys']) <= 8
             or any(not (isinstance(key, str) and 1 <= len(key) <= 128
                         or type(key) is int and 0 <= key < 10000000) for key in selector['keys'])):
-        raise ValueError('Author selectors must be identifiers or fixed dictionary/list key paths')
+        raise ValueError('Author selectors must be identifiers or fixed key/stored-field paths')
     return [selector['name']]
 
 
-def validate_capture(capture, packet, workspace):
+def validate_capture(capture, packet, workspace, *, selected_steps=None, selected_citations=None):
     """Only named author globals are selectable; no expressions or new programs."""
     if not isinstance(capture, dict) or capture.get("kind") not in {"torch_classification", "torch_classification_series"}:
         raise ValueError("Only full-test PyTorch classification capture is supported")
@@ -80,9 +85,12 @@ def validate_capture(capture, packet, workspace):
                     or not re.search(r"(?<!\w)" + re.escape(name) + r"(?!\w)", source)):
                 raise ValueError("Capture selectors must identify values present in author Python source")
         if isinstance(selector, dict):
-            for key in selector['keys']:
+            for key in selector.get('keys', []):
                 if isinstance(key, str) and not re.search(r"['\"]" + re.escape(key) + r"['\"]", source):
                     raise ValueError('Capture dictionary key is absent from the pinned author source')
+            for key in selector.get('attributes', []):
+                if not re.search(r'\.\s*' + re.escape(key) + r'(?!\w)', source):
+                    raise ValueError('Capture stored field is absent from the pinned author source')
     if alignment == 'selected_test' and (capture['test_indices'] is None or capture['test_indices'] not in args):
         raise ValueError('Selected-test output must use the same complete author test indices as a forward input')
     for key in ("expected_optimizer_steps",) if series else ("expected_optimizer_steps", "expected_test_samples"):
@@ -92,9 +100,24 @@ def validate_capture(capture, packet, workspace):
         if capture["device"] not in {"cpu", "cuda"} or capture["aggregation"] != "mean":
             raise ValueError("Native series needs a fixed device and all-run mean aggregation")
         runs, samples = capture["expected_runs"], capture["expected_test_samples"]
-        if (type(runs) is not int or not 1 <= runs <= 100 or not isinstance(samples, list)
-                or len(samples) != runs or any(type(n) is not int or not 0 < n <= 10000000 for n in samples)):
+        derived = isinstance(samples, dict) and samples.get('kind') == 'stratified_remainder'
+        if (type(runs) is not int or not 1 <= runs <= 100 or
+                (not derived and (not isinstance(samples, list) or len(samples) != runs
+                                  or any(type(n) is not int or not 0 < n <= 10000000 for n in samples)))):
             raise ValueError("Native series requires one complete prospective test count for every run")
+        if derived:
+            from src.split_counts import compile_split_rule
+            from src.discovered_repository_plan import _effective_author_parameters
+            if not selected_steps or not selected_citations:
+                raise ValueError('Derived test counts need the validated author command and original citations')
+            train = next(step for step in selected_steps if step['kind'] == 'train')
+            mode = _effective_author_parameters(packet, train).get('split', {}).get('value')
+            citations = {item['id']: item for item in selected_citations}
+            refs = [citations[key] for key in capture['citations']]
+            original = {key: value for key, value in samples.items() if key not in {'train_fraction', 'validation_fraction'}}
+            compiled = compile_split_rule(original, packet['repository']['files'], selected_mode=mode, references=refs)
+            if samples != compiled:
+                raise ValueError('Derived test-count fractions differ from pinned author source')
         scope = capture["scope"]
         if (not isinstance(scope, dict) or not isinstance(scope.get('path'), str)
                 or scope.get('path') not in packet["repository"]["files"]
@@ -152,7 +175,9 @@ def materialize_capture(workspace, plan, spec_hash, *, snapshot=None):
     destination.mkdir()
     runtime = Path(__file__).parent / "experiments" / "discovered_capture.py"
     series = plan["capture"]["kind"] == "torch_classification_series"
-    runtime_files = ["runtime.py", "config.json"]
+    (destination / 'author_values.py').write_bytes((Path(__file__).parent / 'author_values.py').read_bytes())
+    (destination / 'split_counts.py').write_bytes((Path(__file__).parent / 'split_counts.py').read_bytes())
+    runtime_files = ["runtime.py", "config.json", 'author_values.py', 'split_counts.py']
     if series:
         (destination / "common.py").write_bytes(runtime.read_bytes())
         runtime = runtime.with_name("discovered_series_capture.py")
@@ -163,6 +188,9 @@ def materialize_capture(workspace, plan, spec_hash, *, snapshot=None):
     train = next(step for step in plan["steps"] if step["kind"] == "train")
     config = {"version": 1, "spec_sha256": spec_hash, "capture": deepcopy(plan["capture"]),
               "train": deepcopy(train), "source_files": deepcopy((snapshot or {}).get("files", {}))}
+    graph_modules = {'torch-sparse': 'torch_sparse', 'torch-scatter': 'torch_scatter', 'dgl': 'dgl'}
+    config['operator_imports'] = sorted({graph_modules[pin.split('==')[0]]
+        for pin in plan['requirements']['compatibility'] if pin.split('==')[0] in graph_modules})
     write_json(destination / "config.json", config)
     steps = []
     for original in plan["steps"]:
@@ -240,7 +268,8 @@ def verify_capture(plan, workspace, execution, spec_hash):
     if series:
         verify_series_receipts(plan["capture"], root, capture, metrics)
     if ((not series and capture.get("optimizer_steps") != plan["capture"]["expected_optimizer_steps"])
-            or capture.get("test_samples") != plan["capture"]["expected_test_samples"]
+            or (not (series and isinstance(plan['capture']['expected_test_samples'], dict))
+                and capture.get("test_samples") != plan["capture"]["expected_test_samples"])
             or capture.get("parameters_changed") is not True
             or metrics.get("test_samples") != capture["test_samples"]
             or metrics.get("capture_sha256") != digest(root / "capture.json")
@@ -310,11 +339,20 @@ def verify_series_receipts(contract, root, capture, metrics):
         steps = run.get("optimizer_steps")
         rule = contract["completion"]
         loop = 'loop_counter' in contract['scope']
+        samples = contract['expected_test_samples']
+        if isinstance(samples, dict):
+            from src.split_counts import expected_from_census
+            census = run.get('split_census')
+            expected_samples = expected_from_census(samples, census)
+            if evaluated.get('split_census') != census or run.get('total_samples') != sum(census):
+                raise ValueError('Complete label census differs between training and independent evaluation')
+        else:
+            expected_samples = samples[index]
         if (run.get("index") != index or evaluated.get("index") != index
                 or (run.get('native_loop_completed') is not True if loop else run.get("natural_return") is not True)
                 or run.get("parameters_changed") is not True
                 or type(steps) is not int or not 0 < steps <= contract["expected_optimizer_steps"]
-                or run.get("test_samples") != contract["expected_test_samples"][index]
+                or run.get("test_samples") != expected_samples
                 or evaluated.get("test_samples") != run["test_samples"]
                 or evaluated.get("predictions_match") is not True
                 or evaluated.get("numpy_torch_crosscheck") is not True):
@@ -343,7 +381,8 @@ def verify_series_receipts(contract, root, capture, metrics):
             if run.get("files_sha256", {}).get(name) != digest(root / name):
                 raise ValueError("A native repetition artifact changed after evaluation")
     if (capture.get("optimizer_steps") != sum(run["optimizer_steps"] for run in runs)
-            or capture.get("parameters_changed") is not True):
+            or capture.get("parameters_changed") is not True
+            or capture.get('test_samples') != [run['test_samples'] for run in runs]):
         raise ValueError("Aggregate training evidence does not reconcile with every repetition")
     for field in ("accuracy", "cross_entropy"):
         if not math.isclose(metrics.get(field, float("nan")), sum(row[field] for row in independent) / expected,

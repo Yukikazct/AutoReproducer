@@ -5,11 +5,15 @@ model, dataset, optimizer or training loop; those must come from author source.
 """
 import hashlib
 import inspect
+import importlib
 import json
 import os
 from pathlib import Path
 import runpy
 import sys
+
+from author_values import resolve_author_value
+from split_counts import expected_from_census
 
 import torch
 import numpy as np
@@ -38,6 +42,18 @@ def check_sources(config):
             raise ValueError("Author source or bundled input changed: " + name)
 
 
+def load_native_operators(config):
+    """Register only frozen graph libraries before loading the exported graph."""
+    modules = config.get('operator_imports', [])
+    if (not isinstance(modules, list) or len(modules) != len(set(modules))
+            or any(name not in {'torch_sparse', 'torch_scatter', 'dgl'} for name in modules)):
+        raise ValueError('Independent evaluation operator imports are not from reviewed graph libraries')
+    for name in modules:
+        if name == 'dgl':
+            os.environ['DGLBACKEND'] = 'pytorch'
+        importlib.import_module(name)
+
+
 def prepare_output_directories(config):
     """Prepare only parents compiled from source-bound author save statements."""
     for item in config['train'].get('output_directories', []):
@@ -56,17 +72,6 @@ def prepare_output_directories(config):
             if parent.exists() and (parent.is_symlink() or getattr(parent.lstat(), 'st_file_attributes', 0) & 0x400):
                 raise ValueError('Author output parent contains a link or junction')
         target.mkdir(parents=True, exist_ok=True)
-
-
-def resolve_author_value(namespace, selector):
-    if isinstance(selector, str):
-        return namespace[selector]
-    value = namespace[selector['name']]
-    for key in selector['keys']:
-        if type(value) not in (dict, list, tuple):
-            raise ValueError('Author key selector must traverse actual dictionary/list values')
-        value = value[key]
-    return value
 
 
 def author_integer_tensor(value):
@@ -118,6 +123,17 @@ def cpu_tensor(value):
     if not isinstance(value, torch.Tensor) or value.device.type != "cpu":
         raise ValueError("Named author capture must contain real CPU tensors")
     return value.detach().clone()
+
+
+def expected_test_count(contract, index, labels):
+    specification = contract['expected_test_samples']
+    if not isinstance(specification, dict):
+        return specification[index], None
+    classes, counts = torch.unique(labels.detach().cpu(), sorted=True, return_counts=True)
+    if not torch.equal(classes, torch.arange(len(classes), dtype=classes.dtype)):
+        raise ValueError('Source-derived class split requires complete labels numbered from zero')
+    census = counts.tolist()
+    return expected_from_census(specification, census), census
 
 
 def flatten(value, tensors):
@@ -274,6 +290,7 @@ def capture(config):
 
 def evaluate(config):
     check_sources(config)
+    load_native_operators(config)
     receipt = read("capture.json")
     if receipt["spec_sha256"] != config["spec_sha256"] or receipt.get("pass") is not True:
         raise ValueError("Training capture is not from this frozen run")

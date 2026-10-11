@@ -1,4 +1,4 @@
-"""Resolve an original module loop and its validation selection; never eval text."""
+"""Resolve an original repetition loop and validation selection; never eval text."""
 import ast
 import re
 
@@ -7,8 +7,10 @@ _COMPARISONS = {'lt': ast.Lt, 'le': ast.LtE, 'gt': ast.Gt, 'ge': ast.GtE}
 
 
 def resolve_module_loop(source, scope):
-    if not isinstance(scope, dict) or set(scope) != {'path', 'loop_counter', 'selection'}:
-        raise ValueError('Native module scope needs a path, loop counter and validation selection')
+    if (not isinstance(scope, dict)
+            or set(scope) not in ({'path', 'loop_counter', 'selection'},
+                                 {'path', 'function', 'loop_counter', 'selection'})):
+        raise ValueError('Native loop scope needs a path, loop counter and validation selection')
     selection = scope['selection']
     fields = {'validation_metric', 'comparison', 'best_metric', 'result', 'result_unit'}
     if (not isinstance(selection, dict) or set(selection) != fields
@@ -19,10 +21,21 @@ def resolve_module_loop(source, scope):
     if any(not isinstance(name, str) or not _NAME.fullmatch(name) for name in names):
         raise ValueError('Native loop and selection values must be original identifiers')
     tree = ast.parse(source)
-    loops = [node for node in ast.walk(tree) if isinstance(node, ast.For)
+    container, function_line = tree, None
+    if 'function' in scope:
+        name = scope['function']
+        if not isinstance(name, str) or not _NAME.fullmatch(name):
+            raise ValueError('Native loop function must be an original identifier')
+        functions = [node for node in ast.walk(tree)
+                     if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name]
+        if len(functions) != 1 or functions[0] not in tree.body or isinstance(functions[0], ast.AsyncFunctionDef):
+            raise ValueError('Native loop must belong to one unique synchronous top-level function')
+        container = functions[0]
+        function_line = min([container.lineno] + [node.lineno for node in container.decorator_list])
+    loops = [node for node in ast.walk(container) if isinstance(node, ast.For)
              and isinstance(node.target, ast.Name) and node.target.id == scope['loop_counter']]
-    if len(loops) != 1 or loops[0] not in tree.body:
-        raise ValueError('Native loop must resolve to one unique top-level author for loop')
+    if len(loops) != 1 or loops[0] not in container.body:
+        raise ValueError('Native loop must resolve to one unique direct author for loop in its scope')
     loop = loops[0]
     guards = [node for node in ast.walk(loop) if isinstance(node, ast.If)
               and isinstance(node.test, ast.Compare) and len(node.test.ops) == 1
@@ -39,4 +52,5 @@ def resolve_module_loop(source, scope):
         raise ValueError('Selected test result must be assigned directly in the original validation branch')
     assignment = assignments[0]
     return {'loop_line': loop.lineno, 'loop_end': loop.end_lineno,
-            'selection_start': assignment.lineno, 'selection_end': assignment.end_lineno}
+            'selection_start': assignment.lineno, 'selection_end': assignment.end_lineno,
+            'scope_name': scope.get('function', '<module>'), 'function_line': function_line}
