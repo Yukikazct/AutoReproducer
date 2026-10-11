@@ -226,3 +226,33 @@ def test_numbered_annotation_cannot_link_a_declaration_on_another_page():
     records = extract_repository_links(["Code is available on Github1.", "1" + url],
                                        [{"page": 2, "raw_url": url}])
     assert all(not record["is_author_code"] for record in records)
+
+
+@pytest.mark.parametrize("declaration", ["Our implementation is available online.1",
+                                         "Our code is available on Github1."])
+def test_numbered_text_footnote_without_uri_annotations_retains_author_evidence(declaration):
+    url = "https://github.com/researchers/another-method"
+    page = declaration + "\n" + "Body text. " * 100 + "\n1" + url + "\n2"
+    evidence = extract_repository_links([page])[0]
+    assert evidence["url"] == evidence["raw_url"] == url
+    assert evidence["source"] == "pdf_text" and evidence["is_author_code"]
+    assert declaration.rstrip(".") in evidence["context"]
+
+
+@pytest.mark.parametrize("prefix", ["References\n", "Baseline ", "Third-party "])
+def test_numbered_text_footnotes_do_not_promote_external_or_reference_code(prefix):
+    page = prefix + "Code is available online.1\n" + "Body text. " * 100
+    records = extract_repository_links([page + "\n1https://github.com/cited/other-method"])
+    assert records and all(not record["is_author_code"] for record in records)
+
+
+def test_numbered_text_footnotes_with_duplicate_number_remain_ambiguous():
+    page = "Our code is available online.1\n" + "Body text. " * 100
+    page += "\n1https://github.com/authors/method\n1https://github.com/other/tool"
+    records = extract_repository_links([page])
+    assert len(records) == 2 and all(not record["is_author_code"] for record in records)
+
+
+def test_number_before_inline_url_is_not_a_footnote_or_author_claim():
+    records = extract_repository_links(["See example1https://github.com/other/tool"])
+    assert records == []

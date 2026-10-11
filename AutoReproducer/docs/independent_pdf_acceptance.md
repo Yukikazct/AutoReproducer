@@ -16,3 +16,5 @@
 2026-10-11 的首个独立样本《Simplifying Graph Convolutional Networks》在网页预览阶段失败：PDF 将编号脚注和分栏正文粘连，正文的 `Github1` 未关联到同页的正确 URI annotation。已加入通用的同页编号关联：要求明确代码声明、相同编号和唯一仓库目标，排除引用、第三方和歧义。76 项相关测试通过，原 PDF 仅用于提取回归验证，未进入最终复现验收。
 
 第二个独立样本《Simple Spectral Graph Convolution》从 UNSW 公开存档取得，PDF SHA-256 为 `d00c9f89f873b11e7201bf249bb76ad698f0a2f1a6046a43a96064d8188d04a0`，在提交 `cbef881` 冻结之后通过网页上传。作者仓库 `allenhaozhu/SSGC` 发现和固定成功；训练前的计划引用因纯空白差异被拒绝，未执行训练。修复仅允许空白序列等价，最终保存匹配到的原文及模型原提案；字符、数值、页码和语义审查仍严格核验。46 项规划测试和 17 项服务/路由测试通过。该 PDF 已转为回归样本，不能作为最终成功证据；其论文十次运行均值也不能用一次训练代替。
+
+第三个独立样本《Adaptive Universal Generalized PageRank Graph Neural Network》于提交 `82d1b5e` 冻结后取得，原 PDF 为 <https://arxiv.org/pdf/2006.07988>，SHA-256 为 `ce84494f19fd6d74d1c2d19a9c4b5acfa5542a297cbcdd3755e5270bfcd2a942`。网页预览阶段未识别纯文本编号脚注：原文 `Our implementation is available online.1` 对应 `1https://github.com/jianhao2016/GPRGNN`，文件没有 URI annotation。已补齐无注释的行首编号链接和句号后的编号声明关联，并保持同页、唯一目标及非引用要求。83 项 PDF 相关测试通过，原文提取回归确认作者链接优先于第 6 页的第三方仓库。该样本未训练，已退役为回归样本。

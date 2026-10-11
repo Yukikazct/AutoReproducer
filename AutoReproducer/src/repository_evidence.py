@@ -14,6 +14,9 @@ _REPOSITORY_LINK = re.compile(
     r"(?<![\w.@/-])(?:https?://)?(?:www\.)?github\.com/"
     r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"
     r"(?:/[^\s<>\"'\)\]\}]+)?(?:[?#][^\s<>\"'\)\]\}]+)?", re.I)
+_NUMBERED_REPOSITORY_LINK = re.compile(
+    r"(?m)^[ \t]*(?P<number>\d{1,3})[ \t]*(?P<url>"
+    + _REPOSITORY_LINK.pattern.removeprefix(r"(?<![\w.@/-])") + r")", re.I)
 _REFERENCES = re.compile(r"(?im)^\s*(?:\d+\.?\s+)?(?:references|bibliography)\s*$")
 _APPENDIX = re.compile(r"(?im)^\s*(?:appendix|supplementary material)\b")
 
@@ -183,8 +186,9 @@ def _numbered_annotation_claim(page_text, url, page_annotations, headings, initi
             continue
         # A numbered declaration is a short sentence, not arbitrary page text.
         tail = page_text[declaration.end():declaration.end() + 200]
-        marker = re.match(r"[^.!?]{0,160}?\b(?:github|here|online|at|on)\s*"
-                          r"(?:\[\s*)?(\d{1,3})(?:\s*\])?(?=\s*[.,;:]|\s*$)",
+        marker = re.match(r"[^.!?]{0,160}?\b(?:github|here|online|at|on)\s*\.?[ \t]*"
+                          r"(?:\[\s*)?(\d{1,3})(?:\s*\])?"
+                          r"(?=\s*[.,;:]|[ \t]*(?:\r?\n|$))",
                           tail, re.I)
         if not marker:
             continue
@@ -224,25 +228,51 @@ def extract_repository_links(pages, annotations=()):
                           [(m.start(), False) for m in _APPENDIX.finditer(text)])
         page_headings[page_number] = headings
         repaired, positions = _repair_url_wraps(text)
-        matches = list(_REPOSITORY_LINK.finditer(repaired))
-        for index, match in enumerate(matches):
-            url = normalize_repository_url(match.group())
+        matches = [(match.start(), match.end(), match.group(), False)
+                   for match in _REPOSITORY_LINK.finditer(repaired)]
+        numbered = [(match.start("url"), match.end("url"), match.group("url"), True)
+                    for match in _NUMBERED_REPOSITORY_LINK.finditer(repaired)]
+        numbered = [item for item in numbered if item[:2] not in {value[:2] for value in matches}]
+        matches = sorted(matches + numbered)
+        page_annotations = [item for item in annotations if item.get("page") == page_number]
+        canonical = {normalize_repository_url(item.get("raw_url", "")) for item in page_annotations}
+        numbered_annotations = []
+        urls = []
+        for match_start, match_end, raw_url, is_numbered in matches:
+            url = normalize_repository_url(raw_url)
+            if is_numbered:
+                # A real annotation can disambiguate column prose glued to the
+                # visible URL. Without one, retain only the literal text target.
+                candidates = [target for target in canonical if target and
+                              raw_url.lower().startswith(target.lower())]
+                if len(candidates) == 1:
+                    url = candidates[0]
+                if url:
+                    numbered_annotations.append({"page": page_number, "raw_url": url})
+            urls.append(url)
+        for index, (match_start, match_end, raw_url, is_numbered) in enumerate(matches):
+            url = urls[index]
             if not url:
                 continue
-            start, end = positions[match.start()], positions[match.end() - 1] + 1
+            start, end = positions[match_start], positions[match_end - 1] + 1
             reference = reference_section
             for offset, state in headings:
                 if offset <= start:
                     reference = state
             # A declaration for a previous link must not be inherited merely
             # because a different repository appears in the same paragraph.
-            left = positions[matches[index - 1].end() - 1] + 1 if index else 0
-            right = positions[matches[index + 1].start()] if index + 1 < len(matches) else len(text)
+            left = positions[matches[index - 1][1] - 1] + 1 if index else 0
+            right = positions[matches[index + 1][0]] if index + 1 < len(matches) else len(text)
             context = _context(text[max(left, start - 280):min(right, end + 160)],
                                start - max(left, start - 280), end - max(left, start - 280))
-            records.append(_evidence(url, text[start:end], page_number,
-                                     "pdf_text", context, reference,
-                                     text[max(left, start - 280):end]))
+            record = _evidence(url, text[start:end], page_number, "pdf_text", context, reference,
+                               text[max(left, start - 280):end])
+            if is_numbered and not record["is_author_code"] and not reference:
+                claim = _numbered_annotation_claim(text, url, page_annotations + numbered_annotations,
+                                                   headings, page_reference[page_number])
+                if claim:
+                    record.update(context=claim, evidence_type="author_code_statement", is_author_code=True)
+            records.append(record)
         if headings:
             reference_section = headings[-1][1]
 
