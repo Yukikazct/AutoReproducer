@@ -168,6 +168,8 @@ def materialize_capture(workspace, plan, spec_hash, *, snapshot=None):
     for original in plan["steps"]:
         step = deepcopy(original)
         step["env"] = {"PYTHONUNBUFFERED": "1"}
+        if any(pin.startswith('dgl==') for pin in plan['requirements']['compatibility']):
+            step['env']['DGLBACKEND'] = 'pytorch'
         if plan["capture"].get("device", "cpu") == "cpu":
             step["env"]["CUDA_VISIBLE_DEVICES"] = ""
         if step["kind"] == "train":

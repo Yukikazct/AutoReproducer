@@ -139,7 +139,8 @@ def _reviewed_pip_requirement_sources(requirements: str) -> bool:
         # Permit only the exact reviewed supplemental wheel-index options;
         # unknown flags/includes keep their routing rather than guessing it.
         if line.startswith("-") and not re.fullmatch(
-                r"--extra-index-url(?:\s+|=)https://download\.pytorch\.org/whl/(?:cpu|cu121)/?", line):
+                r"(?:--extra-index-url(?:\s+|=)https://download\.pytorch\.org/whl/(?:cpu|cu121)/?"
+                r"|--find-links(?:\s+|=)https://data\.pyg\.org/whl/torch-2\.5\.0\+(?:cpu|cu121)\.html)", line):
             return False
     # Reviewed method presets retain their official torch wheel index in the
     # requirements file. Only the application's default primary mirror changes.

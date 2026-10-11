@@ -38,6 +38,26 @@ def check_sources(config):
             raise ValueError("Author source or bundled input changed: " + name)
 
 
+def prepare_output_directories(config):
+    """Prepare only parents compiled from source-bound author save statements."""
+    for item in config['train'].get('output_directories', []):
+        source = item['source_path']
+        if config['source_files'].get(source) != item['source_sha256']:
+            raise ValueError('Author output parent lacks pinned source evidence')
+        relative = Path(item['path'])
+        if relative.is_absolute() or '..' in relative.parts or '.git' in relative.parts:
+            raise ValueError('Author output parent escaped the repository')
+        target = (WORKSPACE / relative).resolve()
+        if not target.is_relative_to(WORKSPACE):
+            raise ValueError('Author output parent escaped the repository')
+        for parent in [WORKSPACE / relative, *(WORKSPACE / relative).parents]:
+            if parent == WORKSPACE:
+                break
+            if parent.exists() and (parent.is_symlink() or getattr(parent.lstat(), 'st_file_attributes', 0) & 0x400):
+                raise ValueError('Author output parent contains a link or junction')
+        target.mkdir(parents=True, exist_ok=True)
+
+
 def resolve_author_value(namespace, selector):
     if isinstance(selector, str):
         return namespace[selector]
@@ -157,6 +177,7 @@ class FlattenedAuthor(torch.nn.Module):
 
 def capture(config):
     check_sources(config)
+    prepare_output_directories(config)
     if torch.cuda.is_available():
         raise ValueError("Frozen CPU execution unexpectedly exposes CUDA")
     observers = {}

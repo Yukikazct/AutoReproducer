@@ -143,6 +143,7 @@ def capture_return(namespace, index, observers, script, config, retained=None):
 
 def capture(config):
     check_sources(config)
+    _support.prepare_output_directories(config)
     contract = config["capture"]
     if (contract["device"] == "cuda") != torch.cuda.is_available():
         raise ValueError("Native training device availability differs from the frozen plan")

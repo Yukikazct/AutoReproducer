@@ -158,7 +158,7 @@ def verify_snapshot(workspace, snapshot, generated):
 
 def environment_for_plan(plan):
     from src.discovered_repository_plan import (CPU_COMPATIBILITY_PINS, CPU_INDEX_URL,
-                                               CUDA_COMPATIBILITY_PINS, CUDA_INDEX_URL)
+                                               CUDA_COMPATIBILITY_PINS, CUDA_INDEX_URL, GRAPH_WHEEL_LINKS)
     device = (plan.get("capture") or {}).get("device", "cpu")
     if device not in {"cpu", "cuda"}:
         raise ValueError("作者执行设备不在已审阅环境中")
@@ -181,7 +181,9 @@ def environment_for_plan(plan):
         checked.append(value)
     if not checked:
         raise ValueError("缺少冻结的本次执行依赖")
-    return {"requirements_txt": f"--extra-index-url {index_url}\n" + "\n".join(checked) + "\n",
+    graph_wheels = any(value.split('==')[0] in {'torch-sparse', 'torch-scatter'} for value in checked)
+    wheel_options = f"--find-links {GRAPH_WHEEL_LINKS[device]}\n" if graph_wheels else ''
+    return {"requirements_txt": f"--extra-index-url {index_url}\n" + wheel_options + "\n".join(checked) + "\n",
             "author_requirements": deepcopy(requirements.get("author", [])),
             "compatibility_reason": requirements.get("reason", ""),
             "note": f"基于作者依赖与源码导入选择的项目 {device.upper()} 兼容环境；不是论文原始运行环境的等价声明。",
@@ -189,12 +191,16 @@ def environment_for_plan(plan):
             "cache_lock_timeout_s": AUTO_PREPARATION_LOCK_TIMEOUT}
 
 
-_PREFLIGHT = '''import importlib, importlib.metadata, json, platform, sys
+_PREFLIGHT = '''import importlib, importlib.metadata, json, os, platform, sys
 from pathlib import Path
 root = Path(__file__).resolve().parent
 requirements = json.loads((root / "requirements.json").read_text(encoding="utf-8"))
+if any(pin.startswith('dgl==') for pin in requirements):
+    os.environ['DGLBACKEND'] = 'pytorch'
 aliases = {"scikit-learn": "sklearn", "pillow": "PIL", "tensorboardx": "tensorboardX",
-           "googledrivedownloader": "google_drive_downloader"}
+           "googledrivedownloader": "google_drive_downloader",
+           "torch-geometric": "torch_geometric", "torch-sparse": "torch_sparse",
+           "torch-scatter": "torch_scatter"}
 modules, versions = {}, {}
 for requirement in requirements:
     name, expected = requirement.split("==", 1)

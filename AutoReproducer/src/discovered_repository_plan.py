@@ -27,18 +27,36 @@ CPU_COMPATIBILITY_PINS = {
     "matplotlib": "3.9.2", "pillow": "10.4.0", "networkx": "2.8.8",
     "tqdm": "4.67.1", "hyperopt": "0.2.7", "seaborn": "0.13.2", "tensorboardx": "2.6.2.2",
     "googledrivedownloader": "0.4", "requests": "2.32.3",
+    "torch-geometric": "2.6.1", "torch-scatter": "2.1.2+pt25cpu",
+    "torch-sparse": "0.6.18+pt25cpu", "dgl": "1.1.2",
+    "aiohttp": "3.10.10", "fsspec": "2024.10.0", "jinja2": "3.1.6",
+    "psutil": "6.1.0", "pyparsing": "3.2.0",
 }
 CUDA_INDEX_URL = "https://download.pytorch.org/whl/cu121"
-CUDA_COMPATIBILITY_PINS = {**CPU_COMPATIBILITY_PINS, "torch": "2.5.1+cu121",
-                           "torchvision": "0.20.1+cu121"}
+CUDA_COMPATIBILITY_PINS = {**{name: version for name, version in CPU_COMPATIBILITY_PINS.items() if name != 'dgl'},
+                           "torch": "2.5.1+cu121",
+                           "torchvision": "0.20.1+cu121",
+                           "torch-scatter": "2.1.2+pt25cu121",
+                           "torch-sparse": "0.6.18+pt25cu121"}
+GRAPH_WHEEL_LINKS = {
+    "cpu": "https://data.pyg.org/whl/torch-2.5.0+cpu.html",
+    "cuda": "https://data.pyg.org/whl/torch-2.5.0+cu121.html",
+}
 RELATIVE_TOLERANCE = 0.05
 _SHA = re.compile(r"[0-9a-f]{64}")
 _ID = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,63}")
 _NUMBER = re.compile(r"(?<![\w.])[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?(?![\w.])")
 _PACKAGE_IMPORTS = {"scikit-learn": "sklearn", "pillow": "PIL", "tensorboardx": "tensorboardX",
-                    "googledrivedownloader": "google_drive_downloader"}
+                    "googledrivedownloader": "google_drive_downloader",
+                    "torch-geometric": "torch_geometric", "torch-sparse": "torch_sparse",
+                    "torch-scatter": "torch_scatter"}
 # Version 0.4 imports requests but omits it from its wheel dependency metadata.
-_RUNTIME_DEPENDENCIES = {'googledrivedownloader': ('requests',)}
+_RUNTIME_DEPENDENCIES = {
+    'googledrivedownloader': ('requests',),
+    'torch-geometric': ('aiohttp', 'fsspec', 'jinja2', 'numpy', 'psutil', 'pyparsing', 'requests', 'tqdm'),
+    'torch-sparse': ('scipy', 'torch-scatter'),
+    'dgl': ('numpy', 'scipy', 'networkx', 'requests', 'tqdm', 'psutil'),
+}
 _TEXT_SUFFIXES = {".py", ".md", ".rst", ".txt", ".toml", ".yaml", ".yml", ".sh", ".cff"}
 _FORBIDDEN_FLAGS = {"--smoke", "--dry-run", "--fast-dev-run", "--limit-train-batches",
                     "--limit-test-batches", "--subset", "--max-samples"}
@@ -809,10 +827,23 @@ def _steps(items, citations, packet, workspace):
         dependencies = item.get("depends_on", [result[-1]["id"]] if result else [])
         if not isinstance(dependencies, list) or any(dep not in seen for dep in dependencies):
             raise PlanEvidenceError("Step dependencies must refer to preceding required steps")
+        from src.author_outputs import output_directories
+        sources = (_author_imports(packet, item, include_sources=True,
+                    device=(packet.get('experiment_protocol') or {}).get('execution', {}).get('device'))['sources']
+                   if packet.get('experiment_protocol') else [name])
+        prepared = []
+        for source_path in sources:
+            source = packet['repository']['files'][source_path]
+            for output in output_directories(source['text']):
+                target = workspace_path(directory, output['directory'], 'author output directory', forbid_git=True)
+                if target.exists() and not target.is_dir():
+                    raise PlanEvidenceError('Author output parent is an existing file')
+                prepared.append({**output, 'path': target.relative_to(Path(workspace).resolve()).as_posix(),
+                                 'source_path': source_path, 'source_sha256': source['sha256']})
         result.append({"id": identifier, "kind": item["kind"], "argv": list(argv),
                        "cwd": Path(cwd).as_posix(), "timeout_s": timeout,
                        "depends_on": list(dependencies), "citations": list(item["citations"]),
-                       "required": True})
+                       "required": True, **({'output_directories': prepared} if prepared else {})})
         seen.add(identifier)
     if total > 7200 or sum(step["kind"] == "train" for step in result) != 1:
         raise PlanEvidenceError("Initial discovery supports one complete training run within 7200 seconds")
