@@ -16,7 +16,23 @@ _REPOSITORY_LINK = re.compile(
     r"(?:/[^\s<>\"'\)\]\}]+)?(?:[?#][^\s<>\"'\)\]\}]+)?", re.I)
 _REFERENCES = re.compile(r"(?im)^\s*(?:\d+\.?\s+)?(?:references|bibliography)\s*$")
 _APPENDIX = re.compile(r"(?im)^\s*(?:appendix|supplementary material)\b")
-_AUTHOR_CODE = re.compile(
+
+
+def _declaration_pattern(pattern):
+    """Permit PDF word hyphenation only inside declaration vocabulary.
+
+    Match the original text, including its original offsets. Context snippets
+    collapse line breaks to spaces, so both ``avail-\nable`` and ``avail- able``
+    must retain the same classification. URL repair keeps repository hyphens.
+    """
+    vocabulary = ("source code our implementation software library available publicly freely openly "
+                  "published released provided found downloaded accessed release provide publish authors "
+                  "prior previous baseline").split()
+    words = re.compile(r"\b(?:" + "|".join(vocabulary) + r")\b")
+    return words.sub(lambda match: r"(?:-\s+|\u00ad\s*)?".join(match.group()), pattern)
+
+
+_AUTHOR_CODE = re.compile(_declaration_pattern(
     r"(?<![\w])(?:\d{1,3})?(?:source\s+code|our\s+(?:code|implementation|software|library)|"
     r"(?:code|implementation|software|library)(?:\s+for\s+[^.!?]{1,80})?)"
     r"\s+(?:(?:is|are|was|has\s+been|can\s+be|will\s+be)\s+)?"
@@ -26,10 +42,10 @@ _AUTHOR_CODE = re.compile(
     # Footnote extraction can join the marker directly to "Code". A labelled
     # code-for-project link is an explicit declaration even without "available".
     r"|(?<![\w])(?:\d{1,3})?(?:source\s+code|code|implementation|software|library)"
-    r"\s+for\s+[^.!?:]{1,140}:\s*(?=(?:https?://)?(?:www\.)?github\b)", re.I)
-_EXTERNAL_CODE = re.compile(
-    r"\b(?:third[- ]party|prior\s+work|previous\s+work|baseline\s+(?:code|implementation))\b"
-    r"|\b(?:code|implementation)\s+for\s+(?:the\s+)?baseline\b", re.I)
+    r"\s+for\s+[^.!?:]{1,140}:\s*(?=(?:https?://)?(?:www\.)?github\b)"), re.I)
+_EXTERNAL_CODE = re.compile(_declaration_pattern(
+    r"\b(?:third(?:-\s*|\s+)party|prior\s+work|previous\s+work|baseline\s+(?:code|implementation))\b"
+    r"|\b(?:code|implementation)\s+for\s+(?:the\s+)?baseline\b"), re.I)
 _NON_REPOSITORY_OWNERS = {
     "about", "collections", "contact", "enterprise", "events", "explore",
     "features", "issues", "join", "login", "marketplace", "new", "notifications",

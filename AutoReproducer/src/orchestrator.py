@@ -175,8 +175,12 @@ class Orchestrator:
             ("VALIDATE", self.agents["validator"]),
         ]
         if self.on_event:
+            planned = self._generic_plan(pipeline)
+            if (not self.mock_mode and self.data.get("pdf_path")
+                    and not self.data.get("code") and not self.data.get("corpus_paper")):
+                planned = planned[:4]
             self.on_event({"type": "pipeline_plan", "pipeline": "generic",
-                           "stages": self._generic_plan(pipeline)})
+                           "stages": planned})
 
         for state_name, agent in pipeline:
             self.state = state_name
@@ -190,11 +194,6 @@ class Orchestrator:
                 result = agent.run(self.data)
                 self._merge_result(state_name, result)
                 self._accumulate_llm_calls(result)
-
-                # 三层存储：FIND_RESOURCES 后按需懒加载代码/数据集/权重
-                # 到 L0（失败不阻断流水线，仅告警）
-                if state_name == "FIND_RESOURCES":
-                    self._fetch_resources()
 
                 # Docker 真实模式：BUILD_ENV 产出配置后即真实构建镜像，
                 # 成功把 image_tag 透传给 EXECUTE_CODE；失败不阻断（slim 降级）
@@ -218,6 +217,20 @@ class Orchestrator:
                 main_completed = True
                 # Prompt-Free 验证 + 修正闭环
                 self._verify_step(state_name, agent, result)
+
+                if state_name == "FIND_RESOURCES":
+                    # The final reviewed Finder output owns the selection.
+                    # Never fetch an earlier attempt or replace author code
+                    # with a generated single-file smoke experiment.
+                    if (not self.mock_mode and self.data.get("pdf_path")
+                            and not self.data.get("code") and not self.data.get("corpus_paper")):
+                        reviews = [item for item in self.data["verifications"]
+                                   if item["state"] == "FIND_RESOURCES"]
+                        if not reviews or reviews[-1].get("pass") is not True:
+                            raise RuntimeError("作者仓库发现结果未通过最终审查，未启动实验")
+                        self.logger.end_plan(state_name)
+                        return self._run_discovered_repository(input_data)
+                    self._fetch_resources()
 
                 self.logger.log("Orchestrator", f"exit_{state_name}", "SUCCESS",
                                 f"完成阶段: {state_name}")
@@ -276,6 +289,35 @@ class Orchestrator:
             self.on_event(event)
 
     # ---------------- 内部流程 ----------------
+
+    def _run_discovered_repository(self, input_data):
+        from src.discovered_repository_reproduction import DiscoveredRepositoryReproduction
+        previous = self.data
+
+        def emit(event):
+            if not self.on_event:
+                return
+            if event.get("type") == "pipeline_plan":
+                # Retain observed parsing/discovery rows, remove the obsolete
+                # generated-code stages from this request's remaining plan.
+                initial = self._generic_plan([
+                    ("READ_PAPER", self.agents["reader"]),
+                    ("FIND_RESOURCES", self.agents["finder"]),
+                ])[:4]
+                event = {**event, "stages": initial + event.get("stages", [])}
+            self.on_event(event)
+
+        result = DiscoveredRepositoryReproduction(
+            self.resource_manager.data_root, self.logger, self.use_docker,
+            llm=self.llm).run({**input_data, **previous, "mock_mode": False}, on_event=emit)
+        self.state, self.error = result["state"], result.get("error")
+        self.data = {**previous, **result["data"]}
+        for key in ("verifications", "fix_records"):
+            self.data[key] = result["data"].get(key, previous.get(key, []))
+        self.data["total_llm_calls"] = (previous.get("total_llm_calls", 0)
+                                        + result["data"].get("total_llm_calls", 0))
+        self._emit_state(self.state, "", "error" if self.error else "success")
+        return self.get_result()
 
     def _generic_plan(self, pipeline):
         titles = {"READ_PAPER": "论文解析", "FIND_RESOURCES": "资源定位",

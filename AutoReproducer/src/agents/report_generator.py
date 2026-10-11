@@ -234,6 +234,39 @@ def _reader_source_context_lines(reader, sources):
     return lines
 
 
+def _discovered_plan_lines(data):
+    plan = data.get("grounded_repository_plan") or {}
+    if not plan:
+        return []
+    lines = ["### 本次 PDF 与作者源码确定的实验计划", "",
+             "- **范围**: 引用所确定的单项完整实验。",
+             "- **验收规则**: 训练开始前冻结参考值与 5% 相对容差；该容差是项目规则。",
+             "- **实际运行要求**: 作者入口完成、原始源码校验通过、完整测试划分及独立模型重载评估通过。",
+             "", "| 指标 | 论文参考 | 单位 | 引用 |", "|---|---|---|---|"]
+    for item in plan.get("metrics", []):
+        lines.append("| " + " | ".join(_markdown_text(_txt(value)) for value in (
+            item.get("name"), item.get("reference"), item.get("unit"),
+            ", ".join(item.get("citations", [])))) + " |")
+    lines += ["", "**原始作者命令**", ""]
+    for step in plan.get("steps", []):
+        lines += ["- " + _markdown_text(_txt(step.get("id"))) + "，目录：" +
+                  _markdown_text(_txt(step.get("cwd"))),
+                  "```json", json.dumps(step.get("argv", []), ensure_ascii=False), "```"]
+    review = plan.get("semantic_review") or {}
+    if review:
+        lines += ["", "**执行前独立协议审查**", "",
+                  "- **状态**: " + ("通过" if review.get("accepted") is True else "未通过")]
+        for name, check in (review.get("checks") or {}).items():
+            lines.append("- " + _markdown_text(name) + "：" + _markdown_text(_txt(check.get("reason"))))
+    lines += ["", "**计划引用原文**", ""]
+    for citation in plan.get("citations", []):
+        location = (f"PDF 第 {citation.get('page')} 页" if citation.get("source") == "pdf"
+                    else _txt(citation.get("path")))
+        lines += ["- " + _markdown_text(_txt(citation.get("id"))) + "：" + _markdown_text(location),
+                  "", "> " + _markdown_text(_txt(citation.get("quote"))).replace("\n", "\n> "), ""]
+    return lines
+
+
 def _repository_analysis_lines(data):
     analysis = data.get("repository_analysis") or {}
     if not analysis:
@@ -386,6 +419,7 @@ class ReportGeneratorAgent(BaseAgent):
         validation = data.get("validation", {}) or {}
         optimization = data.get("optimization", {}) or {}
         audit = data.get("audit_stats", {}) or {}
+        is_rezero = (data.get("experiment_spec") or {}).get("adapter_id") == "rezero"
 
         lines = ["# 论文复现与优化报告",
                  "",
@@ -400,7 +434,7 @@ class ReportGeneratorAgent(BaseAgent):
                   f"- **标题**: {paper_info.get('title', '未知')}",
                   f"- **方法**: {paper_info.get('method', '未知')}",
                   f"- **数据集**: {paper_info.get('dataset', '未知')}",
-                  f"- **声明指标**: {paper_info.get('metrics', {})}",
+                  f"- **{'作者公开参考指标' if is_rezero else '声明指标'}**: {paper_info.get('metrics', {})}",
                   ""]
 
         # 2. 资源定位
@@ -408,6 +442,18 @@ class ReportGeneratorAgent(BaseAgent):
                   f"- **代码仓库**: {resources.get('code_repo_url', '未找到')}",
                   f"- **数据集**: {resources.get('dataset_url', '未找到')}",
                   f"- **置信度**: {_fmt(resources.get('confidence', 0.0))}"]
+        if resources.get("discovery_repository_url"):
+            lines += [f"- **论文原文发现仓库**: {resources['discovery_repository_url']}",
+                      f"- **实际固定训练仓库**: {resources.get('training_repository_url', resources.get('code_repo_url', '未找到'))}"]
+        relationship = resources.get("repository_relationship") or {}
+        if relationship.get("description"):
+            lines.append("- **作者仓库关联链**: " + _markdown_text(_txt(relationship["description"])))
+        for index, hop in enumerate(relationship.get("hops") or [], 1):
+            if not isinstance(hop, dict):
+                continue
+            lines += [f"- **作者链接第 {index} 跳**: {hop.get('source_url', '')} → {hop.get('target_repository_url', '')}",
+                      f"  - **固定来源 SHA-256**: `{hop.get('sha256', '')}`",
+                      "  - **原文**: " + _markdown_text(_txt(hop.get("quote")))]
         identity = resources.get("repository_identity") or {}
         if identity:
             lines += [f"- **仓库关联证据**: {identity.get('reason', '未核验')}",
@@ -422,7 +468,7 @@ class ReportGeneratorAgent(BaseAgent):
                       f"- **证据类型**: {evidence.get('evidence_type', 'repository_link')}"]
             if evidence.get("context"):
                 lines.append("- **原文上下文**: " + _markdown_text(str(evidence["context"])))
-            pdf_input = data.get("pdf_input") or {}
+            pdf_input = data.get("pdf_input") or data.get("pdf_resolution") or {}
             if pdf_input.get("sha256"):
                 lines.append(f"- **来源 PDF SHA-256**: `{pdf_input['sha256']}`")
         urls = resources.get("extracted_urls", []) or []
@@ -436,7 +482,7 @@ class ReportGeneratorAgent(BaseAgent):
         spec = data.get("experiment_spec") or {}
         if spec:
             lines += ["### 官方仓库实验来源",
-                      f"- **预设**: {spec.get('label', spec.get('id', ''))}",
+                      f"- **实验定义**: {spec.get('label', spec.get('id', ''))}",
                       f"- **论文版本/参考位置**: {paper_info.get('reference_source', '')}",
                       f"- **固定源码版本**: `{repository.get('resolved_sha', '未获取')}`",
                       f"- **实验定义SHA-256**: `{data.get('spec_sha256', '')}`",
@@ -450,6 +496,7 @@ class ReportGeneratorAgent(BaseAgent):
             lines += [f"- **作者协议来源**: {(spec.get('validation') or {}).get('aggregation_source', '')}",
                       f"- **实现版本说明**: {(spec.get('validation') or {}).get('implementation_note', '')}", ""]
         lines += _repository_analysis_lines(data)
+        lines += _discovered_plan_lines(data)
 
         # 3. 环境配置 + 依赖诊断
         lines += ["## 3. 环境配置",
@@ -511,7 +558,7 @@ class ReportGeneratorAgent(BaseAgent):
         # 4. 代码执行（smoke + full）
         lines += ["## 4. 代码执行"]
         if execution.get("mode") == "repository":
-            lines.append("- **执行对象**: 固定版本完整官方仓库（多文件）")
+            lines.append("- **执行对象**: 固定版本作者仓库中的实验入口（多文件）")
         else:
             lines.append(f"- **代码长度**: {len(_txt(execution.get('code')))} 字符")
             scope = execution.get("reproduction_scope")
@@ -647,6 +694,8 @@ class ReportGeneratorAgent(BaseAgent):
             state_text = "✅ 官方方法实验完成（不判定整篇论文数值复现）"
         elif validation.get("status") == "quality_target_not_met":
             state_text = "⚠️ 方法实验已运行，工程效果门槛未达到"
+        elif validation.get("status") == "reference_not_met":
+            state_text = "⚠️ 选定论文实验已完成，数值参考未达到"
         elif validation.get("status") == "analysis_failed":
             state_text = "⏳ 未进入训练（公开协议分析未通过）"
         elif validation.get("status") == "inconclusive":
@@ -702,7 +751,7 @@ class ReportGeneratorAgent(BaseAgent):
                 for k, v in actual_m.items():
                     rows.setdefault(norm_metric_key(k), {})["actual"] = (k, v)
                 lines += ["", "### 指标对比",
-                          "| 指标 | 论文声明 | 实际运行 |",
+                          "| 指标 | 作者公开参考 | 独立评估实测 |" if is_rezero else "| 指标 | 论文声明 | 实际运行 |",
                           "|------|----------|----------|"]
                 for nk in sorted(rows):
                     cell = rows[nk]
@@ -711,7 +760,10 @@ class ReportGeneratorAgent(BaseAgent):
                     # 两侧键名写法不同则标注原写法，避免"对不上号"的疑惑
                     name = pk if pk == ak else f"{pk} / {ak}"
                     def metric_cell(value, unit_map, key):
-                        unit = metric_unit(value, unit_map.get(key))
+                        explicit_unit = unit_map.get(key)
+                        if is_rezero and key == "top1_accuracy_pct":
+                            explicit_unit = "percent"
+                        unit = metric_unit(value, explicit_unit)
                         if isinstance(value, dict):
                             value = value.get("value", "N/A")
                         suffix = {"percent": "%", "fraction": " (比例)"}.get(unit, " " + unit if unit else "")
@@ -732,14 +784,23 @@ class ReportGeneratorAgent(BaseAgent):
         independent = execution.get("independent_metrics") or {}
         if protocol:
             lines += ["", "### 完整实验核验",
-                      f"- **实际训练轮数**: {protocol.get('epochs_completed', '未知')}（最多10轮；保留作者早停）",
                       f"- **协议核验**: {'通过' if protocol.get('pass') else '未通过'}"]
+            if spec.get("adapter_id") == "discovered":
+                lines += [f"- **实际优化器更新次数**: {protocol.get('optimizer_steps', '未知')}",
+                          f"- **实际测试样本数**: {protocol.get('test_samples', '未知')}",
+                          "- **独立评估方式**: 重载本次模型重新推理；NumPy 与 PyTorch 交叉核验指标。"]
+            else:
+                note = ("（最多10轮；保留作者早停）" if spec.get("adapter_id") == "dlinear"
+                        or str(spec.get("id", "")).startswith("dlinear_") else "")
+                lines.append(f"- **实际训练轮数**: {protocol.get('epochs_completed', '未知')}" + note)
             for check in protocol.get("checks", []):
                 if isinstance(check, dict):
                     lines.append(f"  - {check.get('name', '')}: {'通过' if check.get('pass') else '未通过'}")
             if independent:
-                lines += [f"- **独立指标复算**: {independent.get('reason', '')}",
-                          f"- **复算值**: {independent.get('metrics', {})}"]
+                values = independent.get("metrics") or {name: independent[name]
+                    for name in ("accuracy", "cross_entropy") if name in independent}
+                lines += [f"- **独立指标复算**: {independent.get('reason', independent.get('evaluation', ''))}",
+                          f"- **复算值**: {values}"]
         api_analysis = data.get("llm_analysis") or {}
         if api_analysis:
             lines += ["", "### 真实 API 公开论文协议解析",
@@ -748,6 +809,28 @@ class ReportGeneratorAgent(BaseAgent):
             for limitation in api_analysis.get("limitations", []):
                 lines.append(f"- {_txt(limitation)}")
         lines += _result_analysis_lines(data)
+        if is_rezero:
+            summary = validation.get("training_summary") or {}
+            actual = (validation.get("metrics_comparison") or {}).get("actual") or {}
+            lines += ["", "### ReZero 选定论文实验范围与验收",
+                      "- **结论范围**: CIFAR-10 上 ReZero PreActResNet18 超收敛；不覆盖 enwiki8 或整篇论文。",
+                      "- **冻结训练协议**: seed 6892、FP32 CUDA、batch 512、45 轮 / 4410 个优化器步骤；完整 50,000 张训练集和 10,000 张测试集。",
+                      "- **固定验收参考**: 作者公开 notebook 的 94.00% top-1；独立评估须 ≥94.00%，不降低阈值。cross_entropy 仅记录本次实测值。",
+                      f"- **参考来源**: {paper_info.get('reference_source', spec.get('paper', {}).get('reference_source', ''))}",
+                      f"- **实验状态**: {validation.get('status', '尚未执行')}",
+                      f"- **协议核验 / 独立复算**: {validation.get('protocol_pass', False)} / {validation.get('independent_metrics_pass', False)}"]
+            if summary:
+                def measured(value, precision=".2f"):
+                    return "未提供" if value is None else _fmt(value, precision)
+                lines += [f"- **实际完成**: {summary.get('epochs_completed', '未知')} 轮 / {summary.get('steps_completed', '未知')} 个优化器步骤",
+                          f"- **实际数据规模**: 训练 {summary.get('train_samples', '未知')} / 测试 {summary.get('test_samples', '未知')}",
+                          f"- **最佳 checkpoint**: 按作者协议从各轮测试准确率选取，第 {summary.get('best_epoch', '未知')} 轮；训练记录 {measured(summary.get('best_accuracy_pct'))}%",
+                          f"- **独立重载评估**: top-1 {measured(actual.get('top1_accuracy_pct'))}% / 固定参考 94.00%；完整测试集 cross_entropy {measured(actual.get('cross_entropy'), '.6f')}"]
+            else:
+                lines.append("- **本次训练证据**: 尚无完成协议核验的训练摘要，不能根据冻结协议推断已完成。")
+            lines += [f"- **基线耗时**: {_fmt(data.get('baseline_elapsed_s'), '.2f')} 秒",
+                      f"- **本次总耗时（含环境准备）**: {_fmt(data.get('run_elapsed_s'), '.2f')} 秒",
+                      f"- **运行兼容性**: {spec.get('environment', {}).get('note', '')}"]
         if spec.get("adapter_id") in {"siren", "neural_ode"}:
             lines += ["", "### 方法实验范围与耗时",
                       f"- **实验状态**: {validation.get('status', '尚未执行')}",
@@ -756,6 +839,7 @@ class ReportGeneratorAgent(BaseAgent):
                       f"- **本次总耗时（含环境准备）**: {_fmt(data.get('run_elapsed_s'), '.2f')} 秒",
                       f"- **实验与报告耗时（环境准备后）**: {_fmt(data.get('execution_elapsed_s'), '.2f')} 秒",
                       f"- **协议/独立复算**: {validation.get('protocol_pass', False)} / {validation.get('independent_metrics_pass', False)}"]
+        if spec.get("adapter_id") in {"siren", "neural_ode", "rezero"}:
             method_analysis = data.get("method_analysis") or {}
             if method_analysis.get("status") == "rejected":
                 labels = {"reader": "论文方法分析", "finder": "资源核对",
@@ -804,8 +888,11 @@ class ReportGeneratorAgent(BaseAgent):
                           f"- **优化协议基线**: {optimization.get('baseline', {})}",
                           f"- **已用预算**: {_fmt(optimization.get('budget_used_s'), '.2f')} / {optimization.get('budget_seconds', 7200)} 秒"]
         elif not optimization.get("optimized"):
-            lines.append(f"- **优化状态**: 未触发("
-                         f"{optimization.get('reason', '复现未成功或未运行优化')})")
+            if is_rezero:
+                lines.append("- **优化状态**: 关闭；本实验按冻结作者协议运行。")
+            else:
+                lines.append(f"- **优化状态**: 未触发("
+                             f"{optimization.get('reason', '复现未成功或未运行优化')})")
         else:
             # 模拟优化必须与真实执行区分开：`_simulate_trial` 是拿方向名的
             # 哈希当"改进潜力"的假数据，与代码、指标都无关。不标注的话，

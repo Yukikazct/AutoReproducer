@@ -65,6 +65,9 @@ class MethodReproduction:
         mode = request.get("optimization_mode") or ("validate" if request.get("enable_optimization") else "off")
         if mode not in {"off", "suggest", "validate"}:
             raise ValueError("未知优化模式")
+        profile = get_profile(request["experiment_profile"])
+        if mode not in profile.get("optimization_modes", ("off", "suggest", "validate")):
+            raise ValueError("本论文实验只允许冻结协议运行（optimization_mode=off）")
         budget = request.get("budget_seconds", MAX_OPTIMIZATION_SECONDS)
         if mode == "validate" and not (prepare_only or prepare_env):
             budget_error = optimization_budget_error(budget)
@@ -110,7 +113,9 @@ class MethodReproduction:
         data = {"run_dir": str(run_dir.resolve()), "report_path": str((run_dir / "report.md").resolve()),
                 "paper_info": profile["paper"], "paper_title": profile["paper"]["title"],
                 "experiment_spec": profile, "spec_sha256": spec_hash, "verifications": [], "fix_records": [],
-                "optimization": {"optimized": False, "status": "disabled", "available": True, "mode": mode},
+                "optimization": {"optimized": False, "status": "disabled",
+                                 "available": any(value != "off" for value in profile.get(
+                                     "optimization_modes", ("off", "suggest", "validate"))), "mode": mode},
                 "analysis_status": "frozen_protocol", "total_llm_calls": 0}
         if request.get("title_resolution"):
             data["title_resolution"] = deepcopy(request["title_resolution"])
@@ -158,6 +163,24 @@ class MethodReproduction:
             data.update(repository=snapshot, dataset_provenance=dataset, adapter_manifest=manifest,
                         resources={"code_repo_url": snapshot["url"], "dataset_url": dataset.get("url", ""), "confidence": 1.0},
                         method_sources=sources, env_config=profile["environment"])
+            pdf_resolution = data.get("pdf_resolution") or {}
+            if pdf_resolution.get("source") == "pdf_author_code_repository":
+                if (pdf_resolution.get("profile") != profile["id"]
+                        or pdf_resolution.get("training_repository_url") != snapshot["url"]):
+                    raise ValueError("PDF 仓库发现结果与本次冻结训练仓库不一致")
+                evidence = deepcopy(pdf_resolution.get("evidence") or {})
+                data["pdf_input"] = {key: deepcopy(pdf_resolution[key]) for key in
+                                     ("sha256", "pages", "bytes") if key in pdf_resolution}
+                data["resources"].update(
+                    discovery_repository_url=pdf_resolution["discovery_repository_url"],
+                    training_repository_url=snapshot["url"], selection_evidence=evidence,
+                    repository_relationship=deepcopy(pdf_resolution.get("repository_relationship") or {}),
+                    repository_identity={
+                        "source": "pdf_author_code_repository", "verified": True,
+                        "reason": "PDF 原文作者代码声明匹配论文主仓库；经审阅的作者链接对应本次固定训练仓库。",
+                        "evidence": deepcopy(evidence)},
+                    extracted_urls=[link["url"] for link in pdf_resolution.get("repository_links", [])
+                                    if isinstance(link, dict) and link.get("url")])
             for name, value in (("repository", snapshot), ("dataset", dataset), ("public_sources", sources)):
                 write_json(run_dir / f"{name}.json", value)
             event(phase, "success")
@@ -223,8 +246,10 @@ class MethodReproduction:
                         write_json(run_dir / "method_analysis.json", data["method_analysis"])
                         data["analysis_status"] = "public_readiness_accepted"
                     execution_started = time.monotonic()
-                    if mode == "validate" or full_review:
-                        baseline_allowance = min(1200, budget) if mode == "validate" else 1200
+                    if mode == "validate":
+                        baseline_allowance = min(1200, budget)
+                    elif full_review:
+                        baseline_allowance = max(1200, profile["budget"]["baseline_s"])
                     else:
                         baseline_allowance = profile["budget"]["baseline_s"]
                     baseline_deadline = execution_started + baseline_allowance
@@ -330,7 +355,7 @@ class MethodReproduction:
             and data["optimization"]["status"] == "suggested")
         write_json(run_dir / "result.json", {"data": data, "error": error})
         event("generate_report", "success")
-        self.logger.log_experiment("FINISH", "固定方法实验完成", outputs={"title": data["paper_title"]},
+        self.logger.log_experiment("FINISH", "固定协议实验完成", outputs={"title": data["paper_title"]},
                                    result={"state": "ERROR" if error else "COMPLETED", "run_dir": str(run_dir),
                                            "duration_sec": data["run_elapsed_s"], "llm_calls": data["total_llm_calls"]})
         return {"state": "ERROR" if error else "COMPLETED", "data": data, "error": error}

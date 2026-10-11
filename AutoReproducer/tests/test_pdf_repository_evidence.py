@@ -10,7 +10,7 @@ from PyPDF2 import PdfReader, PdfWriter
 from src.agents.paper_reader import PaperReaderAgent
 from src.llm.llm_client import LLMClient
 from src.pdf_input import PDFInputError, extract_pdf_input
-from src.repository_evidence import extract_repository_links, normalize_repository_url
+from src.repository_evidence import extract_repository_links, normalize_repository_url, is_author_code_statement
 from test_pdf_input_routing import write_pdf
 
 
@@ -52,6 +52,46 @@ def test_url_at_line_end_does_not_absorb_the_next_sentence():
     records = extract_repository_links(["github.com/team/method\nNext sentence discusses results."])
     assert records[0]["url"] == "https://github.com/team/method"
     assert records[0]["raw_url"] == "github.com/team/method"
+
+
+@pytest.mark.parametrize("declaration", [
+    "Code is avail-\nable at:", "Code is avail- able at:",
+    "Our implemen-\ntation is publicly avail-\nable at:",
+    "Our soft-\nware is re-\nleased at:", "Code is avail\u00adable at:",
+])
+def test_hyphenated_author_declarations_keep_original_context_and_repository_hyphen(declaration):
+    raw_url = "https://github.com/cure-lab/LTSF-\nLinear"
+    page = declaration + raw_url
+    evidence = extract_repository_links([page])[0]
+    assert evidence["url"] == "https://github.com/cure-lab/LTSF-Linear"
+    assert evidence["raw_url"] == raw_url
+    assert evidence["context"] == re.sub(r"\s+", " ", page)
+    assert evidence["is_author_code"] and evidence["evidence_type"] == "author_code_statement"
+    # Downstream routing receives the preserved, whitespace-collapsed snippet.
+    assert is_author_code_statement(evidence["context"])
+
+
+@pytest.mark.parametrize("prefix", ["References\n[1] ", "Our base-\nline ", "Third-\nparty "])
+def test_hyphenated_reference_and_external_declarations_remain_non_author(prefix):
+    evidence = extract_repository_links([
+        prefix + "code is avail-\nable at https://github.com/cited/LTSF-\nLinear"])[0]
+    assert evidence["is_author_code"] is False
+    assert evidence["evidence_type"] == ("reference" if prefix.startswith("References") else "repository_link")
+
+
+def test_dlinear_style_binary_pdf_hyphenation_retains_bytes_page_and_raw_link(tmp_path):
+    path = write_pdf(tmp_path / "hyphenated.pdf", [
+        "Are Transformers Effective for Time Series Forecasting?", "Abstract",
+        "Code is avail-", "able at:https://github.com/cure-lab/LTSF-", "Linear"])
+    original = path.read_bytes()
+    document = extract_pdf_input(path)
+    evidence = next(record for record in document.repository_links if record["source"] == "pdf_text")
+    assert evidence["url"] == "https://github.com/cure-lab/LTSF-Linear"
+    assert evidence["raw_url"] == "https://github.com/cure-lab/LTSF-\nLinear"
+    assert "Code is avail- able at:" in evidence["context"]
+    assert evidence["is_author_code"] and evidence["page"] == 1
+    assert document.sha256 == hashlib.sha256(original).hexdigest()
+    assert path.read_bytes() == original
 
 
 @pytest.mark.parametrize("prefix,visible_url", [

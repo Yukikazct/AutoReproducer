@@ -708,6 +708,15 @@ class CodeExecutorAgent(BaseAgent):
         if input_data.get("experiment_profile"):
             raise RepositoryModeFallbackRejected(
                 "仓库复现预设不得改走单文件生成；请使用 repository 执行链路")
+        resources = input_data.get("resources") or {}
+        discovery = resources.get("repo_discovery") or {}
+        from src.repository_evidence import normalize_repository_url
+        selected = normalize_repository_url(
+            discovery.get("selected_repo") or resources.get("code_repo_url") or "")
+        if (not self.mock_mode and not input_data.get("code")
+                and (input_data.get("pdf_path") or selected)):
+            raise RepositoryModeFallbackRejected(
+                "PDF 或已选作者仓库请求必须经过真实仓库执行与独立核验，不能降级成模型生成代码")
         self.log("execute_code", "START", "开始执行代码", input_data)
 
         paper_info = input_data.get("paper_info", {}) or {}

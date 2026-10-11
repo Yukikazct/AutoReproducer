@@ -146,7 +146,7 @@ def _fetch_repository(cache, url, revision):
     return source, archive
 
 
-def export_repository(data_root, profile, destination, *, offline=False):
+def export_repository(data_root, profile, destination, *, offline=False, required_files=None):
     """Export the requested commit, not potentially modified cached working files."""
     root, dest = Path(data_root), Path(destination)
     request = profile["repository"]
@@ -194,7 +194,7 @@ def export_repository(data_root, profile, destination, *, offline=False):
                 payload = tar.extractfile(member).read()
                 target.write_bytes(payload)
                 files[member.name] = hashlib.sha256(payload).hexdigest()
-    for path in get_adapter(profile).required_files(profile):
+    for path in (get_adapter(profile).required_files(profile) if required_files is None else required_files):
         if not workspace_path(dest, path, "required file", forbid_git=True).is_file():
             raise RuntimeError(f"固定仓库缺少必需入口: {path}")
     if (dest / ".gitmodules").exists():
@@ -385,7 +385,7 @@ class RepositoryReproduction:
         self.llm = llm
 
     def run(self, input_data, on_event=None):
-        if get_profile(input_data["experiment_profile"]).get("adapter_id") in {"siren", "neural_ode"}:
+        if get_profile(input_data["experiment_profile"]).get("adapter_id") in {"siren", "neural_ode", "rezero"}:
             from src.method_reproduction import MethodReproduction
             return MethodReproduction(self.root, self.logger, self.runner, self.llm).run(
                 {**input_data, "use_docker": self.use_docker}, on_event)

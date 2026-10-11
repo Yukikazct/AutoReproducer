@@ -29,7 +29,7 @@ from src.llm.llm_client import LLMClient
 from src.audit.audit_logger import AuditLogger
 from src.base_agent import BaseAgent
 from src.corpus import list_papers
-from src.repository_profiles import PROFILE_LABELS, PAPER_TITLE, get_profile
+from src.repository_profiles import PAPER_TITLE
 from src.title_routing import resolve_title_request
 from src.method_budget import CONFIRMATION_RESERVE_SECONDS, optimization_budget_error
 from frontend.report_renderer import render_report, build_report_bundle
@@ -40,6 +40,13 @@ from frontend.llm_config import (
     test_llm_connection,
 )
 from frontend import pipeline_entrypoint
+from frontend import repository_entrypoint
+
+if getattr(repository_entrypoint, "REPOSITORY_ENTRYPOINT_API_VERSION", 0) != 2:
+    repository_entrypoint = importlib.reload(repository_entrypoint)
+
+PROFILE_LABELS = repository_entrypoint.profile_labels()
+get_profile = repository_entrypoint.get_profile
 
 # Only refresh the small loader. Older active pipeline modules keep their globals.
 if pipeline_entrypoint.BACKEND_API_VERSION != 4:
@@ -47,7 +54,8 @@ if pipeline_entrypoint.BACKEND_API_VERSION != 4:
 
 _pipeline_backend = pipeline_entrypoint.load_backend_pipeline()
 ProgressStore = _pipeline_backend.ProgressStore
-run_pipeline_background = _pipeline_backend.run_pipeline_background
+run_pipeline_background = repository_entrypoint.background_entrypoint(
+    _pipeline_backend.run_pipeline_background)
 from frontend.history_manager import (
     list_sessions,
     collect_storage_snapshot,
@@ -185,8 +193,7 @@ def render_llm_settings():
 @st.cache_data(show_spinner=False, max_entries=8)
 def _preview_pdf_input(payload: bytes, mock_mode: bool):
     """Inspect uploaded bytes once; the backend independently verifies its file."""
-    from frontend.pdf_entrypoint import load_pdf_input
-    pdf_module = load_pdf_input()
+    pdf_module = repository_entrypoint.load_pdf_input()
     temporary = ""
     try:
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as handle:
@@ -246,7 +253,19 @@ def render_paper_input():
                 st.error(preview["error"])
             elif preview.get("resolution"):
                 selected = get_profile(preview["resolution"]["profile"])
-                st.success("PDF 首页已匹配作者仓库：" + selected["repository"]["url"])
+                resolution = preview["resolution"]
+                if resolution.get("source") == "pdf_author_code_repository":
+                    st.success("PDF 原文作者代码声明已匹配实验：" + resolution["discovery_repository_url"])
+                    st.caption("作者主仓库与实际训练仓库分别记录；经 ReZero-examples 的 README 定位训练仓库："
+                               + resolution["training_repository_url"])
+                    with st.expander("作者仓库到训练实验的引用链"):
+                        for hop in resolution["repository_relationship"]["hops"]:
+                            st.markdown(f"[{hop['repository_url']} · README 第 {hop['line']} 行]"
+                                        f"({hop['source_url']}) → [{hop['target_repository_url']}]"
+                                        f"({hop['linked_url']})")
+                            st.text(hop["quote"])
+                else:
+                    st.success("PDF 首页已匹配作者仓库：" + selected["repository"]["url"])
                 st.markdown(f"[论文]({selected['paper']['url']}) · [作者代码]({selected['repository']['url']})")
                 st.caption("将执行：" + selected["label"] + "；结论按该实验的验收范围给出。")
                 st.caption("该在线审核使用作者源码与项目适配证据。")
@@ -421,6 +440,11 @@ with st.sidebar:
     elif input_mode == "上传PDF" and uploaded_file and not corpus_paper:
         preview = _preview_pdf_input(uploaded_file.getvalue(), st.session_state.mock_mode)
         if preview.get("resolution"):
+            # The backend re-reads the immutable upload and rebuilds its evidence.
+            # Choosing the reviewed route here also selects the fresh worker when
+            # this Streamlit process still owns cached earlier adapters.
+            experiment_profile = preview["resolution"]["profile"]
+            method_selected = False
             requires_api = bool(st.session_state.get("pdf_llm_review", True))
 
     # 启动 / 重置按钮
@@ -520,7 +544,7 @@ if start_btn and not st.session_state.running:
             corpus_paper=corpus_paper,
             experiment_profile=experiment_profile,
             title_resolution=title_resolution,
-            prepare_only=False if title_resolution else (st.session_state.get("method_action") == "仅准备源码和命令" if method_selected else
+            prepare_only=False if title_resolution or tmp_pdf else (st.session_state.get("method_action") == "仅准备源码和命令" if method_selected else
                           bool(st.session_state.get("repository_prepare_only")) if experiment_profile else False),
             prepare_environment=method_selected and st.session_state.get("method_action") == "准备实验环境",
             optimization_mode=st.session_state.get("method_optimization", "off") if method_selected else "off",
@@ -531,7 +555,7 @@ if start_btn and not st.session_state.running:
                             bool(st.session_state.get("method_llm_review")) if method_selected else
                             bool(st.session_state.get("repository_llm_review")) if experiment_profile else False),
             allow_result_summary_review=(bool(st.session_state.get("repository_result_review"))
-                                         if experiment_profile and not title_resolution else False),
+                                         if experiment_profile and not title_resolution and not tmp_pdf else False),
             model_name=model_name, base_url=base_url,
             api_key=api_key,
             mock_mode=st.session_state.mock_mode,
@@ -763,6 +787,13 @@ with tab1:
                 st.error("实验未通过：" + validation.get("reason", "查看报告和执行日志"))
             elif validation.get("status") == "not_reproduced":
                 st.warning("完整实验已运行，论文数值验收未通过：" + validation.get("reason", "查看指标差异"))
+            elif validation.get("status") == "reference_not_met":
+                st.warning("选定论文实验已完成，独立评估数值未达到固定参考：" + validation.get("reason", "查看指标差异"))
+                if (data.get("experiment_spec") or {}).get("adapter_id") == "rezero":
+                    accuracy = ((validation.get("metrics_comparison") or {}).get("actual") or {}).get("top1_accuracy_pct")
+                    if type(accuracy) in (int, float):
+                        st.caption(f"完整 CIFAR-10 测试集 Top-1：{accuracy:.2f}% / 固定验收参考：94.00%。")
+                    st.caption("本次代码执行与协议核验已完成；数值未通过不等于代码执行失败。")
             elif validation.get("status") == "insufficient_evidence":
                 st.warning("论文证据不足，尚未完成论文实验：" + validation.get("reason", "缺少可核验实现"))
             elif validation.get("status") == "best_effort":
@@ -799,7 +830,11 @@ with tab1:
             elif validation.get("status") == "quality_target_not_met":
                 st.warning("方法实验已运行，但未达到预设工程效果门槛。")
             elif validation.get("is_reproduced") is True:
-                st.success("🎉 完整实验已完成，论文数值验收通过！")
+                if (data.get("experiment_spec") or {}).get("adapter_id") == "rezero":
+                    st.success("🎉 ReZero CIFAR-10 完整实验已完成，独立数值验收通过！")
+                    st.caption("本结论限于 ReZero PreActResNet18 的 CIFAR-10 超收敛实验，不覆盖 enwiki8 或整篇论文。")
+                else:
+                    st.success("🎉 完整实验已完成，论文数值验收通过！")
             else:
                 st.info("流水线已结束，请查看报告中的复现结论。")
         elif result.get("state") == "ERROR":

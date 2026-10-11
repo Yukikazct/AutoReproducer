@@ -10,10 +10,17 @@ from pathlib import Path
 import re
 
 from src.title_routing import match_paper_title, resolve_title_request
-from src.repository_evidence import extract_repository_links
+from src.repository_routing import (REZERO_PROFILE_ID, extract_current_repository_links,
+                                    match_repository_profile)
 
 
-PDF_INPUT_API_VERSION = 2
+PDF_INPUT_API_VERSION = 3
+# Record the source generation owned by this module. A long-running web host
+# must not mistake the same public API for the same extraction implementation.
+PDF_SOURCE_FINGERPRINT = hashlib.sha256(b"".join(
+    Path(__file__).with_name(name).read_bytes()
+    for name in ("pdf_input.py", "repository_routing.py", "repository_evidence.py")
+)).hexdigest()
 
 
 class PDFInputError(ValueError):
@@ -132,7 +139,7 @@ def extract_pdf_input(pdf_path):
         return PDFInput(text=text, first_page_text=pages[0] if pages else "",
                         metadata_title=metadata_title, page_count=len(pages),
                         sha256=hashlib.sha256(payload).hexdigest(), byte_size=len(payload),
-                        repository_links=tuple(extract_repository_links(pages, annotations)))
+                        repository_links=tuple(extract_current_repository_links(pages, annotations)))
 
     if unavailable:
         raise PDFParserUnavailable("PDF 解析依赖缺失，需要自动准备应用运行环境后重试")
@@ -148,21 +155,26 @@ _PREAMBLE = re.compile(
 _BODY_HEADING = re.compile(r"^(?:abstract|introduction|references)\b", re.I)
 
 
+def _leading_title_candidates(document):
+    """Yield complete leading lines, stopping before the body or bibliography."""
+    lines = [line.strip() for line in document.first_page_text.splitlines() if line.strip()]
+    while lines and _PREAMBLE.match(lines[0]):
+        lines.pop(0)
+    if not lines or _BODY_HEADING.match(lines[0]):
+        return
+    for count in range(1, min(6, len(lines)) + 1):
+        if any(_BODY_HEADING.match(line) for line in lines[:count]):
+            break
+        yield " ".join(lines[:count])
+
+
 def supported_pdf_title(document):
     """Match complete leading title lines, never a mention elsewhere in a PDF.
 
     Metadata can confirm the title but cannot override a different visible title.
     Only complete consecutive lines at the start of the first page are candidates.
     """
-    lines = [line.strip() for line in document.first_page_text.splitlines() if line.strip()]
-    while lines and _PREAMBLE.match(lines[0]):
-        lines.pop(0)
-    if not lines or _BODY_HEADING.match(lines[0]):
-        return None
-    for count in range(1, min(6, len(lines)) + 1):
-        if any(_BODY_HEADING.match(line) for line in lines[:count]):
-            break
-        candidate = " ".join(lines[:count])
+    for candidate in _leading_title_candidates(document):
         profile = match_paper_title(candidate)
         if profile is not None:
             # A conflicting known metadata title is not unambiguous evidence.
@@ -183,6 +195,28 @@ def resolve_pdf_request(request):
         "code", "preferred_repo_url", "code_repo_url", "corpus_paper",
     )):
         return resolved
+    # Rebuild preview evidence from the bytes currently supplied to the worker.
+    # In particular, a stale selected ReZero profile cannot authorize execution
+    # after its PDF was replaced with an unrelated paper or a link-only document.
+    resolved.pop("pdf_resolution", None)
+    for candidate in _leading_title_candidates(document):
+        repository_route = match_repository_profile(candidate, document.repository_links)
+        if repository_route is None:
+            continue
+        metadata_profile = match_paper_title(document.metadata_title)
+        if metadata_profile is not None and metadata_profile != repository_route["profile"]:
+            continue
+        if request.get("experiment_profile") not in (None, "", repository_route["profile"]):
+            return resolved
+        resolved["experiment_profile"] = repository_route["profile"]
+        resolved["pdf_resolution"] = {
+            **repository_route, "sha256": document.sha256,
+            "pages": document.page_count, "bytes": document.byte_size,
+            "repository_links": [dict(link) for link in document.repository_links],
+        }
+        return resolved
+    if request.get("experiment_profile") == REZERO_PROFILE_ID:
+        raise PDFInputError("本次 PDF 的完整标题与作者代码声明未共同确认 ReZero 实验；本次未运行训练代码")
     title = supported_pdf_title(document)
     if title is None:
         return resolved
