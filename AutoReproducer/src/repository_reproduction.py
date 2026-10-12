@@ -387,8 +387,9 @@ print(json.dumps({'mse':float(np.mean((prediction-truth)**2)), 'mae':float(np.me
 '''
     env = os.environ.copy()
     env.pop("LLM_API_KEY", None)
-    deps = (execution.get("environment") or {}).get("dependencies_path", "")
-    env["PYTHONPATH"] = str(deps or "")
+    environment = execution.get('environment') or {}
+    deps = environment.get('dependency_paths') or [environment.get('dependencies_path', '')]
+    env["PYTHONPATH"] = os.pathsep.join(str(path) for path in deps if path)
     try:
         proc = subprocess.run([sys.executable, "-c", script, str(predictions[0]), dataset["path"],
                                str(artifact_dir), execution["final"]["stdout_path"]],

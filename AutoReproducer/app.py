@@ -1098,10 +1098,13 @@ def render_history():
                            "legacy": "旧目录（无元数据）"}.get(d["kind"], d["kind"]),
                   "包含包": ", ".join(d["packages"]) or "—",
                   "占用": format_size(d["bytes"]),
+                  "复用基础环境": d.get('base_environment') or '—',
                   "最后使用": (d["last_used"] or "")[:16].replace("T", " ")}
                  for d in deps_items],
                 use_container_width=True, hide_index=True)
             st.caption(f"{len(deps_items)} 个目录 · 合计 {format_size(total_deps)}")
+            st.caption('增量环境只保存缺少的包，基础环境按 Python 和 CPU／CUDA 类型隔离。'
+                       '仍被引用或正在运行的环境会保留；新安装前自动检查缓存容量与可用空间。')
 
             deps_keep = st.slider("清理多少天未使用的依赖缓存", 1, 180, 30,
                                   key="deps_keep_days")

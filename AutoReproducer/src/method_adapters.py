@@ -133,8 +133,10 @@ class SirenAdapter:
     def verify_environment(self, profile, execution, workspace):
         root = Path(workspace)
         imported = read_json(root / "import_provenance.json")
-        deps = Path(execution["environment"]["dependencies_path"]).resolve()
-        if any(not Path(p).resolve().is_relative_to(deps) for p in imported["modules"].values()):
+        environment = execution['environment']
+        deps = [Path(p).resolve() for p in (environment.get('dependency_paths') or
+                                          [environment['dependencies_path']])]
+        if any(not any(Path(p).resolve().is_relative_to(root) for root in deps) for p in imported["modules"].values()):
             raise ValueError("依赖从冻结缓存之外导入")
         if profile["parameters"]["device"] == "cuda" and (
                 imported["torch"] != "2.5.1+cu121" or imported["cuda"] != "12.1"

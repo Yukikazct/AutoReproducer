@@ -57,17 +57,26 @@ from packaging.specifiers import SpecifierSet
 
 target = Path(sys.argv[1]).resolve(strict=True)
 requirements = json.loads(sys.argv[2])
+targets = [Path(p).resolve(strict=True) for p in json.loads(sys.argv[3])] if len(sys.argv) > 3 else [target]
+expected_versions = json.loads(sys.argv[4]) if len(sys.argv) > 4 else {}
 if any(req['module'] == 'dgl' for req in requirements):
     os.environ['DGLBACKEND'] = 'pytorch'
-sys.path.insert(0, str(target))
+sys.path[:0] = [str(path) for path in targets]
 canonical = lambda name: re.sub(r"[-_.]+", "-", name).lower()
 distributions = {}
-for dist in importlib.metadata.distributions(path=[str(target)]):
-    name = canonical(dist.metadata.get('Name', ''))
-    if name:
-        if name in distributions:
-            raise RuntimeError('duplicate distribution metadata: ' + name)
-        distributions[name] = dist
+for path in targets:
+    local = {}
+    for dist in importlib.metadata.distributions(path=[str(path)]):
+        name = canonical(dist.metadata.get('Name', ''))
+        if name:
+            if name in local:
+                raise RuntimeError('duplicate distribution metadata: ' + name)
+            local[name] = dist
+    for name, dist in local.items():
+        distributions.setdefault(name, dist)
+for name, version in expected_versions.items():
+    if name not in distributions or distributions[name].version != version:
+        raise RuntimeError('resolved wheel version missing from managed environment: ' + name)
 loaded = {}
 for requirement in requirements:
     name = canonical(requirement['name'])
@@ -80,7 +89,7 @@ for requirement in requirements:
     module = importlib.import_module(module_name)
     locations = ([getattr(module, '__file__', None)] if getattr(module, '__file__', None)
                  else list(getattr(module, '__path__', ())))
-    if not locations or any(not Path(location).resolve().is_relative_to(target) for location in locations):
+    if not locations or any(not any(Path(location).resolve().is_relative_to(path) for path in targets) for location in locations):
         raise RuntimeError('package imported outside the managed cache: ' + module_name)
     loaded[module_name] = module
 

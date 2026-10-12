@@ -28,6 +28,7 @@
 | --- | --- | --- | --- |
 | CCA-SSG | 当时未参与修复的新 PDF，经真实网页上传 | 50 轮训练、2000 轮线性评估，共 2050 次优化更新，退出码 0 | 所选代码运行完成；完整数据来源与论文数值尚未核验。[验收记录](docs/ccassg_author_execution_20261012.md) |
 | GNN-LF/HF | 针对已暴露问题的 PDF，通过生产后端做回归 | 自动定位实现仓库，执行 README 原命令，完成 10 次 Cora 训练、14,068 次优化更新，退出码 0 | 所选代码运行完成；属于问题回归，论文数值尚未独立核验。[回归记录](docs/gnn_lfhf_repository_regression_20261012.md) |
+| SGC | 针对 JSON 核验失败与依赖占满磁盘的问题，经真实网页做回归 | 复用约 1.46 GiB 基础环境，只新增约 61 MiB 依赖；作者命令完成 100 次优化更新，退出码 0 | 所选代码运行完成；论文数值尚未独立核验。[回归记录](docs/sgc_json_dependency_regression_20261012.md) |
 
 两次运行均确认原命令自然结束、所属进程退出。GNN-LF/HF 的原程序报告 ACC `83.25 ± 0.34%`，CCA-SSG 报告 `0.8170`；这些作者输出不替代独立数值验收。
 
@@ -290,6 +291,21 @@ PDF 先验证文件与正文，再识别首页标题，保存 SHA-256、页数�
 真实模式下 `pip install --target data/deps/<sha1(reqs)>` 一次性安装到隔离目录并落 `.ready` 就绪标记，执行时经 **PYTHONPATH 注入** 该目录；同名依赖清单跨论文跨会话只落一份（多论文共享、天然去重），不污染全局 Python。`AUTOREPRO_DEPS_ROOT` 可覆盖根目录。
 
 官方预设的依赖缓存进一步按 Python ABI、系统和架构隔离；每次复用都检查固定版本、导入及关键原生运算。就绪标记存在但缓存已损坏时，会加锁重建相同版本；默认公共镜像超时或连接失败时可回退官方 PyPI，准备和健康检查记录随本次运行保存。
+
+仓库执行现在支持**基础环境与增量包复用**。已有环境包含相同版本的所需包时直接复用；清单增加小包时，由 pip 解析完整版本及传递依赖，复用相同版本的基础包，只将缺少的固定 wheel 安装到增量目录。例如已有 CPU PyTorch、NumPy、SciPy 时，新增 scikit-learn 不再复制整套 PyTorch。完整解析结果、wheel 哈希、基础环境引用和实际导入路径随运行保存。Python 3.11／3.12、CPU／CUDA 和不同版本继续隔离，私有源及复杂源码清单保留独立安装路径。
+
+新安装前自动回收失败残留与闲置环境，按最后使用时间处理容量或空间压力；默认依赖缓存上限为 **20 GiB**、磁盘至少保留 **2 GiB**，超过 30 天未使用的环境可回收。运行期间持有缓存锁，增量目录引用的基础环境也受到保护。空间仍不足时明确提示调整缓存目录。网页“历史记录 → 依赖缓存”可查看各目录的占用、最后使用时间和基础环境引用；不会清理 PDF、数据集或运行证据。详情见 [依赖环境管理](docs/dependency_management.md)。
+
+```powershell
+# 仅预览回收计划；加 --yes 执行
+python scripts/resource_cli.py deps-prune
+python scripts/resource_cli.py deps-prune --yes
+
+# 可选：启动前将新依赖缓存放在空间充足的磁盘
+$env:AUTOREPRO_DEPS_ROOT = "E:\AutoReproducer-cache\deps"
+$env:AUTOREPRO_DEPS_QUOTA_GB = "20"
+$env:AUTOREPRO_DEPS_MIN_FREE_GB = "2"
+```
 
 ### 镜像级共享（P1-1，`src/agents/env_builder.py`）
 

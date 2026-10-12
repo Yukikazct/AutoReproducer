@@ -52,6 +52,10 @@ from src.dependency_cache import (
     cache_guard, DependencyCacheBusy, DEPENDENCY_HEALTH_PROBE, reset_managed_environment,
 )
 from src.runtime_platform import runtime_fingerprint
+from src.dependency_management import (
+    compatible_candidates, environment_paths, requirement_signature, wheel_resolution,
+    choose_base, prune_cache,
+)
 from src.safety.paths import workspace_path
 
 LOCAL_TIMEOUT_SMOKE = 10
@@ -525,6 +529,7 @@ class CodeExecutorAgent(BaseAgent):
         self._retry_feedback = None
         # 最近一次依赖就绪的隔离安装目录（供执行时注入 PYTHONPATH）
         self._deps_dir: Optional[str] = None
+        self._base_deps_dirs = []
         # 运行时自愈补装的隔离目录集合（data/deps/heal-<module>/），
         # 全部注入 PYTHONPATH，与依赖清单目录不互相污染。
         self._heal_dirs: set = set()
@@ -545,6 +550,7 @@ class CodeExecutorAgent(BaseAgent):
                 yield
             finally:
                 paths = set(self._heal_dirs)
+                paths.update(self._base_deps_dirs)
                 if self._deps_dir:
                     paths.add(self._deps_dir)
                 for path in paths:
@@ -1708,6 +1714,7 @@ class CodeExecutorAgent(BaseAgent):
                                    "note": "当前仅执行冒烟阶段，镜像大小尚未读取。"})
         else:
             paths = set(self._heal_dirs)
+            paths.update(self._base_deps_dirs)
             if self._deps_dir:
                 paths.add(self._deps_dir)
             # 安装失败仍保留已经写入的部分文件；缓存命中也按当前清单定位。
@@ -1828,8 +1835,11 @@ class CodeExecutorAgent(BaseAgent):
             # font-cache writes or use a writable user configuration directory.
             with tempfile.TemporaryDirectory(prefix="_health_plot_", dir=deps_dir.parent) as plot_dir:
                 env["MPLCONFIGDIR"] = plot_dir
+                paths = environment_paths(self._dependency_lock_root(), deps_dir)
+                expected_versions = read_deps_meta(deps_dir).get('resolved_versions', {})
                 result = self._run_dependency_command(
-                    [sys.executable, "-I", "-c", DEPENDENCY_HEALTH_PROBE, str(deps_dir), json.dumps(parsed)],
+                    [sys.executable, "-I", "-c", DEPENDENCY_HEALTH_PROBE, str(deps_dir), json.dumps(parsed),
+                     json.dumps([str(path) for path in paths]), json.dumps(expected_versions)],
                     timeout=LOCAL_DEPENDENCY_HEALTH_TIMEOUT, env=env)
             exit_code = result.returncode
             detail = "\n".join(stream for stream in (result.stdout or "", result.stderr or "") if stream).strip()
@@ -1909,6 +1919,7 @@ class CodeExecutorAgent(BaseAgent):
                 return f"自愈缓存路径检查失败: {exc}"
             saved_root = getattr(self, "deps_cache_root", None)
             saved_deps = self._deps_dir
+            saved_bases = list(self._base_deps_dirs)
             self.deps_cache_root = heal_root
             try:
                 heal_root.mkdir(parents=True, exist_ok=True)
@@ -1921,6 +1932,7 @@ class CodeExecutorAgent(BaseAgent):
                 return error
             finally:
                 self._deps_dir = saved_deps
+                self._base_deps_dirs = saved_bases
                 if saved_root is None:
                     del self.deps_cache_root
                 else:
@@ -1965,6 +1977,68 @@ class CodeExecutorAgent(BaseAgent):
         except DependencyCacheBusy as exc:
             return str(exc)
 
+    def _activate_dependency_environment(self, directory):
+        paths = environment_paths(self._dependency_lock_root(), directory, require_ready=True)
+        self._deps_dir = str(paths[0])
+        self._base_deps_dirs = [str(path) for path in paths[1:]]
+        for path in paths:
+            touch_deps_meta(path)
+
+    def _dependency_housekeeping(self, protected):
+        try:
+            quota = float(os.environ.get('AUTOREPRO_DEPS_QUOTA_GB', '20'))
+            reserve = float(os.environ.get('AUTOREPRO_DEPS_MIN_FREE_GB', '2'))
+            if not (0 < quota < 100000 and 0 <= reserve < 100000):
+                raise ValueError('invalid dependency cache limits')
+            receipt = prune_cache(self._dependency_lock_root(), protected=protected,
+                                  quota_bytes=int(quota * 1024**3), min_free_bytes=int(reserve * 1024**3))
+            self.env_config.setdefault('dependency_cache_maintenance', []).append(receipt)
+            if receipt['removed']:
+                self.log('prune_deps', 'SUCCESS', f"回收 {len(receipt['removed'])} 个闲置依赖环境", receipt)
+            if receipt['free_bytes'] < receipt['min_free_bytes']:
+                return '依赖缓存所在磁盘空间不足；请清理闲置缓存或设置 AUTOREPRO_DEPS_ROOT 到空间充足的磁盘'
+        except (OSError, ValueError) as error:
+            return f'依赖缓存空间检查失败: {error}'
+        return None
+
+    def _resolve_dependency_layer(self, root, reqs, req_file, workdir):
+        """Resolve all pins with pip, then install only exact missing wheels."""
+        if not requirement_signature(reqs) or not _allow_official_pip_fallback(reqs):
+            return None
+        candidates = compatible_candidates(root, reqs)
+        # A resolver is useful only if a ready native environment can be shared.
+        if not candidates and not any((path / '.ready').is_file() for path in root.iterdir() if path.is_dir()):
+            return None
+        report_path = Path(workdir) / 'wheel_resolution.json'
+        command = [sys.executable, '-m', 'pip', 'install', '--disable-pip-version-check', '-q',
+                   '--no-user', '--dry-run', '--ignore-installed', '--only-binary=:all:',
+                   '--report', str(report_path), '-i', PIP_INDEX_URL]
+        if PIP_FIND_LINKS:
+            command += ['--find-links', PIP_FIND_LINKS]
+        command += ['-r', req_file]
+        try:
+            resolved = self._run_dependency_command(command, env=self._pip_env(), timeout=LOCAL_PIP_TIMEOUT)
+            if resolved.returncode:
+                raise ValueError(_safe_install_diagnostic(resolved.stderr or resolved.stdout)[-800:])
+            wheels = wheel_resolution(json.loads(report_path.read_text('utf-8')))
+            selected = choose_base(root, reqs, wheels)
+            if selected is None:
+                return None
+            base, missing, shared = selected
+            # Probe the complete base before using any of its native libraries.
+            if self._check_local_dependency_health(base, read_deps_meta(base)['requirements'], 'layer_base'):
+                return None
+            delta_file = Path(workdir) / 'delta_requirements.txt'
+            delta_file.write_text('\n'.join(wheel['requirement'] for wheel in missing.values()) + '\n', 'utf-8')
+            return {'base_environment': base.relative_to(self._dependency_lock_root()).as_posix(),
+                    'resolved_versions': {name: wheel['version'] for name, wheel in wheels.items()},
+                    'shared_packages': sorted(shared), 'installed_packages': sorted(missing),
+                    'requirements_file': str(delta_file)}
+        except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
+            self.log('resolve_deps', 'WARNING', '增量环境规划不可用，回退独立安装',
+                     {'diagnostic': _safe_install_diagnostic(error)[-800:]})
+            return None
+
     def _ensure_local_deps_locked(self, workdir: str, *, requirements_override=None,
                                   deps_directory=None, install_kind="reqs", module="") -> Optional[str]:
         """确保本地执行环境已安装论文依赖；None 表示就绪，否则返回诊断文本。
@@ -1993,6 +2067,7 @@ class CodeExecutorAgent(BaseAgent):
                f"{deps_dir.resolve()}\n{reqs}")
         ready_mark = deps_dir / _DEPS_READY_MARK
         self._deps_dir = None
+        self._base_deps_dirs = []
         resource_id = reqs_digest(reqs)
         self.resource_events.emit(
             "dependency", resource_id, "install", "running",
@@ -2009,7 +2084,7 @@ class CodeExecutorAgent(BaseAgent):
             if ready_mark.is_file():
                 health_error = self._check_local_dependency_health(deps_dir, reqs, "cached")
                 if not health_error:
-                    self._deps_dir = str(deps_dir)
+                    self._activate_dependency_environment(deps_dir)
                     _INSTALLED_DEPS[key] = ""
                     touch_deps_meta(deps_dir)
                     return None
@@ -2020,7 +2095,7 @@ class CodeExecutorAgent(BaseAgent):
         if key in _INSTALLED_DEPS and not _INSTALLED_DEPS[key] and (
                 self.mock_mode or (ready_mark.is_file() and not health_enabled)):
             if not self.mock_mode:
-                self._deps_dir = str(deps_dir)
+                self._activate_dependency_environment(deps_dir)
                 touch_deps_meta(deps_dir)
             self.resource_events.emit(
                 "dependency", resource_id, "install", "cached",
@@ -2028,6 +2103,18 @@ class CodeExecutorAgent(BaseAgent):
             return None
         if _INSTALLED_DEPS.get(key):
             self.log("install_deps", "RUNNING", "上次依赖安装失败，允许本次运行重新尝试")
+
+        managed_repository = (health_enabled and deps_root.parent.name == 'repository'
+                              and deps_root.name == runtime_fingerprint() and install_kind == 'reqs')
+        if managed_repository and _allow_official_pip_fallback(reqs):
+            for cached in compatible_candidates(deps_root, reqs):
+                if cached == deps_dir:
+                    continue
+                if not self._check_local_dependency_health(cached, reqs, 'compatible_cache'):
+                    self._activate_dependency_environment(cached)
+                    env_config['dependency_reuse'] = {'kind': 'compatible_environment', 'path': str(cached)}
+                    self.log('install_deps', 'SUCCESS', '复用满足相同版本要求的已验证环境')
+                    return None
 
         if env_config.get("offline") and not self.mock_mode and not ready_mark.is_file():
             return "离线模式缺少完整的固定依赖缓存；本次未联网安装或训练"
@@ -2054,7 +2141,7 @@ class CodeExecutorAgent(BaseAgent):
 
         # 磁盘就绪检测：同一依赖清单已在隔离目录装过则直接复用
         if ready_mark.is_file() and not invalid_cache:
-            self._deps_dir = str(deps_dir)
+            self._activate_dependency_environment(deps_dir)
             _INSTALLED_DEPS[key] = ""
             touch_deps_meta(deps_dir)       # 刷新 last_used，供冷热清理判断
             self.log("install_deps", "SUCCESS",
@@ -2077,6 +2164,15 @@ class CodeExecutorAgent(BaseAgent):
             incomplete_target = any(deps_dir.iterdir())
             if incomplete_target and not invalid_cache:
                 self._record_dependency_repair(deps_dir, "上次安装未完成，清理残留目录后重装相同依赖")
+            layer = None
+            if managed_repository:
+                # Release failed copies before measuring space or resolving wheels.
+                reset_managed_environment(managed_root, deps_dir)
+                protected = [deps_dir, *self._heal_dirs]
+                space_error = self._dependency_housekeeping(protected)
+                if space_error:
+                    return space_error
+                layer = self._resolve_dependency_layer(deps_root, reqs, req_file, workdir)
             fallback_used = False
             health_rebuild_used = invalid_cache
             # One public-source fallback and one clean native-package rebuild.
@@ -2093,6 +2189,10 @@ class CodeExecutorAgent(BaseAgent):
                 if links:
                     cmd += ["--find-links", links]
                 cmd += ["-r", req_file]
+                if layer:
+                    cmd = [sys.executable, '-m', 'pip', 'install', '--disable-pip-version-check', '-q',
+                           '--no-user', '--no-deps', '--target', str(deps_dir),
+                           '-r', layer['requirements_file']]
                 timed_out, exit_code = False, None
                 timeout_s = LOCAL_PIP_TIMEOUT
                 if index.rstrip("/") == _OFFICIAL_PIP_INDEX:
@@ -2103,7 +2203,9 @@ class CodeExecutorAgent(BaseAgent):
                 self.log("install_deps", "RUNNING",
                          f"第 {attempt} 轮依赖安装: {_safe_install_diagnostic(index)}")
                 try:
-                    res = self._run_dependency_command(cmd, env=self._pip_env(), timeout=timeout_s)
+                    res = (subprocess.CompletedProcess(cmd, 0, 'All resolved wheels reused', '')
+                           if layer and not layer['installed_packages'] else
+                           self._run_dependency_command(cmd, env=self._pip_env(), timeout=timeout_s))
                     exit_code = res.returncode
                     detail = "\n".join(s for s in (res.stdout or "", res.stderr or "") if s).strip()
                 except subprocess.TimeoutExpired as exc:
@@ -2120,6 +2222,11 @@ class CodeExecutorAgent(BaseAgent):
                 safe_detail = _safe_install_diagnostic(detail)[-1600:]
                 health_error = None
                 if exit_code == 0:
+                    if layer:
+                        _write_deps_meta(deps_dir, install_kind, requirements=reqs, module=module)
+                        meta = read_deps_meta(deps_dir)
+                        meta.update({name: value for name, value in layer.items() if name != 'requirements_file'})
+                        _deps_meta_path(deps_dir).write_text(json.dumps(meta, ensure_ascii=False, indent=2), 'utf-8')
                     health_error = self._check_local_dependency_health(
                         deps_dir, reqs, "rebuild" if health_rebuild_used else "installed")
                 attempts.append({"attempt": attempt, "index_url": _safe_install_diagnostic(index),
@@ -2130,14 +2237,21 @@ class CodeExecutorAgent(BaseAgent):
                     if not health_rebuild_used:
                         self._record_dependency_repair(deps_dir, health_error)
                         health_rebuild_used = True
+                        if layer:
+                            env_config.setdefault('dependency_layer_fallbacks', []).append(
+                                {'reason': health_error, 'base_environment': layer['base_environment']})
+                            layer = None
                         continue
                     break
                 if exit_code == 0:
                     ready_mark.write_text("ok\n", encoding="utf-8")
-                    self._deps_dir = str(deps_dir)
+                    self._activate_dependency_environment(deps_dir)
                     _INSTALLED_DEPS[key] = ""
-                    _write_deps_meta(deps_dir, install_kind,
-                                     requirements=reqs if install_kind == "reqs" else "", module=module)
+                    if not layer:
+                        _write_deps_meta(deps_dir, install_kind,
+                                         requirements=reqs if install_kind == "reqs" else "", module=module)
+                    else:
+                        env_config['dependency_reuse'] = {name: value for name, value in layer.items() if name != 'requirements_file'}
                     self._finish_dependency_repair(deps_dir, True)
                     self.log("install_deps", "SUCCESS",
                              f"隔离依赖安装完成（第 {attempt} 轮）: {deps_dir.name}")
@@ -2198,6 +2312,7 @@ class CodeExecutorAgent(BaseAgent):
         paths = []
         if self._deps_dir:
             paths.append(self._deps_dir)
+        paths.extend(self._base_deps_dirs)
         # 自愈目录排序注入，保证多模块顺序确定
         paths.extend(sorted(self._heal_dirs))
         if paths:

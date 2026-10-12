@@ -56,6 +56,10 @@ def cpu_dependency_cache():
 
 
 def use_preinstalled_cache(monkeypatch, runner, cache):
+    import src.repository_runner as repository
+    # This fixture intentionally uses a real preinstalled environment. Its
+    # ownership lock and path boundary must refer to that same managed root.
+    monkeypatch.setattr(repository, 'DEPS_CACHE_ROOT', cache.parents[2])
     executor = runner.runner.executor
 
     def use_cache(_directory):

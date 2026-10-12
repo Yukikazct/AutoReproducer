@@ -1,0 +1,148 @@
+{
+  "test_kind": "known_issue_regression",
+  "input": "real_browser_pdf_upload",
+  "paper": "Simplifying Graph Convolutional Networks",
+  "pdf_sha256": "1151ecd729ecbc9fe51e09d0a5ece2ae2f326bb03cd64f6a2158ec43c083af2e",
+  "repository": {
+    "url": "https://github.com/Tiiiger/SGC",
+    "revision": "2c7a2727e82e462d8ef9d6e57f0b08888e16488f"
+  },
+  "recorded_json_response_replay": {
+    "input": "recorded_failed_model_response_with_original_pdf_and_repository",
+    "accepted": true,
+    "repository": "https://github.com/Tiiiger/SGC",
+    "revision": "2c7a2727e82e462d8ef9d6e57f0b08888e16488f",
+    "source_hashes_verified": true,
+    "repairs": [
+      {
+        "kind": "append_closing_delimiters",
+        "suffix": "}",
+        "format_error": "Expecting ',' delimiter: line 1 column 2106 (char 2105)"
+      },
+      {
+        "kind": "promote_overall_metadata",
+        "field": "verdict",
+        "source": "checks.verdict"
+      },
+      {
+        "kind": "promote_overall_metadata",
+        "field": "reason",
+        "source": "checks.reason"
+      }
+    ],
+    "all_checks": {
+      "paper_identity": true,
+      "author_implementation": true,
+      "method_alignment": true
+    }
+  },
+  "product_source_sha256": "80c9c8cf7d4d492ab2ab529473642c3c38a10dc516d211132c78afd1d2510fb6",
+  "product_files_verified": 117,
+  "live_page_completed": true,
+  "state": "COMPLETED",
+  "validation": {
+    "status": "author_code_completed",
+    "is_reproduced": null,
+    "paper_metrics_verified": false,
+    "completion_checks": {
+      "all_required_author_commands_returned": true,
+      "observed_training_updates": true,
+      "owned_processes_finished": true,
+      "frozen_sources_verified": true,
+      "native_environment_verified": true,
+      "real_data_frozen": true
+    },
+    "dataset_provenance_verified": true
+  },
+  "author_execution": [
+    {
+      "argv": [
+        "python",
+        "citation.py",
+        "--dataset",
+        "cora",
+        "--tuned"
+      ],
+      "natural_return": true,
+      "optimizer_steps": 100,
+      "torch_version": "2.5.1+cpu"
+    }
+  ],
+  "execution_steps": [
+    {
+      "id": "train_cora",
+      "exit_code": 0,
+      "elapsed_s": 18.109,
+      "timed_out": false,
+      "cancelled": false
+    }
+  ],
+  "execution_runs": {
+    "starts": 2,
+    "ends": 2
+  },
+  "dependency_environment": {
+    "runtime": "cpython-312-win32-AMD64",
+    "preparation_elapsed_s": 74.672,
+    "reuse": {
+      "base_environment": "repository/cpython-312-win32-AMD64/77dd001613d7cab9",
+      "resolved_versions": {
+        "networkx": "2.8.8",
+        "numpy": "1.26.4",
+        "scikit-learn": "1.5.2",
+        "scipy": "1.14.1",
+        "torch": "2.5.1+cpu",
+        "sympy": "1.13.1",
+        "joblib": "1.6.0",
+        "threadpoolctl": "3.7.0",
+        "typing-extensions": "4.16.0",
+        "filelock": "4.1.1",
+        "fsspec": "2026.9.0",
+        "jinja2": "3.1.6",
+        "setuptools": "84.0.0",
+        "cloudpickle": "3.1.2",
+        "markupsafe": "3.0.4",
+        "mpmath": "1.3.0"
+      },
+      "shared_packages": [
+        "fsspec",
+        "jinja2",
+        "markupsafe",
+        "mpmath",
+        "numpy",
+        "scipy",
+        "setuptools",
+        "sympy",
+        "torch",
+        "typing-extensions"
+      ],
+      "installed_packages": [
+        "cloudpickle",
+        "filelock",
+        "joblib",
+        "networkx",
+        "scikit-learn",
+        "threadpoolctl"
+      ]
+    },
+    "delta_bytes": 64168060,
+    "base_bytes": 1570270897
+  },
+  "warm_cache_check": {
+    "status": "passed",
+    "pip_calls": 0,
+    "elapsed_s": 9.391,
+    "runtime": "cpython-312-win32-AMD64",
+    "paths": [
+      "repository/cpython-312-win32-AMD64/b35e8f2d21c98067",
+      "repository/cpython-312-win32-AMD64/77dd001613d7cab9"
+    ],
+    "health": true
+  },
+  "cache_reclaimed_bytes": 4350406492,
+  "reported_author_metrics": {
+    "validation_accuracy": 0.794,
+    "test_accuracy": 0.81,
+    "independently_verified": false
+  }
+}

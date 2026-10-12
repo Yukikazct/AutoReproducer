@@ -441,6 +441,7 @@ class RepositoryRunner:
             self.executor.deps_cache_root = deps_root
             self.executor.deps_lock_root = DEPS_CACHE_ROOT
             self.executor._deps_dir = None
+            self.executor._base_deps_dirs = []
             self.executor._heal_dirs.clear()
             prepare_dir = run_dir / "environment_prepare"
             prepare_dir.mkdir()
@@ -452,11 +453,15 @@ class RepositoryRunner:
                 environment = {"python": sys.version, "executable": sys.executable,
                                "platform": sys.platform, "runtime": runtime,
                                "dependencies_path": self.executor._deps_dir,
+                               "dependency_paths": ([self.executor._deps_dir, *self.executor._base_deps_dirs]
+                                                    if self.executor._deps_dir else []),
                                "requirements_txt": config.get("requirements_txt", ""),
                                "preparation_path": str(prepare_dir), "status": status,
                                "preparation_elapsed_s": time.monotonic() - preparation_started,
                                **{name: config.get(name, []) for name in (
-                                   "dependency_install_attempts", "dependency_health_attempts", "dependency_cache_repairs")}}
+                                   "dependency_install_attempts", "dependency_health_attempts", "dependency_cache_repairs",
+                                   "dependency_cache_maintenance")},
+                               "dependency_reuse": config.get('dependency_reuse')}
                 if reason:
                     environment["reason"] = reason
                 result["environment"] = environment
@@ -478,7 +483,7 @@ class RepositoryRunner:
                         deps_error = self.executor._check_local_dependency_health(
                             cached, self.executor.env_config["requirements_txt"], "cached")
                         if not deps_error:
-                            self.executor._deps_dir = str(cached)
+                            self.executor._activate_dependency_environment(cached)
                 else:
                     deps_error = self.executor._ensure_local_deps(str(prepare_dir))
                 # The legacy helper's process-cache fast path does not set the
