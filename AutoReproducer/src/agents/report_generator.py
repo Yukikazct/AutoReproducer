@@ -740,6 +740,8 @@ class ReportGeneratorAgent(BaseAgent):
             state_text = "✅ 实验环境已准备（尚未训练）"
         elif validation.get("status") == "method_experiment_completed":
             state_text = "✅ 官方方法实验完成（不判定整篇论文数值复现）"
+        elif validation.get('status') == 'author_code_completed':
+            state_text = '作者仓库代码运行完成（论文数值尚未核验）'
         elif validation.get("status") == "quality_target_not_met":
             state_text = "⚠️ 方法实验已运行，工程效果门槛未达到"
         elif validation.get("status") == "reference_not_met":
@@ -767,6 +769,7 @@ class ReportGeneratorAgent(BaseAgent):
         inner = validation.get("validation") or {}
         execution_level = {"failed": "执行失败", "incomplete": "执行证据不足",
                            "smoke_passed": "仅冒烟通过",
+                           "author_code_completed": "原作者命令运行完成",
                            "experiment_completed": "完整执行已完成"}.get(validation.get("execution_status"))
         if execution_level:
             lines.append(f"- **执行级别**: {execution_level}")

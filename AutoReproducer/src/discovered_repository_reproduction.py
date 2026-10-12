@@ -271,6 +271,7 @@ class DiscoveredRepositoryReproduction:
         from src.discovered_repository_plan import build_evidence_packet, bind_full_paper_notes, propose_plan
         started = time.monotonic()
         emit = on_event or (lambda event: None)
+        execution_only = request.get('author_execution_only') is True
         phases = [("prepare_repository", "FIND_RESOURCES", "ResourceFinder", "核验论文与 Git 仓库并固定源码版本"),
                   ("select_experiment", "READ_PAPER", "ExperimentProtocol", "判别论文实验方法与源码对应关系"),
                   ("plan_repository", "READ_PAPER", "PaperReader", "依据论文与源码冻结实验计划"),
@@ -279,6 +280,12 @@ class DiscoveredRepositoryReproduction:
                   ("execute_repository", "EXECUTE_CODE", "CodeExecutor", "运行固定作者入口与独立评估"),
                   ("verify_protocol", "VALIDATE", "Verifier", "核验固定源码、完成证据与独立指标"),
                   ("generate_report", "GENERATE_REPORT", "ReportGenerator", "生成带来源证据的实验报告")]
+        if execution_only:
+            phases = [(identifier, state, agent,
+                       {'select_experiment': '选择原作者完整运行命令',
+                        'execute_repository': '运行原作者命令并观察实际训练',
+                        'verify_protocol': '核验原作者命令和所属进程已完成'}.get(identifier, title))
+                      for identifier, state, agent, title in phases]
         emit({"type": "pipeline_plan", "pipeline": "repository", "stages": [
             {"id": identifier, "agent": agent, "title": title, "status": "waiting"}
             for identifier, _, agent, title in phases]})
@@ -298,6 +305,8 @@ class DiscoveredRepositoryReproduction:
                 "reproduction_scope": "selected_paper_experiment", "execution_source": "author_repository",
                 "optimization": {"mode": "off", "available": False, "optimized": False,
                                  "status": "disabled", "reason": "运行已冻结作者实验协议"}}
+        if execution_only:
+            data['reproduction_scope'] = 'author_code_execution'
         for key in ('reading_coverage', 'reading_batches', 'reading_originals'):
             if key in request:
                 data[key] = deepcopy(request[key])
@@ -344,6 +353,8 @@ class DiscoveredRepositoryReproduction:
                     attempt.update(revision=revision, archive_sha256=snapshot.get("archive_sha256"),
                                    workspace=str(workspace.resolve()))
                     packet = build_evidence_packet(request["pdf_path"], workspace, snapshot, for_identity_review=True)
+                    if execution_only:
+                        packet['author_execution_only'] = True
                     bind_full_paper_notes(packet, request)
                     if manual:
                         packet["repository_input"] = {"source": "user_supplied", "url": url}
@@ -381,24 +392,32 @@ class DiscoveredRepositoryReproduction:
             phase = "select_experiment"; event(phase, "running")
             from src.agents.experiment_protocol import ExperimentProtocolAgent
             try:
-                protocol = ExperimentProtocolAgent(self.llm, self.logger).run(packet, workspace)
+                protocol = (None if execution_only else
+                            ExperimentProtocolAgent(self.llm, self.logger).run(packet, workspace))
             except BaseException:
                 try:
                     write_json(run_dir / 'source_packet.json', packet)
                 except Exception as persistence_error:
                     data['source_packet_persistence_error'] = str(persistence_error)
                 raise
-            data['experiment_protocol'] = protocol
-            packet['experiment_protocol'] = protocol
-            write_json(run_dir / 'experiment_protocol.json', protocol)
-            event(phase, "success")
+            if protocol is not None:
+                data['experiment_protocol'] = protocol
+                packet['experiment_protocol'] = protocol
+                write_json(run_dir / 'experiment_protocol.json', protocol)
+                event(phase, "success")
+            else:
+                event(phase, 'skipped', '执行目标为先运行作者代码；完整命令与真实数据由后续独立规划审查核验')
             phase = "plan_repository"; event(phase, "running")
             if digest(Path(request["pdf_path"])) != document.sha256:
                 raise ValueError("原始 PDF 在仓库准备期间发生变化，不能使用不同论文继续规划")
             write_json(run_dir / "source_packet.json", packet)
             planning_error = None
             try:
-                plan = propose_plan(self.llm, packet, workspace)
+                if execution_only:
+                    from src.author_execution_plan import propose_author_execution_plan
+                    plan = propose_author_execution_plan(self.llm, packet, workspace)
+                else:
+                    plan = propose_plan(self.llm, packet, workspace)
             except BaseException as exc:
                 planning_error = exc
                 raise
@@ -428,6 +447,9 @@ class DiscoveredRepositoryReproduction:
                 "paper": deepcopy(data["paper_info"]), "parameters": plan.get("parameters", {}),
                 "environment": deepcopy(environment), "validation": {"scope": "selected_paper_experiment",
                     "note": "本次论文与作者源码引文确定实验范围；独立指标与完整执行证据共同决定结果。"}}
+            if execution_only:
+                data['experiment_spec']['validation'] = {'scope': 'author_code_execution',
+                    'note': '核验原作者完整命令的实际运行和进程结束；尚未验收论文数值。'}
             event(phase, "success")
             phase = "prepare_dataset"; event(phase, "running")
             datasets = prepare_plan_datasets(self.root, workspace, plan, snapshot, offline=offline)
@@ -517,7 +539,12 @@ class DiscoveredRepositoryReproduction:
             canonical = json.dumps(packet, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
             if hashlib.sha256(canonical.encode("utf-8")).hexdigest() != plan["evidence_sha256"]:
                 raise ValueError("落盘来源包与冻结的实验依据不一致")
-            materialized = materialize_capture(workspace, plan, data["spec_sha256"], snapshot=snapshot)
+            execution_only = plan.get('scope') == 'author_code_execution'
+            if execution_only:
+                from src.author_execution_plan import materialize_author_execution
+                materialized = materialize_author_execution(workspace, plan, data['spec_sha256'], snapshot)
+            else:
+                materialized = materialize_capture(workspace, plan, data["spec_sha256"], snapshot=snapshot)
             generated = materialized["files"]
             runtime_dir = workspace / CAPTURE_DIR
             (runtime_dir / "preflight.py").write_text(_PREFLIGHT, encoding="utf-8")
@@ -674,6 +701,17 @@ class DiscoveredRepositoryReproduction:
             event(phase, "success")
             phase = "verify_protocol"; event(phase, "running")
             verify_frozen_inputs()
+            if execution_only:
+                from src.author_execution_plan import verify_author_execution
+                validation = verify_author_execution(plan, workspace, execution, data['spec_sha256'])
+                validation['completion_checks'].update(frozen_sources_verified=True, real_data_frozen=True,
+                                                       native_environment_verified=True)
+                data['validation'] = validation
+                execution['author_execution_verification'] = validation
+                write_json(run_dir / 'author_execution_verification.json', validation)
+                write_json(run_dir / 'execution.json', execution)
+                event(phase, 'success', validation['reason'])
+                return
             validation = verify_capture(plan, workspace, execution, data["spec_sha256"])
             data["validation"] = validation
             execution["protocol_verification"] = {"pass": True, **validation["capture"]}

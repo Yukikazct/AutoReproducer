@@ -76,6 +76,67 @@ def test_backend_pdf_is_identified_before_store_handoff_and_preserves_review_cho
     assert backend.ProgressStore.read_snapshot(str(progress))["done"] is True
 
 
+@pytest.mark.parametrize('execution_only', [True, False])
+def test_generic_pdf_upload_preserves_execution_objective_through_managed_worker(
+        monkeypatch, tmp_path, safe_handoff, execution_only):
+    requests, _, _, host_factory = safe_handoff
+    source = write_pdf(tmp_path / 'new-paper.pdf', [
+        'Unregistered Native Experiment', 'Authors', 'Abstract',
+        'Our code is available at https://github.com/invented-fixtures/signals'])
+    upload = UploadedFile(UploadedFileRec('objective-fixture', 'new-paper.pdf', 'application/pdf',
+                                         source.read_bytes()), FileURLs())
+
+    def uploaded_file(*args, **kwargs):
+        st.session_state[kwargs['key']] = upload
+        return upload
+
+    monkeypatch.setattr(st, 'file_uploader', uploaded_file)
+    monkeypatch.setattr(local_settings, 'load_local_llm_settings', Mock())
+    monkeypatch.setattr(history, 'get_project_data_dir', lambda: tmp_path)
+    monkeypatch.delenv('AUTOREPRO_RESUME_PROGRESS', raising=False)
+    monkeypatch.setenv('LLM_BASE_URL', 'https://api.invalid')
+    monkeypatch.setenv('LLM_MODEL', 'fixture-model')
+    monkeypatch.setenv('LLM_API_KEY', 'fixture-key')
+    threads = []
+    from frontend import repository_entrypoint
+    fresh_backend = repository_entrypoint.load_repository_backend()
+    real_start = fresh_backend.run_pipeline_background
+    progress_paths = []
+
+    def start(path, **kwargs):
+        progress_paths.append(Path(path))
+        thread = real_start(path, **kwargs)
+        threads.append(thread)
+        return thread
+
+    monkeypatch.setattr(fresh_backend, 'run_pipeline_background', start)
+    app = AppTest.from_file(str(APP), default_timeout=30)
+    app.session_state['input_mode'] = '上传PDF'
+    app.session_state['mock_mode'] = False
+    app.session_state['docker_probe'] = (False, 'local execution fixture')
+    try:
+        app.run()
+        assert not app.exception
+        choice = next(item for item in app.sidebar.checkbox if item.label == '先运行作者仓库代码')
+        assert choice.value is True
+        choice.set_value(execution_only).run()
+        next(button for button in app.sidebar.button if '开始复现' in button.label).click().run()
+        assert not app.exception
+        assert len(threads) == 1
+        threads[0].join(timeout=5)
+        assert not threads[0].is_alive()
+        request, = requests
+        assert request['author_execution_only'] is execution_only
+        assert request['experiment_profile'] is None
+        assert request['pdf_path'] != str(source) and not Path(request['pdf_path']).exists()
+        host_factory.assert_not_called()
+    finally:
+        for thread in threads:
+            thread.join(timeout=5)
+        for path in progress_paths:
+            path.unlink(missing_ok=True)
+
+
 @pytest.mark.parametrize("kind", ["missing", "invalid", "blank"])
 def test_invalid_backend_pdf_rejected_before_constructing_llm_or_orchestrator(monkeypatch, tmp_path, kind):
     source = tmp_path / "paper.pdf"
@@ -208,6 +269,7 @@ def test_actual_upload_start_verifies_bytes_and_ignores_stale_preset_controls(mo
         app.run()
         assert not app.exception
         assert any("rtqichen/torchdiffeq" in notice.value for notice in app.success)
+        assert not any(item.label == '先运行作者仓库代码' for item in app.sidebar.checkbox)
         assert app.sidebar.checkbox(key="pdf_llm_review").value is True
         if review is not None:
             app.sidebar.checkbox(key="pdf_llm_review").set_value(review).run()
