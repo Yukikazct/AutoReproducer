@@ -117,16 +117,14 @@ def test_generic_pdf_upload_preserves_execution_objective_through_managed_worker
     try:
         app.run()
         assert not app.exception
-        choice = next(item for item in app.sidebar.checkbox if item.label == '先运行作者仓库代码')
-        assert choice.value is True
-        choice.set_value(execution_only).run()
+        assert not any(item.label == '先运行作者仓库代码' for item in app.sidebar.checkbox)
         next(button for button in app.sidebar.button if '开始复现' in button.label).click().run()
         assert not app.exception
         assert len(threads) == 1
         threads[0].join(timeout=5)
         assert not threads[0].is_alive()
         request, = requests
-        assert request['author_execution_only'] is execution_only
+        assert request['author_execution_only'] is True
         assert request['experiment_profile'] is None
         assert request['pdf_path'] != str(source) and not Path(request['pdf_path']).exists()
         host_factory.assert_not_called()
@@ -270,15 +268,7 @@ def test_actual_upload_start_verifies_bytes_and_ignores_stale_preset_controls(mo
         assert not app.exception
         assert any("rtqichen/torchdiffeq" in notice.value for notice in app.success)
         assert not any(item.label == '先运行作者仓库代码' for item in app.sidebar.checkbox)
-        assert app.sidebar.checkbox(key="pdf_llm_review").value is True
-        if review is not None:
-            app.sidebar.checkbox(key="pdf_llm_review").set_value(review).run()
-            assert not app.exception
-        app.session_state["experiment_profile"] = "siren_camera_quick"
-        app.session_state["method_action"] = stale_action
-        app.session_state["method_optimization"] = "validate"
-        app.session_state["repository_prepare_only"] = True
-        app.session_state["repository_result_review"] = True
+        assert not any(item.key == 'pdf_llm_review' for item in app.sidebar.checkbox)
         next(button for button in app.sidebar.button if "开始复现" in button.label).click().run()
         assert not app.exception
         assert len(threads) == 1
@@ -287,7 +277,7 @@ def test_actual_upload_start_verifies_bytes_and_ignores_stale_preset_controls(mo
         request, = requests
         assert request["experiment_profile"] == "neural_ode_spiral"
         assert request["pdf_resolution"]["sha256"] == hashlib.sha256(payload).hexdigest()
-        assert request["use_llm_review"] is (True if review is None else review)
+        assert request["use_llm_review"] is False
         assert request["prepare_only"] is False and request["prepare_environment"] is False
         assert request["optimization_mode"] == "off" and request["enable_optimization"] is False
         assert request["allow_result_summary_review"] is False

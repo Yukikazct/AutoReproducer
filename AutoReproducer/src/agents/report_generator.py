@@ -1,7 +1,7 @@
 """ReportGeneratorAgent - 报告生成 Agent，生成 Markdown 复现与优化报告。
 
-报告覆盖：论文信息 / 资源定位 / 环境配置与依赖诊断 / 代码执行（smoke+full）/
-验证结果（指标对比） / 智能优化（UCB 尝试记录） / 验证闭环 / 审计与预算统计。
+报告覆盖：论文信息 / 资源定位 / 环境配置与依赖诊断 / 代码执行 /
+实际输出与结束状态 / 调用统计；历史运行保留当时的验收与优化记录。
 """
 from datetime import datetime
 import json
@@ -286,6 +286,17 @@ def _discovered_plan_lines(data):
     plan = data.get("grounded_repository_plan") or {}
     if not plan:
         return []
+    if plan.get('scope') == 'author_code_execution':
+        lines = ['### 本次 PDF 与作者源码确定的运行计划', '',
+                 '- **运行范围**: 所选作者入口及其原始参数。',
+                 '- **结束条件**: 全部所选命令正常返回、退出码为 0，所属进程已结束并清理。',
+                 '- **运行结果**: 记录作者输出和实际训练更新；不进行论文、协议或数值审核。',
+                 '', '**原始作者命令**', '']
+        for step in plan.get('steps', []):
+            lines += ['- ' + _markdown_text(_txt(step.get('id'))) + '，目录：' +
+                      _markdown_text(_txt(step.get('cwd'))),
+                      '```json', json.dumps(step.get('argv', []), ensure_ascii=False), '```']
+        return lines + ['']
     lines = ["### 本次 PDF 与作者源码确定的实验计划", "",
              "- **范围**: 引用所确定的单项完整实验。",
              "- **验收规则**: 训练开始前冻结参考值与 5% 相对容差；该容差是项目规则。",
@@ -482,6 +493,9 @@ class ReportGeneratorAgent(BaseAgent):
         execution = data.get("execution", {}) or {}
         env_config = execution.get("effective_env_config") or data.get("env_config", {}) or {}
         validation = data.get("validation", {}) or {}
+        reviews_removed = bool(validation.get('reviews_removed') or
+                               ((data.get('experiment_spec') or {}).get('validation') or {}).get('reviews_removed') or
+                               ((data.get('grounded_repository_plan') or {}).get('scope') == 'author_code_execution'))
         optimization = data.get("optimization", {}) or {}
         audit = data.get("audit_stats", {}) or {}
         is_rezero = (data.get("experiment_spec") or {}).get("adapter_id") == "rezero"
@@ -803,7 +817,7 @@ class ReportGeneratorAgent(BaseAgent):
         elif validation.get('status') == 'author_code_completed':
             state_text = ('作者仓库代码运行完成（已对比作者输出，尚未独立核验论文数值）'
                           if (validation.get('author_claim_comparison') or {}).get('comparisons') else
-                          '作者仓库代码运行完成（论文数值尚未核验）')
+                          '作者仓库代码运行完成（未进行论文数值审核）')
         elif validation.get("status") == "quality_target_not_met":
             state_text = "⚠️ 方法实验已运行，工程效果门槛未达到"
         elif validation.get("status") == "reference_not_met":
@@ -817,7 +831,7 @@ class ReportGeneratorAgent(BaseAgent):
                           else "✅ 论文数值核验通过")
         else:
             state_text = "❌ 失败"
-        lines += ["## 5. 验证结果",
+        lines += ["## 5. 运行结果",
                   f"- **复现状态**: {state_text}"]
         if execution.get("mode") != "repository":
             lines.append(f"- **置信度**: {_fmt(validation.get('confidence', 0.0))}")
@@ -829,7 +843,12 @@ class ReportGeneratorAgent(BaseAgent):
                 (validation.get("validation") or {}).get("analysis")):
             lines.append(f"- **判定原因**: {reason}")
         for warning in validation.get('warnings', []):
-            lines.append('- **待核验**: ' + _markdown_text(_txt(warning)))
+            lines.append('- **运行说明**: ' + _markdown_text(_txt(warning)))
+        for receipt in validation.get('author_execution', []):
+            step = receipt.get('step') or {}
+            lines.append('- **作者命令结束记录**: ' + _markdown_text(_txt(step.get('id'))) +
+                         '；自然返回：' + ('是' if receipt.get('natural_return') else '否') +
+                         '；实际优化器更新：' + _markdown_text(_txt(receipt.get('optimizer_steps'), '未观察到')))
         inner = validation.get("validation") or {}
         execution_level = {"failed": "执行失败", "incomplete": "执行证据不足",
                            "smoke_passed": "仅冒烟通过",
@@ -889,10 +908,10 @@ class ReportGeneratorAgent(BaseAgent):
         lines += _author_claim_comparison_lines(validation.get('author_claim_comparison'))
         records = validation.get("metric_records") or []
         if records:
-            lines += ["", "### 实际指标证据", "| 指标 | 单位 | 数据划分 | 阶段 | 来源 |",
-                      "|------|------|----------|------|------|"]
+            lines += ["", "### 实际指标证据", "| 指标 | 实测值 | 单位 | 数据划分 | 阶段 | 来源 |",
+                      "|------|------|------|----------|------|------|"]
             for record in records:
-                cells = [record.get("name"), record.get("unit") or "未标注",
+                cells = [record.get("name"), record.get("value"), record.get("unit") or "未标注",
                          record.get("split") or "未标注", record.get("stage") or "未标注",
                          record.get("source")]
                 lines.append("| " + " | ".join(_markdown_text(_txt(c)) for c in cells) + " |")
@@ -925,7 +944,7 @@ class ReportGeneratorAgent(BaseAgent):
             for limitation in api_analysis.get("limitations", []):
                 lines.append(f"- {_txt(limitation)}")
         lines += _result_analysis_lines(data)
-        if is_rezero:
+        if is_rezero and not reviews_removed:
             summary = validation.get("training_summary") or {}
             actual = (validation.get("metrics_comparison") or {}).get("actual") or {}
             lines += ["", "### ReZero 选定论文实验范围与验收",
@@ -953,8 +972,9 @@ class ReportGeneratorAgent(BaseAgent):
                       "- **结论范围**: 官方方法实验；没有对应论文表格数值验收，不宣称整篇论文数值复现。",
                       f"- **基线耗时**: {_fmt(data.get('baseline_elapsed_s'), '.2f')} 秒",
                       f"- **本次总耗时（含环境准备）**: {_fmt(data.get('run_elapsed_s'), '.2f')} 秒",
-                      f"- **实验与报告耗时（环境准备后）**: {_fmt(data.get('execution_elapsed_s'), '.2f')} 秒",
-                      f"- **协议/独立复算**: {validation.get('protocol_pass', False)} / {validation.get('independent_metrics_pass', False)}"]
+                      f"- **实验与报告耗时（环境准备后）**: {_fmt(data.get('execution_elapsed_s'), '.2f')} 秒"]
+            if not reviews_removed:
+                lines.append(f"- **协议/独立复算**: {validation.get('protocol_pass', False)} / {validation.get('independent_metrics_pass', False)}")
         if spec.get("adapter_id") in {"siren", "neural_ode", "rezero"}:
             method_analysis = data.get("method_analysis") or {}
             if method_analysis.get("status") == "rejected":
@@ -1055,21 +1075,8 @@ class ReportGeneratorAgent(BaseAgent):
                              f"| {basis} | {mark} |")
         lines.append("")
 
-        # 7. Prompt-Free 验证闭环
-        lines += ["## 7. 质量验证(Prompt-Free)",
-                  f"- **验证记录数**: {len(data.get('verifications', []) or [])}"]
-        fix_records = data.get("fix_records", []) or []
-        if fix_records:
-            lines.append(f"- **修正闭环触发**: {len(fix_records)} 次")
-            for fr in fix_records:
-                lines.append(f"  - {fr.get('agent')} 第 {fr.get('round')} 轮修正: "
-                             f"{'; '.join(fr.get('issues', [])) or '结构问题'}")
-        else:
-            lines.append("- **修正闭环触发**: 0 次（各步骤一次通过）")
-        lines.append("")
-
         # 8. 审计与用量统计
-        lines += ["## 8. 审计与用量统计",
+        lines += ["## 7. 运行与用量统计",
                   f"- **总步骤数**: {audit.get('total_steps', 'N/A')}",
                   f"- **成功步数**: {audit.get('success', 'N/A')}",
                   f"- **错误步数**: {audit.get('errors', 'N/A')}",

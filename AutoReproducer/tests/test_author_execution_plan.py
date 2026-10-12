@@ -30,7 +30,7 @@ def accepted_execution_review():
     return {'accepted': True, 'checks': {name: {'passed': True,
         'reason': 'The complete invented author command uses its full original fixture data.',
         'citations': ['paper_protocol', 'readme', 'script', 'requirements']}
-        for name in author.CHECKS}}
+        for name in ['dependency_compatibility']}}
 
 
 class AuthorLLM(PlannedLLM):
@@ -80,25 +80,112 @@ def test_execution_mode_fetches_repository_without_identity_review(tmp_path, mon
     assert not any(task['task'] == 'repository_identity_review' for _, task in runner.llm.calls)
 
 
-def test_strict_numerical_mode_retains_identity_review(tmp_path, monkeypatch):
+def test_legacy_request_cannot_reenable_removed_identity_review(tmp_path, monkeypatch):
     from src.agents.repository_verifier import RepositoryVerifierAgent
-    _, runner, request, _ = setup_service(tmp_path, monkeypatch)
-    def reject(*args, **kwargs):
-        raise ValueError('Strict identity review rejected this fixture')
-    monkeypatch.setattr(RepositoryVerifierAgent, 'run', reject)
+    fixture, runner, request, _ = setup_service(tmp_path, monkeypatch)
+    runner.llm = AuthorLLM(fixture)
+    request.update(author_execution_only=False, prepare_only=True)
+    monkeypatch.setattr(RepositoryVerifierAgent, 'run', lambda *a, **k: pytest.fail('Reviewer was called'))
     result = runner.run(request)
-    assert result['state'] == 'ERROR'
-    assert 'Strict identity review rejected' in result['error']
-    assert result['data']['repository_executed'] is False
+    assert result['state'] == 'COMPLETED', result['error']
+    assert result['data']['grounded_repository_plan']['scope'] == author.SCOPE
 
 
 def test_explicit_execution_objective_does_not_need_metric_or_checkpoint_claims(tmp_path):
     fixture, packet = fixture_packet(tmp_path)
-    plan = author.propose_author_execution_plan(AuthorLLM(fixture), packet, fixture['workspace'])
+    llm = AuthorLLM(fixture)
+    plan = author.propose_author_execution_plan(llm, packet, fixture['workspace'])
     assert plan['scope'] == author.SCOPE
     assert plan['metrics'] == [] and plan['capture'] == {'kind': 'author_process', 'device': 'cpu'}
     assert plan['steps'][0]['argv'] == fixture['proposal']['steps'][0]['argv']
-    assert plan['semantic_review']['accepted'] is True
+    assert plan['reviews_removed'] is True
+    assert 'semantic_review' not in plan
+    assert all(kwargs['task'] != 'author_execution_plan_review' for _, kwargs in llm.calls)
+
+
+def test_unread_entrypoint_and_import_graph_are_loaded_without_model_reading_rounds(tmp_path):
+    fixture, packet = fixture_packet(tmp_path)
+    for name in ('train.py', 'author_model.py'):
+        packet['repository']['files'].pop(name)
+    packet['limits'].update(source_files=1, source_bytes=1)
+    plan = author.propose_author_execution_plan(AuthorLLM(fixture), packet, fixture['workspace'])
+    assert {'train.py', 'author_model.py'} <= set(packet['repository']['files'])
+    assert plan['steps'][0]['argv'] == fixture['proposal']['steps'][0]['argv']
+    assert packet['repository']['files']['train.py']['sha256'] == fixture['snapshot']['files']['train.py']
+
+
+def test_execution_can_try_original_command_without_claims_or_exact_argument_quotes(tmp_path):
+    fixture, packet = fixture_packet(tmp_path)
+    proposal = execution_proposal(fixture)
+    proposal.update(citations=[], claims={}, datasets=[])
+    proposal['steps'][0].update(citations=[], argv=['python', 'train.py', '--epochs', '17'])
+    proposal['requirements'] = {}
+    plan = author.validate_author_execution_plan(proposal, packet, fixture['workspace'])
+    assert plan['steps'][0]['argv'][-2:] == ['--epochs', '17']
+    assert 'torch==2.5.1+cpu' in plan['requirements']['compatibility']
+    assert plan['pre_execution_review'] == 'disabled'
+
+
+def test_uncertain_dataset_provenance_defers_to_author_program_without_preparing_guessed_paths(tmp_path):
+    fixture, packet = fixture_packet(tmp_path)
+    proposal = execution_proposal(fixture)
+    proposal['datasets'][0]['paths'] = ['*.json']
+    plan = author.validate_author_execution_plan(proposal, packet, fixture['workspace'])
+    assert plan['datasets'] == []
+    assert plan['reviews_removed'] is True
+
+
+def test_runtime_dataset_observer_is_not_an_execution_prerequisite(tmp_path):
+    fixture, packet = fixture_packet(tmp_path)
+    proposal = execution_proposal(fixture)
+    proposal['datasets'] = [{'kind': 'author_runtime', 'path': 'train.py', 'function': 'unknown_dynamic_loader'}]
+    plan = author.validate_author_execution_plan(proposal, packet, fixture['workspace'])
+    assert plan['datasets'] == []
+    assert plan['reviews_removed'] is True
+
+
+@pytest.mark.parametrize('call', ['model.cuda()', 'torch.cuda.set_device(0)'])
+@pytest.mark.parametrize('gpu_available,cpu_option,expected', [(True, False, 'cuda'), (False, False, 'cpu'), (True, True, 'cpu')])
+def test_original_cuda_calls_select_matching_wheels_on_available_host(tmp_path, gpu_available, cpu_option, expected, call):
+    fixture, _ = fixture_packet(tmp_path)
+    script = fixture['workspace'] / 'train.py'
+    script.write_text(script.read_text('utf-8') + '\n' + call + '\n', encoding='utf-8')
+    fixture['snapshot']['files']['train.py'] = hashlib.sha256(script.read_bytes()).hexdigest()
+    packet = build_evidence_packet(fixture['pdf'], fixture['workspace'], fixture['snapshot'])
+    packet['author_execution_only'] = True
+    packet['execution_host'] = {'gpu_probe_confirmed': gpu_available, 'cuda_device_indices': [0] if gpu_available else []}
+    proposal = execution_proposal(fixture)
+    proposal['citations'] = []
+    if not cpu_option:
+        proposal['steps'][0]['argv'].remove('--cpu')
+    plan = author.validate_author_execution_plan(proposal, packet, fixture['workspace'])
+    assert plan['capture']['device'] == expected
+    assert 'torch==2.5.1+' + ('cu121' if expected == 'cuda' else 'cpu') in plan['requirements']['compatibility']
+
+
+@pytest.mark.parametrize('model_available', [False, True])
+def test_literal_launcher_survives_missing_model_or_model_error_and_crlf_continuations(tmp_path, model_available):
+    fixture, _ = fixture_packet(tmp_path)
+    launcher = fixture['workspace'] / 'demo.sh'
+    launcher.write_bytes(b'python train.py \\\r\n    --epochs 17\r\n')
+    fixture['snapshot']['files']['demo.sh'] = hashlib.sha256(launcher.read_bytes()).hexdigest()
+    packet = build_evidence_packet(fixture['pdf'], fixture['workspace'], fixture['snapshot'])
+    packet['author_execution_only'] = True
+    if model_available:
+        class OfflineLLM:
+            mock_mode = False
+            def chat(self, *args, **kwargs):
+                raise RuntimeError('Model temporarily unavailable')
+        llm = OfflineLLM()
+    else:
+        llm = None
+    # Keep only the launcher command so the README's separate example does
+    # not mask the Windows continuation and network-failure regression.
+    packet['repository']['files']['README.md']['text'] = 'Run demo.sh from the repository root.'
+    plan = author.propose_author_execution_plan(llm, packet, fixture['workspace'])
+    assert plan['steps'][0]['argv'] == ['python', 'train.py', '--epochs', '17']
+    assert plan['command_source']['path'] == 'demo.sh'
+    assert plan['reviews_removed'] is True
 
 
 def test_no_silent_downgrade_of_paper_reference_objective(tmp_path):
@@ -114,7 +201,6 @@ def test_no_silent_downgrade_of_paper_reference_objective(tmp_path):
     lambda p: p['steps'][0].update(argv=['python', '-c', 'print(1)']),
     lambda p: p['steps'][0]['argv'].append('--smoke'),
     lambda p: p['steps'][0].update(required=False),
-    lambda p: p['datasets'][0].update(paths=['*.json']),
 ])
 def test_execution_objective_keeps_original_source_data_and_command_guards(tmp_path, change):
     fixture, packet = fixture_packet(tmp_path)
@@ -124,25 +210,8 @@ def test_execution_objective_keeps_original_source_data_and_command_guards(tmp_p
         author.validate_author_execution_plan(proposal, packet, fixture['workspace'])
 
 
-@pytest.mark.parametrize('gate', list(author.CHECKS))
-def test_execution_review_records_negative_findings_and_allows_actual_runtime_check(tmp_path, gate):
-    fixture, packet = fixture_packet(tmp_path)
-    review = accepted_execution_review()
-    review['checks'][gate]['passed'] = False
-    plan = author.propose_author_execution_plan(AuthorLLM(fixture, review), packet, fixture['workspace'])
-    assert plan['semantic_review']['accepted'] is False
-    assert plan['semantic_review']['advisory'] is True and plan['semantic_review']['execution_allowed'] is True
-    assert plan['semantic_review']['deferred_checks'] == [gate]
-    assert plan['semantic_review']['checks'][gate]['passed'] is False
-
-
-def test_only_dependency_uncertainty_may_be_verified_by_running(tmp_path):
-    fixture, packet = fixture_packet(tmp_path)
-    review = accepted_execution_review()
-    review['accepted'] = False
-    review['checks']['dependency_compatibility'].update(passed=False, severity='warning')
-    plan = author.propose_author_execution_plan(AuthorLLM(fixture, review), packet, fixture['workspace'])
-    assert plan['semantic_review']['deferred_checks'] == ['dependency_compatibility']
+def test_author_review_function_was_removed():
+    assert not hasattr(author, 'review_author_execution_plan')
 
 
 @pytest.mark.parametrize('body,receipt', [
@@ -152,7 +221,7 @@ def test_only_dependency_uncertainty_may_be_verified_by_running(tmp_path):
     ('raise SystemExit(1)\n', False),
     ('raise SystemExit("error")\n', False),
 ])
-def test_exit_without_training_or_natural_return_cannot_pass(tmp_path, body, receipt):
+def test_process_completion_keeps_unobserved_training_and_failed_exits_distinct(tmp_path, body, receipt):
     fixture, packet = fixture_packet(tmp_path)
     plan = author.validate_author_execution_plan(execution_proposal(fixture), packet, fixture['workspace'])
     path = fixture['workspace'] / 'train.py'
@@ -165,8 +234,15 @@ def test_exit_without_training_or_natural_return_cannot_pass(tmp_path, body, rec
     assert path.exists() is receipt
     execution = {'success': completed.returncode == 0, 'steps': [{'id': 'train', 'executed': True,
         'success': completed.returncode == 0, 'exit_code': completed.returncode}]}
-    with pytest.raises((ValueError, FileNotFoundError)):
-        author.verify_author_execution(plan, fixture['workspace'], execution, 'a' * 64)
+    if completed.returncode == 0:
+        validation = author.verify_author_execution(plan, fixture['workspace'], execution, 'a' * 64)
+        assert validation['status'] == 'author_code_completed'
+        assert validation['training_observed'] is False
+        assert validation['completion_checks']['observed_training_updates'] is False
+        assert validation['is_reproduced'] is None
+    else:
+        with pytest.raises((ValueError, FileNotFoundError)):
+            author.verify_author_execution(plan, fixture['workspace'], execution, 'a' * 64)
 
 
 @pytest.mark.parametrize('clean_exit,advisory', [(False, False), (True, False), (False, True)])
@@ -201,11 +277,12 @@ def test_full_service_observes_original_training_and_never_claims_paper_reproduc
     assert data['repository_executed'] is True
     assert validation['status'] == 'author_code_completed' and validation['is_reproduced'] is None
     assert validation['author_execution'][0]['optimizer_steps'] == 40
-    assert all(validation['completion_checks'].values())
+    assert validation['completion_checks']['all_required_author_commands_returned'] is True
+    assert validation['completion_checks']['owned_processes_finished'] is True
+    assert validation.get('native_environment_verified') is not True
+    assert validation['pre_execution_review'] == 'disabled'
     assert validation['paper_metrics_verified'] is False
-    if advisory:
-        assert data['grounded_repository_plan']['semantic_review']['accepted'] is False
-        assert data['grounded_repository_plan']['semantic_review']['advisory'] is True
+    assert 'semantic_review' not in data['grounded_repository_plan']
     assert '作者仓库代码运行完成' in data['report']
     assert (Path(data['run_dir']) / 'repo/logs/native/model.txt').read_text('utf-8') == 'original author output'
     assert 'experiment_protocol' not in data
@@ -263,7 +340,7 @@ def test_code_execution_without_full_data_provenance_stays_explicitly_unverified
     assert validation['is_reproduced'] is None
     assert result['data']['dataset_provenance']['verified'] is False
     assert 'real_data_frozen' not in validation['completion_checks']
-    assert validation['warnings']
+    assert validation['reviews_removed'] is True
 
 
 def test_original_python3_entrypoint_and_absl_tensorboard_dependencies(tmp_path):

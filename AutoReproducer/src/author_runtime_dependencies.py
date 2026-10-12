@@ -11,7 +11,7 @@ from src.agents.dependency_resolver import find_missing_module, python_package_f
 from src.discovered_repository_plan import CPU_COMPATIBILITY_PINS, CUDA_COMPATIBILITY_PINS, _PACKAGE_IMPORTS, _RUNTIME_DEPENDENCIES
 from src.method_adapters import write_json
 
-MAX_DEPENDENCY_REPAIRS = 3
+MAX_DEPENDENCY_REPAIRS = 8
 
 
 def repair_requirement(stderr, plan, packet):
@@ -81,7 +81,7 @@ def run_with_dependency_repair(runner, workspace, steps, environment, plan, pack
                                     'attempt': len(repairs) + len(numeric_repairs) + 1})
             write_json(run_dir / 'numeric_repairs.json', numeric_repairs)
             on_event({'type': 'log', 'log': {'agent': 'CodeExecutor', 'action': 'repair_numeric_type',
-                'status': 'RUNNING', 'detail': '原命令发生整数倒数类型错误；记录浮点兼容修复后重试同一命令。',
+                'status': 'RUNNING', 'detail': '原命令发生 NumPy 兼容错误；记录兼容修复后重试同一命令。',
                 'data': numeric_repairs[-1]}})
             if effective.get('deadline_monotonic') is not None:
                 raw_steps = steps.get('steps', []) if isinstance(steps, dict) else steps

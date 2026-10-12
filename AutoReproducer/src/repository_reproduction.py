@@ -472,7 +472,6 @@ class RepositoryReproduction:
         state, error = "INIT", None
         initial_calls = self.llm.get_call_count() if self.llm else 0
         counted_calls = 0
-        analysis_mode = input_data.get("analysis_mode", "multi_agent")
         active_phase_id, active_agent = "", ""
         public_packet = None
         run_dir = self.root / "runs" / f"repository_{uuid.uuid4().hex}"
@@ -494,31 +493,6 @@ class RepositoryReproduction:
             self.logger.add_llm_calls(actual_calls - counted_calls)
             counted_calls = actual_calls
             data["total_llm_calls"] = actual_calls
-
-        def analysis_event(name, event):
-            nonlocal state, active_phase_id, active_agent
-            mapping = {"reader": ("READ_PAPER", "PaperReader", "analyze_reader"),
-                       "finder": ("FIND_RESOURCES", "ResourceFinder", "analyze_finder"),
-                       "builder": ("BUILD_ENV", "EnvBuilder", "analyze_builder"),
-                       "verifier": ("BUILD_ENV", "Verifier", "review_readiness"),
-                       "result_validator": ("VALIDATE", "ResultValidator", "review_result_summary")}
-            state, agent, phase_id = mapping[name]
-            active_phase_id, active_agent = phase_id, agent
-            status = event["status"]
-            if status == "started":
-                self.logger.begin_plan(f"repository_{name}")
-            else:
-                self.logger.end_plan(f"repository_{name}")
-            emit({"type": "state", "state": state, "agent": agent, "phase_id": phase_id,
-                  "attempt": event.get("attempt", 1),
-                  **{key: event[key] for key in ("calls", "reason") if key in event},
-                  "outcome": None if status == "started" else status,
-                  "status": "running" if status == "started" else
-                  "success" if status == "accepted" else "error"})
-
-        def require_real_llm():
-            if not self.llm or self.llm.mock_mode or not self.llm.base_url or not self.llm.model:
-                raise ValueError("真实多Agent分析需要有效的LLM配置")
 
         def phase(name, agent, action, phase_id):
             nonlocal state, active_phase_id, active_agent
@@ -558,30 +532,22 @@ class RepositoryReproduction:
         try:
             profile = phase("READ_PAPER", "PaperReader", lambda: get_profile(input_data["experiment_profile"]),
                             "select_experiment")
+            from copy import deepcopy
+            profile = deepcopy(profile)
+            profile['steps'] = [{**step, 'depends_on': []} for step in profile['steps'] if step.get('kind') != 'check']
+            profile['validation'] = {**profile['validation'], 'scope': 'author_code_execution', 'reviews_removed': True}
             adapter = get_adapter(profile)
             data.update(paper_title=profile["paper"]["title"], paper_info=profile["paper"],
                         experiment_spec=profile, spec_sha256=spec_digest(profile))
             prepare_only = bool(input_data.get("prepare_only"))
-            multi_analysis = bool(input_data.get("use_llm_review")) and analysis_mode == "multi_agent" and not prepare_only
-            public_protocol_review = bool(input_data.get("use_llm_review")) and analysis_mode == "public_protocol" and not prepare_only
             stages = [
-                ("select_experiment", "PaperReader", "选择实验", "读取冻结论文协议和验收范围", True),
-                ("prepare_repository", "ResourceFinder", "准备源码与数据", "导出固定作者源码并核验真实数据来源", True),
-                ("prepare_environment_plan", "EnvBuilder", "准备环境计划", "核对解释器和冻结依赖、命令；尚未安装依赖", True),
-                ("load_public_sources", "SourceLoader", "加载公开证据", "收集论文原文、作者代码和公开说明", multi_analysis),
-                ("analyze_reader", "PaperReader", "分析论文协议", "依据公开原文核对实验协议与参考指标", multi_analysis),
-                ("analyze_finder", "ResourceFinder", "分析资源映射", "核对固定源码、实验入口与数据映射", multi_analysis),
-                ("analyze_builder", "EnvBuilder", "分析依赖方案", "区分作者原始依赖与尚未执行的兼容建议", multi_analysis),
-                ("review_readiness", "Verifier", "训练前证据预审", "检查前三项公开分析；通过后才允许真实执行", multi_analysis),
-                ("prepare_dependencies", "EnvBuilder", "自动准备训练环境", "验证实际依赖；缺失或损坏时按冻结版本自动修复", not prepare_only),
-                ("execute_repository", "CodeExecutor", "代码执行", "按本次执行计划运行代码并记录实际结果", not prepare_only),
-                ("verify_protocol", "Verifier", "训练后本地核验", "核验完整运行协议并独立复算最终指标", not prepare_only and profile["validation"]["level"] == "reference"),
-                ("validate_metrics", "ResultValidator", "确定性数值验收", "按冻结协议判定结果；阶段完成与复现通过分别显示", not prepare_only),
-                ("review_result_summary", "ResultValidator", "解释结果摘要", "仅在授权后用 API 解释数值摘要，不改变本地判定", multi_analysis and bool(input_data.get("allow_result_summary_review"))),
+                ("select_experiment", "PaperReader", "选择运行命令", "读取作者实验参数", True),
+                ("prepare_repository", "ResourceFinder", "准备源码与数据", "取得作者代码及输入数据", True),
+                ("prepare_environment_plan", "EnvBuilder", "准备依赖计划", "选择运行依赖", True),
+                ("prepare_dependencies", "EnvBuilder", "安装运行依赖", "准备所需环境", not prepare_only),
+                ("execute_repository", "CodeExecutor", "代码执行", "运行原作者命令", not prepare_only),
+                ("generate_report", "ReportGenerator", "生成报告", "汇总运行输出和退出状态", True),
             ]
-            if analysis_mode == "public_protocol":
-                stages.append(("review_public_protocol", "Verifier", "解释公开协议", "仅用 API 解释公开论文与作者协议", public_protocol_review))
-            stages.append(("generate_report", "ReportGenerator", "生成报告", "汇总执行证据、本地判定与本项实验的范围", True))
             emit({"type": "pipeline_plan", "pipeline": "repository", "stages": [
                 {"id": identifier, "agent": agent, "title": title, "description": description,
                  "status": "waiting" if enabled else "skipped"}
@@ -603,8 +569,6 @@ class RepositoryReproduction:
             snapshot = phase("FIND_RESOURCES", "ResourceFinder", prepare, "prepare_repository")
 
             def plan_environment():
-                if sys.version_info[:2] not in {(3, 11), (3, 12)}:
-                    raise RuntimeError("DLinear兼容预设目前支持Python 3.11/3.12，请切换解释器后重试")
                 plan = build_plan(mode="repository", profile=profile["id"],
                                   spec_sha256=data["spec_sha256"], workspace=snapshot["path"],
                                   repository={"url": snapshot.get("url", ""),
@@ -621,7 +585,7 @@ class RepositoryReproduction:
                 if plan_step_ids(stored.get("steps")) != plan_step_ids(plan["steps"]) or \
                         stored.get("spec_sha256") != plan["spec_sha256"]:
                     raise RuntimeError("落盘执行计划与本次执行步骤不一致")
-                environment = {**profile["environment"], "dependency_health_check": True,
+                environment = {**profile["environment"], "dependency_health_check": False,
                                "auto_prepare": True, "offline": offline, "python_version": platform.python_version(),
                                "platform": platform.platform(), "interpreter": sys.executable}
                 data["env_config"] = environment
@@ -635,29 +599,6 @@ class RepositoryReproduction:
                 data["validation"] = {"status": "prepared", "is_reproduced": None,
                                       "result_level": "prepared", "reason": "版本、真实数据与命令已准备，等待用户执行测试。"}
             else:
-                if input_data.get("use_llm_review") and analysis_mode == "multi_agent":
-                    from src.repository_analysis import RepositoryAnalysis, RepositoryAnalysisError
-                    from src.repository_public_sources import RepositoryPublicSources
-                    require_real_llm()
-                    sources = adapter.public_sources(self.root)
-                    public_packet = phase("READ_PAPER", "SourceLoader", lambda: sources.build_packet(
-                        snapshot["path"], snapshot, profile, offline=offline), "load_public_sources")
-                    data["public_source_manifest"] = str(sources.manifest_path)
-                    source_manifest = read_json(sources.manifest_path) if Path(sources.manifest_path).is_file() else {}
-                    data["public_source_recovery"] = [
-                        {key: comment[key] for key in ("source_id", "retrieval_url", "recovery") if key in comment}
-                        for comment in source_manifest.get("author_comments", []) if comment.get("recovery")]
-                    write_json(run_dir / "public_sources.json", public_packet)
-                    try:
-                        data["repository_analysis"] = adapter.analysis(self.llm, self.logger, max_repairs=1).run(
-                            public_packet, profile, on_stage=analysis_event)
-                    except RepositoryAnalysisError as exc:
-                        data["repository_analysis"] = exc.result
-                        raise
-                    finally:
-                        sync_calls()
-                        if data.get("repository_analysis"):
-                            write_json(run_dir / "repository_analysis.json", data["repository_analysis"])
                 runner = self.runner or RepositoryRunner(logger=self.logger)
                 def execution_event(event):
                     if event.get("type") == "repository_environment":
@@ -686,100 +627,11 @@ class RepositoryReproduction:
                     records = adapter.metric_records(execution, data["spec_sha256"])
                 except ValueError as exc:
                     metric_error = str(exc)
-                if not metric_error and profile["validation"]["level"] == "reference":
-                    from src.repository_validation import verify_dlinear_protocol
-                    def verify_local_execution():
-                        execution["protocol_verification"] = adapter.verify_protocol(
-                            profile, execution, snapshot["path"], snapshot, data["dataset_provenance"])
-                        execution["independent_metrics"] = adapter.recompute_metrics(
-                            execution, snapshot["path"], data["dataset_provenance"], records)
-                        passed = (execution["protocol_verification"].get("pass") is True and
-                                  execution["independent_metrics"].get("pass") is True)
-                        return {"success": passed, "outcome": "pass" if passed else "fail",
-                                "reason": "完整运行协议和独立指标复算均通过" if passed else
-                                "完整运行协议或独立指标复算未通过"}
-
-                    phase("VALIDATE", "Verifier", verify_local_execution, "verify_protocol")
-                    if execution["independent_metrics"].get("pass"):
-                        from src.execution_artifacts import collect_images
-                        artifact_result = collect_images(execution["independent_metrics"]["artifact_dir"],
-                                                         "full", self.logger.session_id)
-                        execution.setdefault("artifacts", []).extend(artifact_result["artifacts"])
-                        execution.setdefault("artifact_warnings", []).extend(
-                            artifact_result.get("artifact_warnings", []))
-                        execution["final"]["artifacts"] = execution["artifacts"]
-                    write_json(run_dir / "protocol_verification.json", execution["protocol_verification"])
-                    write_json(run_dir / "independent_metrics.json", execution["independent_metrics"])
-                elif profile["validation"]["level"] == "reference":
-                    emit({"type": "state", "state": "VALIDATE", "agent": "Verifier",
-                          "phase_id": "verify_protocol", "status": "blocked",
-                          "reason": "无法解析有效最终指标，本地核验未执行"})
-                data["validation"] = phase("VALIDATE", "ResultValidator", lambda: adapter.validate(
-                    profile, execution, records, metric_error), "validate_metrics")
+                from src.execution_completion import completed_execution
+                data['validation'] = completed_execution(execution)
+                data['validation']['metric_records'] = records
                 write_json(run_dir / "metrics.json", {"records": records, "error": metric_error,
                                                      "spec_sha256": data["spec_sha256"]})
-                if input_data.get("use_llm_review") and analysis_mode == "multi_agent":
-                    data["analysis_status"] = "public_readiness_accepted"
-                    if input_data.get("allow_result_summary_review"):
-                        summary = {"metrics": {record["name"]: record["value"] for record in records},
-                                   "epochs_completed": (execution.get("protocol_verification") or {}).get("epochs_completed"),
-                                   "protocol_pass": (execution.get("protocol_verification") or {}).get("pass") is True,
-                                   "independent_metrics_pass": (execution.get("independent_metrics") or {}).get("pass") is True}
-                        from src.repository_analysis import RepositoryAnalysis, RepositoryAnalysisError
-                        try:
-                            data["result_analysis"] = phase("VALIDATE", "ResultValidator", lambda:
-                                adapter.analysis(self.llm, self.logger).review_result_summary(
-                                    summary, public_packet, profile, on_stage=analysis_event), "review_result_summary")
-                            data["analysis_status"] = "completed"
-                        except RepositoryAnalysisError as exc:
-                            data["result_analysis"] = exc.result
-                            data["analysis_status"] = "result_analysis_failed"
-                            data["analysis_error"] = str(exc)
-                        finally:
-                            sync_calls()
-                            write_json(run_dir / "result_analysis.json", data["result_analysis"])
-                if input_data.get("use_llm_review") and analysis_mode == "public_protocol":
-                    state = "VALIDATE"
-                    active_phase_id, active_agent = "review_public_protocol", "Verifier"
-                    emit({"type": "state", "state": state, "agent": active_agent,
-                          "phase_id": active_phase_id, "status": "running"})
-                    if not self.llm or self.llm.mock_mode or not self.llm.base_url or not self.llm.model:
-                        raise ValueError("真实API分析需要有效的LLM配置")
-                    # Only published facts go to the API. Local logs, workspace
-                    # paths, dataset contents, checkpoints and measured results
-                    # remain local and never enter this prompt.
-                    public_sources = {
-                        "paper": "https://arxiv.org/html/2205.13504v3#S5.T2",
-                        "published_table_row": "Table 2, multivariate ETTh1, horizon 96, DLinear: MSE 0.375; MAE 0.399.",
-                        "implementation_details": "https://arxiv.org/html/2205.13504v3#A2.SS2; LTSF-Linear input length 336, moving average window 25.",
-                        "author_seed_statement": "https://github.com/cure-lab/LTSF-Linear/issues/33#issuecomment-1331937601; 作者：我们论文里只跑了一个seed。设备和torch可能导致差异。",
-                        "author_script": "https://github.com/cure-lab/LTSF-Linear/blob/0c113668a3b88c4c4ee586b8c5ec3e539c4de5a6/scripts/EXP-LongForecasting/Linear/etth1.sh; seq_len=336, pred_len=96, batch_size=32, learning_rate=0.005, itr=1.",
-                    }
-                    prompt = ("从以下公开论文及作者实现摘录中解析DLinear ETTh1 336→96单项实验的验收协议。"
-                              "只使用这些公开事实，不猜测实际训练结果，不宣称整篇论文全部实验已经复现。"
-                              "返回JSON：{\"summary\":\"中文协议说明\",\"reference_metrics\":{\"mse\":数值,\"mae\":数值},"
-                              "\"limitations\":[\"该单项实验的实际范围限制\"]}。\n" +
-                              json.dumps(public_sources, ensure_ascii=False))
-                    raw_review = self.llm.chat(prompt, task="repository_public_protocol", temperature=0.1)
-                    if raw_review.startswith("[LLM API Error"):
-                        raise RuntimeError("真实API分析调用失败")
-                    try:
-                        cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw_review.strip())
-                        review = json.loads(cleaned)
-                        if not isinstance(review.get("summary"), str) or not review["summary"].strip():
-                            raise ValueError("API返回缺少分析")
-                        if review.get("reference_metrics") != {"mse": 0.375, "mae": 0.399}:
-                            raise ValueError("API解析的公开参考值不符合已核对论文")
-                    except (ValueError, TypeError, AttributeError) as exc:
-                        raise ValueError("真实API分析返回结构无效") from exc
-                    data["llm_analysis"] = {**review, "model": self.llm.model,
-                                            "usage": self.llm.last_usage, "source": "real_api",
-                                            "input_scope": "public_paper_only"}
-                    sync_calls()
-                    self.logger.log("Verifier", "repository_api_review", "SUCCESS", "真实API分析已完成")
-                    emit({"type": "state", "state": "VALIDATE", "agent": "Verifier",
-                          "phase_id": "review_public_protocol", "status": "success", "outcome": "accepted"})
-                    write_json(run_dir / "llm_analysis.json", data["llm_analysis"])
             optimization_requested = input_data.get("enable_optimization", False) is True
             data["optimization"] = {
                 "optimized": False, "status": "not_implemented" if optimization_requested else "disabled",
@@ -799,7 +651,7 @@ class RepositoryReproduction:
                 data["analysis_status"] = "failed"
                 data["analysis_error"] = error
             else:
-                data["validation"] = {"status": "analysis_failed" if data.get("repository_analysis") else "execution_failed",
+                data["validation"] = {"status": "execution_failed",
                                       "is_reproduced": False, "result_level": "failed", "reason": error}
         sync_calls()
         data["audit_stats"] = self.logger.get_stats()

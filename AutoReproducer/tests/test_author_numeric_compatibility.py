@@ -81,3 +81,55 @@ def test_full_service_retries_real_numeric_failure_then_observes_original_traini
     config = Path(data['run_dir']) / 'repo/_autorepro_capture/config.json'
     assert manifest['files']['_autorepro_capture/config.json'] == hashlib.sha256(config.read_bytes()).hexdigest()
     assert any('浮点倒数兼容' in item for item in data['validation']['warnings'])
+
+@pytest.mark.parametrize('alias', ['bool', 'int', 'float'])
+def test_missing_numpy_builtin_alias_is_restored_only_after_actual_failure(tmp_path, monkeypatch, alias):
+    import builtins
+    from src.experiments.author_numeric_compatibility import diagnose_numpy_alias_error
+    monkeypatch.delattr(np, alias, raising=False)
+    source = tmp_path / 'train.py'
+    source.write_text(f'import numpy as np\nresult = np.{alias}\n', encoding='utf-8')
+    original = source.read_bytes()
+    sources = {'train.py': hashlib.sha256(original).hexdigest()}
+    try:
+        run_entrypoint(source, [], tmp_path, sources)
+    except AttributeError as exc:
+        repair = diagnose_numpy_alias_error(exc, source, tmp_path, sources)
+    else:
+        pytest.fail('Expected the original missing-alias failure')
+    assert repair['kind'] == 'numpy_builtin_alias'
+    monkeypatch.setattr(np, alias, getattr(builtins, alias), raising=False)
+    monkeypatch.delattr(np, alias)
+    result = run_entrypoint(source, [repair], tmp_path, sources)
+    assert result['result'] is getattr(builtins, alias)
+    assert source.read_bytes() == original
+
+
+def test_builtin_alias_in_original_local_module_is_repaired_and_retried(tmp_path, monkeypatch, cpu_dependency_cache):
+    fixture, runner, request, _ = setup_service(tmp_path, monkeypatch)
+    workspace = fixture['workspace']
+    legacy = workspace / 'legacy_types.py'
+    legacy.write_text('import numpy as np\nMASK_DTYPE = np.bool\n', encoding='utf-8')
+    train = workspace / 'train.py'
+    train.write_text('from legacy_types import MASK_DTYPE\n' + train.read_text('utf-8'), encoding='utf-8')
+    originals = {path.name: path.read_bytes() for path in (legacy, train)}
+    for name, content in originals.items():
+        fixture['snapshot']['files'][name] = hashlib.sha256(content).hexdigest()
+    next(item for item in fixture['proposal']['citations'] if item['id'] == 'script')['quote'] = train.read_text('utf-8')
+    runner.llm = AuthorLLM(fixture)
+    use_preinstalled_cache(monkeypatch, runner, cpu_dependency_cache)
+    result = runner.run(request)
+    assert result['state'] == 'COMPLETED', result['error']
+    data = result['data']
+    assert data['validation']['author_execution'][0]['optimizer_steps'] == 40
+    assert len(data['numeric_repair_attempts']) == 1
+    assert data['numeric_repair_attempts'][0]['kind'] == 'numpy_builtin_alias'
+    assert data['numeric_repair_attempts'][0]['path'] == 'legacy_types.py'
+    for name, content in originals.items():
+        assert (Path(data['run_dir']) / 'repo' / name).read_bytes() == content
+    assert data['validation']['is_reproduced'] is None
+
+@pytest.mark.parametrize('message', ["module 'numpy' has no attribute 'float128'", "module 'other_library' has no attribute 'bool'"])
+def test_unrelated_attribute_errors_do_not_enable_numpy_alias_repair(tmp_path, message):
+    from src.experiments.author_numeric_compatibility import diagnose_numpy_alias_error
+    assert diagnose_numpy_alias_error(AttributeError(message), tmp_path/'train.py', tmp_path, {}) is None

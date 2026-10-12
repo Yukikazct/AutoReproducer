@@ -57,7 +57,6 @@ AGENTS = [
     ("FIND_RESOURCES", "🔍 ResourceFinder", "finder"),
     ("BUILD_ENV", "🔧 EnvBuilder", "builder"),
     ("EXECUTE_CODE", "⚡ CodeExecutor", "executor"),
-    ("VALIDATE", "✅ ResultValidator", "validator"),
 ]
 
 OPTIMIZER_NAME = "🧪 Optimizer"
@@ -138,7 +137,7 @@ def run_pipeline_core(progress_path: str,
                       title_resolution: Optional[dict] = None,
                       pdf_resolution: Optional[dict] = None,
                       preferred_repo_url: str = "",
-                      author_execution_only: bool = False,
+                      author_execution_only: bool = True,
                       _managed_runtime: bool = False,
                       _append_progress: bool = False,
                       _runtime_preparation: Optional[dict] = None) -> Dict[str, Any]:
@@ -464,7 +463,7 @@ def run_pipeline_background(progress_path: str, *,
                             title_resolution: Optional[dict] = None,
                             pdf_resolution: Optional[dict] = None,
                             preferred_repo_url: str = "",
-                            author_execution_only: bool = False,
+                            author_execution_only: bool = True,
                             cleanup_pdf: bool = True,
                             on_done=None) -> threading.Thread:
     """启动后台线程执行流水线；返回守护线程句柄。

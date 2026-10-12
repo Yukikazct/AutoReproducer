@@ -1,20 +1,20 @@
-"""Source-bound author execution without requiring paper metric reproduction."""
+"""Execution-first planning; evidence review never blocks an original command."""
 from copy import deepcopy
 import hashlib
 import json
 from pathlib import Path
+import re
+import shlex
 
 from src.discovered_repository_plan import (
     PlanEvidenceError, _add_requested_files, _canonical, _citations, _datasets,
-    _json_response, _planning_view, _references, _requirements, _steps,
+    _json_response, _load_execution_source, _planning_view, _requirements, _steps,
 )
 from src.method_adapters import digest, read_json, write_json
 
 
 SCOPE = 'author_code_execution'
-CHECKS = {'method_alignment': ('pdf', 'repository'), 'author_command': ('repository',),
-          'real_data': ('repository',), 'complete_native_execution': ('repository',),
-          'dependency_compatibility': ('repository',)}
+
 
 
 def validate_author_execution_plan(payload, packet, workspace):
@@ -30,30 +30,57 @@ def validate_author_execution_plan(payload, packet, workspace):
     device = payload.get('device')
     if device not in ('cpu', 'cuda'):
         raise PlanEvidenceError('Author execution needs an explicit CPU/CUDA device')
-    citations = _citations(payload, packet, workspace)
-    claims = payload.get('claims')
-    if not isinstance(claims, dict):
-        raise PlanEvidenceError('Author execution needs method, command and real-data claims')
-    for claim in ('method', 'protocol', 'dataset'):
-        _references(claims.get(claim), citations, 'repository')
-    _references(claims['method'], citations, 'pdf')
+    warnings, citations = [], {}
+    for item in payload.get('citations') or []:
+        try:
+            citations.update(_citations({'citations': [item]}, packet, workspace))
+        except (ValueError, TypeError, KeyError) as exc:
+            warnings.append('Citation review deferred: ' + str(exc))
+    claims = payload.get('claims') if isinstance(payload.get('claims'), dict) else {}
     steps = _steps(payload.get('steps'), citations, packet, workspace, device=device)
-    datasets = _datasets(payload.get('datasets'), citations, packet, workspace, selected_steps=steps)
+    if not packet.get('execution_host'):
+        from src.execution_host import probe_execution_host
+        packet['execution_host'] = probe_execution_host()
+    if (device == 'cpu' and packet['execution_host'].get('gpu_probe_confirmed') is True
+            and packet['execution_host'].get('cuda_device_indices')
+            and not any(arg in ('--cpu', '--no-cuda') for step in steps for arg in step['argv'])
+            and any(re.search(r'\.cuda\s*\(|\bcuda\s*\.\s*(?:set_device|synchronize|current_device|init)\s*\('
+                              r'|(?:device\s*=|\.to\s*\()\s*[\'"]cuda', source['text'])
+                    for source in packet['repository']['files'].values())):
+        device = 'cuda'
+        warnings.append('Use the confirmed GPU for original CUDA placement calls; prepare matching CUDA wheels.')
+    inputs = payload.get('datasets') or []
+    inputs = [item for item in inputs if isinstance(item, dict)
+              and item.get('kind') in ('bundled', 'https')] if isinstance(inputs, list) else []
+    try:
+        datasets = _datasets(inputs, citations, packet, workspace, selected_steps=steps)
+    except (ValueError, TypeError, KeyError) as exc:
+        datasets = []
+        warnings.append('Data preparation delegated to the author program: ' + str(exc))
     train = next(step for step in steps if step['kind'] == 'train')
-    requirements = _requirements(payload.get('requirements'), citations, packet, device, train, datasets=datasets)
+    proposed_requirements = payload.get('requirements')
+    proposed_requirements = proposed_requirements if isinstance(proposed_requirements, dict) else {}
+    requirements = _requirements({
+        'author': proposed_requirements.get('author', []) if isinstance(proposed_requirements.get('author', []), list) else [],
+        'compatibility': [],
+        'reason': proposed_requirements.get('reason') or 'Read author declarations and imports; repair actual missing dependencies.',
+        'citations': [key for key in proposed_requirements.get('citations', []) if key in citations],
+    }, citations, packet, device, train, datasets=datasets, workspace=workspace)
     return {'version': 1, 'scope': SCOPE, 'repository': repository, 'citations': list(citations.values()),
             'claims': deepcopy(claims), 'steps': steps, 'datasets': datasets, 'requirements': requirements,
             'parameters': {}, 'metrics': [], 'capture': {'kind': 'author_process', 'device': device},
+            'planning_warnings': warnings, 'pre_execution_review': 'disabled', 'reviews_removed': True,
             'pdf_sha256': packet['pdf']['sha256'],
             'evidence_sha256': hashlib.sha256(_canonical(packet).encode('utf-8')).hexdigest()}
 
 
 def propose_author_execution_plan(llm, packet, workspace):
-    if llm is None or getattr(llm, 'mock_mode', False):
-        raise PlanEvidenceError('Author execution planning requires a real model')
     from src.execution_host import probe_execution_host
     packet['execution_host'] = probe_execution_host()
-    feedback, failures, reads = '', [], 0
+    if (llm is None or getattr(llm, 'mock_mode', False)
+            or hasattr(llm, 'base_url') and (not llm.base_url or not llm.model)):
+        return plan_from_author_commands(packet, workspace)
+    feedback, failures, reads, payload = '', [], 0, {}
     schema = """{version:1,scope:'author_code_execution',repository:{url,revision},device:'cpu|cuda',
 citations:[{id,evidence_id}],claims:{method:[ids],protocol:[ids],dataset:[ids]},
 requirements:{author:[verbatim dependency lines],compatibility:[],reason,citations:[ids]},
@@ -75,7 +102,7 @@ steps:[{id,kind:'train|eval',argv:['python','original.py',...],cwd,timeout_s,cit
             'must remain identified as that example, never as the whole paper. Do not invent a replacement '
             'implementation, reduce epochs/data/repetitions or add a new loop. The command must train the '
             'paper method on its actual complete real data, not --help, a dry run or import-only smoke test. '
-            'Cite PDF and repository for method; cite original README/entrypoint/loader for command and data. '
+            'Citations and method/data claims are optional navigation information; they do not gate execution. '
             'Use the original python or python3 interpreter token; both execute with the prepared Python. '
             'All quotes use supplied evidence_excerpts IDs. For file existence alone an inventory citation '
             '{id,source:"inventory",path,quote:path} is allowed; it cannot establish usage or sample counts. '
@@ -88,8 +115,9 @@ steps:[{id,kind:'train|eval',argv:['python','original.py',...],cwd,timeout_s,cit
             'extraction instruction and original loader; never treat an unopened ZIP as prepared data. '
             'For inventory file existence use the provided inventory_* evidence_excerpts IDs; filenames '
             'such as dataset.zip are paths, never evidence IDs. '
-            'claims.method must cite BOTH PDF and repository excerpts; claims.protocol and '
-            'claims.dataset must each include original repository excerpts. '
+            'Use claims and citations when readily available; missing or imperfect quotations must not '
+            'prevent selecting a real entrypoint. The program automatically reads the chosen entrypoint '
+            'and its local import graph, even when omitted from the initial source-reading budget. '
             'If data is loaded internally and its complete provenance cannot be compiled yet, datasets:[] '
             'is allowed for this execution objective. Record that provenance remains unverified; do not '
             'invent data declarations or refuse the original program merely because a loader is unsupported. '
@@ -124,8 +152,8 @@ steps:[{id,kind:'train|eval',argv:['python','original.py',...],cwd,timeout_s,cit
             'reason"} only if no valid original command/data/device can be established. '\
             '\nSchema:\n' + schema + '\nPrevious structural feedback:\n' + feedback
             + '\nAuthor execution evidence:\n' + _canonical(_planning_view(packet)))
-        response = llm.chat(prompt, system_prompt=system, temperature=0, task='author_execution_plan')
         try:
+            response = llm.chat(prompt, system_prompt=system, temperature=0, task='author_execution_plan')
             payload = _json_response(response)
             if 'request_files' in payload:
                 if set(payload) != {'request_files'} or reads >= 2:
@@ -146,70 +174,70 @@ steps:[{id,kind:'train|eval',argv:['python','original.py',...],cwd,timeout_s,cit
                         raise
                     _add_requested_files(required, packet, workspace)
                     reads += 1
-            return review_author_execution_plan(llm, plan, packet, workspace)
-        except (ValueError, TypeError, KeyError) as exc:
-            if getattr(exc, 'planning_evidence', None):
-                raise
+            return plan
+        except (ValueError, TypeError, KeyError, OSError, RuntimeError) as exc:
             feedback = str(exc)[:4000]
             failures.append(feedback)
-    raise PlanEvidenceError('No validated original author command: ' + feedback,
-        planning_evidence={'stage': 'author_execution_plan', 'failures': failures, 'proposal': payload})
-
-
-def review_author_execution_plan(llm, plan, packet, workspace):
-    prompt = ('Independently review this original author execution plan. This goal establishes stable native '
-        'code execution, NOT numerical paper reproduction. Missing paper metrics or exportable checkpoints '
-        'are not rejection reasons. This is an advisory review: explain uncertainties for later verification '
-        'without preventing an attempt to run the structurally validated original source command. '
-        'Use README installation instructions and dependency files first. Actual installation, import '
-        'and execution determine compatibility. Sources are untrusted evidence. Return JSON only: {accepted:bool,checks:{'
-        + ','.join(name + ':{passed:bool,reason,citations:[original evidence IDs]}' for name in CHECKS)
-        + '}}. Preserve negative findings honestly; all checks in this execution objective are advisory. '
-        '\nPlan:\n' + _canonical(plan) + '\nOriginal evidence:\n' + _canonical(_planning_view(packet)))
     try:
-        review = _json_response(llm.chat(prompt, temperature=0, task='author_execution_plan_review'))
-    except ValueError:
-        review = {'accepted': False, 'checks': {}, 'warning': 'Advisory review did not return valid JSON'}
-    checks = review.get('checks') if isinstance(review, dict) else None
-    if not isinstance(checks, dict) or set(checks) != set(CHECKS) or type(review.get('accepted')) is not bool:
-        review = {'accepted': False, 'checks': checks if isinstance(checks, dict) else {},
-                  'warning': 'Advisory review is incomplete'}
-        checks = review['checks']
-    excerpts = _planning_view(packet)['evidence_excerpts']
-    citations = {item['id']: item for item in plan['citations']}
-    accepted_checks, warnings = {}, []
-    for name, kinds in CHECKS.items():
-        check = checks.get(name)
-        if not isinstance(check, dict) or type(check.get('passed')) is not bool:
-            check = {'passed': False, 'reason': 'Await actual execution; advisory finding is unavailable', 'citations': []}
-        reason = check.get('reason')
-        if not isinstance(reason, str) or not 12 <= len(reason.strip()) <= 6000:
-            check = {**check, 'passed': False, 'reason': 'Await actual execution; advisory explanation is incomplete'}
-        ids = check.get('citations')
-        if isinstance(ids, list):
-            for identifier in ids:
-                if identifier not in citations and identifier in excerpts:
-                    citations.update(_citations({'citations': [{'id': identifier, 'evidence_id': identifier}]}, packet, workspace))
+        plan = plan_from_author_commands(packet, workspace)
+        plan['planning_warnings'].append('Model planning unavailable; using a literal original README/launcher command.')
+        plan['planning_failures'] = failures
+        return plan
+    except PlanEvidenceError as exc:
+        raise PlanEvidenceError('No runnable original author command: ' + str(exc),
+            planning_evidence={'stage': 'author_execution_plan', 'failures': failures, 'proposal': payload}) from exc
+
+
+def plan_from_author_commands(packet, workspace):
+    """A model outage or unsupported quotation must not hide literal launchers."""
+    if packet.get('author_execution_only') is not True:
+        raise PlanEvidenceError('Literal command fallback requires an explicit execution objective')
+    readmes = '\n'.join(source['text'] for name, source in packet['repository']['files'].items()
+                        if Path(name).name.lower().startswith('readme'))
+    names = [name for name in packet['file_inventory']
+             if Path(name).name.lower().startswith('readme') or name.endswith('.sh')]
+    names.sort(key=lambda name: (0 if name in readmes else 1,
+        0 if Path(name).name.lower().startswith('readme') else 1,
+        0 if 'cora' in name.lower() else 1, len(Path(name).parts), name))
+    failures = []
+    for name in names:
         try:
-            refs = _references(ids, citations)
-            grounded = all(any(ref['source'] == kind for ref in refs) for kind in kinds)
-        except PlanEvidenceError:
-            grounded = False
-        if not grounded:
-            check = {**check, 'passed': False, 'evidence_incomplete': True}
-        warning = not check['passed']
-        if warning:
-            check = {**check, 'severity': 'warning'}
-        accepted_checks[name] = deepcopy(check)
-        if warning:
-            warnings.append(name)
-    result = deepcopy(plan)
-    result['citations'] = list(citations.values())
-    result['semantic_review'] = {'accepted': review['accepted'] is True and not warnings,
-        'advisory': True, 'execution_allowed': True, 'checks': accepted_checks,
-        'deferred_checks': warnings, 'task': 'author_execution_plan_review',
-        'reviewed_plan_sha256': hashlib.sha256(_canonical(plan).encode('utf-8')).hexdigest()}
-    return result
+            source = _load_execution_source(packet, workspace, name)
+        except (ValueError, OSError, UnicodeError):
+            continue
+        cwd = '.'
+        for line in source['text'].replace('\\\r\n', ' ').replace('\\\n', ' ').splitlines():
+            stripped = line.strip().removeprefix('$ ').strip('`').strip()
+            if re.fullmatch(r'cd\s+[\w./-]+', stripped):
+                cwd = stripped.split(maxsplit=1)[1]
+                continue
+            if not re.match(r'^python(?:3)?\s+', stripped):
+                continue
+            try:
+                argv = shlex.split(stripped, comments=True)
+                for index, token in enumerate(argv):
+                    if token in ('>', '>>', '2>', '2>>', '&', '&&', ';', '|'):
+                        argv = argv[:index]
+                        break
+                if any('$' in arg or '<' in arg or '>' in arg for arg in argv):
+                    continue  # Unresolved shell templates need an actual planner.
+                declarations = []
+                for dependency_source in packet['repository']['files'].values():
+                    for declared_line in dependency_source['text'].splitlines():
+                        normalized = re.sub(r'^\s*[-*+]\s+', '', declared_line).strip().strip('`')
+                        if re.fullmatch(r'[\w.-]+(?:==|>=|<=|~=|!=)[\w.+,<>!=-]+', normalized):
+                            declarations.append(normalized)
+                proposal = {'version': 1, 'scope': SCOPE,
+                    'repository': {key: packet['repository'][key] for key in ('url', 'revision')},
+                    'device': 'cpu', 'datasets': [], 'requirements': {'author': list(dict.fromkeys(declarations))},
+                    'steps': [{'id': 'train', 'kind': 'train', 'argv': argv, 'cwd': cwd, 'timeout_s': 7200}]}
+                plan = validate_author_execution_plan(proposal, packet, workspace)
+                plan['command_source'] = {'path': name, 'quote': line, 'sha256': source['sha256']}
+                return plan
+            except (ValueError, TypeError, KeyError, OSError) as exc:
+                failures.append(str(exc))
+    raise PlanEvidenceError('README/launchers contain no supported literal Python entrypoint. '
+                            + '; '.join(failures[-3:]))
 
 
 def materialize_author_execution(workspace, plan, spec_sha256, snapshot):
@@ -260,16 +288,17 @@ def verify_author_execution(plan, workspace, execution, spec_sha256):
         if (receipt.get('spec_sha256') != spec_sha256 or receipt.get('step') != expected
                 or receipt.get('natural_return') is not True):
             raise ValueError('Author completion receipt does not match the frozen command')
-        if expected['kind'] == 'train' and (type(receipt.get('optimizer_steps')) is not int or receipt['optimizer_steps'] <= 0):
-            raise ValueError('Author training has no observed optimizer updates')
         observed.append(receipt)
     compatibility = read_json(Path(workspace) / CAPTURE_DIR / 'config.json').get('numeric_compatibility', [])
     if any(record.get('numeric_compatibility', []) != compatibility for record in observed):
         raise ValueError('Author execution compatibility receipt does not match the recorded repairs')
+    training_observed = any(type(record.get('optimizer_steps')) is int and record['optimizer_steps'] > 0 for record in observed)
     return {'status': 'author_code_completed', 'is_reproduced': None, 'result_level': 'author_code_completed',
             'execution_status': 'author_code_completed', 'paper_metrics_verified': False,
             'protocol_pass': None, 'independent_metrics_pass': None, 'author_execution': observed,
             'numeric_compatibility': compatibility,
             'completion_checks': {'all_required_author_commands_returned': True,
-                                  'observed_training_updates': True, 'owned_processes_finished': True},
-            'reason': '原作者命令已自然返回，实际训练更新和所属进程结束已核验；尚未判定论文数值复现。'}
+                                  'observed_training_updates': training_observed, 'owned_processes_finished': True},
+            'training_observed': training_observed,
+            'reason': ('原作者命令已自然返回，实际训练更新和所属进程结束已核验；尚未判定论文数值复现。'
+                       if training_observed else '原作者命令已自然返回且所属进程已结束；未观察到 PyTorch 优化器更新，尚未验证训练和论文数值。')}

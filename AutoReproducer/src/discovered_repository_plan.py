@@ -112,19 +112,29 @@ def _priority(name):
     return 4, len(Path(name).parts), name
 
 
-def _read_source(workspace, name, expected):
+def _read_source(workspace, name, expected, *, max_bytes=100000):
     path = workspace_path(workspace, name, "public repository source", must_exist=True, forbid_git=True)
     if not path.is_file() or not _text_candidate(name):
         raise PlanEvidenceError("Requested evidence is not an allowed repository text file")
     raw = path.read_bytes()
     if _digest(raw) != expected:
         raise PlanEvidenceError(f"Repository source changed after snapshot: {name}")
-    if len(raw) > 100000:
+    if len(raw) > max_bytes:
         raise PlanEvidenceError(f"Repository evidence file exceeds the bounded read limit: {name}")
     text = raw.decode("utf-8-sig")
     if "\x00" in text:
         raise UnicodeError("Binary content cannot serve as source text")
     return {"text": text, "sha256": expected, "bytes": len(raw)}
+
+
+def _load_execution_source(packet, workspace, name):
+    """Read the actual entrypoint/import without spending model reading rounds."""
+    entry = packet['file_inventory'].get(name)
+    if entry is None:
+        raise PlanEvidenceError('Original author source is absent: ' + name)
+    source = _read_source(workspace, name, entry['sha256'], max_bytes=2 * 1024 * 1024)
+    packet['repository']['files'][name] = source
+    return source
 
 
 def _read_dataset_summary(workspace, name, expected):
@@ -489,7 +499,7 @@ def _citations(payload, packet, workspace):
     return result
 
 
-def _author_imports(packet, step, *, include_sources=False, device=None):
+def _author_imports(packet, step, *, include_sources=False, device=None, workspace=None):
     """Follow imports in pinned author files; no model-generated dependency list."""
     argv = step.get('argv') or []
     position = 2 if len(argv) > 1 and argv[1] == '-u' else 1
@@ -526,6 +536,8 @@ def _author_imports(packet, step, *, include_sources=False, device=None):
             continue
         visited.add(path)
         source = packet['repository']['files'].get(path)
+        if source is None and workspace is not None and packet.get('author_execution_only') is True:
+            source = _load_execution_source(packet, workspace, path)
         if source is None:
             missing = PlanEvidenceError(f'Required import source is not in the bounded packet; request_files: {path}')
             missing.required_files = [path]
@@ -533,6 +545,9 @@ def _author_imports(packet, step, *, include_sources=False, device=None):
         try:
             tree = ast.parse(source['text'])
         except SyntaxError as exc:
+            if packet.get('author_execution_only') is True:
+                # Let the selected interpreter report Python-version problems.
+                continue
             raise PlanEvidenceError(f'Author import source is not valid Python: {path}') from exc
         # Literal author sys.path additions resolve local files, never packages
         # invented by the model. Paths are relative to the unchanged author cwd.
@@ -751,22 +766,28 @@ def _effective_author_parameters(packet, step):
     return definitions
 
 
-def _requirements(value, citations, packet, device="cpu", step=None, *, datasets=None):
+def _requirements(value, citations, packet, device="cpu", step=None, *, datasets=None, workspace=None):
     if not isinstance(value, dict) or not isinstance(value.get("reason"), str) or not value["reason"].strip():
         raise PlanEvidenceError("Compatibility dependencies need an explicit explanation")
-    refs = _references(value.get("citations"), citations, "repository")
+    relaxed = packet.get('author_execution_only') is True
+    refs = ([ref for ref in citations.values() if ref['source'] == 'repository'] if relaxed
+            else _references(value.get("citations"), citations, "repository"))
     author, compatibility = value.get("author"), value.get("compatibility")
     if not isinstance(author, list) or any(not isinstance(line, str) or not line.strip()
                                           or "\n" in line or "\r" in line for line in author):
         raise PlanEvidenceError("Original dependency lines must be a list of strings")
-    combined = "\n".join(ref["quote"] for ref in refs)
+    combined = ("\n".join(source['text'] for source in packet['repository']['files'].values()) if relaxed
+                else "\n".join(ref["quote"] for ref in refs))
     def unformat(line):
         line = re.sub(r"^\s*(?:[-*+]|\d+[.)])\s+", "", line).strip()
         return line[1:-1] if len(line) >= 2 and line.startswith("`") and line.endswith("`") else line
 
     original_lines = [line.strip() for line in combined.splitlines() if line.strip()]
     originals = {unformat(line): line for line in original_lines}
-    if any(unformat(line) not in originals for line in author):
+    if relaxed:
+        author = [line for line in author if unformat(line) in originals]
+        compatibility = []  # Derive packages from real imports, rather than model pins.
+    elif any(unformat(line) not in originals for line in author):
         raise PlanEvidenceError("Original dependencies are not supported by their citations")
     if not isinstance(compatibility, list) or (not compatibility and step is None):
         raise PlanEvidenceError("Frozen compatibility dependency pins are required")
@@ -793,7 +814,13 @@ def _requirements(value, citations, packet, device="cpu", step=None, *, datasets
     import_evidence, omitted, excluded, namespaces, deferred = [], [], [], [], []
     declared_pins = []
     if step is not None:
-        discovery = _author_imports(packet, step, include_sources=True, device=device)
+        try:
+            discovery = _author_imports(packet, step, include_sources=True, device=device, workspace=workspace)
+        except PlanEvidenceError:
+            if not relaxed:
+                raise
+            # Dynamic imports/configuration should be resolved by the program.
+            discovery = {'imports': [], 'excluded_device_branches': [], 'repository_namespaces': []}
         actual, excluded = discovery['imports'], discovery['excluded_device_branches']
         namespaces = discovery['repository_namespaces']
         inverse = {module: name for name, module in _PACKAGE_IMPORTS.items()}
@@ -859,10 +886,12 @@ def _datasets(items, citations, packet, workspace, *, selected_steps=None):
     for item in items:
         if not isinstance(item, dict):
             raise PlanEvidenceError("Invalid dataset declaration")
-        refs = _references(item.get("citations"), citations)
-        accepted = {"kind": item.get("kind"), "citations": list(item["citations"])}
+        relaxed = packet.get('author_execution_only') is True
+        refs = [] if relaxed else _references(item.get("citations"), citations)
+        accepted = {"kind": item.get("kind"), "citations": [key for key in item.get("citations", []) if key in citations]}
         if item.get("kind") == "bundled":
-            _references(item.get("citations"), citations, "repository")
+            if not relaxed:
+                _references(item.get("citations"), citations, "repository")
             paths = item.get("paths")
             if not isinstance(paths, list) or not paths or len(paths) > 200:
                 raise PlanEvidenceError("Bundled data needs explicit files, without wildcards")
@@ -897,13 +926,13 @@ def _datasets(items, citations, packet, workspace, *, selected_steps=None):
             if (parsed is None or parsed.scheme != "https" or not parsed.hostname
                     or parsed.username or parsed.password or parsed.fragment
                     or parsed.port not in (None, 443)
-                    or not any(url in ref["quote"] for ref in refs)):
+                    or not relaxed and not any(url in ref["quote"] for ref in refs)):
                 raise PlanEvidenceError("Dataset URL needs a cited canonical HTTPS source")
             # A fresh URL cannot acquire an invented identity from a model.
             sha, size = item.get("sha256"), item.get("bytes")
             if (not isinstance(sha, str) or not _SHA.fullmatch(sha)
                     or type(size) is not int or not 0 < size <= 512 * 1024 * 1024
-                    or not _has_value(sha, refs) or not _has_value(size, refs)):
+                    or not relaxed and (not _has_value(sha, refs) or not _has_value(size, refs))):
                 raise PlanEvidenceError("External data needs published checksum and byte-size evidence")
             name = item.get("target")
             path = workspace_path(workspace, name, "prepared dataset", forbid_git=True)
@@ -971,25 +1000,32 @@ def _steps(items, citations, packet, workspace, *, device=None):
         directory = workspace_path(workspace, cwd, "author working directory", must_exist=True, forbid_git=True)
         script = workspace_path(directory, argv[position], "author entrypoint", must_exist=True, forbid_git=True)
         name = script.relative_to(Path(workspace).resolve()).as_posix()
+        relaxed = packet.get('author_execution_only') is True
+        if name not in packet['repository']['files'] and relaxed:
+            _load_execution_source(packet, workspace, name)
         if name not in packet["repository"]["files"]:
             raise PlanEvidenceError("Author entrypoint must be read and verified before planning")
-        _read_source(workspace, name, packet["repository"]["files"][name]["sha256"])
-        refs = _references(item.get("citations"), citations, "repository")
+        _read_source(workspace, name, packet['repository']['files'][name]['sha256'],
+                     max_bytes=2 * 1024 * 1024 if relaxed else 100000)
+        refs = ([citations[key] for key in item.get('citations', []) if key in citations] if relaxed
+                else _references(item.get("citations"), citations, "repository"))
         quotes = "\n".join(ref["quote"] for ref in refs)
-        from src.execution_host import placement_options
-        placements = placement_options(packet, name) if packet.get('author_execution_only') is True else {}
+        placements = {}
         host_indices = (packet.get('execution_host') or {}).get('cuda_device_indices', [])
         runtime_values = {str(value) for value in host_indices}
         for arg in argv[position:]:
             if arg.split("=", 1)[0] in _FORBIDDEN_FLAGS:
                 raise PlanEvidenceError("A shortened diagnostic run cannot replace the author experiment")
+            if relaxed:
+                continue  # Original CLI parsing determines supported flags and values.
             # Runtime-only CPU selection is permitted, never tuning or data reduction.
             if arg in {"--no-cuda", "--cpu"}:
                 if arg not in quotes:
                     raise PlanEvidenceError("CPU selection must be a documented author option")
             elif arg not in quotes and not (placements and arg in runtime_values):
                 raise PlanEvidenceError(f"Author argv token has no source quote: {arg}")
-        _verify_author_arguments(argv[position + 1:], quotes, packet, script=argv[position], placements=placements)
+        if not relaxed:
+            _verify_author_arguments(argv[position + 1:], quotes, packet, script=argv[position], placements=placements)
         if item.get("env") or item.get("required", True) is not True:
             raise PlanEvidenceError("Planner cannot override the execution environment or optionalize training")
         timeout = item.get("timeout_s")
@@ -1000,9 +1036,14 @@ def _steps(items, citations, packet, workspace, *, device=None):
         if not isinstance(dependencies, list) or any(dep not in seen for dep in dependencies):
             raise PlanEvidenceError("Step dependencies must refer to preceding required steps")
         from src.author_outputs import output_directories
-        sources = (_author_imports(packet, item, include_sources=True,
-                    device=device or (packet.get('experiment_protocol') or {}).get('execution', {}).get('device'))['sources']
-                   if packet.get('experiment_protocol') or packet.get('author_execution_only') is True else [name])
+        try:
+            sources = (_author_imports(packet, item, include_sources=True, workspace=workspace if relaxed else None,
+                        device=device or (packet.get('experiment_protocol') or {}).get('execution', {}).get('device'))['sources']
+                       if packet.get('experiment_protocol') or relaxed else [name])
+        except PlanEvidenceError:
+            if not relaxed:
+                raise
+            sources = [name]
         prepared = []
         for source_path in sources:
             source = packet['repository']['files'][source_path]
@@ -1014,7 +1055,7 @@ def _steps(items, citations, packet, workspace, *, device=None):
                                  'source_path': source_path, 'source_sha256': source['sha256']})
         result.append({"id": identifier, "kind": item["kind"], "argv": list(argv),
                        "cwd": Path(cwd).as_posix(), "timeout_s": timeout,
-                       "depends_on": list(dependencies), "citations": list(item["citations"]),
+                       "depends_on": list(dependencies), "citations": [key for key in item.get('citations', []) if key in citations],
                        "required": True, **({'output_directories': prepared} if prepared else {})})
         seen.add(identifier)
     if total > 7200 or sum(step["kind"] == "train" for step in result) != 1:

@@ -7,9 +7,10 @@ from typing import Any, Dict, List
 COMPLETION_RULES = {
     "prepare_runtime": "兼容解释器与应用依赖检查通过，交接结果已返回",
     "prepare_repository": "固定源码、数据及执行计划已准备并完成完整性校验",
-    "prepare_environment": "依赖、导入和设备检查返回结果，准备进程已退出并清理",
-    "prepare_dependencies": "隔离依赖检查返回结果，安装与检查进程已退出并清理",
+    "prepare_environment": "依赖安装返回结果，准备进程已退出并清理",
+    "prepare_dependencies": "隔离依赖安装返回结果，安装进程已退出并清理",
     "execute_repository": "本轮全部必需步骤返回结果，执行进程已退出并清理",
+    "finish_execution": "作者命令已返回退出状态，全部所属执行进程已退出并清理",
     "execute_code": "本轮执行及修复步骤返回结果，执行进程已退出并清理",
     "verify_protocol": "本轮协议、产物与独立指标核验返回结果",
     "compare_author_claims": "作者输出与论文宣称对比已返回结果，或明确记录无法配对的原因",
