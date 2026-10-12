@@ -27,11 +27,12 @@ CPU_COMPATIBILITY_PINS = {
     "matplotlib": "3.9.2", "pillow": "10.4.0", "networkx": "2.8.8",
     "tqdm": "4.67.1", "hyperopt": "0.2.7", "seaborn": "0.13.2", "tensorboardx": "2.6.2.2",
     "googledrivedownloader": "0.4", "requests": "2.32.3",
-    "torch-geometric": "2.6.1", "torch-scatter": "2.1.2+pt25cpu",
+    "torch-geometric": "2.6.1", "pyyaml": "6.0.2", "absl-py": "2.1.0", "tensorboard": "2.18.0",
+    "torch-scatter": "2.1.2+pt25cpu",
     "torch-sparse": "0.6.18+pt25cpu", "dgl": "1.1.2",
     "aiohttp": "3.10.10", "fsspec": "2024.10.0", "jinja2": "3.1.6",
     "psutil": "6.1.0", "pyparsing": "3.2.0",
-    "optuna": "3.6.1",
+    "optuna": "3.6.1", "deeprobust": "0.2.11", "ogb": "1.3.6",
 }
 CUDA_INDEX_URL = "https://download.pytorch.org/whl/cu121"
 CUDA_COMPATIBILITY_PINS = {**{name: version for name, version in CPU_COMPATIBILITY_PINS.items() if name != 'dgl'},
@@ -53,15 +54,20 @@ _PDF_NUMBER_UNIT = re.compile(
 _PACKAGE_IMPORTS = {"scikit-learn": "sklearn", "pillow": "PIL", "tensorboardx": "tensorboardX",
                     "googledrivedownloader": "google_drive_downloader",
                     "torch-geometric": "torch_geometric", "torch-sparse": "torch_sparse",
-                    "torch-scatter": "torch_scatter"}
+                    "torch-scatter": "torch_scatter", "pyyaml": "yaml", "absl-py": "absl"}
 # Version 0.4 imports requests but omits it from its wheel dependency metadata.
 _RUNTIME_DEPENDENCIES = {
     'googledrivedownloader': ('requests',),
     'torch-geometric': ('aiohttp', 'fsspec', 'jinja2', 'numpy', 'psutil', 'pyparsing', 'requests', 'tqdm'),
     'torch-sparse': ('scipy', 'torch-scatter'),
     'dgl': ('numpy', 'scipy', 'networkx', 'requests', 'tqdm', 'psutil'),
+    # DeepRobust's wheel permits any newer torchvision. Freeze the matching
+    # native torch/vision pair rather than letting pip choose another build.
+    'deeprobust': ('torchvision', 'numpy', 'scipy', 'networkx', 'pillow',
+                  'scikit-learn', 'matplotlib', 'tensorboardx', 'tqdm'),
+    'ogb': ('torch', 'numpy', 'pandas', 'scikit-learn', 'tqdm'),
 }
-_TEXT_SUFFIXES = {".py", ".md", ".rst", ".txt", ".toml", ".yaml", ".yml", ".sh", ".cff"}
+_TEXT_SUFFIXES = {".py", ".md", ".rst", ".txt", ".toml", ".yaml", ".yml", ".sh", ".cff", ".cfg"}
 _FORBIDDEN_FLAGS = {"--smoke", "--dry-run", "--fast-dev-run", "--limit-train-batches",
                     "--limit-test-batches", "--subset", "--max-samples"}
 
@@ -297,6 +303,9 @@ def _planning_excerpts(packet):
         prefix = 'repo_' + _digest(path.encode())[:12]
         add(prefix, {"source": "repository", "path": path}, source["text"])
     for path, entry in packet["file_inventory"].items():
+        if len(path) >= 4:
+            prefix = 'inventory_' + _digest(path.encode())[:12]
+            excerpts[prefix] = {'source': 'inventory', 'path': path, 'quote': path}
         if entry.get("dataset_evidence"):
             prefix = 'data_' + _digest(path.encode())[:12]
             add(prefix, {"source": "dataset", "path": path}, entry["dataset_evidence"]["text"])
@@ -323,6 +332,9 @@ def _planning_view(packet):
     view["evidence_excerpts"] = _planning_excerpts(packet)
     from src.native_loop import discover_native_selections
     view['program_detected_native_selections'] = discover_native_selections(packet['repository']['files'])
+    if packet.get('author_execution_only') is True:
+        from src.runtime_dataset_evidence import discover_runtime_constructors
+        view['program_detected_runtime_constructors'] = discover_runtime_constructors(packet['repository']['files'])
     return view
 
 
@@ -484,9 +496,10 @@ def _author_imports(packet, step, *, include_sources=False, device=None):
     if len(argv) <= position:
         raise PlanEvidenceError('Cannot determine imports without an author entrypoint')
     entry = (Path(step.get('cwd', '.')) / argv[position]).as_posix()
-    queue, visited, imports, excluded = [entry], set(), [], []
+    queue, visited, imports, excluded, namespaces = [entry], set(), [], [], {}
     absolute_roots = list(dict.fromkeys([Path(entry).parent, Path('.')]))
     inventory = packet['file_inventory']
+    repository_name = urlsplit(packet['repository']['url']).path.rstrip('/').split('/')[-1].removesuffix('.git')
 
     def local_module(parts, bases):
         for base in bases:
@@ -521,6 +534,27 @@ def _author_imports(packet, step, *, include_sources=False, device=None):
             tree = ast.parse(source['text'])
         except SyntaxError as exc:
             raise PlanEvidenceError(f'Author import source is not valid Python: {path}') from exc
+        # Literal author sys.path additions resolve local files, never packages
+        # invented by the model. Paths are relative to the unchanged author cwd.
+        author_path_additions = {}
+        for statement in tree.body:
+            if not isinstance(statement, ast.Expr) or not isinstance(statement.value, ast.Call):
+                continue
+            call = statement.value
+            if (not isinstance(call.func, ast.Attribute) or call.func.attr not in {'append', 'insert'}
+                    or ast.dump(call.func.value) != ast.dump(ast.parse('sys.path', mode='eval').body)
+                    or call.keywords):
+                continue
+            arguments = call.args
+            if call.func.attr == 'insert':
+                if len(arguments) != 2 or not isinstance(arguments[0], ast.Constant) or arguments[0].value != 0:
+                    continue
+                arguments = arguments[1:]
+            if len(arguments) != 1 or not isinstance(arguments[0], ast.Constant) or not isinstance(arguments[0].value, str):
+                continue
+            from src.safety.paths import relative_path
+            root = Path(step.get('cwd', '.')) / relative_path(arguments[0].value, 'author sys.path', forbid_git=True)
+            author_path_additions[statement] = (root, call.func.attr)
         # Only a frozen CPU device with hidden CUDA can make this exact guard
         # false. Unknown conditions and shadowed/mutated torch remain conservative.
         def binds_torch(node):
@@ -563,6 +597,13 @@ def _author_imports(packet, step, *, include_sources=False, device=None):
                     yield from reachable(child)
 
         for node in reachable(tree):
+            if node in author_path_additions:
+                root, operation = author_path_additions[node]
+                if root not in absolute_roots:
+                    if operation == 'insert':
+                        absolute_roots.insert(0, root)
+                    else:
+                        absolute_roots.append(root)
             if isinstance(node, ast.Import):
                 modules = [alias.name for alias in node.names]
             elif isinstance(node, ast.ImportFrom):
@@ -583,6 +624,26 @@ def _author_imports(packet, step, *, include_sources=False, device=None):
                     bases = absolute_roots
                 parts = module.split('.') if module else []
                 local, resolved, target, package = local_module(parts, bases)
+                # Some author checkouts are themselves an implicit package:
+                # imports use the repository name while modules live at its
+                # root. Bind that namespace to unchanged source, not to PyPI.
+                namespace = (not local and not relative_import and root.isidentifier()
+                             and root.casefold() == repository_name.casefold()
+                             and root not in sys.stdlib_module_names
+                             and root.replace('_', '-') not in CPU_COMPATIBILITY_PINS
+                             and '__init__.py' not in inventory)
+                if namespace:
+                    if len(parts) == 1 and isinstance(node, ast.ImportFrom):
+                        target, package = Path('.'), True
+                        for alias in node.names:
+                            found, children, _, _ = local_module([alias.name], [target])
+                            local |= found
+                            resolved.extend(children)
+                    elif len(parts) > 1:
+                        local, resolved, target, package = local_module(parts[1:], [Path('.')])
+                    if local:
+                        namespaces[root] = {'name': root, 'path': '.',
+                            'reason': 'original_repository_name_imports_of_existing_root_modules'}
                 # "from . import layers" and "from package import layers"
                 # can load a submodule even when the module field is empty.
                 if isinstance(node, ast.ImportFrom) and (package or not parts):
@@ -599,7 +660,11 @@ def _author_imports(packet, step, *, include_sources=False, device=None):
                 elif root and root not in sys.stdlib_module_names:
                     imports.append({'module':root, 'path':path, 'line':node.lineno,
                                     'statement':ast.get_source_segment(source['text'], node), 'sha256':source['sha256']})
-    return {'imports':imports, 'sources':sorted(visited), 'excluded_device_branches':excluded} if include_sources else imports
+                    if module == 'torch.utils.tensorboard':
+                        imports.append({**imports[-1], 'module': 'tensorboard',
+                                        'dependency_of': 'torch.utils.tensorboard'})
+    return {'imports':imports, 'sources':sorted(visited), 'excluded_device_branches':excluded,
+            'repository_namespaces': list(namespaces.values())} if include_sources else imports
 
 
 def _effective_author_parameters(packet, step):
@@ -725,17 +790,32 @@ def _requirements(value, citations, packet, device="cpu", step=None, *, datasets
     if not {"torch", "numpy"} <= names:
         if step is None:
             raise PlanEvidenceError("Independent evaluation needs the reviewed torch and numpy dependencies")
-    import_evidence, omitted, excluded = [], [], []
+    import_evidence, omitted, excluded, namespaces, deferred = [], [], [], [], []
+    declared_pins = []
     if step is not None:
         discovery = _author_imports(packet, step, include_sources=True, device=device)
         actual, excluded = discovery['imports'], discovery['excluded_device_branches']
+        namespaces = discovery['repository_namespaces']
         inverse = {module: name for name, module in _PACKAGE_IMPORTS.items()}
         required = {'torch', 'numpy'}
         unsupported = []
         for item in actual:
             package = inverse.get(item['module'], item['module'])
             if package not in pins:
-                unsupported.append(item['module'] + ' in ' + item['path'])
+                if packet.get('author_execution_only') is True:
+                    from src.agents.dependency_resolver import python_package_for
+                    package = python_package_for(item['module']).casefold().replace('_', '-')
+                    declared = next((unformat(line) for line in author if re.fullmatch(
+                        re.escape(package) + r'==[\w.+-]+', unformat(line), re.I)), None)
+                    if declared:
+                        declared_pins.append(declared)
+                        import_evidence.append({**item, 'package': package, 'pin': declared,
+                            'evidence_scope': 'original_author_dependency_declaration'})
+                    else:
+                        deferred.append({**item, 'package': package,
+                            'reason': 'Await an actual missing-module error before installing an undeclared dependency'})
+                else:
+                    unsupported.append(item['module'] + ' in ' + item['path'])
             else:
                 required.add(package)
                 import_evidence.append({**item, 'package':package, 'pin':package + '==' + pins[package]})
@@ -744,7 +824,8 @@ def _requirements(value, citations, packet, device="cpu", step=None, *, datasets
                     import_evidence.append({**item, 'package':dependency, 'pin':dependency + '==' + pins[dependency],
                         'dependency_of': package, 'evidence_scope': 'reviewed_package_runtime_import'})
         for loader in datasets or []:
-            if loader['kind'] == 'author_loader':
+            if (loader['kind'] == 'author_loader' or loader['kind'] == 'author_runtime'
+                    and loader['dataset_class'] in {'Planetoid', 'Coauthor', 'Amazon', 'CitationFull'}):
                 # Public Planetoid feature files contain scipy sparse matrices.
                 # Their original framework pickle loader needs scipy even when
                 # the author's Python files never directly import that package.
@@ -757,16 +838,21 @@ def _requirements(value, citations, packet, device="cpu", step=None, *, datasets
             raise PlanEvidenceError('Author imports require packages outside the reviewed runtime: ' + ', '.join(sorted(set(unsupported))),
                                     category='runtime_unsupported')
         omitted = [line for line in compatibility if line.split('==')[0].casefold().replace('_', '-') not in required]
-        compatibility = [name + '==' + pins[name] for name in sorted(required)]
+        compatibility = [name + '==' + pins[name] for name in sorted(required)] + sorted(set(declared_pins))
     return {"author": [originals[unformat(line)] for line in author], "compatibility": list(compatibility),
             "reason": value["reason"], "citations": list(value["citations"]),
             "runtime_required": ["torch==" + pins["torch"], "numpy==" + pins["numpy"]],
             "index_url": CUDA_INDEX_URL if device == "cuda" else CPU_INDEX_URL,
             "import_evidence": import_evidence, "omitted_unused_proposals": omitted,
-            "excluded_device_branches": excluded}
+            "excluded_device_branches": excluded, "repository_namespaces": namespaces,
+            "declared_runtime_pins": sorted(set(declared_pins)), "deferred_runtime_imports": deferred}
 
 
 def _datasets(items, citations, packet, workspace, *, selected_steps=None):
+    if items == [] and packet.get('author_execution_only') is True:
+        # Running an author program does not certify full dataset provenance.
+        # Keep unknown provenance explicit rather than blocking its first run.
+        return []
     if not isinstance(items, list) or not 1 <= len(items) <= 16:
         raise PlanEvidenceError("An experiment needs explicit full-data preparation evidence")
     result, targets = [], set()
@@ -795,6 +881,16 @@ def _datasets(items, citations, packet, workspace, *, selected_steps=None):
                 targets.add(name)
                 hashes[name] = entry["sha256"]
             accepted.update(paths=list(paths), files_sha256=hashes)
+            if 'extract_to' in item:
+                if len(paths) != 1 or not isinstance(item['extract_to'], str):
+                    raise PlanEvidenceError('Bundled ZIP extraction needs one fixed archive and a relative destination')
+                from src.bundled_archives import inspect_bundled_zip
+                extraction = inspect_bundled_zip(workspace, paths[0], hashes[paths[0]], item['extract_to'])
+                for name in extraction['files']:
+                    if name in targets:
+                        raise PlanEvidenceError('Bundled ZIP duplicates another dataset target')
+                    targets.add(name)
+                accepted['extraction'] = extraction
         elif item.get("kind") == "https":
             url = item.get("url")
             parsed = urlsplit(url) if isinstance(url, str) else None
@@ -845,6 +941,9 @@ def _datasets(items, citations, packet, workspace, *, selected_steps=None):
                 raise PlanEvidenceError('Original data loader root must be a fresh directory inside the author repository')
             targets.add(root)
             accepted.update(loader)
+        elif item.get('kind') == 'author_runtime':
+            from src.runtime_dataset_evidence import compile_runtime_dataset
+            accepted = compile_runtime_dataset(item, packet, workspace, citations)
         else:
             raise PlanEvidenceError('Dataset needs bundled files, evidenced HTTPS bytes, or a reviewed original author loader')
         result.append(accepted)
@@ -862,7 +961,7 @@ def _steps(items, citations, packet, workspace, *, device=None):
         if identifier in seen or item.get("kind") not in {"train", "eval"}:
             raise PlanEvidenceError("Duplicate step or unsupported author step kind")
         argv = item.get("argv")
-        if (not isinstance(argv, list) or len(argv) < 2 or argv[0] != "python"
+        if (not isinstance(argv, list) or len(argv) < 2 or argv[0] not in ("python", "python3")
                 or any(not isinstance(arg, str) or not arg or any(c in arg for c in "\x00\r\n") for arg in argv)):
             raise PlanEvidenceError("Only structured Python entrypoint argv is supported")
         position = 2 if argv[1] == "-u" else 1
@@ -877,6 +976,10 @@ def _steps(items, citations, packet, workspace, *, device=None):
         _read_source(workspace, name, packet["repository"]["files"][name]["sha256"])
         refs = _references(item.get("citations"), citations, "repository")
         quotes = "\n".join(ref["quote"] for ref in refs)
+        from src.execution_host import placement_options
+        placements = placement_options(packet, name) if packet.get('author_execution_only') is True else {}
+        host_indices = (packet.get('execution_host') or {}).get('cuda_device_indices', [])
+        runtime_values = {str(value) for value in host_indices}
         for arg in argv[position:]:
             if arg.split("=", 1)[0] in _FORBIDDEN_FLAGS:
                 raise PlanEvidenceError("A shortened diagnostic run cannot replace the author experiment")
@@ -884,9 +987,9 @@ def _steps(items, citations, packet, workspace, *, device=None):
             if arg in {"--no-cuda", "--cpu"}:
                 if arg not in quotes:
                     raise PlanEvidenceError("CPU selection must be a documented author option")
-            elif arg not in quotes:
+            elif arg not in quotes and not (placements and arg in runtime_values):
                 raise PlanEvidenceError(f"Author argv token has no source quote: {arg}")
-        _verify_author_arguments(argv[position + 1:], quotes, packet, script=argv[position])
+        _verify_author_arguments(argv[position + 1:], quotes, packet, script=argv[position], placements=placements)
         if item.get("env") or item.get("required", True) is not True:
             raise PlanEvidenceError("Planner cannot override the execution environment or optionalize training")
         timeout = item.get("timeout_s")
@@ -954,9 +1057,9 @@ def _enumerated_command_values(quotes, script):
     return values
 
 
-def _verify_author_arguments(arguments, quotes, packet, *, script=None):
+def _verify_author_arguments(arguments, quotes, packet, *, script=None, placements=None):
     """Accept author CLI defaults or exact documented flag/value pairs only."""
-    defaults, boolean_flags = {}, set()
+    defaults, boolean_flags, declared_flags = {}, set(), set()
     for name, source in packet["repository"]["files"].items():
         if not name.endswith(".py"):
             continue
@@ -969,6 +1072,7 @@ def _verify_author_arguments(arguments, quotes, packet, *, script=None):
                 continue
             flags = [arg.value for arg in node.args if isinstance(arg, ast.Constant)
                      and isinstance(arg.value, str) and arg.value.startswith("-")]
+            declared_flags.update(flags)
             keywords = {keyword.arg: keyword.value for keyword in node.keywords}
             action = keywords.get("action")
             if isinstance(action, ast.Constant) and action.value in {"store_true", "store_false"}:
@@ -982,10 +1086,16 @@ def _verify_author_arguments(arguments, quotes, packet, *, script=None):
                             defaults.setdefault(flag, []).append(str(value))
                 except (ValueError, TypeError):
                     pass
-    try:
-        documented = shlex.split(quotes.replace("\\\n", " ").replace("\\\r\n", " "))
-    except ValueError:
-        documented = []
+    documented = []
+    text = quotes.replace("\\\n", " ").replace("\\\r\n", " ")
+    # Prose contractions and Python source contain unmatched shell quotes.
+    # Parse individual original command lines so one unrelated apostrophe
+    # cannot erase every documented flag/value pair in a README.
+    for command in [text, *re.findall(r'(?m)^\s*python3?\s+[^\r\n]+', text)]:
+        try:
+            documented.append(shlex.split(command))
+        except ValueError:
+            continue
     enumerations = _enumerated_command_values(quotes, script)
     index = 0
     while index < len(arguments):
@@ -1009,10 +1119,22 @@ def _verify_author_arguments(arguments, quotes, packet, *, script=None):
             raise PlanEvidenceError('Author command placeholder must be resolved to a documented literal value')
         matches_default = any(value == expected or _numeric_equal(value, expected)
                               for expected in defaults.get(flag, []))
-        matches_command = any(documented[i:i + 2] == [flag, value] for i in range(len(documented) - 1))
-        matches_command = matches_command or f"{flag}={value}" in documented
+        matches_command = any(tokens[i:i + 2] == [flag, value]
+                              for tokens in documented for i in range(len(tokens) - 1))
+        matches_command = matches_command or any(f"{flag}={value}" in tokens for tokens in documented)
         matches_enumeration = value in enumerations.get(flag, set())
-        if not matches_default and not matches_command and not matches_enumeration:
+        if flag in (placements or {}):
+            indices = (packet.get('execution_host') or {}).get('cuda_device_indices', [])
+            if not value.isdigit() or int(value) not in indices:
+                raise PlanEvidenceError('Author CUDA placement selects an unavailable device: ' + flag + ' ' + value)
+            matches_command = True
+        # Original launchers may spell argv as a Python list rather than a
+        # shell command. A declared flag alone does not justify inventing a
+        # shorter training run or changing a method parameter.
+        executable_option = (packet.get('author_execution_only') is True and flag in declared_flags
+            and re.search(r'''['"]''' + re.escape(flag) + r'''['"]\s*,\s*['"]'''
+                          + re.escape(value) + r'''['"]''', quotes) is not None)
+        if not matches_default and not matches_command and not matches_enumeration and not executable_option:
             raise PlanEvidenceError(f"Author option differs from both CLI defaults and documented commands: {flag}")
         index += consumed
 

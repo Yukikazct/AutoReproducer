@@ -1,6 +1,7 @@
 """Continuous full-text reading: a per-call window never removes paper content."""
 import hashlib
 import json
+import re
 
 
 READING_TEXT_LIMIT = 120000
@@ -10,6 +11,15 @@ class PaperReadingError(ValueError):
     def __init__(self, message, coverage):
         super().__init__(message)
         self.reading_coverage = coverage
+
+
+def check_reading_api_response(response, llm):
+    """Transport/auth errors cannot be repaired as paper JSON or local facts."""
+    if isinstance(response, str) and response.lstrip().startswith('[LLM API Error'):
+        key = getattr(llm, 'api_key', '')
+        detail = response.replace(key, '[redacted]') if isinstance(key, str) and key else response
+        detail = re.sub(r'\bsk-[A-Za-z0-9_-]+', '[redacted]', detail)
+        raise RuntimeError('论文阅读 API 调用失败：' + detail)
 
 
 class _BatchCapacityError(ValueError):
@@ -107,6 +117,7 @@ def read_full_paper(llm, text, *, on_batch=None):
                 response = llm.chat(prompt + ('\nRepair the prior response format: ' + failure if failure else ''),
                     task='paper_reader_batch', temperature=0,
                     system_prompt='Read supplied paper text completely and extract evidence-linked notes. Return JSON only.')
+                check_reading_api_response(response, llm)
                 if getattr(llm, 'last_finish_reason', '') == 'length':
                     raise _BatchCapacityError('Paper batch response was truncated by the model')
                 notes = _notes(_json(response), sources)

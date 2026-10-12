@@ -122,8 +122,70 @@ def test_mock_llm_and_invalid_response_cannot_confirm_identity(packet):
         RepositoryVerifierAgent(Mock(mock_mode=True)).run(packet)
     llm = Mock(mock_mode=False)
     llm.chat.return_value = "[LLM API Error: timeout]"
-    with pytest.raises(ValueError, match="有效 JSON"):
+    with pytest.raises(ValueError, match="API 调用失败"):
         RepositoryVerifierAgent(llm).run(packet)
+    assert llm.chat.call_count == 1
+
+
+def test_malformed_identity_output_gets_one_format_retry_without_fabricating_verdict(packet):
+    llm = Mock(mock_mode=False, model='fixture-model')
+    valid = identity_review(identity_view(packet))
+    llm.chat.side_effect = ['{"verdict": "author_repository",', json.dumps(valid)]
+    result = RepositoryVerifierAgent(llm).run(packet)
+    assert result['accepted'] is True and llm.chat.call_count == 2
+    assert result['attempts'][0]['format_error']
+    llm.chat.side_effect = ['{"verdict":', '{"verdict":']
+    with pytest.raises(ValueError, match='有效 JSON') as failure:
+        RepositoryVerifierAgent(llm).run(packet)
+    assert len(failure.value.repository_review['attempts']) == 2
+
+
+def test_discovered_candidate_without_pdf_url_can_match_only_in_execution_objective(packet):
+    packet['pdf']['repository_links'] = []
+    packet['author_execution_only'] = True
+    packet['repository_input'] = {'source': 'model_discovered', 'url': packet['repository']['url']}
+    view = identity_view(packet)
+    assert view['pdf']['repository_links'] == [] and view['repository_input']['source'] == 'model_discovered'
+    review = {'verdict': 'matching_repository', 'reason': 'The actual paper title and method match the fetched implementation.',
+              'checks': {name: {'passed': True, 'reason': 'Same paper and original implementation are cited in the fetched sources.',
+                               'citations': ['pdf_p1_0', 'repo_0_0']}
+                         for name in ('paper_identity', 'author_implementation', 'method_alignment')}}
+    review['checks']['author_implementation'] = {'passed': False, 'reason': 'Author ownership is uncertain.', 'citations': []}
+    result = validate_identity_review(packet, review)
+    assert result['accepted'] is True and result['author_identity_confirmed'] is False
+    assert result['selection_source'] == 'model_discovered'
+    review['checks']['paper_identity']['passed'] = False
+    with pytest.raises(ValueError, match='paper_identity'):
+        validate_identity_review(packet, review)
+    packet['author_execution_only'] = False
+    with pytest.raises(ValueError, match='候选链接'):
+        identity_view(packet)
+
+
+def test_resource_discovery_is_not_misrepresented_as_a_pdf_link(tmp_path):
+    from src.discovered_repository_reproduction import author_repository_input
+    fixture = make_experiment(tmp_path)
+    write_pdf(fixture['pdf'], [['Separating Signed Signals', 'An original paper without a repository URL.']])
+    request = {'pdf_path': str(fixture['pdf']), 'author_execution_only': True,
+               'resources': {'code_repo_url': fixture['snapshot']['url']}}
+    _, _, evidence = author_repository_input(request, require_author=False)
+    assert evidence['source'] == 'model_discovered' and evidence['is_author_code'] is False and evidence['page'] is None
+    request['author_execution_only'] = False
+    with pytest.raises(ValueError, match='链接证据'):
+        author_repository_input(request, require_author=False)
+
+
+def test_extra_check_metadata_and_nested_explanation_keep_verified_evidence(packet):
+    review = identity_review(packet)
+    review['checks']['reason'] = review.pop('reason')
+    review['checks']['confidence'] = 0.9
+    result = validate_identity_review(packet, review)
+    assert result['accepted'] is True
+    assert set(result['checks']) == {'paper_identity', 'author_implementation', 'method_alignment'}
+    assert result['reason'] == review['checks']['reason']
+    del review['checks']['method_alignment']
+    with pytest.raises(ValueError, match='缺少'):
+        validate_identity_review(packet, review)
 
 
 def test_semantic_rejection_is_not_retried_as_quote_repair(packet):

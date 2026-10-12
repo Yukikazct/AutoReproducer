@@ -1,0 +1,1111 @@
+{
+  "version": 1,
+  "archived_on": "2026-10-12",
+  "scope": "Original downloaded PDF candidates. Archive inclusion does not imply author execution or paper reproduction.",
+  "archived_pdf_count": 23,
+  "total_pdf_bytes": 43567322,
+  "papers": [
+    {
+      "id": "pairnorm",
+      "repository_url": "https://github.com/LingxiaoShawn/PairNorm",
+      "source_url": "https://arxiv.org/pdf/1909.12223",
+      "final_url": null,
+      "downloaded_at_utc": "2026-10-12T02:27:28.399774+00:00",
+      "timestamp_evidence": "completed_download_file_mtime",
+      "file": "pairnorm.pdf",
+      "bytes": 725863,
+      "sha256": "e5bbdc19fcc02a3dc502a49abda3b116d3988565ff3290dc1c4a0b0dff35ceff",
+      "pages": 17,
+      "title": "arXiv:1909.12223v2  [cs.LG]  13 Feb 2020Published as a conference paper at ICLR 2020\nPAIRNORM : TACKLING OVERSMOOTHING IN GNN S\nLingxiao Zhao\nCarnegie Mellon University",
+      "first_page_excerpt": "arXiv:1909.12223v2  [cs.LG]  13 Feb 2020Published as a conference paper at ICLR 2020\nPAIRNORM : TACKLING OVERSMOOTHING IN GNN S\nLingxiao Zhao\nCarnegie Mellon University\nPittsburgh, PA 15213, USA\n{lingxia1 }@andrew.cmu.eduLeman Akoglu\nCarnegie Mellon University\nPittsburgh, PA 15213, USA\n{lakoglu }@andrew.cmu.edu\nABSTRACT\nThe performance of graph neural nets (GNNs) is known to gradu ally decrease\nwith increasing number of layers. This decay is partly attri buted to oversmooth-\ning, where repeated graph convolutions eventually make nod e embeddings indis-\ntinguishable. We take a closer look at two different interpr etations, aiming to\nquantify oversmoothing. Our main contribution is P AIRNORM , a novel normal-\nization layer that is based on a careful analysis of the graph convolution operator,\nwhich prevents all node embeddings from becoming too simila r. What is more,\nPAIRNORM is fast, easy to implement without any change to network arch itecture\nnor any additional parameters, and is bro",
+      "matching_pdf_repository_links": [
+        {
+          "url": "https://github.com/LingxiaoShawn/PairNorm",
+          "raw_url": "https://github.com/LingxiaoShawn/PairNorm",
+          "page": 1,
+          "source": "pdf_text",
+          "context": "oadly applicable to any GNN. Experiments on real-world graphs demonstrate that P AIRNORM makes deeper GCN, GAT, and SGC models more robust against oversmoothing, and signiﬁca ntly boosts per- formance for a new problem setting that beneﬁts from deeper G NNs. Code is available at https://github.com/LingxiaoShawn/PairNorm . 1 I NTRODUCTION Graph neural networks (GNNs) is a family of neural networks t hat can learn from graph structured data. Starting with the success of GCN (Kip",
+          "evidence_type": "author_code_statement",
+          "is_author_code": true
+        },
+        {
+          "url": "https://github.com/LingxiaoShawn/PairNorm",
+          "raw_url": "https://github.com/LingxiaoShawn/PairNorm",
+          "page": 1,
+          "source": "pdf_annotation",
+          "context": "oadly applicable to any GNN. Experiments on real-world graphs demonstrate that P AIRNORM makes deeper GCN, GAT, and SGC models more robust against oversmoothing, and signiﬁca ntly boosts per- formance for a new problem setting that beneﬁts from deeper G NNs. Code is available at https://github.com/LingxiaoShawn/PairNorm . 1 I NTRODUCTION Graph neural networks (GNNs) is a family of neural networks t hat can learn from graph structured data. Starting with the success of GCN (Kip",
+          "evidence_type": "author_code_statement",
+          "is_author_code": true
+        }
+      ],
+      "pdf_repository_link_present": true,
+      "status": "failed_api_authentication",
+      "original_local_file": "data/papers/candidate_pool_20261012/pairnorm.pdf",
+      "paper_metrics_verified": false,
+      "failure": "Password input was not committed; task used old credential and stopped with HTTP 401"
+    },
+    {
+      "id": "graph_unets",
+      "repository_url": "https://github.com/HongyangGao/Graph-U-Nets",
+      "source_url": "https://proceedings.mlr.press/v97/gao19a/gao19a.pdf",
+      "final_url": null,
+      "downloaded_at_utc": "2026-10-12T02:27:31.404037+00:00",
+      "timestamp_evidence": "completed_download_file_mtime",
+      "file": "graph_unets.pdf",
+      "bytes": 375680,
+      "sha256": "cd6888ecebfcc732c7cc02dfd6b60225d92688b97057c24bbc86de6c3d8013ad",
+      "pages": 10,
+      "title": "Graph U-Nets",
+      "first_page_excerpt": "Graph U-Nets\nHongyang Gao 1 Shuiwang Ji 1\nAbstract vision (He et al., 2017; Huang et al., 2017) and natural lan-\nguage processing (Bahdanau et al., 2015). One common\nWe consider the problem of representation learn-\nproperty behind these tasks is that both images and texts\ning for graph data. Convolutional neural networks\nhave grid-like structures. Elements on feature maps have lo-\ncan naturally operate on images, but have sig-\ncality and order information, which enables the application\nnificant challenges in dealing with graph data.\nof convolutional operations (Defferrard et al., 2016).\nGiven images are special cases of graphs with\nnodes lie on 2D lattices, graph embedding tasks In practice, many real-world data can be naturally repre-\nhave a natural correspondence with image pixel- sented as graphs such as social and biological networks.\nwise prediction tasks such as segmentation. While Due to the great success of CNNs on grid-like data, apply-\nencoder-decoder architectures like U-Net",
+      "matching_pdf_repository_links": [],
+      "pdf_repository_link_present": false,
+      "status": "retired_after_identity_json_rejection",
+      "original_local_file": "data/papers/candidate_pool_20261012/graph_unets.pdf",
+      "paper_metrics_verified": false,
+      "trial_tag": "author_graphunets_20261012_17",
+      "failure": "Repository review returned invalid JSON; no retry or preserved raw response existed; no training"
+    },
+    {
+      "id": "gin",
+      "repository_url": "https://github.com/weihua916/powerful-gnns",
+      "source_url": "https://arxiv.org/pdf/1810.00826",
+      "final_url": null,
+      "downloaded_at_utc": "2026-10-12T02:27:29.131583+00:00",
+      "timestamp_evidence": "completed_download_file_mtime",
+      "file": "gin.pdf",
+      "bytes": 819821,
+      "sha256": "a6ebf80c2790b8bac1fa378902993eae26020cc6d0d95e3964eea42b0c66a974",
+      "pages": 17,
+      "title": "Published as a conference paper at ICLR 2019\nHOW POWERFUL ARE GRAPH NEURAL NETWORKS?\nKeyulu Xu Weihua Hu Jure Leskovec\n∗† ∗‡",
+      "first_page_excerpt": "Published as a conference paper at ICLR 2019\nHOW POWERFUL ARE GRAPH NEURAL NETWORKS?\nKeyulu Xu Weihua Hu Jure Leskovec\n∗† ∗‡\nMIT Stanford University Stanford University\nkeyulu@mit.edu weihuahu@stanford.edu jure@cs.stanford.edu\nStefanie Jegelka\nMIT\nstefje@mit.edu\nABSTRACT\nGraph Neural Networks (GNNs) are an effective framework for representation\nlearning of graphs. GNNs follow a neighborhood aggregation scheme, where the\nrepresentation vector of a node is computed by recursively aggregating and trans-\nforming representation vectors of its neighboring nodes. Many GNN variants have\nbeen proposed and have achieved state-of-the-art results on both node and graph\nclassification tasks. However, despite GNNs revolutionizing graph representation\nlearning, there is limited understanding of their representational properties and\nlimitations. Here, we present a theoretical framework for analyzing the expressive\npower of GNNs to capture different graph structures. Our results characterize\nthe discri",
+      "matching_pdf_repository_links": [
+        {
+          "url": "https://github.com/weihua916/powerful-gnns",
+          "raw_url": "https://github.com/weihua916/powerful-gnns.",
+          "page": 8,
+          "source": "pdf_text",
+          "context": "ming GIN-(cid:15) in terms of test accuracy. For the less powerful GNN variants, we consider architectures that replace the sum in the GIN-0 aggregation with mean or max-pooling3, or replace MLPs with 1-layer perceptrons, i.e., a linear mapping followed 1The code is available at https://github.com/weihua916/powerful-gnns. 2There exist certain (somewhat contrived) graphs that GIN-(cid:15) can distinguish but GIN-0 cannot. 3For REDDIT-BINARY, REDDIT–MULTI5K, and COLLAB, we did not",
+          "evidence_type": "author_code_statement",
+          "is_author_code": true
+        },
+        {
+          "url": "https://github.com/weihua916/powerful-gnns",
+          "raw_url": "https://github.com/weihua916/powerful-gnns.",
+          "page": 8,
+          "source": "pdf_annotation",
+          "context": "ming GIN-(cid:15) in terms of test accuracy. For the less powerful GNN variants, we consider architectures that replace the sum in the GIN-0 aggregation with mean or max-pooling3, or replace MLPs with 1-layer perceptrons, i.e., a linear mapping followed 1The code is available at https://github.com/weihua916/powerful-gnns. 2There exist certain (somewhat contrived) graphs that GIN-(cid:15) can distinguish but GIN-0 cannot. 3For REDDIT-BINARY, REDDIT–MULTI5K, and COLLAB, we did not",
+          "evidence_type": "author_code_statement",
+          "is_author_code": true
+        }
+      ],
+      "pdf_repository_link_present": true,
+      "status": "retired_after_planning_repair",
+      "original_local_file": "data/papers/candidate_pool_20261012/gin.pdf",
+      "paper_metrics_verified": false,
+      "failure": "Unknown inventory excerpt ID dataset.zip; no training started"
+    },
+    {
+      "id": "bernnet",
+      "repository_url": "https://github.com/ivam-he/BernNet",
+      "source_url": "https://arxiv.org/pdf/2106.10994",
+      "final_url": null,
+      "downloaded_at_utc": "2026-10-12T02:27:57.563981+00:00",
+      "timestamp_evidence": "completed_download_file_mtime",
+      "file": "bernnet.pdf",
+      "bytes": 4471076,
+      "sha256": "312117c42030fc4712c8b792398b340f24f43714ad22b489d5b69b07fcb2e342",
+      "pages": 16,
+      "title": "BernNet: Learning Arbitrary Graph Spectral Filters\nvia Bernstein Approximation\nMingguo He Zhewei Wei\n∗",
+      "first_page_excerpt": "BernNet: Learning Arbitrary Graph Spectral Filters\nvia Bernstein Approximation\nMingguo He Zhewei Wei\n∗\nRenmin University of China Renmin University of China\nmingguo@ruc.edu.cn zhewei@ruc.edu.cn\nZengfeng Huang Hongteng Xu\n∗\nFudan University Renmin University of China\nhuangzf@fudan.edu.cn hongtengxu@ruc.edu.cn\nAbstract\nMany representative graph neural networks, e.g., GPR-GNN and ChebNet, ap-\nproximate graph convolutions with graph spectral filters. However, existing work\neither applies predefined filter weights or learns them without necessary constraints,\nwhich may lead to oversimplified or ill-posed filters. To overcome these issues,\nwe propose BernNet, a novel graph neural network with theoretical support that\nprovides a simple but effective scheme for designing and learning arbitrary graph\nspectral filters. In particular, for any filter over the normalized Laplacian spectrum\nof a graph, our BernNet estimates it by an order-K Bernstein polynomial approxi-\nmation and designs its spectr",
+      "matching_pdf_repository_links": [
+        {
+          "url": "https://github.com/ivam-he/BernNet",
+          "raw_url": "https://github.com/ivam-he/BernNet.",
+          "page": 1,
+          "source": "pdf_text",
+          "context": "thus achieve the BernNet specialized for the data. Our experiments demonstrate that BernNet can learn arbitrary spectral filters, including complicated band-rejection and comb filters, and it achieves superior performance in real-world graph modeling tasks. Code is available at https://github.com/ivam-he/BernNet. 1 Introduction Graph neural networks (GNNs) have received extensive attention from researchers due to their excellent performance on various graph learning tas",
+          "evidence_type": "author_code_statement",
+          "is_author_code": true
+        },
+        {
+          "url": "https://github.com/ivam-he/BernNet",
+          "raw_url": "https://github.com/ivam-he/BernNet",
+          "page": 1,
+          "source": "pdf_annotation",
+          "context": "thus achieve the BernNet specialized for the data. Our experiments demonstrate that BernNet can learn arbitrary spectral filters, including complicated band-rejection and comb filters, and it achieves superior performance in real-world graph modeling tasks. Code is available at https://github.com/ivam-he/BernNet. 1 Introduction Graph neural networks (GNNs) have received extensive attention from researchers due to their excellent performance on various graph learning tas",
+          "evidence_type": "author_code_statement",
+          "is_author_code": true
+        }
+      ],
+      "pdf_repository_link_present": true,
+      "status": "retired_after_ui_repair",
+      "original_local_file": "data/papers/candidate_pool_20261012/bernnet.pdf",
+      "paper_metrics_verified": false,
+      "failure": "Execution checkbox not rendered after fragment upload; no task started"
+    },
+    {
+      "id": "grand",
+      "repository_url": "https://github.com/Grand20/grand",
+      "source_url": "https://arxiv.org/pdf/2005.11079",
+      "final_url": null,
+      "downloaded_at_utc": "2026-10-12T02:27:28.459030+00:00",
+      "timestamp_evidence": "completed_download_file_mtime",
+      "file": "grand.pdf",
+      "bytes": 1499016,
+      "sha256": "3ad1228263fab18871c403f1e5fc41751d03fe8e6de209e4828e9f3b6e781a06",
+      "pages": 18,
+      "title": "Graph Random Neural Networks for\nSemi-Supervised Learning on Graphs\nWenzheng Feng1∗, Jie Zhang2∗‡, Yuxiao Dong3, Yu Han1, Huanbo Luan1, Qian Xu2,\nQiang Yang2, Evgeny Kharlamov4, Jie Tang1§",
+      "first_page_excerpt": "Graph Random Neural Networks for\nSemi-Supervised Learning on Graphs\nWenzheng Feng1∗, Jie Zhang2∗‡, Yuxiao Dong3, Yu Han1, Huanbo Luan1, Qian Xu2,\nQiang Yang2, Evgeny Kharlamov4, Jie Tang1§\n1 Department of Computer Science and Technology, Tsinghua University\n2WeBank Co., Ltd 3Microsoft Research 4 Bosch Center for Artificial Intelligence\nfwz17@mails.tsinghua.edu.cn, {zhangjie.exe, ericdongyx, yhanthu, luanhuanbo}@gmail.com\n{qianxu, qiangyang}@webank.com, evgeny.kharlamov@de.bosch.com, jietang@tsinghua.edu.cn\nAbstract\nWe study the problem of semi-supervised learning on graphs, for which graph\nneural networks (GNNs) have been extensively explored. However, most existing\nGNNs inherently suffer from the limitations of over-smoothing [7, 27, 28, 34],\nnon-robustness [54, 51], and weak-generalization when labeled nodes are scarce.\nIn this paper, we propose a simple yet effective framework—GRAPH RANDOM\nNEURAL NETWORKS (GRAND)—to address these issues. In GRAND, we first\ndesign a random propagatio",
+      "matching_pdf_repository_links": [
+        {
+          "url": "https://github.com/Grand20/grand",
+          "raw_url": "https://github.com/Grand20/grand.",
+          "page": 1,
+          "source": "pdf_text",
+          "context": "performs state-of- the-art GNN baselines on semi-supervised node classification. Finally, we show that GRAND mitigates the issues of over-smoothing and non-robustness, exhibiting better generalization behavior than existing GNNs. The source code of GRAND is publicly available at https://github.com/Grand20/grand. 1 Introduction Graphs serve as a common language for modeling structured and relational data [26], such as social networks, knowledge graphs, and the World Wid",
+          "evidence_type": "repository_link",
+          "is_author_code": false
+        },
+        {
+          "url": "https://github.com/Grand20/grand",
+          "raw_url": "https://github.com/Grand20/grand",
+          "page": 1,
+          "source": "pdf_annotation",
+          "context": "performs state-of- the-art GNN baselines on semi-supervised node classification. Finally, we show that GRAND mitigates the issues of over-smoothing and non-robustness, exhibiting better generalization behavior than existing GNNs. The source code of GRAND is publicly available at https://github.com/Grand20/grand. 1 Introduction Graphs serve as a common language for modeling structured and relational data [26], such as social networks, knowledge graphs, and the World Wid",
+          "evidence_type": "repository_link",
+          "is_author_code": false
+        }
+      ],
+      "pdf_repository_link_present": true,
+      "status": "retired_after_device_placement_repair",
+      "acquisition_repository_hint": "https://github.com/Grand20/grand",
+      "original_local_file": "data/papers/candidate_pool_20261012/grand.pdf",
+      "paper_metrics_verified": false,
+      "failure": "Planned author GPU ordinal 2 is unavailable; owned task stopped before training and cleanup confirmed"
+    },
+    {
+      "id": "dgi",
+      "repository_url": "https://github.com/PetarV-/DGI",
+      "source_url": "https://arxiv.org/pdf/1809.10341",
+      "final_url": null,
+      "downloaded_at_utc": "2026-10-12T02:27:34.064958+00:00",
+      "timestamp_evidence": "completed_download_file_mtime",
+      "file": "dgi.pdf",
+      "bytes": 7267329,
+      "sha256": "f21afabaa0cc9f27f00c2c15c881ff06b5f6c79b5677e6e6695d2b767168fb4b",
+      "pages": 17,
+      "title": "Published as a conference paper at ICLR 2019\nDEEPGRAPH INFOMAX\nPetar Veli ˇckovi ´c\u0003\nDepartment of Computer Science and Technology",
+      "first_page_excerpt": "Published as a conference paper at ICLR 2019\nDEEPGRAPH INFOMAX\nPetar Veli ˇckovi ´c\u0003\nDepartment of Computer Science and Technology\nUniversity of Cambridge\npetar.velickovic@cst.cam.ac.ukWilliam Fedus\nMila – Qu ´ebec Artiﬁcial Intelligence Institute\nGoogle Brain\nliamfedus@google.com\nWilliam L. Hamilton\nMila – Qu ´ebec Artiﬁcial Intelligence Institute\nMcGill University\nwlh@cs.mcgill.caPietro Li `o\nDepartment of Computer Science and Technology\nUniversity of Cambridge\npietro.lio@cst.cam.ac.uk\nYoshua Bengioy\nMila – Qu ´ebec Artiﬁcial Intelligence Institute\nUniversit ´e de Montr ´eal\nyoshua.bengio@mila.quebecR Devon Hjelm\nMicrosoft Research\nMila – Qu ´ebec Artiﬁcial Intelligence Institute\ndevon.hjelm@microsoft.com\nABSTRACT\nWe present Deep Graph Infomax (DGI), a general approach for learning node\nrepresentations within graph-structured data in an unsupervised manner. DGI re-\nlies on maximizing mutual information between patch representations and corre-\nsponding high-level summaries of graphs—b",
+      "matching_pdf_repository_links": [
+        {
+          "url": "https://github.com/PetarV-/DGI",
+          "raw_url": "https://github.com/PetarV-/DGI",
+          "page": 8,
+          "source": "pdf_text",
+          "context": ") and Planetoid (Yang et al., 2016)—a representative supervised random walk method. Specially, we provide results for training the logistic regression on raw input features, as well as DeepWalk with the input features concatenated. 3A reference DGI implementation may be found at https://github.com/PetarV-/DGI . 8",
+          "evidence_type": "repository_link",
+          "is_author_code": false
+        },
+        {
+          "url": "https://github.com/PetarV-/DGI",
+          "raw_url": "https://github.com/PetarV-/DGI",
+          "page": 8,
+          "source": "pdf_annotation",
+          "context": ") and Planetoid (Yang et al., 2016)—a representative supervised random walk method. Specially, we provide results for training the logistic regression on raw input features, as well as DeepWalk with the input features concatenated. 3A reference DGI implementation may be found at https://github.com/PetarV-/DGI . 8",
+          "evidence_type": "repository_link",
+          "is_author_code": false
+        }
+      ],
+      "pdf_repository_link_present": true,
+      "status": "retired_after_reading_error_repair",
+      "original_local_file": "data/papers/candidate_pool_20261012/dgi.pdf",
+      "paper_metrics_verified": false,
+      "failure": "Old API credential returned HTTP 401; no author training started"
+    },
+    {
+      "id": "fagcn",
+      "repository_url": "https://github.com/bdy9527/FAGCN",
+      "source_url": "https://arxiv.org/pdf/2101.00797",
+      "final_url": null,
+      "downloaded_at_utc": "2026-10-12T02:27:35.396468+00:00",
+      "timestamp_evidence": "completed_download_file_mtime",
+      "file": "fagcn.pdf",
+      "bytes": 836855,
+      "sha256": "ff7e7fe4cc8a12d935c8181c86012a2129cf837c64a0e93ce3807d1a90518974",
+      "pages": 8,
+      "title": "Beyond Low-frequency Information in Graph Convolutional Networks\nDeyu Bo1, Xiao Wang1, Chuan Shi1 *, Huawei Shen2\n1Beijing University of Posts and Telecommunications\n2CAS Key Lab of Network Data Science and Technology, Institute of Computing Technology,",
+      "first_page_excerpt": "Beyond Low-frequency Information in Graph Convolutional Networks\nDeyu Bo1, Xiao Wang1, Chuan Shi1 *, Huawei Shen2\n1Beijing University of Posts and Telecommunications\n2CAS Key Lab of Network Data Science and Technology, Institute of Computing Technology,\nChinese Academy of Sciences, Beijing, China\n{bodeyu, xiaowang, shichuan}@bupt.edu.cn, shenhuawei@ict.ac.cn\nAbstract the low-frequency information all we need and what roles\ndo other information play in GNNs? This is a fundamental\nGraph neural networks (GNNs) have been proven to be effec-\nquestion which motivates us to rethink whether GNNs com-\ntive in various network-related tasks. Most existing GNNs usu-\nprehensively exploit the information in node features when\nally exploit the low-frequency signals of node features, which\nlearning node representation.\ngives rise to one fundamental question: is the low-frequency\ninformation all we need in the real world applications? In this Firstly, the low-pass filter in GNNs mainly retains the com-",
+      "matching_pdf_repository_links": [],
+      "pdf_repository_link_present": false,
+      "status": "retired_after_identity_schema_rejection",
+      "original_local_file": "data/papers/candidate_pool_20261012/fagcn.pdf",
+      "paper_metrics_verified": false,
+      "failure": "Same-paper matching repository passed identity and method checks but extra nested reason field was rejected; no training",
+      "trial_tag": "author_fagcn_20261012_14"
+    },
+    {
+      "id": "mvgrl",
+      "repository_url": "https://github.com/kavehhassani/mvgrl",
+      "source_url": "https://arxiv.org/pdf/2006.05582",
+      "final_url": null,
+      "downloaded_at_utc": "2026-10-12T02:27:35.428746+00:00",
+      "timestamp_evidence": "completed_download_file_mtime",
+      "file": "mvgrl.pdf",
+      "bytes": 560258,
+      "sha256": "e88eb0a373b93300e9a2ef08dd14842a2294cc5e369d263eafd2c4ecc770c6be",
+      "pages": 13,
+      "title": "Contrastive Multi-View Representation Learning on Graphs",
+      "first_page_excerpt": "Contrastive Multi-View Representation Learning on Graphs\nKaveh Hassani 1 Amir Hosein Khasahmadi 1 2\nAbstract 2017), molecules (Duvenaud et al., 2015), and knowledge\ngraphs (Vivona & Hassani, 2019). For an overview see\nWe introduce a self-supervised approach for learn-\n(Zhang et al., 2020; Wu et al., 2020).\ning node and graph level representations by con-\ntrasting structural views of graphs. We show that GNNs mostly require task-dependent labels to learn rich\nunlike visual representation learning, increasing representations. Nevertheless, annotating graphs is challeng-\nthe number of views to more than two or contrast- ing compared to more common modalities such as video,\ning multi-scale encodings do not improve perfor- image, text, and audio. This is partly because graphs are\nmance, and the best performance is achieved by usually used to represent concepts in specialized domains,\ncontrasting encodings from first-order neighbors e.g., biology. Also, labeling graphs procedurally using do-",
+      "matching_pdf_repository_links": [],
+      "pdf_repository_link_present": false,
+      "status": "retired_after_readme_command_parsing_rejection",
+      "original_local_file": "data/papers/candidate_pool_20261012/mvgrl.pdf",
+      "paper_metrics_verified": false,
+      "failure": "README documents the exact --epochs 20 command; unrelated unmatched quotes erased its shell tokenization; no training",
+      "trial_tag": "author_mvgrl_20261012_16",
+      "selected_repository": "https://github.com/hengruizhang98/mvgrl"
+    },
+    {
+      "id": "gca",
+      "repository_url": "https://github.com/CRIPAC-DIG/GCA",
+      "source_url": "https://arxiv.org/pdf/2010.14945",
+      "final_url": null,
+      "downloaded_at_utc": "2026-10-12T02:27:38.298077+00:00",
+      "timestamp_evidence": "completed_download_file_mtime",
+      "file": "gca.pdf",
+      "bytes": 3160510,
+      "sha256": "c52ab3f122631a1835d5e912f253711aeb4b20d3940cbe41842ac9e3147361f8",
+      "pages": 12,
+      "title": "Graph Contrastive Learning with Adaptive Augmentation",
+      "first_page_excerpt": "Graph Contrastive Learning with Adaptive Augmentation\nYanqiao Zhu1,2,*, Yichen Xu3,*, Feng Yu4, Qiang Liu1,2, Shu Wu1,2,†, and Liang Wang1,2\n1Center for Research on Intelligent Perception and Computing, Institute of Automation, Chinese Academy of Sciences\n2School of Artificial Intelligence, University of Chinese Academy of Sciences\n3School of Computer Science, Beijing University of Posts and Telecommunications4Alibaba Group\nyanqiao.zhu@cripac.ia.ac.cn, linyxus@bupt.edu.cn\nyf271406@alibaba-inc.com, {qiang.liu, shu.wu, wangliang}@nlpr.ia.ac.cn\nABSTRACT\nRecently, contrastive learning (CL) has emerged as a successful\nmethod for unsupervised graph representation learning. Most graph\nCL methods first perform stochastic augmentation on the input\ngraph to obtain two graph views and maximize the agreement of\nrepresentations in the two views. Despite the prosperous devel-\nopment of graph CL methods, the design of graph augmentation\nschemes—a crucial component in CL—remains rarely explored. We\nar",
+      "matching_pdf_repository_links": [
+        {
+          "url": "https://github.com/CRIPAC-DIG/GCA",
+          "raw_url": "https://github.com/CRIPAC-DIG/GCA.",
+          "page": 2,
+          "source": "pdf_text",
+          "context": "mmonly-used linear evaluation protocol. GCA consistently outperforms existing methods and our unsuper- vised method even surpasses its supervised counterparts on several transductive tasks. To make the results of this work reproducible, we make all the code publicly available at https://github.com/CRIPAC-DIG/GCA. The remaining of the paper includes the following sections. We briefly review related work in Section 2. In Section 3, we present the proposed GCA model in det",
+          "evidence_type": "author_code_statement",
+          "is_author_code": true
+        },
+        {
+          "url": "https://github.com/CRIPAC-DIG/GCA",
+          "raw_url": "https://github.com/CRIPAC-DIG/GCA",
+          "page": 2,
+          "source": "pdf_annotation",
+          "context": "mmonly-used linear evaluation protocol. GCA consistently outperforms existing methods and our unsuper- vised method even surpasses its supervised counterparts on several transductive tasks. To make the results of this work reproducible, we make all the code publicly available at https://github.com/CRIPAC-DIG/GCA. The remaining of the paper includes the following sections. We briefly review related work in Section 2. In Section 3, we present the proposed GCA model in det",
+          "evidence_type": "author_code_statement",
+          "is_author_code": true
+        }
+      ],
+      "pdf_repository_link_present": true,
+      "status": "retired_after_native_dataset_repair",
+      "original_local_file": "data/papers/candidate_pool_20261012/gca.pdf",
+      "paper_metrics_verified": false,
+      "failure": "Optional argparse nargs=? declaration save_split unsupported; no data preparation or training"
+    },
+    {
+      "id": "bgrl",
+      "repository_url": "https://github.com/nerdslab/bgrl",
+      "source_url": "https://arxiv.org/pdf/2102.06514",
+      "final_url": null,
+      "downloaded_at_utc": "2026-10-12T02:28:05.522527+00:00",
+      "timestamp_evidence": "completed_download_file_mtime",
+      "file": "bgrl.pdf",
+      "bytes": 5047506,
+      "sha256": "e5dad781d9591d20f665b2bce39f35218b0fa8dc53ad6b5c7153711961c82eb0",
+      "pages": 21,
+      "title": "Published as a conference paper at ICLR 2022\nLARGE-SCALE REPRESENTATION LEARNING ON\nGRAPHS VIA BOOTSTRAPPING\nShantanu Thakoor∗ Corentin Tallec Mohammad Gheshlaghi Azar",
+      "first_page_excerpt": "Published as a conference paper at ICLR 2022\nLARGE-SCALE REPRESENTATION LEARNING ON\nGRAPHS VIA BOOTSTRAPPING\nShantanu Thakoor∗ Corentin Tallec Mohammad Gheshlaghi Azar\nDeepMind DeepMind DeepMind\nMehdi Azabou Eva Dyer Rémi Munos\nGeorgia Institute of Technology Georgia Institute of Technology DeepMind\nPetar Velicˇkovic´ Michal Valko\nDeepMind DeepMind\nABSTRACT\nSelf-supervised learning provides a promising path towards eliminating the need\nfor costly label information in representation learning on graphs. However, to\nachieve state-of-the-art performance, methods often need large numbers of neg-\native examples and rely on complex augmentations. This can be prohibitively\nexpensive, especially for large graphs. To address these challenges, we introduce\nBootstrapped Graph Latents (BGRL) - a graph representation learning method that\nlearns by predicting alternative augmentations of the input. BGRL uses only simple\naugmentations and alleviates the need for contrasting with negative examples, and",
+      "matching_pdf_repository_links": [
+        {
+          "url": "https://github.com/nerdslab/bgrl",
+          "raw_url": "https://github.com/nerdslab/bgrl",
+          "page": 4,
+          "source": "pdf_text",
+          "context": "ot been previously demonstrated by prior works on self-supervised representation learning on graphs. Implementation details including model architectures and hyperparameters are provided in Ap- pendix F. Algorithm implementation and experiment code for most tasks can be found at https://github.com/nerdslab/bgrl while code for our solution on MAG240M has been open-sourced as part of the KDD Cup 2021 (Addanki et al., 2021) at",
+          "evidence_type": "author_code_statement",
+          "is_author_code": true
+        },
+        {
+          "url": "https://github.com/nerdslab/bgrl",
+          "raw_url": "https://github.com/nerdslab/bgrl",
+          "page": 4,
+          "source": "pdf_annotation",
+          "context": "ot been previously demonstrated by prior works on self-supervised representation learning on graphs. Implementation details including model architectures and hyperparameters are provided in Ap- pendix F. Algorithm implementation and experiment code for most tasks can be found at https://github.com/nerdslab/bgrl while code for our solution on MAG240M has been open-sourced as part of the KDD Cup 2021 (Addanki et al., 2021) at",
+          "evidence_type": "author_code_statement",
+          "is_author_code": true
+        }
+      ],
+      "pdf_repository_link_present": true,
+      "status": "retired_after_native_factory_repair",
+      "original_local_file": "data/papers/candidate_pool_20261012/bgrl.pdf",
+      "paper_metrics_verified": false,
+      "tag": "author_bgrl_20261012_08",
+      "progress_file": "progress_1791779654581.jsonl",
+      "failure": "Original python3 token and qualified dictionary-selected Coauthor factory were rejected; no training started",
+      "run_dir": "repository_b27b66bf20e34f6bb83b8f40514090a4"
+    },
+    {
+      "id": "gatv2",
+      "repository_url": "https://github.com/tech-srl/how_attentive_are_gats",
+      "source_url": "https://arxiv.org/pdf/2105.14491",
+      "final_url": "https://arxiv.org/pdf/2105.14491",
+      "downloaded_at_utc": "2026-10-12T03:16:07.481684+00:00",
+      "timestamp_evidence": "http_download_completed",
+      "file": "gatv2.pdf",
+      "bytes": 699201,
+      "sha256": "d316a7d23d735becf0c31d2b73c3426bb2aa5ec592705ce559d79a740abf53ec",
+      "pages": 26,
+      "title": "Published as a conference paper at ICLR 2022\nHOW ATTENTIVE ARE GRAPH ATTENTION\nNETWORKS?\nShaked Brody Uri Alon\nTechnion Language Technologies Institute",
+      "first_page_excerpt": "Published as a conference paper at ICLR 2022\nHOW ATTENTIVE ARE GRAPH ATTENTION\nNETWORKS?\nShaked Brody Uri Alon\nTechnion Language Technologies Institute\nshakedbr@cs.technion.ac.il Carnegie Mellon University\nualon@cs.cmu.edu\nEran Yahav\nTechnion\nyahave@cs.technion.ac.il\nABSTRACT\nGraph Attention Networks (GATs) are one of the most popular GNN architectures\nand are considered as the state-of-the-art architecture for representation learning\nwith graphs. In GAT, every node attends to its neighbors given its own represen-\ntation as the query. However, in this paper we show that GAT computes a very\nlimited kind of attention: the ranking of the attention scores is unconditioned\non the query node. We formally define this restricted kind of attention as static\nattention and distinguish it from a strictly more expressive dynamic attention. Be-\ncause GATs use a static attention mechanism, there are simple graph problems\nthat GAT cannot express: in a controlled problem, we show that static attention\n",
+      "matching_pdf_repository_links": [
+        {
+          "url": "https://github.com/tech-srl/how_attentive_are_gats",
+          "raw_url": "https://github.com/tech-srl/how_attentive_are_gats",
+          "page": 1,
+          "source": "pdf_annotation",
+          "context": "graph attention variant that is strictly more expressive than GAT. We perform an extensive evaluation and show that GATv2 outperforms GAT across 12 OGB and other benchmarks while we match their parametric costs. Our code is available at 1 2 https://github.com/tech-srl/how_attentive_are_ gats . GATv2 is available as part of the PyTorch Geometric library, 3 4 the Deep Graph Library, and the TensorFlow GNN library.",
+          "evidence_type": "author_code_statement",
+          "is_author_code": true
+        },
+        {
+          "url": "https://github.com/tech-srl/how_attentive_are_gats",
+          "raw_url": "https://github.com/tech-srl/how_attentive_are_gats",
+          "page": 1,
+          "source": "pdf_annotation",
+          "context": "apedryfonrammaicn gerxatpenhsaivtteeenvtiaolunavtiaorniaanntdthsahtoiws sthtraitctGlyATmvo2reouetxpperrefsosrimves GthAanT GacAroTs.sW12e OGB and other benchmarks while we match their parametric costs. Our code is available at https://github.com/tech-srl/how_attentive_are_ gats.1 GATv2 is available as part of the PyTorch Geometric library,2 the Deep Graph Library,3 and the TensorFlow GNN library.4 19441.5",
+          "evidence_type": "author_code_statement",
+          "is_author_code": true
+        },
+        {
+          "url": "https://github.com/tech-srl/how_attentive_are_gats",
+          "raw_url": "https://github.com/tech-srl/how_attentive_are_gats",
+          "page": 1,
+          "source": "pdf_annotation",
+          "context": "perform an extensive evaluation and show that GATv2 outperforms GAT across 12 OGB and other benchmarks while we match their parametric costs. Our code is available at https://github.com/tech-srl/how_attentive_are_ gats.1 GATv2 is available as part of the PyTorch Geometric library,2 the Deep Graph Library,3 and the TensorFlow GNN library.4 9441.50",
+          "evidence_type": "author_code_statement",
+          "is_author_code": true
+        },
+        {
+          "url": "https://github.com/tech-srl/how_attentive_are_gats",
+          "raw_url": "https://github.com/tech-srl/how_attentive_are_gats",
+          "page": 10,
+          "source": "pdf_text",
+          "context": "r- chitectures to the common strong baselines. In complex tasks and domains and in challenging datasets, a model that uses GAT as an internal component can replace it with GATv2 to bene- fit from a strictly more powerful model. To this end, we make our code publicly available at https://github.com/tech-srl/how_attentive_are_gats , and GATv2 is available as part of the PyTorch Geometric library, the Deep Graph Library, and TensorFlow GNN. An anno- tated implementation is available at ht",
+          "evidence_type": "author_code_statement",
+          "is_author_code": true
+        },
+        {
+          "url": "https://github.com/tech-srl/how_attentive_are_gats",
+          "raw_url": "https://github.com/tech-srl/how_attentive_are_gats",
+          "page": 10,
+          "source": "pdf_annotation",
+          "context": "r- chitectures to the common strong baselines. In complex tasks and domains and in challenging datasets, a model that uses GAT as an internal component can replace it with GATv2 to bene- fit from a strictly more powerful model. To this end, we make our code publicly available at https://github.com/tech-srl/how_attentive_are_gats , and GATv2 is available as part of the PyTorch Geometric library, the Deep Graph Library, and TensorFlow GNN. An anno- tated implementation is available at ht",
+          "evidence_type": "author_code_statement",
+          "is_author_code": true
+        }
+      ],
+      "all_pdf_repository_links": [
+        {
+          "url": "https://github.com/tech-srl/how_attentive_are_",
+          "raw_url": "https://github.com/tech-srl/how_attentive_are_",
+          "page": 1,
+          "source": "pdf_text",
+          "context": "of operations and propose GATv2: a dynamic graph attention variant that is strictly more expressive than GAT. We perform an extensive evaluation and show that GATv2 outperforms GAT across 12 OGB and other benchmarks while we match their parametric costs. Our code is available at https://github.com/tech-srl/how_attentive_are_ gats.1 GATv2 is available as part of the PyTorch Geometric library,2 the Deep Graph Library,3 and the TensorFlow GNN library.4 1 INTRODUCTION Graph neural netw",
+          "evidence_type": "author_code_statement",
+          "is_author_code": true
+        },
+        {
+          "url": "https://github.com/tech-srl/how_attentive_are_gats",
+          "raw_url": "https://github.com/tech-srl/how_attentive_are_gats",
+          "page": 1,
+          "source": "pdf_annotation",
+          "context": "graph attention variant that is strictly more expressive than GAT. We perform an extensive evaluation and show that GATv2 outperforms GAT across 12 OGB and other benchmarks while we match their parametric costs. Our code is available at 1 2 https://github.com/tech-srl/how_attentive_are_ gats . GATv2 is available as part of the PyTorch Geometric library, 3 4 the Deep Graph Library, and the TensorFlow GNN library.",
+          "evidence_type": "author_code_statement",
+          "is_author_code": true
+        },
+        {
+          "url": "https://github.com/tech-srl/how_attentive_are_gats",
+          "raw_url": "https://github.com/tech-srl/how_attentive_are_gats",
+          "page": 1,
+          "source": "pdf_annotation",
+          "context": "apedryfonrammaicn gerxatpenhsaivtteeenvtiaolunavtiaorniaanntdthsahtoiws sthtraitctGlyATmvo2reouetxpperrefsosrimves GthAanT GacAroTs.sW12e OGB and other benchmarks while we match their parametric costs. Our code is available at https://github.com/tech-srl/how_attentive_are_ gats.1 GATv2 is available as part of the PyTorch Geometric library,2 the Deep Graph Library,3 and the TensorFlow GNN library.4 19441.5",
+          "evidence_type": "author_code_statement",
+          "is_author_code": true
+        },
+        {
+          "url": "https://github.com/tech-srl/how_attentive_are_gats",
+          "raw_url": "https://github.com/tech-srl/how_attentive_are_gats",
+          "page": 1,
+          "source": "pdf_annotation",
+          "context": "perform an extensive evaluation and show that GATv2 outperforms GAT across 12 OGB and other benchmarks while we match their parametric costs. Our code is available at https://github.com/tech-srl/how_attentive_are_ gats.1 GATv2 is available as part of the PyTorch Geometric library,2 the Deep Graph Library,3 and the TensorFlow GNN library.4 9441.50",
+          "evidence_type": "author_code_statement",
+          "is_author_code": true
+        },
+        {
+          "url": "https://github.com/tech-srl/how_attentive_are_gats",
+          "raw_url": "https://github.com/tech-srl/how_attentive_are_gats",
+          "page": 10,
+          "source": "pdf_text",
+          "context": "r- chitectures to the common strong baselines. In complex tasks and domains and in challenging datasets, a model that uses GAT as an internal component can replace it with GATv2 to bene- fit from a strictly more powerful model. To this end, we make our code publicly available at https://github.com/tech-srl/how_attentive_are_gats , and GATv2 is available as part of the PyTorch Geometric library, the Deep Graph Library, and TensorFlow GNN. An anno- tated implementation is available at ht",
+          "evidence_type": "author_code_statement",
+          "is_author_code": true
+        },
+        {
+          "url": "https://github.com/tech-srl/how_attentive_are_gats",
+          "raw_url": "https://github.com/tech-srl/how_attentive_are_gats",
+          "page": 10,
+          "source": "pdf_annotation",
+          "context": "r- chitectures to the common strong baselines. In complex tasks and domains and in challenging datasets, a model that uses GAT as an internal component can replace it with GATv2 to bene- fit from a strictly more powerful model. To this end, we make our code publicly available at https://github.com/tech-srl/how_attentive_are_gats , and GATv2 is available as part of the PyTorch Geometric library, the Deep Graph Library, and TensorFlow GNN. An anno- tated implementation is available at ht",
+          "evidence_type": "author_code_statement",
+          "is_author_code": true
+        },
+        {
+          "url": "https://github.com/microsoft/tf-gnn-samples",
+          "raw_url": "https://github.com/\nmicrosoft/tf-gnn-samples.",
+          "page": 11,
+          "source": "pdf_text",
+          "context": "ngs of the 30th International Conference on Neural Information Processing Systems, pages 4509–4517, 2016. Marc Brockschmidt. Gnn-film: Graph neural networks with feature-wise linear modulation. Proceedings of the 36th International Conference on Machine Learning, ICML, 2020. URL https://github.com/ microsoft/tf-gnn-samples. Michael M Bronstein, Joan Bruna, Yann LeCun, Arthur Szlam, and Pierre Vandergheynst. Geometric deep learning: going beyond euclidean data. IEEE Signal Processi",
+          "evidence_type": "reference",
+          "is_author_code": false
+        },
+        {
+          "url": "https://github.com/gordicaleksa/pytorch-GAT",
+          "raw_url": "https://github.com/gordicaleksa/pytorch-GAT",
+          "page": 11,
+          "source": "pdf_text",
+          "context": "Justin Gilmer, Samuel S Schoenholz, Patrick F Riley, Oriol Vinyals, and George E Dahl. Neural message passing for quantum chemistry. In Proceedings of the 34th International Conference on Machine Learning-Volume 70, pages 1263–1272. JMLR. org, 2017. Aleksa Gordic´. pytorch-gat. https://github.com/gordicaleksa/pytorch-GAT, 2020. Marco Gori, Gabriele Monfardini, and Franco Scarselli. A new model for learning in graph domains. In Proceedings. 2005 IEEE International Joint Conferen",
+          "evidence_type": "reference",
+          "is_author_code": false
+        },
+        {
+          "url": "https://github.com/microsoft/tf-gnn-samples",
+          "raw_url": "https://github.com/microsoft/tf-gnn-samples",
+          "page": 11,
+          "source": "pdf_annotation",
+          "context": "ngs of the 30th International Conference on Neural Information Processing Systems, pages 4509–4517, 2016. Marc Brockschmidt. Gnn-film: Graph neural networks with feature-wise linear modulation. Proceedings of the 36th International Conference on Machine Learning, ICML, 2020. URL https://github.com/ microsoft/tf-gnn-samples. Michael M Bronstein, Joan Bruna, Yann LeCun, Arthur Szlam, and Pierre Vandergheynst. Geometric deep learning: going beyond euclidean data. IEEE Signal Processi",
+          "evidence_type": "reference",
+          "is_author_code": false
+        },
+        {
+          "url": "https://github.com/gordicaleksa/pytorch-GAT",
+          "raw_url": "https://github.com/gordicaleksa/pytorch-GAT",
+          "page": 11,
+          "source": "pdf_annotation",
+          "context": "Justin Gilmer, Samuel S Schoenholz, Patrick F Riley, Oriol Vinyals, and George E Dahl. Neural message passing for quantum chemistry. In Proceedings of the 34th International Conference on Machine Learning-Volume 70, pages 1263–1272. JMLR. org, 2017. Aleksa Gordic´. pytorch-gat. https://github.com/gordicaleksa/pytorch-GAT, 2020. Marco Gori, Gabriele Monfardini, and Franco Scarselli. A new model for learning in graph domains. In Proceedings. 2005 IEEE International Joint Conferen",
+          "evidence_type": "reference",
+          "is_author_code": false
+        }
+      ],
+      "pdf_repository_link_present": true,
+      "status": "retired_after_wrapped_uri_repair",
+      "original_local_file": "data/papers/candidate_pool_20261012/gatv2.pdf",
+      "paper_metrics_verified": false,
+      "tag": "author_gatv2_20261012_09",
+      "failure": "Preview selected a truncated text URL despite the complete same-page URI; no task started"
+    },
+    {
+      "id": "h2gcn",
+      "repository_url": "https://github.com/GemsLab/H2GCN",
+      "source_url": "https://arxiv.org/pdf/2006.11468",
+      "final_url": "https://arxiv.org/pdf/2006.11468",
+      "downloaded_at_utc": "2026-10-12T03:16:26.896762+00:00",
+      "timestamp_evidence": "http_download_completed",
+      "file": "h2gcn.pdf",
+      "bytes": 1692015,
+      "sha256": "fe708a4529447a900ff2a40b15904268ab36587e2ef4ebaa1572ee7eb0171af3",
+      "pages": 30,
+      "title": "Beyond Homophily in Graph Neural Networks:\nCurrent Limitations and Effective Designs\nJiong Zhu Yujun Yan Lingxiao Zhao\nUniversity of Michigan University of Michigan Carnegie Mellon University\njiongzhu@umich.edu yujunyan@umich.edu lingxia1@andrew.cmu.edu",
+      "first_page_excerpt": "Beyond Homophily in Graph Neural Networks:\nCurrent Limitations and Effective Designs\nJiong Zhu Yujun Yan Lingxiao Zhao\nUniversity of Michigan University of Michigan Carnegie Mellon University\njiongzhu@umich.edu yujunyan@umich.edu lingxia1@andrew.cmu.edu\nMark Heimann Leman Akoglu Danai Koutra\nUniversity of Michigan Carnegie Mellon University University of Michigan\nmheimann@umich.edu lakoglu@andrew.cmu.edu dkoutra@umich.edu\nAbstract\nWe investigate the representation power of graph neural networks in the semi-\nsupervised node classification task under heterophily or low homophily, i.e., in\nnetworks where connected nodes may have different class labels and dissimilar\nfeatures. Many popular GNNs fail to generalize to this setting, and are even\noutperformed by models that ignore the graph structure (e.g., multilayer percep-\ntrons). Motivated by this limitation, we identify a set of key designs—ego- and\nneighbor-embedding separation, higher-order neighborhoods, and combination of\nintermediate",
+      "matching_pdf_repository_links": [
+        {
+          "url": "https://github.com/GemsLab/H2GCN",
+          "raw_url": "https://github.com/GemsLab/H2GCN.",
+          "page": 2,
+          "source": "pdf_text",
+          "context": "eighborhoods, and (D3) combination of intermediate representations. We justify the designs theoretically, and combine them into a model, H GCN, that effectively adapts to both heterophily and homophily. We compare it to prior GNN 2 models, and make our code and data available at https://github.com/GemsLab/H2GCN. § 3-4 • Extensive Empirical Evaluation: We empirically analyze our model and competitive existing GNN models on both synthetic and real networks covering the f",
+          "evidence_type": "repository_link",
+          "is_author_code": false
+        },
+        {
+          "url": "https://github.com/GemsLab/H2GCN",
+          "raw_url": "https://github.com/GemsLab/H2GCN",
+          "page": 2,
+          "source": "pdf_annotation",
+          "context": "eighborhoods, and (D3) combination of intermediate representations. We justify the designs theoretically, and combine them into a model, H GCN, that effectively adapts to both heterophily and homophily. We compare it to prior GNN 2 models, and make our code and data available at https://github.com/GemsLab/H2GCN. § 3-4 • Extensive Empirical Evaluation: We empirically analyze our model and competitive existing GNN models on both synthetic and real networks covering the f",
+          "evidence_type": "repository_link",
+          "is_author_code": false
+        }
+      ],
+      "all_pdf_repository_links": [
+        {
+          "url": "https://github.com/GemsLab/H2GCN",
+          "raw_url": "https://github.com/GemsLab/H2GCN.",
+          "page": 2,
+          "source": "pdf_text",
+          "context": "eighborhoods, and (D3) combination of intermediate representations. We justify the designs theoretically, and combine them into a model, H GCN, that effectively adapts to both heterophily and homophily. We compare it to prior GNN 2 models, and make our code and data available at https://github.com/GemsLab/H2GCN. § 3-4 • Extensive Empirical Evaluation: We empirically analyze our model and competitive existing GNN models on both synthetic and real networks covering the f",
+          "evidence_type": "repository_link",
+          "is_author_code": false
+        },
+        {
+          "url": "https://github.com/GemsLab/H2GCN",
+          "raw_url": "https://github.com/GemsLab/H2GCN",
+          "page": 2,
+          "source": "pdf_annotation",
+          "context": "eighborhoods, and (D3) combination of intermediate representations. We justify the designs theoretically, and combine them into a model, H GCN, that effectively adapts to both heterophily and homophily. We compare it to prior GNN 2 models, and make our code and data available at https://github.com/GemsLab/H2GCN. § 3-4 • Extensive Empirical Evaluation: We empirically analyze our model and competitive existing GNN models on both synthetic and real networks covering the f",
+          "evidence_type": "repository_link",
+          "is_author_code": false
+        },
+        {
+          "url": "https://github.com/tkipf/gcn",
+          "raw_url": "https://github.com/tkipf/gcn",
+          "page": 22,
+          "source": "pdf_text",
+          "context": "ound-truth labels for nodes within the training set, and add L regularization of network parameters W and W . (cf. Alg. 1) 2 e c Baseline Implementations For all baselines besides MLP, we used the official implementation released by the authors on GitHub. • GCN & GCN-Cheby [17]: https://github.com/tkipf/gcn • GraphSAGE [11]:",
+          "evidence_type": "reference",
+          "is_author_code": false
+        },
+        {
+          "url": "https://github.com/williamleif/graphsage-simple",
+          "raw_url": "https://github.com/williamleif/graphsage-simple",
+          "page": 22,
+          "source": "pdf_text",
+          "context": "• GraphSAGE [11]: https://github.com/williamleif/graphsage-simple (PyTorch im- plementation) • MixHop [1]:",
+          "evidence_type": "reference",
+          "is_author_code": false
+        },
+        {
+          "url": "https://github.com/samihaija/mixhop",
+          "raw_url": "https://github.com/samihaija/mixhop",
+          "page": 22,
+          "source": "pdf_text",
+          "context": "(PyTorch im- plementation) • MixHop [1]: https://github.com/samihaija/mixhop • GAT [36]:",
+          "evidence_type": "reference",
+          "is_author_code": false
+        },
+        {
+          "url": "https://github.com/PetarV-/GAT",
+          "raw_url": "https://github.com/PetarV-/GAT.",
+          "page": 22,
+          "source": "pdf_text",
+          "context": "• GAT [36]: https://github.com/PetarV-/GAT. (For large datasets, we make use of the sparse version provided by the author.) 22",
+          "evidence_type": "reference",
+          "is_author_code": false
+        },
+        {
+          "url": "https://github.com/tkipf/gcn",
+          "raw_url": "https://github.com/tkipf/gcn",
+          "page": 22,
+          "source": "pdf_annotation",
+          "context": "ound-truth labels for nodes within the training set, and add L regularization of network parameters W and W . (cf. Alg. 1) 2 e c Baseline Implementations For all baselines besides MLP, we used the official implementation released by the authors on GitHub. • GCN & GCN-Cheby [17]: https://github.com/tkipf/gcn • GraphSAGE [11]:",
+          "evidence_type": "reference",
+          "is_author_code": false
+        },
+        {
+          "url": "https://github.com/williamleif/graphsage-simple",
+          "raw_url": "https://github.com/williamleif/graphsage-simple",
+          "page": 22,
+          "source": "pdf_annotation",
+          "context": "• GraphSAGE [11]: https://github.com/williamleif/graphsage-simple (PyTorch im- plementation) • MixHop [1]:",
+          "evidence_type": "reference",
+          "is_author_code": false
+        },
+        {
+          "url": "https://github.com/samihaija/mixhop",
+          "raw_url": "https://github.com/samihaija/mixhop",
+          "page": 22,
+          "source": "pdf_annotation",
+          "context": "(PyTorch im- plementation) • MixHop [1]: https://github.com/samihaija/mixhop • GAT [36]:",
+          "evidence_type": "reference",
+          "is_author_code": false
+        },
+        {
+          "url": "https://github.com/PetarV-/GAT",
+          "raw_url": "https://github.com/PetarV-/GAT",
+          "page": 22,
+          "source": "pdf_annotation",
+          "context": "• GAT [36]: https://github.com/PetarV-/GAT. (For large datasets, we make use of the sparse version provided by the author.) 22",
+          "evidence_type": "reference",
+          "is_author_code": false
+        }
+      ],
+      "pdf_repository_link_present": true,
+      "status": "candidate_not_executed",
+      "original_local_file": "data/papers/candidate_pool_20261012/h2gcn.pdf",
+      "paper_metrics_verified": false
+    },
+    {
+      "id": "appnp",
+      "repository_url": "https://github.com/klicperajo/ppnp",
+      "source_url": "https://arxiv.org/pdf/1810.05997",
+      "final_url": "https://arxiv.org/pdf/1810.05997",
+      "downloaded_at_utc": "2026-10-12T03:18:15.055687+00:00",
+      "timestamp_evidence": "http_download_completed",
+      "file": "appnp.pdf",
+      "bytes": 494617,
+      "sha256": "317cf7bff134966af889c6eca6aff606a03d5857363f0b8221892a26151f1ecd",
+      "pages": 15,
+      "title": "Published as a conference paper at ICLR 2019\nPREDICT THEN PROPAGATE: GRAPH NEURAL\nNETWORKS MEET PERSONALIZED PAGERANK\nJohannes Gasteiger, Aleksandar Bojchevski & Stephan Gu¨ nnemann\nTechnical University of Munich, Germany",
+      "first_page_excerpt": "Published as a conference paper at ICLR 2019\nPREDICT THEN PROPAGATE: GRAPH NEURAL\nNETWORKS MEET PERSONALIZED PAGERANK\nJohannes Gasteiger, Aleksandar Bojchevski & Stephan Gu¨ nnemann\nTechnical University of Munich, Germany\n{j.gasteiger,a.bojchevski,guennemann}@in.tum.de\nABSTRACT\nNeural message passing algorithms for semi-supervised classification on graphs\nhave recently achieved great success. However, for classifying a node these meth-\nods only consider nodes that are a few propagation steps away and the size of this\nutilized neighborhood is hard to extend. In this paper, we use the relationship be-\ntween graph convolutional networks (GCN) and PageRank to derive an improved\npropagation scheme based on personalized PageRank. We utilize this propagation\nprocedure to construct a simple model, personalized propagation of neural predic-\ntions (PPNP), and its fast approximation, APPNP. Our model’s training time is on\npar or faster and its number of parameters on par or lower than previous mo",
+      "matching_pdf_repository_links": [],
+      "all_pdf_repository_links": [],
+      "pdf_repository_link_present": false,
+      "status": "retired_after_reader_gate_rejection",
+      "original_local_file": "data/papers/candidate_pool_20261012/appnp.pdf",
+      "paper_metrics_verified": false,
+      "failure": "Reader review demanded a non-GitHub project homepage as a GitHub repository; no training",
+      "trial_tag": "author_appnp_20261012_15"
+    },
+    {
+      "id": "gat",
+      "repository_url": "https://github.com/PetarV-/GAT",
+      "source_url": "https://arxiv.org/pdf/1710.10903.pdf",
+      "final_url": "https://arxiv.org/pdf/1710.10903",
+      "downloaded_at_utc": "2026-10-12T03:21:27.887877+00:00",
+      "timestamp_evidence": "http_download_completed",
+      "file": "gat.pdf",
+      "bytes": 1637828,
+      "sha256": "a7d811a44e1c65bf27da3a01859f23a8edbe33b8f96114b4b5066aedb078f284",
+      "pages": 12,
+      "title": "Published as a conference paper at ICLR 2018\nGRAPH ATTENTION NETWORKS\nPetar Veli ˇckovi ´c\u0003\nDepartment of Computer Science and Technology\nUniversity of Cambridge",
+      "first_page_excerpt": "Published as a conference paper at ICLR 2018\nGRAPH ATTENTION NETWORKS\nPetar Veli ˇckovi ´c\u0003\nDepartment of Computer Science and Technology\nUniversity of Cambridge\npetar.velickovic@cst.cam.ac.ukGuillem Cucurull\u0003\nCentre de Visi ´o per Computador, UAB\ngcucurull@gmail.com\nArantxa Casanova\u0003\nCentre de Visi ´o per Computador, UAB\nar.casanova.8@gmail.comAdriana Romero\nMontr ´eal Institute for Learning Algorithms\nadriana.romero.soriano@umontreal.ca\nPietro Li `o\nDepartment of Computer Science and Technology\nUniversity of Cambridge\npietro.lio@cst.cam.ac.ukYoshua Bengio\nMontr ´eal Institute for Learning Algorithms\nyoshua.umontreal@gmail.com\nABSTRACT\nWe present graph attention networks (GATs), novel neural network architectures\nthat operate on graph-structured data, leveraging masked self-attentional layers to\naddress the shortcomings of prior methods based on graph convolutions or their\napproximations. By stacking layers in which nodes are able to attend over their\nneighborhoods’ features, we enabl",
+      "matching_pdf_repository_links": [
+        {
+          "url": "https://github.com/PetarV-/GAT",
+          "raw_url": "https://github.com/PetarV-/GAT",
+          "page": 7,
+          "source": "pdf_text",
+          "context": "ReLU in all three cases). For the inductive task, we report the micro-averaged F 1score on the nodes of the two unseen test graphs, averaged after 10 runs, and reuse the metrics already reported in Hamilton et al. (2017) for 1Our implementation of the GAT layer may be found at: https://github.com/PetarV-/GAT . 7",
+          "evidence_type": "repository_link",
+          "is_author_code": false
+        },
+        {
+          "url": "https://github.com/PetarV-/GAT",
+          "raw_url": "https://github.com/PetarV-/GAT",
+          "page": 7,
+          "source": "pdf_annotation",
+          "context": "ReLU in all three cases). For the inductive task, we report the micro-averaged F 1score on the nodes of the two unseen test graphs, averaged after 10 runs, and reuse the metrics already reported in Hamilton et al. (2017) for 1Our implementation of the GAT layer may be found at: https://github.com/PetarV-/GAT . 7",
+          "evidence_type": "repository_link",
+          "is_author_code": false
+        }
+      ],
+      "all_pdf_repository_links": [
+        {
+          "url": "https://github.com/PetarV-/GAT",
+          "raw_url": "https://github.com/PetarV-/GAT",
+          "page": 7,
+          "source": "pdf_text",
+          "context": "ReLU in all three cases). For the inductive task, we report the micro-averaged F 1score on the nodes of the two unseen test graphs, averaged after 10 runs, and reuse the metrics already reported in Hamilton et al. (2017) for 1Our implementation of the GAT layer may be found at: https://github.com/PetarV-/GAT . 7",
+          "evidence_type": "repository_link",
+          "is_author_code": false
+        },
+        {
+          "url": "https://github.com/PetarV-/GAT",
+          "raw_url": "https://github.com/PetarV-/GAT",
+          "page": 7,
+          "source": "pdf_annotation",
+          "context": "ReLU in all three cases). For the inductive task, we report the micro-averaged F 1score on the nodes of the two unseen test graphs, averaged after 10 runs, and reuse the metrics already reported in Hamilton et al. (2017) for 1Our implementation of the GAT layer may be found at: https://github.com/PetarV-/GAT . 7",
+          "evidence_type": "repository_link",
+          "is_author_code": false
+        }
+      ],
+      "pdf_repository_link_present": true,
+      "status": "candidate_not_executed",
+      "original_local_file": "data/papers/candidate_pool_20261012/gat.pdf",
+      "paper_metrics_verified": false
+    },
+    {
+      "id": "grace",
+      "repository_url": "https://github.com/CRIPAC-DIG/GRACE",
+      "source_url": "https://arxiv.org/pdf/2006.04131.pdf",
+      "final_url": "https://arxiv.org/pdf/2006.04131",
+      "downloaded_at_utc": "2026-10-12T03:21:28.859990+00:00",
+      "timestamp_evidence": "http_download_completed",
+      "file": "grace.pdf",
+      "bytes": 654395,
+      "sha256": "ae30ee1c450b978a13145c46042d1f4fdb7f48694cf3dd203fb3c29671464f33",
+      "pages": 17,
+      "title": "Deep Graph Contrastive Representation Learning\nYanqiao Zhu1,2\u0003Yichen Xu3\u0003,yFeng Yu1,2Qiang Liu4,5Shu Wu1,2Liang Wang1,2\n1Center for Research on Intelligent Perception and Computing\nInstitute of Automation, Chinese Academy of Sciences\n2School of Artiﬁcial Intelligence, University of Chinese Academy of Sciences",
+      "first_page_excerpt": "Deep Graph Contrastive Representation Learning\nYanqiao Zhu1,2\u0003Yichen Xu3\u0003,yFeng Yu1,2Qiang Liu4,5Shu Wu1,2Liang Wang1,2\n1Center for Research on Intelligent Perception and Computing\nInstitute of Automation, Chinese Academy of Sciences\n2School of Artiﬁcial Intelligence, University of Chinese Academy of Sciences\n3School of Computer Science, Beijing University of Posts and Telecommunications\n4RealAI5Tsinghua University\nyanqiao.zhu@cripac.ia.ac.cn, linyxus@bupt.edu.cn\n{feng.yu, shu.wu, wangliang}@nlpr.ia.ac.cn, qiang.liu@realai.ai\nAbstract\nGraph representation learning nowadays becomes fundamental in analyzing graph-\nstructured data. Inspired by recent success of contrastive methods, in this paper,\nwe propose a novel framework for unsupervised graph representation learning\nby leveraging a contrastive objective at the node level. Speciﬁcally, we generate\ntwo graph views by corruption and learn node representations by maximizing the\nagreement of node representations in these two views. To pro",
+      "matching_pdf_repository_links": [
+        {
+          "url": "https://github.com/CRIPAC-DIG/GRACE",
+          "raw_url": "https://github.com/CRIPAC-DIG/GRACE",
+          "page": 2,
+          "source": "pdf_text",
+          "context": "es, removing edges and masking features, to generate views of graphs. Finally, we conduct comprehensive empirical studies using six popular public benchmark datasets on both transductive and inductive node classiﬁcation under the commonly-used 3Code is made publicly available at https://github.com/CRIPAC-DIG/GRACE . 2",
+          "evidence_type": "repository_link",
+          "is_author_code": false
+        },
+        {
+          "url": "https://github.com/CRIPAC-DIG/GRACE",
+          "raw_url": "https://github.com/CRIPAC-DIG/GRACE",
+          "page": 2,
+          "source": "pdf_annotation",
+          "context": "es, removing edges and masking features, to generate views of graphs. Finally, we conduct comprehensive empirical studies using six popular public benchmark datasets on both transductive and inductive node classiﬁcation under the commonly-used 3Code is made publicly available at https://github.com/CRIPAC-DIG/GRACE . 2",
+          "evidence_type": "repository_link",
+          "is_author_code": false
+        }
+      ],
+      "all_pdf_repository_links": [
+        {
+          "url": "https://github.com/CRIPAC-DIG/GRACE",
+          "raw_url": "https://github.com/CRIPAC-DIG/GRACE",
+          "page": 2,
+          "source": "pdf_text",
+          "context": "es, removing edges and masking features, to generate views of graphs. Finally, we conduct comprehensive empirical studies using six popular public benchmark datasets on both transductive and inductive node classiﬁcation under the commonly-used 3Code is made publicly available at https://github.com/CRIPAC-DIG/GRACE . 2",
+          "evidence_type": "repository_link",
+          "is_author_code": false
+        },
+        {
+          "url": "https://github.com/CRIPAC-DIG/GRACE",
+          "raw_url": "https://github.com/CRIPAC-DIG/GRACE",
+          "page": 2,
+          "source": "pdf_annotation",
+          "context": "es, removing edges and masking features, to generate views of graphs. Finally, we conduct comprehensive empirical studies using six popular public benchmark datasets on both transductive and inductive node classiﬁcation under the commonly-used 3Code is made publicly available at https://github.com/CRIPAC-DIG/GRACE . 2",
+          "evidence_type": "repository_link",
+          "is_author_code": false
+        },
+        {
+          "url": "https://github.com/kimiyoung/planetoid",
+          "raw_url": "https://github.com/kimiyoung/planetoid/raw/master/data",
+          "page": 10,
+          "source": "pdf_text",
+          "context": "seer Transductive 3,327 4,732 3,703 6 Pubmed Transductive 19,717 44,338 500 3 DBLP Transductive 17,716 105,734 1,639 4 Reddit Inductive 231,443 11,606,919 602 41 PPI Inductive56,944 (24 graphs)818,716 50121 (multilabel) Table 3: Dataset download links. Dataset Download link Cora https://github.com/kimiyoung/planetoid/raw/master/data Citeseer",
+          "evidence_type": "repository_link",
+          "is_author_code": false
+        },
+        {
+          "url": "https://github.com/kimiyoung/planetoid",
+          "raw_url": "https://github.com/kimiyoung/planetoid/raw/master/data",
+          "page": 10,
+          "source": "pdf_text",
+          "context": "Citeseer https://github.com/kimiyoung/planetoid/raw/master/data Pubmed",
+          "evidence_type": "repository_link",
+          "is_author_code": false
+        },
+        {
+          "url": "https://github.com/kimiyoung/planetoid",
+          "raw_url": "https://github.com/kimiyoung/planetoid/raw/master/data",
+          "page": 10,
+          "source": "pdf_text",
+          "context": "Pubmed https://github.com/kimiyoung/planetoid/raw/master/data DBLP",
+          "evidence_type": "repository_link",
+          "is_author_code": false
+        },
+        {
+          "url": "https://github.com/abojchevski/graph2gauss",
+          "raw_url": "https://github.com/abojchevski/graph2gauss/raw/master/data/dblp.npz",
+          "page": 10,
+          "source": "pdf_text",
+          "context": "DBLP https://github.com/abojchevski/graph2gauss/raw/master/data/dblp.npz Reddit https://s3.us-east-2.amazonaws.com/dgl.ai/dataset/reddit.zip PPI https://s3.us-east-2.amazonaws.com/dgl.ai/dataset/ppi.zip 10",
+          "evidence_type": "repository_link",
+          "is_author_code": false
+        },
+        {
+          "url": "https://github.com/kimiyoung/planetoid",
+          "raw_url": "https://github.com/kimiyoung/planetoid/raw/master/data",
+          "page": 10,
+          "source": "pdf_annotation",
+          "context": "seer Transductive 3,327 4,732 3,703 6 Pubmed Transductive 19,717 44,338 500 3 DBLP Transductive 17,716 105,734 1,639 4 Reddit Inductive 231,443 11,606,919 602 41 PPI Inductive56,944 (24 graphs)818,716 50121 (multilabel) Table 3: Dataset download links. Dataset Download link Cora https://github.com/kimiyoung/planetoid/raw/master/data Citeseer",
+          "evidence_type": "repository_link",
+          "is_author_code": false
+        },
+        {
+          "url": "https://github.com/abojchevski/graph2gauss",
+          "raw_url": "https://github.com/abojchevski/graph2gauss/raw/master/data/dblp.npz",
+          "page": 10,
+          "source": "pdf_annotation",
+          "context": "DBLP https://github.com/abojchevski/graph2gauss/raw/master/data/dblp.npz Reddit https://s3.us-east-2.amazonaws.com/dgl.ai/dataset/reddit.zip PPI https://s3.us-east-2.amazonaws.com/dgl.ai/dataset/ppi.zip 10",
+          "evidence_type": "repository_link",
+          "is_author_code": false
+        }
+      ],
+      "pdf_repository_link_present": true,
+      "status": "retired_after_conditional_function_repair",
+      "original_local_file": "data/papers/candidate_pool_20261012/grace.pdf",
+      "paper_metrics_verified": false,
+      "failure": "Original get_dataset was declared under __main__; scope discovery rejected it before training",
+      "run_dir": "repository_3a2a34fb5b05488a9b4d5c71419f285e"
+    },
+    {
+      "id": "airgnn",
+      "source_url": "https://proceedings.neurips.cc/paper_files/paper/2021/file/50abc3e730e36b387ca8e02c26dc0a22-Paper.pdf",
+      "final_url": "https://proceedings.neurips.cc/paper_files/paper/2021/file/50abc3e730e36b387ca8e02c26dc0a22-Paper.pdf",
+      "downloaded_at_utc": "2026-10-12T04:54:29.795791+00:00",
+      "bytes": 516244,
+      "sha256": "394cb32a33e4e84e554649fc6728d918d836e02ad5dd7f218627ef235c432311",
+      "pages": 14,
+      "first_page_excerpt": "Graph Neural Networks with Adaptive Residual\nXiaorui Liu1 Jiayuan Ding1 Wei Jin1\nxiaorui@msu.edu dingjia5@msu.edu jinwei2@msu.edu\nHan Xu1 Yao Ma2 Zitao Liu3 Jiliang Tang1\nxuhan1@msu.edu yao.ma@njit.edu liuzitao@100tal.com tangjili@msu.edu\n1Michigan State University, East Lansing, MI, USA\n2New Jersey Institute of Technology, Newark, NJ, USA\n3TAL Education Group, Beijing, China\nAbstract\nGraph neural networks (GNNs) have shown the power in graph representation\nlearning for numerous tasks. In this work, we discover an interesting phenomenon\nthat although residual connections in the message passing",
+      "matching_pdf_repository_links": [
+        {
+          "url": "https://github.com/lxiaorui/AirGNN",
+          "raw_url": "https://github.com/lxiaorui/AirGNN.",
+          "page": 1,
+          "source": "pdf_text",
+          "context": "s aspects. For instance, in social networks, new users might not have complete profile before they make connections with others, leading to missing user features. In transportation networks, node features can be noisy since there exist certain 1The implementation is available at https://github.com/lxiaorui/AirGNN. 35th Conference on Neural Information Processing Systems (NeurIPS 2021).",
+          "evidence_type": "author_code_statement",
+          "is_author_code": true
+        },
+        {
+          "url": "https://github.com/lxiaorui/AirGNN",
+          "raw_url": "https://github.com/lxiaorui/AirGNN",
+          "page": 1,
+          "source": "pdf_annotation",
+          "context": "s aspects. For instance, in social networks, new users might not have complete profile before they make connections with others, leading to missing user features. In transportation networks, node features can be noisy since there exist certain 1The implementation is available at https://github.com/lxiaorui/AirGNN. 35th Conference on Neural Information Processing Systems (NeurIPS 2021).",
+          "evidence_type": "author_code_statement",
+          "is_author_code": true
+        },
+        {
+          "url": "https://github.com/DSE-MSU/DeepRobust",
+          "raw_url": "https://github.com/DSE-MSU/DeepRobust",
+          "page": 8,
+          "source": "pdf_text",
+          "context": "turbation budgets {0, 5, 10, 20, 50, 80}, where the perturbation numbers denote the number of feature dimensions that can be manipulated. The node classification accuracy on these attacked nodes are showed in Figure 7. From these figures, we can make the following observations: 3https://github.com/DSE-MSU/DeepRobust 8",
+          "evidence_type": "repository_link",
+          "is_author_code": false
+        },
+        {
+          "url": "https://github.com/DSE-MSU/DeepRobust",
+          "raw_url": "https://github.com/DSE-MSU/DeepRobust",
+          "page": 8,
+          "source": "pdf_annotation",
+          "context": "turbation budgets {0, 5, 10, 20, 50, 80}, where the perturbation numbers denote the number of feature dimensions that can be manipulated. The node classification accuracy on these attacked nodes are showed in Figure 7. From these figures, we can make the following observations: 3https://github.com/DSE-MSU/DeepRobust 8",
+          "evidence_type": "repository_link",
+          "is_author_code": false
+        }
+      ],
+      "file": "airgnn.pdf",
+      "status": "retired_after_constructor_scope_repair",
+      "paper_metrics_verified": false,
+      "repository_url": "https://github.com/lxiaorui/AirGNN",
+      "tag": "author_airgnn_20261012_10",
+      "pdf_repository_link_present": true,
+      "original_local_file": "data/papers/candidate_pool_20261012/airgnn.pdf",
+      "failure": "Model selected prepare_data wrapper four times instead of get_planetoid_dataset; no training started",
+      "run_dir": "repository_f2bae40cd1b3428cbe2732c16e1868df",
+      "progress_file": "progress_1791780898583.jsonl"
+    },
+    {
+      "id": "elasticgnn",
+      "source_url": "https://proceedings.mlr.press/v139/liu21k/liu21k.pdf",
+      "final_url": "https://proceedings.mlr.press/v139/liu21k/liu21k.pdf",
+      "downloaded_at_utc": "2026-10-12T05:01:10.187245+00:00",
+      "bytes": 1218486,
+      "sha256": "ea07251e70cc27d74bd4320b0d5193f232bc5c0667c7f729d09afdcfbb59c7b6",
+      "pages": 13,
+      "first_page_excerpt": "Elastic Graph Neural Networks\nXiaorui Liu 1 * Wei Jin 1 * Yao Ma 1 Yaxin Li 1 Hua Liu 2 Yiqi Wang 1 Ming Yan 3 Jiliang Tang 1\nAbstract architecture design has been motivated from spectral do-\nmain (Kipf & Welling, 2016; Defferrard et al., 2016) and\nWhile many existing graph neural networks\nspatial domain (Hamilton et al., 2017; Velicˇkovic´ et al.,\n(GNNs) have been proven to perform (cid:96) -based\n2 2017; Scarselli et al., 2008; Gilmer et al., 2017). Recent\ngraph smoothing that enforces smoothness glob-\nstudy (Ma et al., 2020) has proven that the message passing\nally, in this work we aim to f",
+      "matching_pdf_repository_links": [
+        {
+          "url": "https://github.com/lxiaorui/ElasticGNN",
+          "raw_url": "https://github.com/lxiaorui/ElasticGNN",
+          "page": 1,
+          "source": "pdf_annotation",
+          "context": "that the proposed Elastic GNNs obtain better adap- . The resulted message passing schemes can be derived tivity on benchmark datasets and are signiﬁcantly by different optimization solvers, and they typically entail robust to graph adversarial attacks. The imple- mentation of Elastic GNNs is available at the aggregation of node features from neighboring nodes, https: //github.com/lxiaorui/ElasticGNN . which intuitively coincides with the cluster or consistency assumption that neighboring nodes should be similar (Zhu",
+          "evidence_type": "repository_link",
+          "is_author_code": false
+        },
+        {
+          "url": "https://github.com/lxiaorui/ElasticGNN",
+          "raw_url": "https://github.com/lxiaorui/ElasticGNN",
+          "page": 1,
+          "source": "pdf_annotation",
+          "context": "tivity on benchmark datasets and are signiﬁcantly by different optimization solvers, and they typically entail robust to graph adversarial attacks. The imple- mentation of Elastic GNNs is available at the aggregation of node features from neighboring nodes, https: //github.com/lxiaorui/ElasticGNN . which intuitively coincides with the cluster or consistency assumption that neighboring nodes should be similar (Zhu & Ghahramani; Zhou et al., 2004). While existing GNNs are prominently driven by ` -based graph smoothing, `",
+          "evidence_type": "repository_link",
+          "is_author_code": false
+        },
+        {
+          "url": "https://github.com/lxiaorui/ElasticGNN",
+          "raw_url": "https://github.com/lxiaorui/ElasticGNN",
+          "page": 1,
+          "source": "pdf_annotation",
+          "context": "tivity on benchmark datasets and are significantly nbayldFif.fTerheenrteosputlitmedizmaetisosnagseoplvaesrssin, gansdchtehmeyestycpaincbalelydeernivtaeidl robust to graph adversarial attacks. The imple- the aggregation of node features from neighboring nodes, mentation of Elastic GNNs is available at https: which intuitively coincides with the cluster or consistency //github.com/lxiaorui/ElasticGNN. assumption that neighboring nodes should be similar (Zhu & Ghahramani; Zhou et al., 2004). While existing GNNs",
+          "evidence_type": "repository_link",
+          "is_author_code": false
+        },
+        {
+          "url": "https://github.com/lxiaorui/ElasticGNN",
+          "raw_url": "https://github.com/lxiaorui/ElasticGNN",
+          "page": 1,
+          "source": "pdf_annotation",
+          "context": "robust to graph adversarial attacks. The imple- bthyedaigffgerreegnattoiopntimofiznaotdioenfesoatluvreerss,farnodmthneeyigthybpoicrianlglyneondtaeisl, mentation of Elastic GNNs is available at https: which intuitively coincides with the cluster or consistency //github.com/lxiaorui/ElasticGNN. assumption that neighboring nodes should be similar (Zhu & Ghahramani; Zhou et al., 2004). While existing GNNs are prominently driven by (cid:96) -based graph smoothing, (cid:96) - 2 2",
+          "evidence_type": "repository_link",
+          "is_author_code": false
+        },
+        {
+          "url": "https://github.com/DSE-MSU/DeepRobust",
+          "raw_url": "https://github.com/DSE-MSU/DeepRobust",
+          "page": 7,
+          "source": "pdf_text",
+          "context": "local smoothness adaptivity by increasing the in the adversarial graphs. Therefore, the results in Table 2 smoothness along correct edges (connecting nodes with are not directly comparable with the results in Table 1. We same labels) while lowering smoothness along wrong edges 3https://github.com/DSE-MSU/DeepRobust (connecting nodes with different labels). To validate this,",
+          "evidence_type": "repository_link",
+          "is_author_code": false
+        },
+        {
+          "url": "https://github.com/DSE-MSU/DeepRobust",
+          "raw_url": "https://github.com/DSE-MSU/DeepRobust",
+          "page": 7,
+          "source": "pdf_annotation",
+          "context": "local smoothness adaptivity by increasing the in the adversarial graphs. Therefore, the results in Table 2 smoothness along correct edges (connecting nodes with are not directly comparable with the results in Table 1. We same labels) while lowering smoothness along wrong edges 3https://github.com/DSE-MSU/DeepRobust (connecting nodes with different labels). To validate this,",
+          "evidence_type": "repository_link",
+          "is_author_code": false
+        }
+      ],
+      "file": "elasticgnn.pdf",
+      "status": "retired_after_dependency_timeout",
+      "paper_metrics_verified": false,
+      "repository_url": "https://github.com/lxiaorui/ElasticGNN",
+      "tag": "author_elasticgnn_20261012_11",
+      "pdf_repository_link_present": true,
+      "original_local_file": "data/papers/candidate_pool_20261012/elasticgnn.pdf",
+      "failure": "Default mirror and official PyPI attempts both timed out after 300 seconds; no training started; terminal ERROR with zero active processes",
+      "progress_file": "progress_1791781325289.jsonl",
+      "run_dir": "repository_6e36e18304254def9c737cd5dc059886"
+    },
+    {
+      "id": "adagnn",
+      "repository_url": "https://github.com/yushundong/AdaGNN",
+      "source_url": "https://raw.githubusercontent.com/yushundong/AdaGNN/main/Graph%20Neural%20Networks%20with%20Adaptive%20Frequency%20Response%20Filter.pdf",
+      "final_url": "https://raw.githubusercontent.com/yushundong/AdaGNN/main/Graph%20Neural%20Networks%20with%20Adaptive%20Frequency%20Response%20Filter.pdf",
+      "downloaded_at_utc": "2026-10-12T05:20:32.957984+00:00",
+      "timestamp_evidence": "completed_download_file_mtime",
+      "file": "adagnn.pdf",
+      "bytes": 1256662,
+      "sha256": "ad4780e85914beaec0be6f7233eaa2126bbbf2160d0e18c16a8f55770ccc1ab5",
+      "pages": 10,
+      "title": "Graph Neural Networks with Adaptive Frequency Response Filter",
+      "first_page_excerpt": "Graph Neural Networks with\nAdaptive Frequency Response Filter\nYushun Dong\nUniversity of Virginia\nCharlottesville, USA\nyd6eb@virginia.eduKaize Ding\nArizona State University\nTempe, USA\nkding9@asu.eduBrian Jalaian\nArmy Research Laboratory\nAdelphi, USA\nbrian.a.jalaian.civ@mail.mil\nShuiwang Ji\nTexas A &M University\nCollege Station, USA\nsji@tamu.eduJundong Li\nUniversity of Virginia\nCharlottesville, USA\njundong@virginia.edu\nABSTRACT\nGraph Neural Networks have recently become a prevailing para-\ndigm for",
+      "matching_pdf_repository_links": [
+        {
+          "url": "https://github.com/yushundong/AdaGNN",
+          "raw_url": "https://github.com/yushundong/AdaGNN.",
+          "page": 1,
+          "source": "pdf_text",
+          "context": "ates the over-smoothing problem. We empirically validate the effec- tiveness of the proposed framework on various benchmark datasets. Theoretical analysis is also provided to show the superiority of the proposed AdaGNN. The open-source implementation of AdaGNN can be found here: https://github.com/yushundong/AdaGNN. ACM Reference Format: Yushun Dong, Kaize Ding, Brian Jalaian, Shuiwang Ji, and Jundong Li. 2021. Graph Neural Networks with Adaptive Frequency Response Filter.",
+          "evidence_type": "repository_link",
+          "is_author_code": false
+        }
+      ],
+      "pdf_repository_link_present": true,
+      "status": "retired_after_namespace_import_rejection",
+      "original_local_file": "data/papers/adagnn_paper_20261012.pdf",
+      "paper_metrics_verified": false,
+      "tag": "author_adagnn_20261012_12b",
+      "product_source_sha256": "c60f068243ce4590943411813566801cbf2fcad142f7123894ba118b6e6bb5a2",
+      "progress_file": "progress_1791782453426.jsonl",
+      "run_dir": "repository_d42f0ab745c643378f755e26aa19fb12",
+      "revision": "711a614f26e654185e38d8120678aecc3a9cb44d",
+      "failure": "Root author modules imported via the repository namespace were mistaken for a PyPI dependency; no training started"
+    },
+    {
+      "id": "gmnn_arxiv",
+      "title": "GMNN: Graph Markov Neural Networks",
+      "repository_url": "https://github.com/DeepGraphLearning/GMNN",
+      "source_url": "https://arxiv.org/pdf/1905.06214",
+      "file": "gmnn_arxiv.pdf",
+      "bytes": 1234795,
+      "sha256": "de914534f60a62ade79541ae215adad5a3081885afbaf36e79857eaa31c2cc35",
+      "pages": 13,
+      "downloaded_at_utc": "2026-10-12T05:45:21.261367+00:00",
+      "timestamp_evidence": "completed_download_file_mtime",
+      "pdf_repository_link_present": false,
+      "matching_pdf_repository_links": [],
+      "original_local_file": "data/papers/gmnn_1905.06214_20261012.pdf",
+      "status": "retired_after_pdf_link_gate_rejection",
+      "trial_tag": "author_gmnn_20261012_13b",
+      "paper_metrics_verified": false
+    },
+    {
+      "id": "gmnn_pmlr",
+      "title": "GMNN: Graph Markov Neural Networks",
+      "repository_url": "https://github.com/DeepGraphLearning/GMNN",
+      "source_url": "https://proceedings.mlr.press/v97/qu19a/qu19a.pdf",
+      "file": "gmnn_pmlr.pdf",
+      "bytes": 1096277,
+      "sha256": "705fc0af7b846b12b6b19d2aece4751251ce40523125eb9f6932a3e1ae648363",
+      "pages": 10,
+      "downloaded_at_utc": "2026-10-12T05:46:12.400469+00:00",
+      "timestamp_evidence": "completed_download_file_mtime",
+      "pdf_repository_link_present": false,
+      "matching_pdf_repository_links": [],
+      "original_local_file": "data/papers/gmnn_pmlr_20261012.pdf",
+      "status": "retired_after_pdf_link_gate_rejection",
+      "trial_tag": "author_gmnn_20261012_13b",
+      "paper_metrics_verified": false
+    },
+    {
+      "title": "SGFormer: Simplifying and Empowering Transformers for Large-Graph Representations",
+      "source_url": "https://arxiv.org/pdf/2306.10759.pdf",
+      "final_url": "https://arxiv.org/pdf/2306.10759",
+      "downloaded_at_utc": "2026-10-12T06:20:26.585331+00:00",
+      "bytes": 1164542,
+      "sha256": "4da8826ec385f9f0b0315492e1547615ec4a858dd8ab2f4c945e68337440261e",
+      "pages": 21,
+      "repository_url": "https://github.com/qitianwu/SGFormer",
+      "id": "sgformer",
+      "file": "sgformer.pdf",
+      "timestamp_evidence": "download_record",
+      "status": "retired_after_advisory_gate_rejection",
+      "trial_tag": "author_sgformer_20261012_18",
+      "original_local_file": "data/papers/sgformer_2306.10759_20261012.pdf",
+      "paper_metrics_verified": false,
+      "failure": "Old preparation gate rejected advisory semantic review before training"
+    },
+    {
+      "title": "Finding Global Homophily in Graph Neural Networks When Meeting Heterophily",
+      "source_url": "https://arxiv.org/pdf/2205.07308.pdf",
+      "final_url": "https://arxiv.org/pdf/2205.07308",
+      "downloaded_at_utc": "2026-10-12T06:27:43.057708+00:00",
+      "bytes": 1129828,
+      "sha256": "0eba6207e064e6c87ccc1a921321cf061aa0589dc2d6e995ba73fa87a8c94b0a",
+      "pages": 15,
+      "repository_url": "https://github.com/RecklessRonan/GloGNN",
+      "id": "glognn",
+      "file": "glognn.pdf",
+      "original_local_file": "data/papers/glognn_2205.07308_20261012.pdf",
+      "timestamp_evidence": "download_record",
+      "trial_tag": "author_glognn_20261012_19",
+      "status": "retired_after_platform_reciprocal_repair",
+      "failure": "Windows uint32 feature row sums fail in original np.power(rowsum, -1); no optimizer updates in independent trial",
+      "paper_metrics_verified": false
+    },
+    {
+      "id": "ccassg",
+      "file": "ccassg.pdf",
+      "source_url": "https://arxiv.org/pdf/2106.12484",
+      "downloaded_at_utc": "2026-10-12T06:54:46.107557+00:00",
+      "bytes": 6008518,
+      "sha256": "be3dfcecb83ac87ca01131895b08385383a9f428d6b5dafb318788d864e99855",
+      "pages": 24,
+      "repository_url": "https://github.com/hengruizhang98/CCA-SSG",
+      "status": "author_code_completed",
+      "original_local_file": "data/papers/ccassg_2106.12484_20261012.pdf",
+      "paper_metrics_verified": false,
+      "matching_pdf_repository_links": [
+        {
+          "url": "https://github.com/hengruizhang98/CCA-SSG",
+          "raw_url": "https://github.com/hengruizhang98/CCA-SSG.",
+          "page": 1,
+          "source": "pdf_text",
+          "context": "under- standing for the new objective which can be equivalently seen as an instantiation of the Information Bottleneck Principle under the self-supervised setting. Despite its simplicity, our method performs competitively on seven public graph datasets. The code is available at: https://github.com/hengruizhang98/CCA-SSG. 1 Introduction Self-supervised learning (SSL) has been a promising paradigm for learning useful representations without costly labels [7, 46, 5]. In general, i",
+          "evidence_type": "author_code_statement",
+          "is_author_code": true
+        },
+        {
+          "url": "https://github.com/hengruizhang98/CCA-SSG",
+          "raw_url": "https://github.com/hengruizhang98/CCA-SSG",
+          "page": 1,
+          "source": "pdf_annotation",
+          "context": "under- standing for the new objective which can be equivalently seen as an instantiation of the Information Bottleneck Principle under the self-supervised setting. Despite its simplicity, our method performs competitively on seven public graph datasets. The code is available at: https://github.com/hengruizhang98/CCA-SSG. 1 Introduction Self-supervised learning (SSL) has been a promising paradigm for learning useful representations without costly labels [7, 46, 5]. In general, i",
+          "evidence_type": "author_code_statement",
+          "is_author_code": true
+        }
+      ],
+      "pdf_repository_link_present": true,
+      "acceptance_record": "../../../docs/ccassg_author_execution_20261012.json",
+      "repository_revision": "ce5b2c0ad4f05811008559f66e5e114dbd71a82b",
+      "optimizer_steps": 2050
+    }
+  ]
+}

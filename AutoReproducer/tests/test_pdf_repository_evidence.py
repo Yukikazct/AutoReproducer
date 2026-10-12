@@ -290,3 +290,17 @@ def test_numbered_text_footnotes_with_duplicate_number_remain_ambiguous():
 def test_number_before_inline_url_is_not_a_footnote_or_author_claim():
     records = extract_repository_links(["See example1https://github.com/other/tool"])
     assert records == []
+def test_same_page_uri_and_visible_underscore_continuation_replace_truncated_candidate():
+    from src.repository_evidence import extract_repository_links
+    prefix = 'https://github.com/research/model_'
+    full = prefix + 'original'
+    text = 'Our code is available at ' + prefix + '\noriginal. Results follow.'
+    links = extract_repository_links([text], [{'page': 1, 'raw_url': full, 'context': text}])
+    assert links[0]['url'] == full and links[0]['is_author_code'] is True
+    assert all(link['url'] != prefix for link in links)
+    # Neither an absent URI, a different page, nor unconfirmed prose completes
+    # the repository name. These cases must preserve the original candidate.
+    assert extract_repository_links([text])[0]['url'] == prefix
+    assert extract_repository_links([text, 'Other page'], [{'page': 2, 'raw_url': full, 'context': text}])[0]['url'] == prefix
+    other_text = 'Our code is available at ' + prefix + '. Results follow.'
+    assert extract_repository_links([other_text], [{'page': 1, 'raw_url': full, 'context': other_text}])[0]['url'] == prefix

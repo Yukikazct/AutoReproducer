@@ -224,7 +224,7 @@ class Orchestrator:
                 if state_name == "READ_PAPER" and not self.mock_mode:
                     reviews = [item for item in self.data["verifications"]
                                if item["state"] == "READ_PAPER"]
-                    if not reviews or reviews[-1].get("pass") is not True:
+                    if (not reviews or reviews[-1].get("pass") is not True) and not self._allow_discovery_review_advice(state_name):
                         raise RuntimeError("论文解析结果未通过最终审查，未启动资源实验")
 
                 if state_name == "FIND_RESOURCES":
@@ -235,7 +235,7 @@ class Orchestrator:
                             and not self.data.get("code") and not self.data.get("corpus_paper")):
                         reviews = [item for item in self.data["verifications"]
                                    if item["state"] == "FIND_RESOURCES"]
-                        if not reviews or reviews[-1].get("pass") is not True:
+                        if (not reviews or reviews[-1].get("pass") is not True) and not self._allow_discovery_review_advice(state_name):
                             raise RuntimeError("作者仓库发现结果未通过最终审查，未启动实验")
                         self.logger.end_plan(state_name)
                         return self._run_discovered_repository(input_data)
@@ -285,6 +285,31 @@ class Orchestrator:
 
         self._emit_state(self.state, "", "error" if self.error else "success")
         return self.get_result()
+
+    def _allow_discovery_review_advice(self, state_name):
+        """Execution-only discovery may proceed to the fetched identity review."""
+        if (self.data.get('author_execution_only') is not True or not self.data.get('pdf_path')
+                or (self.data.get('reading_coverage') or {}).get('complete') is not True
+                or not self.data.get('raw_text')):
+            return False
+        if state_name == 'READ_PAPER':
+            if not (self.data.get('paper_info') or {}).get('title'):
+                return False
+        elif state_name == 'FIND_RESOURCES':
+            from src.repository_evidence import normalize_repository_url
+            if not normalize_repository_url((self.data.get('resources') or {}).get('code_repo_url', '')):
+                return False
+        else:
+            return False
+        reviews = [item for item in self.data.get('verifications', []) if item['state'] == state_name]
+        if not reviews:
+            return False
+        reviews[-1].update(advisory=True, execution_allowed=True)
+        reason = '审查意见已保留；先核对实际仓库与论文内容，再验证代码运行。'
+        self.logger.log('Verifier', state_name, 'WARNING', reason, reviews[-1])
+        self._emit_state(state_name, 'Verifier', 'skipped', phase_id=_VERIFY_PHASE_IDS[state_name],
+                         reason=reason, outcome='advisory')
+        return True
 
     def _emit_execution_event(self, event):
         if self.on_event and event.get("type") in {"execution_step", "execution_output", "execution_run"}:

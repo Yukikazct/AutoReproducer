@@ -9,6 +9,21 @@ from src.discovered_repository_reproduction import environment_for_plan
 from src.agents.code_executor import _reviewed_pip_requirement_sources
 
 
+def test_original_graph_tools_keep_matching_native_dependencies(tmp_path):
+    fixture = make_experiment(tmp_path)
+    path = fixture['workspace'] / 'train.py'
+    source = 'from deeprobust.graph.data import Dataset\nfrom ogb.nodeproppred import Evaluator\n' + path.read_text('utf-8')
+    path.write_text(source, encoding='utf-8')
+    fixture['snapshot']['files'][path.name] = hashlib.sha256(path.read_bytes()).hexdigest()
+    next(item for item in fixture['proposal']['citations'] if item.get('path') == path.name)['quote'] = source
+    packet = planner.build_evidence_packet(fixture['pdf'], fixture['workspace'], fixture['snapshot'])
+    citations = planner._citations(fixture['proposal'], packet, fixture['workspace'])
+    requirements = planner._requirements(fixture['proposal']['requirements'], citations, packet,
+                                         step=fixture['proposal']['steps'][0])
+    assert {'deeprobust==0.2.11', 'ogb==1.3.6', 'torch==2.5.1+cpu',
+            'torchvision==0.20.1+cpu', 'pandas==2.2.3'} <= set(requirements['compatibility'])
+
+
 @pytest.mark.parametrize('device,suffix', [('cpu', 'cpu'), ('cuda', 'cu121')])
 def test_actual_graph_imports_compile_package_aliases_and_runtime_dependencies(tmp_path, device, suffix):
     fixture = make_experiment(tmp_path)

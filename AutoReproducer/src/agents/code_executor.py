@@ -63,9 +63,10 @@ DOCKER_STARTUP_TIMEOUT = 30
 EXIT_DEPENDENCY_FAILED = -7
 # 本地依赖安装超时（numpy/matplotlib/torch 等大包需要更长时间）
 LOCAL_PIP_TIMEOUT = 300
-# Cold pinned CUDA wheels need time for extraction and the --target copy. The
+# Cold pinned torch wheels need time for extraction and the --target copy. The
 # default mirror stays bounded at 300 s before the reviewed official retry.
 LOCAL_CUDA_PIP_TIMEOUT = 1800
+LOCAL_CPU_PIP_TIMEOUT = 1800
 LOCAL_DEPENDENCY_HEALTH_TIMEOUT = 90
 # 运行时缺模块自我修复上限：缺包 -> 隔离安装 -> 重跑，最多 3 轮
 # （对齐 ScholarAgent coder.py 的 MAX_SELF_CORRECTIONS=3）
@@ -158,6 +159,15 @@ def _pinned_cuda_requirements(requirements: str) -> bool:
     return bool(re.search(
         r"(?m)^\s*--extra-index-url(?:\s+|=)https://download\.pytorch\.org/whl/cu" +
         re.escape(wheel.group(1)) + r"/?\s*$", requirements))
+
+
+def _pinned_cpu_requirements(requirements: str) -> bool:
+    """Give the reviewed fixed CPU stack the same cold-install budget."""
+    return (_reviewed_pip_requirement_sources(requirements)
+            and bool(re.search(r"(?m)^\s*torch\s*==\s*\d+(?:\.\d+)*\+cpu\s*(?:#.*)?$",
+                               requirements))
+            and bool(re.search(r"(?m)^\s*--extra-index-url(?:\s+|=)https://download\.pytorch\.org/whl/cpu/?\s*$",
+                               requirements)))
 
 # ---- P1-⑪ Docker 沙箱加固参数（镜像白名单 + cap-drop + 只读 + 非 root + 限额） ----
 # 镜像白名单前缀（逗号分隔，可用 AUTOREPRO_DOCKER_IMAGE_ALLOWLIST 覆盖）：
@@ -2060,6 +2070,8 @@ class CodeExecutorAgent(BaseAgent):
         fallback_allowed = _allow_official_pip_fallback(reqs)
         pinned_cuda = (bool(env_config.get("auto_prepare")) and _pinned_cuda_requirements(reqs)
                        and links in {"", _DEFAULT_PUBLIC_FIND_LINKS})
+        pinned_cpu = (bool(env_config.get("auto_prepare")) and _pinned_cpu_requirements(reqs)
+                      and links in {"", _DEFAULT_PUBLIC_FIND_LINKS})
         try:
             deps_dir.mkdir(parents=True, exist_ok=True)
             incomplete_target = any(deps_dir.iterdir())
@@ -2082,8 +2094,12 @@ class CodeExecutorAgent(BaseAgent):
                     cmd += ["--find-links", links]
                 cmd += ["-r", req_file]
                 timed_out, exit_code = False, None
-                timeout_s = (LOCAL_CUDA_PIP_TIMEOUT if pinned_cuda and
-                             index.rstrip("/") == _OFFICIAL_PIP_INDEX else LOCAL_PIP_TIMEOUT)
+                timeout_s = LOCAL_PIP_TIMEOUT
+                if index.rstrip("/") == _OFFICIAL_PIP_INDEX:
+                    if pinned_cuda:
+                        timeout_s = LOCAL_CUDA_PIP_TIMEOUT
+                    elif pinned_cpu:
+                        timeout_s = LOCAL_CPU_PIP_TIMEOUT
                 self.log("install_deps", "RUNNING",
                          f"第 {attempt} 轮依赖安装: {_safe_install_diagnostic(index)}")
                 try:

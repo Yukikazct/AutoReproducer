@@ -273,6 +273,11 @@ def render_paper_input():
                 st.caption("该在线审核使用作者源码与项目适配证据。")
             else:
                 st.caption("将解析论文正文并核验资源；信息不足会明确报告，不能据占位代码认定复现。")
+                if (not st.session_state.mock_mode
+                        and st.session_state.get('corpus_paper_select', '无') == '无'):
+                    st.checkbox('先运行作者仓库代码', value=True,
+                        key='author_execution_' + hashlib.sha256(uploaded_file.getvalue()).hexdigest(),
+                        help='先尝试运行作者命令；审核作为参考，缺少依赖时自动安装并重试。按真实进程核验结束，论文数值另行验收。关闭后要求完整论文数值复现。')
             links = preview.get("repository_links", [])
             if links:
                 primary = next((link for link in links if link.get("is_author_code")), None)
@@ -475,8 +480,7 @@ with st.sidebar:
             requires_api = bool(st.session_state.get("pdf_llm_review", True))
 
     if uploaded_file and not st.session_state.mock_mode and not experiment_profile and not corpus_paper:
-        author_execution_only = st.checkbox('先运行作者仓库代码', value=True,
-            help='运行作者原始完整命令并核验结束；论文指标与独立模型评估另行验收。关闭后要求完整论文数值复现。')
+        author_execution_only = st.session_state.get('author_execution_' + uploaded_hash, True) is True
 
     # 启动 / 重置按钮
     col1, col2 = st.columns(2)
@@ -828,7 +832,9 @@ with tab1:
             elif validation.get("status") in {"prepared", "environment_prepared", "smoke_passed"}:
                 st.info(validation.get("reason", "流程已结束，请查看实验结论"))
             elif validation.get('status') == 'author_code_completed':
-                st.success('作者仓库代码已运行完成，实际训练更新和所属进程结束已核验。')
+                st.success('所选仓库代码已运行完成，实际训练更新和所属进程结束已核验。')
+                for warning in validation.get('warnings', []):
+                    st.warning(warning)
                 st.caption('论文数值尚未核验；此结果不判定论文复现成功。')
             elif validation.get("status") == "method_experiment_completed":
                 optimization = data.get("optimization") or {}

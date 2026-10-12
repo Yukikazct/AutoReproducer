@@ -65,7 +65,7 @@ def test_author_execution_completion_is_displayed_without_numerical_reproduction
                        'paper_metrics_verified': False}}}
     app.run()
     assert not app.exception
-    assert any('作者仓库代码已运行完成' in item.value for item in app.success)
+    assert any('所选仓库代码已运行完成' in item.value for item in app.success)
     assert any('论文数值尚未核验' in item.value for item in app.caption)
     assert not any('论文数值复现通过' in item.value for item in app.success)
 

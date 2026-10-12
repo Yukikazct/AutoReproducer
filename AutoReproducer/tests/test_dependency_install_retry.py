@@ -144,7 +144,7 @@ def test_explicit_official_index_with_private_cuda_sources_keeps_generic_budget(
 
 
 @pytest.mark.parametrize("requirements,auto_prepare", [
-    ("--extra-index-url https://download.pytorch.org/whl/cpu\n"
+    ("--extra-index-url https://download.pytorch.org/whl/cu121\n"
      "torch==2.5.1+cpu\nnumpy==1.26.4", True),
     ("--extra-index-url https://download.pytorch.org/whl/cu121\n" + REQUIREMENTS, True),
     ("torch==2.5.1+cu121\nnumpy==1.26.4", True),
@@ -152,13 +152,23 @@ def test_explicit_official_index_with_private_cuda_sources_keeps_generic_budget(
      "torch==2.5.1+cu118", True),
     (CUDA_REQUIREMENTS, False),
 ])
-def test_only_matching_auto_prepared_cuda_wheels_get_long_retry(monkeypatch, tmp_path, requirements, auto_prepare):
+def test_only_matching_auto_prepared_torch_wheels_get_long_retry(monkeypatch, tmp_path, requirements, auto_prepare):
     calls = install_responses(monkeypatch, [(1, "", NO_CANDIDATES), (0, "installed", "")])
     instance = executor()
     instance.env_config.update(requirements_txt=requirements, auto_prepare=auto_prepare)
     assert prepare(instance, tmp_path) is None
     assert [call["kwargs"]["timeout"] for call in calls] == [300, 300]
     assert [record["timeout_s"] for record in instance.env_config["dependency_install_attempts"]] == [300, 300]
+
+
+def test_auto_prepared_cpu_stack_gets_long_official_retry(monkeypatch, tmp_path):
+    requirements = "--extra-index-url https://download.pytorch.org/whl/cpu\ntorch==2.5.1+cpu\nnumpy==1.26.4"
+    calls = install_responses(monkeypatch, [subprocess.TimeoutExpired(["pip"], 300), (0, "installed", "")])
+    instance = executor()
+    instance.env_config.update(requirements_txt=requirements, auto_prepare=True)
+    assert prepare(instance, tmp_path) is None
+    assert [call["kwargs"]["timeout"] for call in calls] == [300, ce.LOCAL_CPU_PIP_TIMEOUT]
+    assert [call["requirements"] for call in calls] == [requirements] * 2
 
 
 @pytest.mark.parametrize("private_source", ["index", "links", "requirements", "extra", "no-index",

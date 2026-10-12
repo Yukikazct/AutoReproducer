@@ -58,6 +58,7 @@ MODULE_TO_PYPI = {
     "PIL": "pillow",
     "bs4": "beautifulsoup4",
     "yaml": "pyyaml",
+    "absl": "absl-py",
     "dotenv": "python-dotenv",
     "huggingface_hub": "huggingface-hub",
     "tensorflow_hub": "tensorflow-hub",
