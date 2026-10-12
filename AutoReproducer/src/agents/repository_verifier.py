@@ -104,7 +104,8 @@ def identity_view(packet):
 def validate_identity_review(packet, review):
     """Recheck quotations and bind the verdict to the actual paper/Git bytes."""
     view = identity_view(packet)
-    alternative = view['repository_input']['source'] in {'user_supplied', 'model_discovered'}
+    alternative = (packet.get('author_execution_only') is True
+                   or view['repository_input']['source'] in {'user_supplied', 'model_discovered'})
     allowed = {"author_repository", "matching_repository"} if alternative else {"author_repository"}
     if not isinstance(review, dict) or review.get("verdict") not in allowed:
         raise ValueError("LLM 未确认该仓库与论文实现内容匹配" if alternative else "LLM 未确认这是该论文的作者实现仓库")
@@ -177,6 +178,7 @@ def validate_identity_review(packet, review):
         raise ValueError("仓库语义核验缺少结论依据")
     return {"verdict": review["verdict"], "accepted": True, "reason": reason[:2000],
             "author_identity_confirmed": validated["author_implementation"]["passed"],
+            "review_mode": "implementation_execution" if packet.get('author_execution_only') is True else "author_identity",
             "selection_source": view["repository_input"]["source"],
             "checks": validated, "evidence_sha256": _digest(view),
             "pdf_sha256": view["pdf"]["sha256"],
@@ -195,8 +197,9 @@ class RepositoryVerifierAgent(BaseAgent):
         if self.llm is None or getattr(self.llm, "mock_mode", False):
             raise ValueError("作者仓库的在线语义核验需要真实 LLM；模拟结果不能确认作者身份")
         view = identity_view(packet)
+        relaxed = packet.get('author_execution_only') is True
         schema = {"verdict": ("author_repository|matching_repository|third_party|unrelated|uncertain"
-                              if view["repository_input"]["source"] in {'user_supplied', 'model_discovered'}
+                              if relaxed or view["repository_input"]["source"] in {'user_supplied', 'model_discovered'}
                               else "author_repository|third_party|unrelated|uncertain"),
                   "reason": "Explain the conclusion using the provided evidence.",
                   "checks": {gate: {"passed": False, "reason": "Evidence-based explanation",
@@ -235,6 +238,15 @@ Use author_repository only if the fetched evidence actually establishes author o
                            'It has not been quoted from the PDF. Check the actual README against the paper '
                            'and retain uncertain authorship explicitly; matching implementations may be tried '
                            'in the code-execution objective without claiming paper reproduction.\n')
+        if relaxed:
+            prompt += ("\nThe objective is to run an implementation, not certify author ownership or reproduce paper metrics. "
+                       "A PDF-linked repository has the same allowance as a discovered or user-supplied candidate. "
+                       "If paper_identity and method_alignment match the actual evidence, allow matching_repository "
+                       "even when author ownership is unknown, unofficial, or a fork; set author_implementation.passed=false "
+                       "with an honest explanation and empty citations. Do not use uncertain solely for missing ownership. "
+                       "Historical dependencies, absent benchmark results and incomplete reproduction instructions "
+                       "are advisory concerns to resolve during planning and runtime, not identity rejection reasons. "
+                       "Still reject a framework dependency, dataset, baseline or implementation of a different method.\n")
         model_view = deepcopy(view)
         # Each fetched text appears once as immutable selectable excerpts.
         for page in model_view["pdf"]["pages"]:

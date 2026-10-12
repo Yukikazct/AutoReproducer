@@ -83,7 +83,10 @@ def test_protocol_reads_missing_pinned_experiment_sources_before_deciding(tmp_pa
             calls.append(prompt)
             evidence = json.loads(prompt.split('Protocol evidence:\n', 1)[1])
             if len(calls) == 1:
-                assert not any(ref.get('path') == 'train.py' for ref in evidence['evidence_excerpts'].values())
+                assert not any(ref.get('path') == 'train.py' and ref['source'] == 'repository'
+                               for ref in evidence['evidence_excerpts'].values())
+                assert any(ref.get('path') == 'train.py' and ref['source'] == 'inventory'
+                           for ref in evidence['evidence_excerpts'].values())
                 return json.dumps({'request_files': ['train.py']})
             assert any(ref.get('path') == 'train.py' and ref['quote'] == source['text']
                 for ref in evidence['evidence_excerpts'].values())

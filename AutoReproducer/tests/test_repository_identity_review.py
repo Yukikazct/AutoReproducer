@@ -175,6 +175,29 @@ def test_resource_discovery_is_not_misrepresented_as_a_pdf_link(tmp_path):
         author_repository_input(request, require_author=False)
 
 
+def test_pdf_linked_matching_implementation_can_run_without_certifying_authorship(packet):
+    packet['author_execution_only'] = True
+    review = {'verdict': 'matching_repository', 'reason': 'Same paper and method; ownership is uncertain.',
+        'checks': {name: {'passed': True, 'reason': 'The pinned README matches the paper.',
+                         'citations': ['pdf_p1_0', 'repo_0_0']}
+                   for name in ('paper_identity', 'method_alignment')}}
+    review['checks']['author_implementation'] = {'passed': False, 'reason': 'Unconfirmed ownership.', 'citations': []}
+    result = validate_identity_review(packet, review)
+    assert result['accepted'] and not result['author_identity_confirmed']
+    assert result['review_mode'] == 'implementation_execution'
+    llm = Mock(mock_mode=False)
+    llm.chat.return_value = json.dumps(review)
+    assert RepositoryVerifierAgent(llm).run(packet)['accepted']
+    assert 'Do not use uncertain solely for missing ownership' in llm.chat.call_args.args[0]
+    review['checks']['method_alignment']['passed'] = False
+    with pytest.raises(ValueError, match='method_alignment'):
+        validate_identity_review(packet, review)
+    review['checks']['method_alignment']['passed'] = True
+    packet['author_execution_only'] = False
+    with pytest.raises(ValueError, match='作者实现仓库'):
+        validate_identity_review(packet, review)
+
+
 def test_extra_check_metadata_and_nested_explanation_keep_verified_evidence(packet):
     review = identity_review(packet)
     review['checks']['reason'] = review.pop('reason')

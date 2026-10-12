@@ -21,7 +21,7 @@ from src.pdf_input import extract_pdf_input
 from src.preset_downloads import atomic_cache_bytes, download_bytes
 from src.process_lifecycle import termination_signals
 from src.repository_evidence import normalize_repository_url
-from src.repository_reproduction import export_repository, spec_digest
+from src.repository_reproduction import export_repository, materialize_submodules, spec_digest
 from src.repository_runner import RepositoryRunner
 from src.runtime_preparation import run_owned_process
 from src.safety.paths import workspace_path
@@ -30,6 +30,34 @@ from src.safety.paths import workspace_path
 _MAX_DATA_BYTES = 512 * 1024 * 1024
 _REF = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_./-]{0,200}")
 _SHA = re.compile(r"[0-9a-f]{40}")
+
+
+def repository_candidates(document, evidence, resources, *, execution_only=False):
+    """Keep declarations first; discovered implementations precede ordinary citations."""
+    if evidence['source'] == 'user_supplied':
+        return [deepcopy(evidence)]
+    links = list(document.repository_links)
+    candidates = [*(link for link in links if link.get('is_author_code')), evidence]
+    if execution_only:
+        discovered = [*(resources.get('alternative_repos') or []),
+                      *(url for item in (resources.get('repo_discovery') or {}).get('candidates', [])
+                        for url in item.get('repo_urls', []))]
+        for raw in discovered:
+            url = normalize_repository_url(raw) if isinstance(raw, str) else ''
+            if url:
+                candidates.append({'url': url, 'source': 'model_discovered', 'page': None,
+                    'evidence_type': 'discovered_repository_candidate', 'is_author_code': False,
+                    'context': '发现阶段的备用候选；须读取固定 README 核验论文与方法'})
+    candidates.extend(links)
+    unique, seen = [], set()
+    for link in candidates:
+        url = link.get('url', '')
+        if (url and link.get('evidence_type') != 'reference'
+                and link.get('source') in {'pdf_text', 'pdf_annotation', 'user_supplied', 'model_discovered'}
+                and url.casefold() not in seen):
+            unique.append(deepcopy(link))
+            seen.add(url.casefold())
+    return unique[:6]
 
 
 def author_repository_input(request, *, require_author=True):
@@ -347,17 +375,9 @@ class DiscoveredRepositoryReproduction:
                                  "bytes": document.byte_size, "readable": True}
             pin = (data["resources"].get("repo_discovery") or {}).get("pinned_revision", "")
             offline = bool(request.get("offline"))
-            candidates = [evidence] if manual else [evidence, *sorted(document.repository_links,
-                          key=lambda link: not link.get("is_author_code"))]
-            unique, seen = [], set()
-            for link in candidates:
-                if (link.get("evidence_type") != "reference"
-                        and link.get("source") in {"pdf_text", "pdf_annotation", "user_supplied", "model_discovered"}
-                        and link["url"].casefold() not in seen):
-                    unique.append(link)
-                    seen.add(link["url"].casefold())
+            unique = repository_candidates(document, evidence, data['resources'], execution_only=execution_only)
             attempts, packet, review = [], None, None
-            for index, candidate in enumerate(unique[:3]):
+            for index, candidate in enumerate(unique):
                 candidate_url = candidate["url"]
                 attempt = {"repository_url": candidate_url, "accepted": False}
                 attempts.append(attempt)
@@ -366,7 +386,7 @@ class DiscoveredRepositoryReproduction:
                         candidate_url, pin if candidate_url.casefold() == url.casefold() else "", offline=offline)
                     workspace = run_dir / ("repo" if index == 0 else f"candidate_repos/{index + 1}")
                     snapshot = export_repository(self.root, {"repository": {"url": candidate_url, "revision": revision}},
-                                                 workspace, offline=offline, required_files=[])
+                                                 workspace, offline=offline, required_files=[], include_submodules=False)
                     if snapshot.get("resolved_sha") != revision or snapshot.get("url") != candidate_url:
                         raise ValueError("导出的仓库与所选作者来源或固定版本不一致")
                     attempt.update(revision=revision, archive_sha256=snapshot.get("archive_sha256"),
@@ -383,12 +403,19 @@ class DiscoveredRepositoryReproduction:
                         raise ValueError("原始 PDF 在仓库准备期间发生变化，不能使用不同论文继续规划")
                     write_json(run_dir / f"repository_identity_packet_{index + 1}.json", packet)
                     review = RepositoryVerifierAgent(self.llm, self.logger).run(packet)
+                    if snapshot.get('submodules_pending'):
+                        materialize_submodules(self.root, snapshot, offline=offline)
+                        packet = build_evidence_packet(request['pdf_path'], workspace, snapshot, for_identity_review=True)
+                        packet['author_execution_only'] = execution_only
+                        bind_full_paper_notes(packet, request)
+                        packet['repository_input'] = {'source': candidate['source'], 'url': candidate_url}
                     attempt.update(accepted=True, review=review, revision=revision)
                     url, evidence = candidate_url, deepcopy(candidate)
                     packet["repository_identity_review"] = review
                     packet["repository_identity_pending"] = False
                     break
                 except Exception as exc:
+                    review = None
                     attempt.update(error=str(exc), review=getattr(exc, "repository_review", None))
                     if digest(Path(request["pdf_path"])) != document.sha256:
                         raise ValueError("原始 PDF 在仓库准备期间发生变化，不能继续") from exc

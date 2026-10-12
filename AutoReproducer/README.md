@@ -8,6 +8,8 @@
 
 上传 PDF 后默认选择“先运行作者仓库代码”。系统从原文和在线发现结果定位仓库，以真实 README 与论文核对实现关系，获取固定版本源码、准备依赖，再执行仓库提供的 Python 命令。网址没有印在 PDF 中时也可核验候选；作者归属不确定的匹配实现会明确标注。公开仓库无需登录 GitHub 或先 fork；fork 用于后续保存修改，不是运行的前提。
 
+普通 PDF 链接可能指向依赖框架或基线，不再阻止标题搜索和模型选择其他实现。匹配论文与方法的非官方实现、fork 或作者归属尚不确定的仓库也可先运行；备用候选会依次核验，最多尝试六个。含 `.gitmodules` 的仓库先读取 README 核验实现关系，再按父仓库记录的固定 commit 导出子模块并记录来源及文件哈希，不会直接拒绝整个仓库。
+
 这条路径先检查代码能否实际执行，暂不要求论文表格数值、检查点导出或独立指标一致。依赖优先从 README、requirements 等文件提取，源码导入补漏；运行前模型审查作为参考，实际缺包时自动安装并重试原作者命令，整个任务最多修复 3 轮。训练开始前遇到固定入口中的整数倒数类型错误时，可记录精确位置，并在下一次执行中将该调用转换为浮点倒数；原仓库文件、命令、训练参数及数据不变，报告明确标注兼容修复。其他异常保留真实失败原因。作者批量实验脚本中的单次原始训练命令也可以单独执行。
 
 所选作者命令自然结束、确有训练更新且所属进程全部退出后，才显示“所选仓库代码已运行完成”。能确认的数据文件保持哈希核验；数据来源暂时无法完整证明时允许先运行，并明确显示“完整数据来源与规模尚未核验”。论文数值始终另行标注，不将代码可运行当成整篇论文复现。关闭该选项可要求数值复现；该严格路线保留原有审核。真实新论文测试进度见 [独立验收记录](docs/independent_pdf_acceptance.md)。
@@ -97,25 +99,33 @@ Markdown 图片使用同目录的 `<report_stem>_assets/` 相对资产目录。�
 
 ## 快速启动
 
-```bash
-# 1. 进入项目目录
+进入包含 `app.py` 和 `requirements.txt` 的项目目录。仓库有一层同名子目录：从 Git 仓库根目录执行 `cd AutoReproducer`；已经在内层目录时不用再执行。
+
+Windows PowerShell（推荐 Python 3.11）：
+
+```powershell
 cd AutoReproducer
 
-# 2. 创建虚拟环境（如有需要）
-python -m venv .venv
-# Windows:
-.venv\Scripts\Activate.ps1
-# macOS / Linux:
-# source .venv/bin/activate
+# 首次安装；已有 .venv-py311 环境和依赖时跳过这两步
+py -3.11 -m venv .venv-py311
+.\.venv-py311\Scripts\python.exe -m pip install -r requirements.txt
 
-# 3. 安装依赖
-pip install -r requirements.txt
-
-# 4. 启动前端
-streamlit run app.py
+# 启动，不需要激活虚拟环境
+.\.venv-py311\Scripts\python.exe -m streamlit run app.py --server.port 8501
 ```
 
-浏览器访问 http://localhost:8501
+上述命令直接指定虚拟环境中的解释器，安装与启动使用同一个环境，不受 PowerShell 激活脚本执行策略或全局 `streamlit` PATH 的影响。可用 `py -0p` 查看已安装的解释器；只有 Python 3.12 时，将命令中的 `3.11` 和 `.venv-py311` 分别换成 `3.12` 和 `.venv-py312`。
+
+macOS / Linux：
+
+```bash
+cd AutoReproducer
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python -m streamlit run app.py --server.port 8501
+```
+
+保持启动终端打开，浏览器访问 <http://localhost:8501>；按 `Ctrl+C` 停止服务。若提示端口已占用，先检查已有页面，或把 `--server.port 8501` 改为 `--server.port 8502` 后访问对应地址。若提示找不到 `app.py` 或 `requirements.txt`，检查是否进入了内层项目目录。
 
 > 依赖 Python 3.11+；DLinear 固定预设支持 Python 3.11/3.12，本地 CPU 路径无需 Docker。通用代码执行选择 Docker 时，需本地安装并启动 Docker Desktop。
 > docker CLI 自动探测：优先 `DOCKER_PATH` 环境变量 → 系统 PATH → Docker Desktop
@@ -123,7 +133,7 @@ streamlit run app.py
 > Windows 上即使 docker 不在 PATH 中也能正常构建/执行。
 > 侧边栏会进一步探测**引擎（daemon）是否在跑**——只装 CLI 没启动 Docker Desktop
 > 时不会谎报「已就绪」，而是提示原因并自动改用本地隔离执行（启动后点
-> 「🔄 重新检测 Docker」即可，无需刷新页面）。
+> 「重新检测 Docker」即可，无需刷新页面）。
 
 ## 运行测试
 
@@ -194,7 +204,7 @@ PDF 先验证文件与正文，再识别首页标题，保存 SHA-256、页数�
 
 匹配路线默认在线核对固定作者源码与项目适配证据；可关闭对应复选框。这项审核不宣称已分析论文全文。旧预设的优化、仅准备和结果分享选项不会带入标题或 PDF 输入。未注册预设的 PDF 在最终仓库发现审查后进入通用作者仓库流程：重新读取实际 PDF 中的候选链接，拉取真实 Git 仓库并固定 commit，由 RepositoryVerifier Agent 联合阅读 PDF 原文、README、论文引用文件和目录，检查论文身份、作者实现关系与方法匹配。模型选择实际来源片段的编号，程序校验引用与 PDF/源码哈希；模型猜测、参考文献链接、模拟响应和用户传入的确认标记不能代替核验。首个候选未确认时最多核查三个原文候选，失败原因与固定来源均保存到运行记录。随后 ExperimentProtocol Agent 从完整 PDF 与固定源码判别一个完整实验，分别确定方法变体、数据划分与预处理、训练与提前停止、模型选择与评估权重、全部重复及汇总、指标表格行列与单位、作者入口及设备。步骤规划必须保留该协议；程序从实际导入链编译依赖，从 argparse 默认值和作者命令确定有效参数，并执行七项独立语义审查。计划、真实数据、依赖、作者入口及数值容差在训练前冻结；冲突、证据不足或未支持的运行形式明确停止。仓库计划失败不会改用模型生成的单文件或合成数据。标题输入的通用发现仍与 PDF 路线分开。详见 [实验协议判别与步骤规划](docs/experiment_protocol_judgement.md)。
 
-未注册预设的 PDF 默认勾选“先运行作者仓库代码”：仍须确认作者身份、固定原始源码与完整真实数据，由 LLM 规划并独立审核作者文档中的完整训练命令，再检查原生依赖和实际执行。该目标无需事先提取论文数值或导出模型检查点；所有必需命令正常返回、训练观察到实际优化器更新、所属进程结束且冻结来源未变化时，状态为 `author_code_completed`，`is_reproduced=null`，页面和报告注明论文数值尚未核验。仅导入、异常退出、超时和取消均不能判定作者训练完成。此模式当前使用 PyTorch 观察器和已支持的数据准备形式；实际新 PDF 的稳定运行验收仍待继续验证。已注册预设保持其对应实验路线，页面不显示此选项。
+未注册预设的 PDF 默认勾选“先运行作者仓库代码”：论文与实现方法匹配即可继续，作者身份不确定时明确标注；固定原始源码后，由 LLM 规划作者文档中的完整训练命令。计划审查作为参考，再用依赖准备和真实运行验证可执行性。该目标无需事先提取论文数值或导出模型检查点；所有必需命令正常返回、训练观察到实际优化器更新、所属进程结束且冻结来源未变化时，状态为 `author_code_completed`，`is_reproduced=null`，页面和报告注明论文数值尚未核验。仅导入、异常退出、超时和取消均不能判定作者训练完成。此模式当前使用 PyTorch 观察器和已支持的数据准备形式；实际运行结果见 [GNN-LF/HF 问题回归](docs/gnn_lfhf_repository_regression_20261012.md) 和独立验收记录。已注册预设保持其对应实验路线，页面不显示此选项。
 
 取消勾选后走完整论文数值复现路线，保留上面的 ExperimentProtocol 判别与独立评估要求。通用仓库执行当前支持可读取的 Python 入口、可校验的完整数据及 PyTorch 分类实验的独立评估。训练进程完成、实际优化器更新次数和测试样本数符合计划、原始源码未改动、模型在独立进程重载并重新计算指标均通过后，才进行论文数值验收。未支持的入口、数据或产物形式会明确报告缺口；不能把“找到仓库”或“程序退出”当作复现成功。详见 [独立新 PDF 验收规则](docs/independent_pdf_acceptance.md)和 [输入与结束判定验收记录](docs/paper_input_completion_20261010.md)。
 

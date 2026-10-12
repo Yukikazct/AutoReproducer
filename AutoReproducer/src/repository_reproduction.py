@@ -18,6 +18,7 @@ import sys
 import tarfile
 import time
 import urllib.request
+from urllib.parse import urljoin, urlsplit
 import uuid
 from pathlib import Path
 from filelock import FileLock
@@ -146,7 +147,78 @@ def _fetch_repository(cache, url, revision):
     return source, archive
 
 
-def export_repository(data_root, profile, destination, *, offline=False, required_files=None):
+def _submodule_url(parent_url, value):
+    """Resolve Git-relative URLs without changing a submodule's pinned commit."""
+    if not value:
+        raise ValueError('子模块缺少固定来源 URL')
+    if '://' not in parent_url and Path(parent_url).is_absolute():
+        return str((Path(parent_url) / value).resolve()) if value.startswith('.') else value
+    if value.startswith(('./', '../')):
+        value = urljoin(parent_url.rstrip('/') + '/', value)
+    if value.startswith('git@github.com:'):
+        value = 'https://github.com/' + value.split(':', 1)[1]
+    parsed = urlsplit(value)
+    if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password:
+        raise ValueError('子模块需要公开 HTTPS 来源')
+    return value
+
+
+def materialize_submodules(data_root, snapshot, *, offline=False, _ancestors=()):
+    """Export each committed gitlink, retaining hashes and nested source provenance."""
+    identity = (snapshot['url'], snapshot['resolved_sha'])
+    if identity in _ancestors or len(_ancestors) >= 8:
+        raise ValueError('子模块引用循环或嵌套超过八层')
+    dest, source = Path(snapshot['path']), Path(snapshot['cache_path'])
+    gitlinks = []
+    for record in _git(source, 'ls-tree', '-r', '-z', snapshot['resolved_sha'], binary=True).split(b'\0'):
+        if not record:
+            continue
+        header, path = record.split(b'\t', 1)
+        mode, kind, revision = header.decode('ascii').split()
+        if mode == '160000' and kind == 'commit':
+            gitlinks.append((path.decode('utf-8'), revision))
+    if len(gitlinks) > 64:
+        raise ValueError('单个仓库的子模块数量超过六十四个')
+    modules = dest / '.gitmodules'
+    configured = {}
+    if gitlinks:
+        if not modules.is_file():
+            raise ValueError('固定 gitlink 缺少 .gitmodules 来源声明')
+        raw = _git(source, 'config', '--file', str(modules.resolve()), '--null', '--get-regexp',
+                   r'^submodule\..*\.(path|url)$', binary=True)
+        for item in raw.split(b'\0'):
+            if item:
+                key, value = item.decode('utf-8').split('\n', 1)
+                name, field = key.rsplit('.', 1)
+                configured.setdefault(name, {})[field] = value
+    by_path = {}
+    for item in configured.values():
+        if 'path' in item:
+            if item['path'] in by_path:
+                raise ValueError('子模块路径声明重复')
+            by_path[item['path']] = item.get('url', '')
+    snapshots = []
+    for name, revision in gitlinks:
+        target = workspace_path(dest, name, 'submodule', forbid_git=True)
+        child_url = _submodule_url(snapshot['url'], by_path.get(name, ''))
+        if target.exists():
+            target.rmdir()  # Only a Git archive's empty gitlink placeholder is allowed.
+        child = export_repository(data_root, {'repository': {'url': child_url, 'revision': revision}},
+            target, offline=offline, required_files=[], include_submodules=False)
+        materialize_submodules(data_root, child, offline=offline, _ancestors=(*_ancestors, identity))
+        snapshots.append({'mount_path': name, **child})
+        for path, sha in child['files'].items():
+            qualified = f'{name}/{path}'
+            if qualified in snapshot['files']:
+                raise ValueError('子模块不能覆盖父仓库文件')
+            snapshot['files'][qualified] = sha
+    snapshot['submodules'] = snapshots
+    snapshot['submodules_pending'] = False
+    return snapshot
+
+
+def export_repository(data_root, profile, destination, *, offline=False, required_files=None,
+                      include_submodules=True):
     """Export the requested commit, not potentially modified cached working files."""
     root, dest = Path(data_root), Path(destination)
     request = profile["repository"]
@@ -182,7 +254,7 @@ def export_repository(data_root, profile, destination, *, offline=False, require
             except ValueError as exc:
                 raise ValueError("仓库归档包含越界路径") from exc
             if not (member.isdir() or member.isfile()):
-                raise ValueError(f"首版仓库执行不支持symlink/submodule: {member.name}")
+                raise ValueError(f"仓库归档包含不支持的 symlink 或链接文件: {member.name}")
         dest.mkdir(parents=True, exist_ok=False)
         for member in members:
             # Recheck immediately before writing; earlier entries may exist now.
@@ -194,14 +266,16 @@ def export_repository(data_root, profile, destination, *, offline=False, require
                 payload = tar.extractfile(member).read()
                 target.write_bytes(payload)
                 files[member.name] = hashlib.sha256(payload).hexdigest()
+    snapshot = {"url": url, "revision": revision, "resolved_sha": revision,
+            "path": str(dest.resolve()), "cache_path": str(source.resolve()),
+             "archive_sha256": hashlib.sha256(archive).hexdigest(), "files": files,
+             "submodules_pending": (dest / '.gitmodules').is_file(), "submodules": []}
+    if include_submodules and snapshot['submodules_pending']:
+        materialize_submodules(root, snapshot, offline=offline)
     for path in (get_adapter(profile).required_files(profile) if required_files is None else required_files):
         if not workspace_path(dest, path, "required file", forbid_git=True).is_file():
             raise RuntimeError(f"固定仓库缺少必需入口: {path}")
-    if (dest / ".gitmodules").exists():
-        raise RuntimeError("首版尚不支持submodule仓库")
-    return {"url": url, "revision": revision, "resolved_sha": revision,
-            "path": str(dest.resolve()), "cache_path": str(source.resolve()),
-            "archive_sha256": hashlib.sha256(archive).hexdigest(), "files": files}
+    return snapshot
 
 
 def prepare_dataset(data_root, profile, workspace, *, offline=False):

@@ -499,7 +499,7 @@ def _author_imports(packet, step, *, include_sources=False, device=None):
     queue, visited, imports, excluded, namespaces = [entry], set(), [], [], {}
     absolute_roots = list(dict.fromkeys([Path(entry).parent, Path('.')]))
     inventory = packet['file_inventory']
-    repository_name = urlsplit(packet['repository']['url']).path.rstrip('/').split('/')[-1].removesuffix('.git')
+    repository_name = urlsplit(packet['repository'].get('url', '')).path.rstrip('/').split('/')[-1].removesuffix('.git')
 
     def local_module(parts, bases):
         for base in bases:
