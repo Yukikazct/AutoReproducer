@@ -146,6 +146,7 @@ class Orchestrator:
             "code": input_data.get("code", "") or "",
             "corpus_paper": input_data.get("corpus_paper"),
             "preferred_repo_url": input_data.get("preferred_repo_url", ""),
+            "author_execution_only": input_data.get("author_execution_only") is True,
             "code_repo_url": input_data.get("code_repo_url", ""),
             "reproduction_scope": "user_supplied_code" if input_data.get("code") else (
                 "mock_demo" if self.mock_mode else "generated_reconstruction"),

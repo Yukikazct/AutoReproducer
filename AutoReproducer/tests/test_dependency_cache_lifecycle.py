@@ -150,14 +150,23 @@ def test_auto_preparation_queues_behind_active_cache_outside_experiment_deadline
         holder = pool.submit(active_setup)
         assert locked.wait(5)
         timer = threading.Timer(0.1, release.set)
-        timer.start()
+
+        def release_after_preparation_started(event):
+            if event.get('type') == 'repository_environment' and event.get('status') == 'running':
+                timer.start()
+
         deadline = time.monotonic() + 5
         runner = repository.RepositoryRunner(executor=ce.CodeExecutorAgent(None, logger=Mock()))
-        result = runner.run(tmp_path, [{"id": "run", "argv": ["python", "-c", "print('READY')"]}],
-                            {"auto_prepare": True, "deadline_monotonic": deadline,
-                             "exclude_environment_preparation_from_deadline": True})
-        holder.result(timeout=5)
-        timer.join()
+        try:
+            result = runner.run(tmp_path, [{"id": "run", "argv": ["python", "-c", "print('READY')"]}],
+                                {"auto_prepare": True, "deadline_monotonic": deadline,
+                                 "exclude_environment_preparation_from_deadline": True},
+                                on_event=release_after_preparation_started)
+        finally:
+            release.set()
+            holder.result(timeout=5)
+            if timer.ident is not None:
+                timer.join()
     assert result["success"], result["final"]["stderr"]
     assert result["environment"]["preparation_elapsed_s"] >= 0.08
     assert result["effective_env_config"]["deadline_monotonic"] > deadline

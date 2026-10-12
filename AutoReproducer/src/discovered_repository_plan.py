@@ -851,7 +851,7 @@ def _datasets(items, citations, packet, workspace, *, selected_steps=None):
     return result
 
 
-def _steps(items, citations, packet, workspace):
+def _steps(items, citations, packet, workspace, *, device=None):
     if not isinstance(items, list) or not 1 <= len(items) <= 8:
         raise PlanEvidenceError("Plan needs a bounded list of author Python steps")
     result, seen, total = [], set(), 0
@@ -898,8 +898,8 @@ def _steps(items, citations, packet, workspace):
             raise PlanEvidenceError("Step dependencies must refer to preceding required steps")
         from src.author_outputs import output_directories
         sources = (_author_imports(packet, item, include_sources=True,
-                    device=(packet.get('experiment_protocol') or {}).get('execution', {}).get('device'))['sources']
-                   if packet.get('experiment_protocol') else [name])
+                    device=device or (packet.get('experiment_protocol') or {}).get('execution', {}).get('device'))['sources']
+                   if packet.get('experiment_protocol') or packet.get('author_execution_only') is True else [name])
         prepared = []
         for source_path in sources:
             source = packet['repository']['files'][source_path]

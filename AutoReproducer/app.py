@@ -426,6 +426,7 @@ with st.sidebar:
     experiment_profile = (st.session_state.get("experiment_profile")
                           if input_mode == "官方仓库预设" else None)
     manual_repo_url, manual_repo_error = "", ""
+    author_execution_only = False
     if uploaded_file and not st.session_state.mock_mode:
         from frontend.repository_fallback import manual_repository, repository_widget_key
         uploaded_hash = hashlib.sha256(uploaded_file.getvalue()).hexdigest()
@@ -472,6 +473,10 @@ with st.sidebar:
             experiment_profile = preview["resolution"]["profile"]
             method_selected = False
             requires_api = bool(st.session_state.get("pdf_llm_review", True))
+
+    if uploaded_file and not st.session_state.mock_mode and not experiment_profile and not corpus_paper:
+        author_execution_only = st.checkbox('先运行作者仓库代码', value=True,
+            help='运行作者原始完整命令并核验结束；论文指标与独立模型评估另行验收。关闭后要求完整论文数值复现。')
 
     # 启动 / 重置按钮
     col1, col2 = st.columns(2)
@@ -560,6 +565,7 @@ if start_btn and not st.session_state.running:
         run_pipeline_background(
             progress_file,
             paper_title=pt, pdf_path=tmp_pdf,
+            **({'author_execution_only': True} if author_execution_only else {}),
             **({"preferred_repo_url": manual_repo_url} if manual_repo_url else {}),
             corpus_paper=corpus_paper,
             experiment_profile=experiment_profile,
@@ -821,6 +827,9 @@ with tab1:
                 st.warning("论文实验未完成：" + validation.get("reason", "代码未运行或执行证据不完整"))
             elif validation.get("status") in {"prepared", "environment_prepared", "smoke_passed"}:
                 st.info(validation.get("reason", "流程已结束，请查看实验结论"))
+            elif validation.get('status') == 'author_code_completed':
+                st.success('作者仓库代码已运行完成，实际训练更新和所属进程结束已核验。')
+                st.caption('论文数值尚未核验；此结果不判定论文复现成功。')
             elif validation.get("status") == "method_experiment_completed":
                 optimization = data.get("optimization") or {}
                 st.success(("基线方法实验已完成" if optimization.get("mode") == "validate"

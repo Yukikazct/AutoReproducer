@@ -19,8 +19,11 @@ def isolated_artifacts(tmp_path, monkeypatch):
     monkeypatch.setattr(artifacts, "ARTIFACT_ROOT", tmp_path / "reports" / "artifacts")
 
 
-def test_real_chinese_plot_survives_workspace_cleanup_and_links_in_report(tmp_path):
+def test_real_chinese_plot_survives_workspace_cleanup_and_links_in_report(tmp_path, monkeypatch):
     pytest.importorskip("matplotlib")
+    # Cold Matplotlib font discovery can exceed 10 s on a hosted Windows runner.
+    # This test verifies actual figure retention, not the production timeout.
+    monkeypatch.setattr('src.agents.code_executor.LOCAL_TIMEOUT_SMOKE', 60)
     executor = CodeExecutorAgent(LLMClient(mock_mode=True), logger=Mock(), mock_mode=True)
     code = """import os
 from pathlib import Path
