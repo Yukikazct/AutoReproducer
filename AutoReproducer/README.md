@@ -6,95 +6,44 @@
 
 ## 从 PDF 运行作者代码
 
-上传 PDF 后默认选择“先运行作者仓库代码”。系统从原文和在线发现结果定位仓库，直接获取固定版本源码，按真实 README 规划命令、准备依赖，再执行仓库提供的 Python 命令。默认模式已移除阻断运行的 LLM 论文与仓库匹配审核，阶段显示“获取代码仓库”；仓库地址未印在 PDF 中或作者归属尚未确认也可尝试运行，报告保留来源说明。公开仓库无需登录 GitHub 或先 fork；fork 用于后续保存修改，不是运行的前提。
+上传 PDF 后直接定位仓库、取得源码、读取 README 和依赖声明、安装环境并运行作者命令。论文匹配审核、Agent 输出审核、实验协议预审、命令引文审核、数据来源审核和论文数值验收已从运行流程移除，前端不再提供审核或严格模式开关。公开 GitHub 仓库不需要登录或先 fork。
 
-普通 PDF 链接可能指向依赖框架或基线，不再阻止标题搜索和模型选择其他实现。非官方实现、fork 或作者归属尚不确定的仓库也可先运行；源码获取失败时最多尝试六个备用候选。含 `.gitmodules` 的仓库按父仓库记录的固定 commit 导出子模块并记录来源及文件哈希，不会直接拒绝整个仓库。
+模型负责论文阅读、仓库定位和运行命令规划。模型规划不可用时，尝试 README 或启动脚本中的原始 Python 命令；所选入口及本地导入会自动读取。作者程序负责加载数据；文档明确给出的仓库内压缩包仍可先解压。实际缺包时自动安装并重试，最多修复 8 轮；同一缺包反复出现、真实运行错误、取消和超时会保留失败原因。
 
-这条路径先检查代码能否实际执行，暂不要求论文表格数值、检查点导出或独立指标一致。依赖优先从 README、requirements 等文件提取，源码导入补漏；运行前模型审查作为参考，实际缺包时自动安装并重试原作者命令，整个任务最多修复 3 轮。训练开始前遇到固定入口中的整数倒数类型错误时，可记录精确位置，并在下一次执行中将该调用转换为浮点倒数；原仓库文件、命令、训练参数及数据不变，报告明确标注兼容修复。其他异常保留真实失败原因。作者批量实验脚本中的单次原始训练命令也可以单独执行。
+只有所选命令以退出码 0 结束且所属进程完成清理，才显示代码运行完成。报告保留真实命令、日志、实际指标和已观察到的训练更新；未观察到更新也可记录代码正常结束，不能据此宣称训练或论文数值通过。
 
-所选作者命令自然结束、确有训练更新且所属进程全部退出后，才显示“所选仓库代码已运行完成”。能确认的数据文件保持哈希核验；数据来源暂时无法完整证明时允许先运行，并明确显示“完整数据来源与规模尚未核验”。论文数值始终另行标注，不将代码可运行当成整篇论文复现。关闭该选项可要求选定实验的数值复现；该严格路线保留原有审核。真实新论文测试进度见 [独立验收记录](docs/independent_pdf_acceptance.md)。
+**当前未完成**：运行结束后，自动将实测指标与论文或作者宣称对齐并计算差异的环节尚未接入当前流程。报告中的实际指标不代表已经完成数值比较。作者命令和外层后台任务目前仍有超时限制；取消运行时间限制、仅保留报错修复次数上限是后续待办。
 
-代码完成后自动提取作者日志中的指标，与 PDF 中对应的方法、数据集和划分下的宣称值对比。报告显示论文值、实际值、差值及来源；百分比和比例按有来源的单位换算。单次运行与论文多次均值、或其他实验设置不同的情况仍显示差值，标注为“仅供参考”；数据集、方法、划分不对应或缺少参考值时说明原因。指标提取、API 调用或数值未达参考均不会覆盖已完成的代码运行状态；独立复算仍由完整数值复现模式提供。详见[结果对比说明](docs/result_validation.md)。
+2026-10-12 换用 AdaGNN PDF 完成了后台真实运行：作者默认 `python main.py` 自然返回，327 次优化器更新，BlogCatalog 测试准确率 0.8953。范围与证据见 [移除审核后的运行记录](docs/execution_without_reviews_20261012.md)。
 
-### 使用步骤
+1. 按“快速启动”启动网页；仓库定位需要模型时，在侧栏配置 API。
+2. 选择“上传PDF”，上传可读取正文的原始论文，点击“开始复现”。
+3. 找不到仓库时，在“补充 GitHub 仓库”中填写地址并重试。
+4. 在“各部分结束判定”查看命令退出和进程清理状态，完成后下载运行报告。
 
-1. 按下方“快速启动”启动网页，在侧栏配置 API Key 并测试 AI 连接。
-2. 选择“上传PDF”，上传可读取正文的原始论文。保持 Mock 和 Docker 关闭；当前通用仓库路线使用本地受控进程。
-3. 保持“先运行作者仓库代码”勾选，点击“开始复现”。系统读取论文、定位并获取仓库，再准备数据与依赖并运行原命令。
-4. 无法找到或获取仓库时，在“补充 GitHub 仓库”中填写实现地址，再点击“开始复现”。无需先 fork 或登录 GitHub。
-5. 在“各部分结束判定”查看训练、命令退出和进程清理状态。完成后查看报告中的“作者输出与论文宣称对比”；需要独立数值验收时，取消“先运行作者仓库代码”再创建新任务。
-
-### 最近真实运行记录（2026-10-12）
-
-| 论文 | 验证方式 | 实际执行结果 | 结论与记录 |
-| --- | --- | --- | --- |
-| CCA-SSG | 当时未参与修复的新 PDF，经真实网页上传 | 50 轮训练、2000 轮线性评估，共 2050 次优化更新，退出码 0 | 所选代码运行完成；完整数据来源与论文数值尚未核验。[验收记录](docs/ccassg_author_execution_20261012.md) |
-| GNN-LF/HF | 针对已暴露问题的 PDF，通过生产后端做回归 | 自动定位实现仓库，执行 README 原命令，完成 10 次 Cora 训练、14,068 次优化更新，退出码 0 | 所选代码运行完成；属于问题回归，论文数值尚未独立核验。[回归记录](docs/gnn_lfhf_repository_regression_20261012.md) |
-| SGC | 针对 JSON 核验失败与依赖占满磁盘的问题，经真实网页做回归 | 复用约 1.46 GiB 基础环境，只新增约 61 MiB 依赖；作者命令完成 100 次优化更新，退出码 0 | 所选代码运行完成；论文数值尚未独立核验。[回归记录](docs/sgc_json_dependency_regression_20261012.md) |
-| SGC | 移除仓库匹配审核后再次经真实网页回归，最终对比规则回放已保存输出 | 直接获取仓库，完成 100 次训练更新；测试准确率 81.0%，论文参考 81.0%，差值 0 个百分点 | 单次运行与论文 10 次均值仅作参考；尚未独立复算。[直接运行与对比记录](docs/sgc_direct_execution_regression_20261012.md) |
-
-两次运行均确认原命令自然结束、所属进程退出。GNN-LF/HF 的原程序报告 ACC `83.25 ± 0.34%`，CCA-SSG 报告 `0.8170`；这些作者输出不替代独立数值验收。
+之前的真实测试与修复记录保留在 [历史独立测试记录](docs/independent_pdf_acceptance.md)。这些历史记录不能证明当前所有 PDF 均可运行。
 
 ## 固定预设实验
 
-网页“官方仓库预设”和命令行共用真实执行流程。当前支持以下固定案例，运行前关闭 Mock 与 Docker：
+网页预设与标题匹配入口同样直接运行，已移除在线预审、单独导入审核、训练后协议审核、独立数值验收和参数优化确认环节。系统自动取得源码和真实输入数据、安装隔离依赖，再执行训练命令。单独准备环境仍可使用；环境准备成功不等于训练完成。
 
-选择预设后可直接运行。系统自动取得固定版本源码和真实数据、检查 Python 与隔离依赖，缺失或损坏时按冻结版本准备和修复；环境检查通过后才开始训练。Windows Store 启动环境会自动切换到健康的标准 CPython 环境。自动恢复保留作者算法、训练参数、真实数据和验收门槛，详见[运行环境与自动准备](docs/cross_platform_runtime.md)。
-
-[10 月 10 日自动恢复验收](docs/automatic_preset_recovery_20261010.md)已完成 DLinear、SIREN 和 Neural ODE 的真实训练；包含缺失依赖、并发排队及前次准备失败后的恢复记录。
-
-| 预设 | 实验与设备 | 已有证据 |
-|---|---|---|
-| `dlinear_etth1_reference` | ETTh1 多变量 336→96，CPU | 选定论文实验数值复现通过，详见下节 |
-| `siren_camera_quick` | cameraman 256×256、500 步，NVIDIA CUDA 12.1 | Windows RTX 4060 上完成全图拟合、独立评价和真实 API 建议；[10 月 8 日快速档记录](docs/siren_quick_result.md) |
-| `neural_ode_spiral` | 官方二维螺旋示例、2000 次迭代，CPU | 完成轨迹拟合、独立 SciPy 评价和真实 API 建议；[10 月 8 日方法实验记录](docs/neural_ode_result.md) |
-
-SIREN 与 Neural ODE 的结果为 `method_experiment_completed`、`is_reproduced=null`：完成作者方法实验，不代表论文全部基准或表格数值复现。SIREN 五分钟目标从已准备环境开始计时，首次下载和安装不计入；换设备或网络后需重新实测。
-
-这两个方法预设支持三种优化模式：
-
-| 模式 | 行为 | 结论范围 |
-|---|---|---|
-| `off`（默认） | 完整训练与独立评价 | 无需建议 API；保留真实基线与图表 |
-| `suggest` | 基线后调用真实 API，生成最多 3 条有作者来源的单参数建议 | 建议尚未训练验证，`optimized=False` |
-| `validate` | 独立优化协议重训基线，按验证集选择候选，再做两种子留出确认 | 只有两种子均达到事前门槛才标记 `validated_gain`；最多 3 个候选，总预算不超过 7200 秒 |
-
-`validate` 的总预算包含在线分析、官方基线和参数验证，当前调度规则固定预留 40 分钟给最终两种子确认。
-因此总预算必须大于 40 分钟，建议使用默认 120 分钟；预算只是上限，完成后会提前结束。
-不足的配置会在调用 API 或训练前提示。运行中若预算不足，已完成基线仍保留，优化结果明确标为未完成。
-
-优化扩展中的 SIREN 使用固定 80%/10%/10% 训练、验证和留出像素；Neural ODE 使用新增初值轨迹验证。选优只看验证集，冻结候选后才打开留出评估，不把这些指标混称为官方全图或全轨迹拟合结果。DLinear 保留作者协议，不开放参数优化。已有 [10 月 8 日检查点](docs/implementation_checkpoint_20261008.md)保留 SIREN 优化测量和 Neural ODE 中断记录；[10 月 9 日续跑](docs/resumed_validation_20261009.md)已完成 SIREN 四阶段在线分析及 Neural ODE 两种子留出确认；后者第二种子未达提升门槛，结论为 `tested_no_gain`、`optimized=False`。
-
-从 `AutoReproducer/` 目录直接运行；也可提前准备环境，便于重复实验：
+| 预设 | 运行内容 |
+| --- | --- |
+| `dlinear_etth1_reference` | 作者 ETTh1 336→96 训练与自带测试，CPU |
+| `siren_camera_quick` | 作者方法全图拟合，500 步，CUDA |
+| `neural_ode_spiral` | 官方二维螺旋示例，2000 次迭代，CPU |
 
 ```powershell
-# 可选预热：准备源码、数据、隔离依赖和设备；此阶段不训练
 python scripts/reproduce_repository.py --profile siren_camera_quick --prepare-environment
-python scripts/reproduce_repository.py --profile neural_ode_spiral --prepare-environment
-
-# 真实基线，无需 API
 python scripts/reproduce_repository.py --profile siren_camera_quick --optimization off
-
-# 真实基线与建议：从 LLM_API_KEY 读取密钥，交互终端未配置时隐藏输入
-python scripts/reproduce_repository.py --profile siren_camera_quick --optimization suggest
-python scripts/reproduce_repository.py --profile neural_ode_spiral --optimization suggest
-
-# 独立候选训练与两种子留出确认；每次命令创建新实验
-python scripts/reproduce_repository.py --profile neural_ode_spiral --optimization validate --max-candidates 3 --budget-seconds 7200
-
-# 可选：在训练前增加四阶段真实 API 公开来源分析
-python scripts/reproduce_repository.py --profile siren_camera_quick --llm-review --optimization suggest
+python scripts/reproduce_repository.py --profile neural_ode_spiral --optimization off
 ```
 
-`--prepare-only` 只准备源码、数据与执行计划，不安装环境；`--prepare-environment` 还会安装依赖并检查设备。正式运行会自动执行这些准备和健康检查，可直接选择网页“运行实验”；“准备实验环境”用于提前预热。运行结果和原始建议记录保存在本机 `data/runs/<运行编号>/`，不随 Git 分发。
-
-明确指定 `--offline` 时，源码、数据、公开证据和冻结训练依赖只使用可核验本地缓存，缺失或损坏即停止，禁止在线下载安装。运行环境恢复也不会下载新解释器，只使用已有解释器和本地应用 wheel。明确启用建议或在线分析时仍会访问 LLM API。
-
-运行中优化状态为 `running`；正常取消保存 `interrupted` 记录及已有实验结果。Windows 的训练进程受 Job 管理，关闭启动会话（含 `py` 启动器）或强杀主 Python 后会清理训练后代。强杀后，下次方法实验自动识别失去运行锁的未完成记录，也可运行 `python scripts/recover_interrupted_optimizations.py`，为结果与报告补记中断；这不会续训或改写已完成指标。POSIX 的正常 SIGTERM 会清理进程组；SIGKILL 后孤儿训练可能持续至超时，不能将记录恢复视为立即终止所有后代。
-
-Windows 支持直接运行 Python 和标准 CPython 虚拟环境。检测到 Microsoft Store Python、解释器版本不兼容或应用依赖无法导入时，系统会自动发现并验证已有标准环境，或创建项目专用运行环境。64 位 Windows 未发现兼容解释器时，会下载 python.org 官方安装程序、验证数字签名后安装到项目缓存。原启动环境及全局依赖不被改写；后续运行自动健康检查并复用准备结果。
+旧的审核和优化请求参数仅作调用兼容，当前运行入口不会据此重新启用审核。以下历史实验记录保留当时的数值和运行证据。
 
 ## DLinear 官方仓库复现（2026-10-07：真实 4 + 1 多 Agent 流程通过）
+
+本节记录历史版本及当时的操作选项；当前版本已移除这些审核开关，实际流程以上方“从 PDF 运行作者代码”为准。
 
 网页默认真实模式。“输入方式 → 官方仓库预设”默认执行 DLinear 的 ETTh1 多变量 **336→96 完整作者实验**：固定源码和真实数据，按最多 10 轮、patience 3 的官方协议训练、加载验证集最优 checkpoint，再测试和独立复算指标。保持 Mock 与 Docker 关闭，使用本地 CPU。默认勾选“使用真实多 Agent 分析论文、仓库和环境”；自行勾选“允许 API 分析本次指标、轮数和核验状态摘要”后，训练后再执行结果解释。取消分析选项时，作者训练本身无需 LLM API。
 
@@ -120,22 +69,52 @@ Markdown 图片使用同目录的 `<report_stem>_assets/` 相对资产目录。�
 
 ## 快速启动
 
-进入包含 `app.py` 和 `requirements.txt` 的项目目录。仓库有一层同名子目录：从 Git 仓库根目录执行 `cd AutoReproducer`；已经在内层目录时不用再执行。
+仓库有一层同名子目录。macOS / Linux 启动前请进入包含 `app.py` 和 `requirements.txt` 的项目目录；Windows PowerShell 命令会自动识别 Git 仓库根目录或内层项目目录。
 
-Windows PowerShell（推荐 Python 3.11）：
+Windows PowerShell（从 Git 仓库根目录或内层项目目录均可执行）：
 
 ```powershell
-cd AutoReproducer
+if (Test-Path .\app.py) {
+    $ProjectDir = (Get-Location).Path
+} elseif (Test-Path .\AutoReproducer\app.py) {
+    $ProjectDir = (Resolve-Path .\AutoReproducer).Path
+} else {
+    throw "找不到 app.py；请在 Git 仓库根目录或包含 app.py 的项目目录运行。"
+}
+Set-Location $ProjectDir
 
-# 首次安装；已有 .venv-py311 环境和依赖时跳过这两步
-py -3.11 -m venv .venv-py311
-.\.venv-py311\Scripts\python.exe -m pip install -r requirements.txt
+# 优先使用 Windows Python Launcher 选择最新 Python 3；没有 Launcher 时使用 PATH 中的 python。
+$Launcher = Get-Command py -CommandType Application -ErrorAction SilentlyContinue
+$PythonArgs = @()
+if ($Launcher) {
+    $PythonCommand = $Launcher.Source
+    $PythonArgs = @("-3")
+} else {
+    $Launcher = Get-Command python -CommandType Application -ErrorAction SilentlyContinue
+    if (-not $Launcher) {
+        throw "找不到 Python。请安装 Python 3.11 或更高版本，并确保 py 或 python 在 PATH 中。"
+    }
+    $PythonCommand = $Launcher.Source
+}
+$PythonVersion = & $PythonCommand @PythonArgs -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"
+if ($LASTEXITCODE -ne 0 -or $PythonVersion -notmatch '^3\.(1[1-9]|[2-9]\d)$') {
+    throw "需要 Python 3.11 或更高版本；检测到 '$PythonVersion'。请用 py -0p 查看已安装版本。"
+}
 
-# 启动，不需要激活虚拟环境
-.\.venv-py311\Scripts\python.exe -m streamlit run app.py --server.port 8501
+$Venv = ".venv-py$($PythonVersion.Replace('.', ''))"
+$VenvPython = Join-Path $Venv "Scripts\python.exe"
+if (-not (Test-Path $VenvPython)) {
+    & $PythonCommand @PythonArgs -m venv $Venv
+    if ($LASTEXITCODE -ne 0) { throw "创建虚拟环境失败：$Venv" }
+}
+& $VenvPython -m pip install -r requirements.txt
+if ($LASTEXITCODE -ne 0) { throw "依赖安装失败；请检查上方 pip 错误信息后重试。" }
+
+# 启动；保持此终端打开，不需要激活虚拟环境。
+& $VenvPython -m streamlit run app.py --server.port 8501
 ```
 
-上述命令直接指定虚拟环境中的解释器，安装与启动使用同一个环境，不受 PowerShell 激活脚本执行策略或全局 `streamlit` PATH 的影响。可用 `py -0p` 查看已安装的解释器；只有 Python 3.12 时，将命令中的 `3.11` 和 `.venv-py311` 分别换成 `3.12` 和 `.venv-py312`。
+命令会自动从 Git 仓库根目录进入内层项目目录，并使用同一个 Python 解释器创建虚拟环境、安装依赖和启动应用；不需要激活环境，也不受 PowerShell 激活脚本执行策略或全局 `streamlit` PATH 的影响。若提示找不到 Python，或版本低于 3.11，可运行 `py -0p` 查看已安装解释器，再安装 Python 3.11 或更高版本并重试。
 
 macOS / Linux：
 
@@ -161,7 +140,7 @@ python3 -m venv .venv
 macOS、Windows 和 Linux 的通用运行稳定性说明见 [跨平台运行与中断恢复](docs/cross_platform_runtime.md)。
 GitHub Actions 覆盖 Ubuntu、Windows 与 Python 3.11/3.12 的四组配置；Windows 另跑 UTF-8 模式。它验证程序回归，不是部署在线复现服务，也不会自动证明某篇论文训练成功。真实论文训练与 API 验收使用上方单独的运行记录。
 
-2026-10-12 的本地全量回归为 **2725 项通过、66 项跳过**，跳过项受平台或本地原生依赖条件限制。代码提交 `e47cff3` 的四组 PR CI 均通过，见 [GitHub 测试记录](https://github.com/Yukikazct/AutoReproducer/actions/runs/38231904173)。
+移除审核之前，2026-10-12 的本地全量回归为 **2725 项通过、66 项跳过**，跳过项受平台或本地原生依赖条件限制。代码提交 `e47cff3` 的四组 PR CI 均通过，见 [GitHub 测试记录](https://github.com/Yukikazct/AutoReproducer/actions/runs/38231904173)。这不是本次修改的全量回归结果；当前相关测试及待迁移的历史审核测试见 [本次验证记录](docs/execution_without_reviews_20261012.md)。
 
 以下 `python` 指已安装项目依赖的解释器。未激活虚拟环境时，Windows 将它替换为 `.\.venv-py311\Scripts\python.exe`，macOS/Linux 替换为 `.venv/bin/python`，与快速启动使用同一环境。
 
@@ -183,82 +162,34 @@ GitHub Actions 在 Windows/Linux 与 Python 3.11/3.12 上运行回归；Windows
 同时检查系统默认编码和 UTF-8 模式。测试使用模拟 API、小型本地程序与临时缓存，
 不需要真实模型密钥或启动论文训练。缺少 matplotlib 的本地环境会明确跳过绘图用例。
 
-## 当前核心流程（复现 → 验证 → 报告）
+## 当前核心流程（阅读 → 定位 → 安装 → 运行 → 报告）
 
-SIREN 与 Neural ODE 已接入上方三种优化模式，使用有限参数候选和真实训练评估。通用论文流程的旧优化开关仍是预留接口，DLinear 也不做参数优化；UCB/BeamUCT 等既有模块不参与当前方法实验的候选选择。
-
-**编排器按输入路线调用以下 Agent：**
-
-| Agent | 职责 |
-|---|---|
-| PaperReader | 读取论文；仓库定位时针对全文代码声明、脚注和链接提取所在位置 |
-| ResourceFinder | 综合作者代码声明、在线搜索与模型候选定位仓库；普通依赖链接不锁定选择 |
-| RepositoryVerifier | 核对实际 PDF 与固定 README/引用文件中的论文及方法；先运行模式允许作者归属未知的匹配实现 |
-| ExperimentProtocol | 数值复现模式中选定完整实验协议；先运行模式不以此阻断作者命令规划 |
-| EnvBuilder | 准备依赖和检查原生运算；通用仓库使用隔离的本地依赖，其他路线可构建 Docker 镜像 |
-| CodeExecutor | 执行原命令、观察真实训练、记录退出与清理；缺包时按有界预算安装并重试 |
-| ResultValidator | 先运行模式核验命令与训练是否完成；数值复现模式另核验协议、独立指标及论文目标 |
-| Verifier | 审查阶段输出；先运行模式将质量意见作为参考，数值复现模式保留必要审核 |
-| Optimizer | 方法预设的来源建议、有限参数试验与两种子确认；通用流程仍预留 |
-| ReportGenerator | 生成 Markdown 复现报告 |
-
-**状态机流转：**
+| Agent | 当前职责 |
+| --- | --- |
+| PaperReader | 从论文全文、脚注和代码声明中提取仓库位置与实验信息 |
+| ResourceFinder | 根据链接、搜索和模型候选定位仓库；允许用户补充地址 |
+| EnvBuilder | 从 README、依赖文件及源码导入选择并安装运行依赖 |
+| CodeExecutor | 执行命令，遇到实际缺包自动修复并重试，记录退出状态及进程清理 |
+| ReportGenerator | 汇总真实运行日志、指标和结束状态 |
 
 ```
-INIT → READ_PAPER → FIND_RESOURCES → BUILD_ENV → EXECUTE_CODE → VALIDATE
-  → [方法预设可选：建议 / 候选训练与确认] → GENERATE_REPORT → COMPLETED
+INIT → READ_PAPER → FIND_RESOURCES → BUILD_ENV → EXECUTE_CODE
+  → GENERATE_REPORT → COMPLETED / ERROR
 ```
 
-网页根据实际执行阶段显示进度，Agent 名称只是负责人。启用方法优化时，已完成的基线单独显示“基线执行完成”和“基线核验完成”；后续优化训练在优化卡片显示“代码执行中”和当前轮次。阶段负责人返回结果，且本阶段所属的执行轮次、步骤和后台进程已退出并完成清理，才确认阶段结束。整轮 `execution_run` 从准备到清理持续开放，步骤间隙仍在运行；`done` 或 `error` 提前到达会显示“结束确认中”，不能直接关闭任务。进程异常退出后，只由持有它的进程在确认清理后将未返回结果的执行标为中断，不补写成功。网页的“各部分结束判定”列出每阶段条件与确认状态。
+RepositoryVerifier、ExperimentProtocol、Verifier 和 ResultValidator 已退出当前编排流程。不存在“审核未通过所以不启动训练”的分支，也不自动执行论文值对比或独立数值验收。相关存量工具和历史记录保留供独立开发使用。
 
-当前执行按执行方提供的独立编号区分轮次与步骤，不从日志计数、论文名称、命令或目录推断状态。总步骤未知时只显示当前步骤，不估算百分比。阶段完成比例既不是耗时比例，也不代表论文数值验收通过，验收结论以 `validation` 为准。执行输出按轮次和步骤分段，使用 240 像素高的滚动窗口；普通脚本模式在步骤返回时更新输出，仓库模式提供实时输出。
+标题输入匹配已知论文时选择相应预设；其余 PDF 从当前上传的正文提取链接并尝试运行。入口不存在、数据下载失败、依赖安装失败及作者代码异常仍是实际运行问题，会显示具体报错。
 
-### 标题与 PDF 输入的复现路线
+阶段负责人返回结果且所属轮次、步骤和后台进程退出并完成清理后，才能确认该部分结束。步骤间隙和日志中的最终轮数不代替结束确认；异常退出只记录失败或中断。网页按实际阶段计数显示进度，并在“各部分结束判定”列出结束条件。
 
-直接输入下列完整论文标题，或上传首页标题与之匹配的原始 PDF，即可选择固定作者仓库并运行已核验的实验，不需要手动切换到仓库预设。标题只规范化大小写、空白与外层引号；相似标题、正文或参考文献中的提及不能选择预设。
+## 核心机制
 
-| 论文 | 作者仓库 | 自动运行与结论范围 |
-|---|---|---|
-| Neural Ordinary Differential Equations | `rtqichen/torchdiffeq` | 官方螺旋拟合，2000 次迭代；完成作者方法实验，不等同于完整论文基准复现 |
-| Are Transformers Effective for Time Series Forecasting? | `cure-lab/LTSF-Linear` | 已适配的 DLinear ETTh1 冻结协议与数值验收 |
-| Implicit Neural Representations with Periodic Activation Functions | `vsitzmann/siren` | 已适配的官方单图拟合方法实验 |
+1. 论文全文阅读与仓库位置提取。
+2. README 命令规划、隔离依赖缓存和实际缺包修复。
+3. 真实命令退出、所属进程清理和运行日志归档。
 
-PDF 先验证文件与正文，再识别首页标题，保存 SHA-256、页数和字节数；提取为空时尝试另一解析器。缺失、损坏、无法解密或没有可读正文的 PDF 明确停止，不能用空内容生成训练代码。解析依赖缺失则先自动准备兼容运行环境再重试。标题和 PDF 的通用路线也先检查宿主环境，不只仓库预设会自动恢复；Windows Store 等不兼容环境交给受控的兼容进程执行。显式仓库预设、语料对照或外部代码保持其输入优先级。
-
-通用 PDF 会扫描全部页面的文字与超链接注释，修复 `github.` 与 `com/...` 等明确的断行边界，保留原始链接、页码及上下文。上传后侧栏显示“PDF 原文代码声明链接”或“PDF 仓库候选链接”及提取依据，不必等模型搜索。资源定位优先用户指定仓库和明确的作者代码声明。普通正文链接可能只是框架或基线，因此继续在线搜索并让模型选择实现候选；参考文献中的链接不能据此确认作者身份。报告保留选择证据与来源 PDF 哈希。早期 DeepXDE 排查见 [PDF 仓库定位记录](docs/pdf_repository_discovery_20261010.md)，框架链接误选的修复与真实执行见上方 GNN-LF/HF 回归记录。
-
-已适配的标题/PDF 路线默认在线核对固定作者源码与项目适配证据，可关闭对应复选框；该审核不宣称已分析论文全文。旧预设的优化、仅准备和结果分享选项不会带入标题或 PDF 输入。
-
-未注册预设的 PDF 进入通用仓库流程：重新读取原 PDF，拉取候选的真实 Git 仓库并固定 commit，由 RepositoryVerifier 联合核对论文、README、引用文件和目录。模型引用实际来源片段，程序检查引用及 PDF/源码哈希。候选失败后继续尝试；默认先运行模式会同时考虑发现阶段的备用仓库，去重后最多核验六个，保存每次失败与固定来源。用户手动指定地址时只核验该仓库。仓库存在子模块时先核验实现关系，再按父仓库的固定 gitlink 导出子模块，不追随子模块最新 HEAD。
-
-未注册预设的 PDF 默认勾选“先运行作者仓库代码”：论文与实现方法匹配即可继续，作者身份不确定时明确标注；固定原始源码后，由 LLM 规划作者文档中的完整训练命令。计划审查作为参考，再用依赖准备和真实运行验证可执行性。该目标无需事先提取论文数值或导出模型检查点；所有必需命令正常返回、训练观察到实际优化器更新、所属进程结束且冻结来源未变化时，状态为 `author_code_completed`，`is_reproduced=null`，页面和报告注明论文数值尚未核验。仅导入、异常退出、超时和取消均不能判定作者训练完成。此模式当前使用 PyTorch 观察器和已支持的数据准备形式；实际运行结果见 [GNN-LF/HF 问题回归](docs/gnn_lfhf_repository_regression_20261012.md) 和独立验收记录。已注册预设保持其对应实验路线，页面不显示此选项。
-
-取消勾选后走论文选定实验的数值复现路线。ExperimentProtocol 从完整 PDF 与固定源码确定方法变体、数据划分与预处理、训练和早停、评估权重、重复与汇总、指标及作者入口；后续规划必须保留该协议，通过七项必要语义审核，并在训练前冻结计划、数据、依赖及数值容差。当前支持可读取的 Python 入口、可校验的完整数据及 PyTorch 分类实验的独立评估。训练进程完成、实际优化器更新次数和测试样本数符合计划、原始源码未改动、模型在独立进程重载并重新计算指标均通过后，才进行该实验的论文数值验收。协议冲突或未支持的形式明确报告缺口；仓库计划失败不会改用模型生成的单文件或合成数据。详见 [实验协议判别与步骤规划](docs/experiment_protocol_judgement.md)、[独立新 PDF 验收规则](docs/independent_pdf_acceptance.md)和 [输入与结束判定验收记录](docs/paper_input_completion_20261010.md)。
-
-作者入口自带多次运行时，可按源码冻结全部运行次数、各次完整测试划分及均值规则。项目在唯一作者函数自然返回时捕获实际训练模型和输入，不添加重复训练循环；提前停止必须由实际局部轮数和观察到的优化器更新共同确认。源码要求 CUDA 时使用独立固定的 CUDA 依赖并检查原生 GPU 运算，随后在独立 CPU 进程重载每次模型、重新推理和复算全部指标，不能用最后一次或最佳一次替代论文均值。上述机制已由合成 CPU/GPU 样例验证；真实新 PDF 的最终验收仍须遵守独立样本规则。
-
-论文阅读覆盖全部提取文本，包括正文、结果表及附录，长论文连续分批，输出过密或被截断时自动拆小重读。全部批次成功才允许汇总；验证器同样分批复核原文。不设整篇论文的总字符或调用次数预算；120,000 字符只限定单次文本窗口。报告记录实际覆盖范围和完成批次数，阅读笔记不能代替协议判定的原文证据，文字覆盖也不等于所有图片、公式或扫描页都已识别。
-
-通用数据准备支持仓库内真实文件、带公开校验信息的 HTTPS 数据，以及已审阅的原始作者 Planetoid 加载函数。后者从实际 CLI 调用编译数据名、目录和预处理，先准备固定依赖，再执行原函数并记录真实下载 URL、全部原始/处理文件哈希及划分规模，训练前冻结；模型无需猜测论文没有公布的逐文件校验和。当前仅覆盖 public Cora/CiteSeer/PubMed，其他加载器仍需明确支持。PyG `Data` 输入和原验证指标字典可用于完整原生重复捕获，实际训练、权重选择、独立重载和数值门槛分别核验。
-
-实验判别可在训练前按完整文件目录补读缺失的脚本、加载器和模型源码，最多两轮，每轮八个文件；所选 NPZ 划分的程序摘要另有独立两轮。对于原生模块级重复循环，可在作者唯一的验证选择赋值完成时保留实际权重，等待完整迭代和整个入口结束后确认训练，再独立评估全部重复；导出保留随机数状态。报告分别列出训练、模型选择、完整重复、测试数据、独立评估和数值验收的结束依据，详见上述协议文档中的能力边界。
-
-原生重复循环位于唯一同步顶层函数内部时，也支持上述完整迭代观察。捕获可读取普通对象的直接存储字段；独立评估根据冻结依赖重新注册稀疏算子。测试数量由作者按类别训练配额及全局验证配额计算时，可以引用完整比例函数和划分函数，由程序核对已支持的完整算法与实际命令模式，再从全部真实标签独立计算测试规模；不要求模型猜测原文未给出的整数，其他算法仍明确报告未支持。
-
-传统流程由 Verifier 复用相应 Agent 的 `system_prompt` 审查阶段输出，预算内最多修正一次（`MAX_FIX_RETRIES=1`）。默认先运行模式的阅读、资源定位与计划质量意见作为参考，不因作者归属未知、旧依赖或缺少论文指标直接停止；源码来源、有效命令和真实完成判定仍会检查。关闭先运行选项后的数值复现路线要求七项必要实验检查均有有效证据且通过；真实协议冲突或语义拒绝会停止，不靠改换参考指标或调参获得通过。
-
-自动仓库确认失败后，当前 PDF 会显示“补充 GitHub 仓库”输入框。用户填入地址并点击“开始复现”重试；系统读取固定仓库并核验论文与实现内容，按当前选择的执行目标继续。先运行模式允许作者归属未知的匹配实现；数值复现模式另保留完整实验与独立指标门槛。报告标明用户提供的来源与作者身份是否确认，补充地址按 PDF 哈希隔离，重新上传另一篇论文不会沿用旧地址。
-
-## 核心创新点
-
-1. **真实实验与确定性核验** — 完整执行后分别检查协议、独立指标复算和数值验收
-2. **有限参数优化** — 方法预设使用冻结验证协议和两种子留出确认；UCB 等既有模块仍保留供后续开发
-3. **Prompt-Free 双层验证** — 复用各 Agent 系统提示词作为质量标准，无需额外验证提示词
-4. **可审计完整实验追踪** — 所有步骤的输入输出 / 决策依据写入 `data/logs/` JSONL，
-   实验账本（Ledger）写入 `data/experiment_ledger/`，支持 `replay()` 按时间轴回放
-5. **语料对照层** — 对接 PaperGuru-Benchmark 23 篇真实论文（依赖 / 复现分）
-
-## 关键机制
+## 存量工具与历史机制
 
 | 机制 | 说明 |
 |---|---|
@@ -357,7 +288,7 @@ python scripts/resource_cli.py quota-check --size-gb 1.5   # 下载前预检
 | `AUTOREPRO_DEPS_ROOT` | 隔离依赖安装根 | `data/deps` |
 | `AUTOREPRO_PIP_INDEX` | pip 下载源（镜像级共享与注入共用） | 清华镜像 |
 
-## 工程可信度增强（ScholarAgent 融合）
+## 存量工程模块（当前审核流程已移除）
 
 面向「复现结论可信」的工程防线（P0 移植 + P1 增强，参照 ScholarAgent 的
 证据链 / 经验库 / 防泄漏理念落地）：
@@ -379,7 +310,7 @@ python scripts/resource_cli.py quota-check --size-gb 1.5   # 下载前预检
 
 ## 两种模式
 
-- **真实模式**（网页默认）— 配置 **OpenAI 兼容的远程 LLM API** 执行分析；官方仓库预设也可关闭分析与优化选项后直接训练。预设按固定配置使用本地 CPU 或 CUDA，不依赖 Docker。
+- **真实模式**（网页默认）— 配置 **OpenAI 兼容的远程 LLM API** 执行分析；官方仓库预设直接安装依赖并训练，无需审核 API。预设按固定配置使用本地 CPU 或 CUDA，不依赖 Docker。
 - **Mock 模式**（手动开启）— 无需 LLM API / Docker，演示通用流程；官方仓库预设要求真实模式。
 
 > **安全提示**：真实模式的代码执行分两种沙箱——**本地子进程**（默认，便捷但

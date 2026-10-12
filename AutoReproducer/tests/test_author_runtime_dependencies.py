@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from src.author_runtime_dependencies import repair_requirement, run_with_dependency_repair
+from src.author_runtime_dependencies import MAX_DEPENDENCY_REPAIRS, repair_requirement, run_with_dependency_repair
 from src.discovered_repository_plan import _author_imports, _citations, _requirements, build_evidence_packet
 from src.discovered_repository_reproduction import environment_for_plan
 from discovered_fixtures import make_experiment
@@ -94,9 +94,17 @@ def test_repeated_missing_module_does_not_retry_forever_or_report_success(tmp_pa
 
 
 def test_repair_budget_is_shared_by_preflight_and_training(tmp_path):
-    data = {'dependency_repair_attempts': [{'package': 'one'}, {'package': 'two'}, {'package': 'three'}]}
+    data = {'dependency_repair_attempts': [{'package': str(i)} for i in range(MAX_DEPENDENCY_REPAIRS)]}
     runner = FailingRunner(["ModuleNotFoundError: No module named 'einops'"])
     result = run_with_dependency_repair(runner, tmp_path, [], {}, plan(), {'file_inventory': {}},
                                        tmp_path, data, lambda e: None, lambda: None)
     assert result['success'] is False and len(runner.calls) == 1
-    assert len(data['dependency_repair_attempts']) == 3
+    assert len(data['dependency_repair_attempts']) == MAX_DEPENDENCY_REPAIRS
+
+
+def test_more_than_three_distinct_missing_modules_can_be_repaired(tmp_path):
+    modules = ['einops', 'yaml', 'tqdm', 'pandas', 'seaborn']
+    runner = FailingRunner(["ModuleNotFoundError: No module named '" + module + "'" for module in modules] + [''])
+    result = run_with_dependency_repair(runner, tmp_path, [], {}, plan(), {'file_inventory': {}},
+                                       tmp_path, {}, lambda e: None, lambda: None)
+    assert result['success'] is True and len(runner.calls) == 6

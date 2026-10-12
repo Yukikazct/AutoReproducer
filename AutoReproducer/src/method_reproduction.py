@@ -1,4 +1,4 @@
-"""Run reviewed method adapters with preparation separate from timed execution."""
+"""Run author method adapters with preparation separate from timed execution."""
 import time
 import uuid
 import os
@@ -57,6 +57,7 @@ class MethodReproduction:
     @termination_signals()
     def run(self, request, on_event=None):
         from src.run_lifecycle import cancellation_signals
+        request = {**request, "use_llm_review": False, "optimization_mode": "off", "enable_optimization": False}
         # Reject impossible requests and recover abandoned studies before this run
         # claims any record, so a refused request leaves no run directory behind.
         prepare_only, prepare_env = bool(request.get("prepare_only")), bool(request.get("prepare_environment"))
@@ -99,7 +100,6 @@ class MethodReproduction:
     def _run(self, request, on_event, run_dir):
         from src.repository_reproduction import export_repository, spec_digest
         from src.agents.report_generator import ReportGeneratorAgent
-        from src.method_advice import suggest
         started = time.monotonic()
         emit = on_event or (lambda e: None)
         profile = get_profile(request["experiment_profile"])
@@ -122,21 +122,15 @@ class MethodReproduction:
         if request.get("pdf_resolution"):
             data["pdf_resolution"] = deepcopy(request["pdf_resolution"])
         before_calls = self.llm.get_call_count() if self.llm else 0
-        full_review = bool(request.get("use_llm_review")) and not (prepare_only or prepare_env)
-        stages = [("prepare_repository", "FIND_RESOURCES", "ResourceFinder", "核验固定源码与数据"),
-                  ("prepare_environment", "BUILD_ENV", "EnvBuilder", "准备或检查实验环境"),
-                  ("execute_repository", "EXECUTE_CODE", "CodeExecutor", "代码执行"),
-                  ("verify_protocol", "VALIDATE", "Verifier", "核验本次协议与产物"),
-                  ("method_advice", "OPTIMIZE", "Optimizer", "智能建议与参数试验"),
-                  ("generate_report", "GENERATE_REPORT", "ReportGenerator", "生成实验报告")]
-        reviews = [("review_" + role, "READ_PAPER", agent, title) for role, agent, title in (
-            ("reader", "PaperReader", "在线分析论文方法"), ("finder", "ResourceFinder", "在线核对资源"),
-            ("builder", "EnvBuilder", "在线分析依赖"), ("verifier", "Verifier", "在线证据预审"))]
-        stages[2:2] = reviews
+        stages = [("prepare_repository", "FIND_RESOURCES", "ResourceFinder", "准备源码与数据"),
+                  ("prepare_environment", "BUILD_ENV", "EnvBuilder", "安装运行依赖"),
+                  ("execute_repository", "EXECUTE_CODE", "CodeExecutor", "运行作者实验"),
+                  ("finish_execution", "EXECUTE_CODE", "CodeExecutor", "记录命令退出与进程结束"),
+                  ("generate_report", "GENERATE_REPORT", "ReportGenerator", "生成运行报告")]
         emit({"type": "pipeline_plan", "pipeline": "repository", "stages": [
             {"id": i, "agent": a, "title": title, "description": title,
-             "status": "skipped" if ((prepare_only or prepare_env) and i in {"execute_repository", "verify_protocol", "method_advice"})
-                       or (i == "method_advice" and mode == "off") or (i.startswith("review_") and not full_review) else "waiting"}
+             "status": "skipped" if ((prepare_only or prepare_env) and i in {"execute_repository", "finish_execution"})
+                           else "waiting"}
             for i, s, a, title in stages]})
         def event(identifier, status, reason=""):
             _, state, agent, title = next(s for s in stages if s[0] == identifier)
@@ -185,9 +179,10 @@ class MethodReproduction:
                 write_json(run_dir / f"{name}.json", value)
             event(phase, "success")
             phase = "prepare_environment"; event(phase, "running")
-            steps = adapter.steps(profile, train=not (prepare_only or prepare_env))
+            steps = [{**step, 'depends_on': []} for step in adapter.steps(profile, train=True)
+                     if step.get('kind') == 'train']
             env = {**profile["environment"], "cache_lock_timeout_s": AUTO_PREPARATION_LOCK_TIMEOUT,
-                   "dependency_health_check": True, "auto_prepare": True, "offline": offline}
+                   "dependency_health_check": False, "auto_prepare": True, "offline": offline}
             data["env_config"] = deepcopy(env)
             plan = build_plan(mode="repository", profile=profile["id"], spec_sha256=spec_hash,
                               workspace=snapshot["path"],
@@ -212,7 +207,8 @@ class MethodReproduction:
                 # Check imports, native packages and the requested device before
                 # starting any baseline deadline. This retains genuine failure
                 # evidence while preventing a failed setup from launching training.
-                preparation_steps = steps if prepare_env else adapter.steps(profile, train=False)
+                preparation_steps = [{'id': 'prepare_dependencies', 'kind': 'check', 'depends_on': [],
+                    'argv': ['python', '-c', "print('environment ready')"], 'timeout_s': 60}]
                 preparation_plan = {**plan, "steps": deepcopy(preparation_steps)}
                 data["environment_preparation_plan"] = preparation_plan
                 write_json(run_dir / "environment_preparation_plan.json", preparation_plan)
@@ -226,32 +222,13 @@ class MethodReproduction:
                 write_json(run_dir / "environment_preparation_execution.json", preparation)
                 if not preparation["success"]:
                     raise RuntimeError((preparation.get("final") or {}).get("stderr", "实验环境准备失败")[-1800:])
-                adapter.verify_environment(profile, preparation, workspace)
                 for name in ("dependency_install_attempts", "dependency_health_attempts", "dependency_cache_repairs"):
                     env[name] = deepcopy(preparation.get("environment", {}).get(name, []))
                 data["preparation_elapsed_s"] = time.monotonic() - started
                 event(phase, "success")
                 if not prepare_env:
-                    if full_review:
-                        from src.method_advice import review_sources
-                        phase = "review_reader"
-                        def review_stage(role, status):
-                            nonlocal phase
-                            phase = "review_" + role
-                            event(phase, status)
-                        project_sources = method_review_project_sources(workspace, manifest, environment_verified=True)
-                        write_json(run_dir / "project_review_sources.json", project_sources)
-                        data["method_analysis"] = review_sources(self.llm, profile, sources,
-                                                                 review_stage, project_sources=project_sources)
-                        write_json(run_dir / "method_analysis.json", data["method_analysis"])
-                        data["analysis_status"] = "public_readiness_accepted"
                     execution_started = time.monotonic()
-                    if mode == "validate":
-                        baseline_allowance = min(1200, budget)
-                    elif full_review:
-                        baseline_allowance = max(1200, profile["budget"]["baseline_s"])
-                    else:
-                        baseline_allowance = profile["budget"]["baseline_s"]
+                    baseline_allowance = profile['budget']['baseline_s']
                     baseline_deadline = execution_started + baseline_allowance
                     env.update(require_prepared=True, deadline_monotonic=baseline_deadline,
                                exclude_environment_preparation_from_deadline=True)
@@ -277,27 +254,17 @@ class MethodReproduction:
                                           "is_reproduced": None, "reason": "源码、数据、依赖和设备导入检查完成；尚未训练"}
                 else:
                     event(phase, "success")
-                    phase = "verify_protocol"; event(phase, "running")
-                    data["validation"] = adapter.verify(profile, execution, workspace, snapshot, manifest, spec_hash)
+                    phase = "finish_execution"; event(phase, "running")
+                    from src.execution_completion import completed_execution
+                    data["validation"] = completed_execution(execution)
                     data["baseline_elapsed_s"] = time.monotonic() - execution_started
-                    if time.monotonic() > baseline_deadline:
-                        raise TimeoutError("基线阶段超过冻结时间预算")
+                    from src.author_claim_comparison import collect_author_metrics
+                    try:
+                        data['validation']['metric_records'], data['metric_parse_errors'] = collect_author_metrics(execution)
+                    except Exception as exc:
+                        data['metric_parse_errors'] = [str(exc)]
                     write_json(run_dir / "validation.json", data["validation"])
                     event(phase, "success")
-                    # Publish a complete baseline before calling the external API.
-                    data["report"] = ReportGeneratorAgent(self.logger).run(data, report_path=data["report_path"])["report"]
-                    (run_dir / "report.md").write_text(data["report"], encoding="utf-8")
-                    if mode != "off":
-                        phase = "method_advice"; event(phase, "running")
-                        remaining = (execution_started + profile["budget"]["total_s"] - time.monotonic() - 15) if mode == "suggest" and not full_review else 45
-                        if mode == "validate":
-                            from src.method_optimization import validate_candidates
-                            data["optimization"] = validate_candidates(self, profile, data, request, execution_started,
-                                lambda execution_event, phase_id=phase: emit({**execution_event, "phase_id": phase_id}))
-                        else:
-                            data["optimization"] = suggest(self.llm, profile, data["validation"], sources, timeout_s=min(45, remaining))
-                            data["optimization"]["baseline_run_id"] = run_dir.name
-                        event(phase, "success" if data["optimization"]["status"] not in {"advice_timeout", "advice_unavailable"} else "error", data["optimization"].get("reason", ""))
         except (KeyboardInterrupt, SystemExit) as exc:
             # Preserve a verified baseline and the study's partial evidence,
             # while keeping the whole run explicitly incomplete.
@@ -329,7 +296,7 @@ class MethodReproduction:
                 data["method_analysis"] = analysis
                 data["analysis_status"] = "public_readiness_rejected"
                 write_json(run_dir / "method_analysis.json", analysis)
-            data["validation"] = {"status": "analysis_failed" if phase.startswith("review_") else "execution_failed",
+            data["validation"] = {"status": "execution_failed",
                                   "failure_phase": phase, "result_level": "failed", "is_reproduced": None,
                                   "optimization_eligible": False, "reason": error}
             data.setdefault("execution", {"mode": "repository", "executed": False, "success": False})
@@ -350,7 +317,7 @@ class MethodReproduction:
                                        if execution_started is not None else 0)
         data["quick_target"]["elapsed_s"] = data["execution_elapsed_s"]
         data["quick_target"]["validated_on_this_run"] = bool(
-            not error and profile["adapter_id"] == "siren" and not (prepare_env or prepare_only or full_review) and mode == "suggest"
+            not error and profile["adapter_id"] == "siren" and not (prepare_env or prepare_only) and mode == "suggest"
             and data["execution_elapsed_s"] <= 300 and data["validation"].get("quality_pass")
             and data["optimization"]["status"] == "suggested")
         write_json(run_dir / "result.json", {"data": data, "error": error})

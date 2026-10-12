@@ -47,6 +47,33 @@ def build(data):
     return ReportGeneratorAgent()._build_report(data)
 
 
+def test_current_author_run_report_has_completion_and_metrics_without_old_review_requirements():
+    report = build({
+        'grounded_repository_plan': {'scope': 'author_code_execution', 'steps': [
+            {'id': 'train', 'argv': ['python', 'main.py'], 'cwd': '.'}]},
+        'validation': {'status': 'author_code_completed', 'reviews_removed': True,
+                       'author_execution': [{'step': {'id': 'train'}, 'natural_return': True,
+                                             'optimizer_steps': 327}],
+                       'metric_records': [{'name': 'accuracy', 'value': 0.8953}]},
+        'execution': {'mode': 'repository', 'executed': True,
+                      'final': {'success': True, 'exit_code': 0}},
+    })
+    assert '["python", "main.py"]' in report
+    assert '退出码为 0' in report
+    assert '实际优化器更新：327' in report
+    assert '| accuracy | 0.8953 |' in report
+    for obsolete in ('验收规则', '5% 相对容差', '独立模型重载评估通过', '每次完整执行 None',
+                     '按独立协议审查确定的作者规则'):
+        assert obsolete not in report
+
+
+def test_current_rezero_run_does_not_claim_independent_evaluation_or_reference_gate():
+    report = build({'experiment_spec': {'adapter_id': 'rezero'},
+                   'validation': {'status': 'author_code_completed', 'reviews_removed': True}})
+    assert '独立评估须' not in report
+    assert '固定验收参考' not in report
+
+
 def test_report_shows_distinct_specialists_actual_calls_and_accepted_evidence(report_data):
     report = build(report_data)
     assert "公开来源多 Agent 分析" in report

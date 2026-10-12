@@ -10,7 +10,7 @@ import types
 import torch
 from torch.optim.optimizer import register_optimizer_step_post_hook
 from observe_datasets import DatasetObserver
-from author_numeric_compatibility import diagnose_reciprocal_error, run_entrypoint
+from author_numeric_compatibility import diagnose_numpy_alias_error, diagnose_reciprocal_error, run_entrypoint
 
 
 runtime = Path(__file__).resolve().parent
@@ -84,8 +84,9 @@ try:
         # through SystemExit. A clean exit still needs real data and updates.
         if exc.code is not None and (type(exc.code) is not int or exc.code != 0):
             raise
-    except ValueError as exc:
-        candidate = diagnose_reciprocal_error(exc, script, workspace, config['source_files'])
+    except (ValueError, AttributeError) as exc:
+        candidate = (diagnose_reciprocal_error(exc, script, workspace, config['source_files'])
+                     or diagnose_numpy_alias_error(exc, script, workspace, config['source_files']))
         if candidate:
             failure_path.write_text(json.dumps({'spec_sha256': config['spec_sha256'],
                 'step': identifier, 'optimizer_steps': updates, 'repair': candidate}), encoding='utf-8')

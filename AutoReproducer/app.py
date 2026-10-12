@@ -236,11 +236,9 @@ def render_paper_input():
             selected = get_profile(match["experiment_profile"])
             st.success("已匹配官方作者仓库：" + selected["repository"]["url"])
             st.markdown(f"[论文]({selected['paper']['url']}) · [作者代码]({selected['repository']['url']})")
-            st.caption("将核验固定版本并执行：" + selected["label"])
+            st.caption("将取得固定版本并运行：" + selected["label"])
             if selected.get("adapter_id"):
                 st.caption("结论限于选定官方方法实验；论文完整基准需要另行适配。")
-            st.caption("该在线审核使用作者源码与项目适配证据。")
-            st.checkbox("在线核验匹配的作者代码与实验依据", value=True, key="title_llm_review")
     elif input_mode == "上传PDF":
         uploaded_file = st.file_uploader(
             "上传PDF文件", type=["pdf"], key="pdf_uploader",
@@ -269,15 +267,12 @@ def render_paper_input():
                 else:
                     st.success("PDF 首页已匹配作者仓库：" + selected["repository"]["url"])
                 st.markdown(f"[论文]({selected['paper']['url']}) · [作者代码]({selected['repository']['url']})")
-                st.caption("将执行：" + selected["label"] + "；结论按该实验的验收范围给出。")
-                st.caption("该在线审核使用作者源码与项目适配证据。")
+                st.caption("将执行：" + selected["label"] + "；结果由实际运行输出给出。")
             else:
-                st.caption("将解析论文正文并核验资源；信息不足会明确报告，不能据占位代码认定复现。")
+                st.caption("从论文正文寻找仓库并尝试运行，实际报错会显示在日志中。")
                 if (not st.session_state.mock_mode
                         and st.session_state.get('corpus_paper_select', '无') == '无'):
-                    st.checkbox('先运行作者仓库代码', value=True,
-                        key='author_execution_' + hashlib.sha256(uploaded_file.getvalue()).hexdigest(),
-                        help='找到仓库后直接获取源码，按 README 规划并运行原命令，跳过论文与仓库匹配审核。缺少依赖时自动安装并重试，完成后对比作者输出与论文宣称。关闭后要求完整论文数值复现。')
+                    st.caption('按作者 README 直接运行仓库代码，缺包时自动安装并重试。')
             links = preview.get("repository_links", [])
             if links:
                 primary = next((link for link in links if link.get("is_author_code")), None)
@@ -288,7 +283,7 @@ def render_paper_input():
                     candidate = next((link for link in links if link.get("evidence_type") != "reference"), None)
                     if candidate:
                         st.info("PDF 仓库候选链接：" + candidate["url"])
-                st.caption("默认先获取仓库源码并尝试运行；选择完整数值复现时另行核验论文与实现关系。")
+                st.caption("获取仓库源码后直接安装依赖并运行。")
                 with st.expander("PDF 仓库链接提取依据"):
                     for link in links[:12]:
                         kind = {"author_code_statement": "代码公开声明", "reference": "参考文献",
@@ -297,7 +292,6 @@ def render_paper_input():
                         if link.get("context"):
                             st.text(link["context"])
             if not preview.get("error"):
-                st.checkbox("在线核验匹配的作者代码与实验依据", value=True, key="pdf_llm_review")
                 from frontend.repository_fallback import fallback_for_pdf, repository_widget_key
                 pdf_hash = (preview.get("pdf_input") or {}).get("sha256", "")
                 fallback = fallback_for_pdf(st.session_state.result, pdf_hash)
@@ -319,31 +313,11 @@ def render_paper_input():
         st.markdown(f"[论文]({selected['paper']['url']}) · [作者代码]({selected['repository']['url']})")
         if selected.get("adapter_id") in {"siren", "neural_ode"}:
             st.selectbox("实验操作", ["运行实验", "准备实验环境", "仅准备源码和命令"], key="method_action")
-            st.selectbox("智能优化", ["off", "suggest", "validate"], index=1,
-                         format_func=lambda value: {"off": "关闭", "suggest": "真实基线 + 智能建议", "validate": "真实训练验证建议（长任务）"}[value],
-                         key="method_optimization")
-            st.checkbox("运行前进行在线论文与代码分析（完整模式）", value=False, key="method_llm_review")
-            if st.session_state.method_optimization == "validate":
-                st.number_input("最多候选数", min_value=1, max_value=3, value=3, key="method_max_candidates")
-                minutes = st.number_input("本篇总预算（分钟）", min_value=1, max_value=120, value=120,
-                                          key="method_budget_minutes",
-                                          help="包含在线分析、基线、候选训练和最终确认；必须大于40分钟，建议120分钟。")
-                st.caption(f"总预算包含分析、基线与参数验证，其中固定预留"
-                           f"{CONFIRMATION_RESERVE_SECONDS // 60}分钟用于两种子确认。"
-                           "建议120分钟；这是耗时上限，提前完成不会等满。")
-                if st.session_state.method_action == "运行实验":
-                    budget_error = optimization_budget_error(minutes * 60)
-                    if budget_error:
-                        st.warning(budget_error)
-            st.caption("运行时会自动准备缺失环境、检查依赖并修复缓存；也可单独准备环境。"
-                       "快速档目标为五分钟，建议尚未实测有效；验证建议使用独立长任务预算。"
-                       "智能建议会把指标与训练摘要交给已配置的 API。")
+            st.caption('自动安装运行依赖，直接执行作者实验。')
             return
         st.checkbox("仅准备代码、数据和命令（不训练）", key="repository_prepare_only")
-        st.checkbox("使用真实多 Agent 分析论文、仓库和环境", value=True, key="repository_llm_review")
-        st.checkbox("允许 API 分析本次指标、轮数和核验状态摘要", key="repository_result_review")
-        st.caption("完整分析流程需要真实 API；关闭分析选项可直接执行作者实验。"
-                   "使用本地 CPU，首次训练会安装隔离依赖；默认执行完整作者训练协议。")
+        st.caption('直接执行作者实验，首次运行会安装隔离依赖。')
+
 
 
 # ========== 侧边栏 ==========
@@ -351,7 +325,7 @@ with st.sidebar:
     st.markdown("""
     <div class="sidebar-brand">
         <span class="brand-icon" aria-hidden="true">AR</span>
-        <div><strong>AutoReproducer</strong><small>论文复现与实验核验</small></div>
+        <div><strong>AutoReproducer</strong><small>论文代码运行与实验记录</small></div>
     </div>
     <div class="sidebar-intro">配置复现任务</div>
     <p class="sidebar-help">设置运行环境与论文来源，提交可追踪的复现实验。</p>
@@ -431,19 +405,14 @@ with st.sidebar:
     experiment_profile = (st.session_state.get("experiment_profile")
                           if input_mode == "官方仓库预设" else None)
     manual_repo_url, manual_repo_error = "", ""
-    author_execution_only = False
+    author_execution_only = not st.session_state.mock_mode
     if uploaded_file and not st.session_state.mock_mode:
         from frontend.repository_fallback import manual_repository, repository_widget_key
         uploaded_hash = hashlib.sha256(uploaded_file.getvalue()).hexdigest()
         manual_repo_url, manual_repo_error = manual_repository(
             st.session_state.get(repository_widget_key(uploaded_hash), ""))
     method_selected = bool(experiment_profile and get_profile(experiment_profile).get("adapter_id") in {"siren", "neural_ode"})
-    requires_api = not experiment_profile or (
-        bool(st.session_state.get("repository_llm_review"))
-        and not bool(st.session_state.get("repository_prepare_only")))
-    if method_selected:
-        requires_api = st.session_state.get("method_action") == "运行实验" and (
-            st.session_state.get("method_optimization", "off") != "off" or st.session_state.get("method_llm_review", False))
+    requires_api = not experiment_profile
 
     # 语料对照层（可选）：选择真实论文作为轻量锚点
     st.markdown('<div class="sidebar-section-label"><span>02</span> 语料对照 <em>可选</em></div>',
@@ -468,7 +437,7 @@ with st.sidebar:
             # Title input runs the matched baseline. Preset controls belong to
             # that input mode and must not leak a previous long optimization.
             method_selected = False
-            requires_api = bool(st.session_state.get("title_llm_review", True))
+            requires_api = False
     elif input_mode == "上传PDF" and uploaded_file and not corpus_paper:
         preview = _preview_pdf_input(uploaded_file.getvalue(), st.session_state.mock_mode)
         if preview.get("resolution") and not manual_repo_url:
@@ -477,10 +446,10 @@ with st.sidebar:
             # this Streamlit process still owns cached earlier adapters.
             experiment_profile = preview["resolution"]["profile"]
             method_selected = False
-            requires_api = bool(st.session_state.get("pdf_llm_review", True))
+            requires_api = False
 
     if uploaded_file and not st.session_state.mock_mode and not experiment_profile and not corpus_paper:
-        author_execution_only = st.session_state.get('author_execution_' + uploaded_hash, True) is True
+        author_execution_only = True
 
     # 启动 / 重置按钮
     col1, col2 = st.columns(2)
@@ -577,15 +546,10 @@ if start_btn and not st.session_state.running:
             prepare_only=False if title_resolution or tmp_pdf else (st.session_state.get("method_action") == "仅准备源码和命令" if method_selected else
                           bool(st.session_state.get("repository_prepare_only")) if experiment_profile else False),
             prepare_environment=method_selected and st.session_state.get("method_action") == "准备实验环境",
-            optimization_mode=st.session_state.get("method_optimization", "off") if method_selected else "off",
+            optimization_mode="off",
             max_candidates=int(st.session_state.get("method_max_candidates", 3)),
             budget_seconds=int(st.session_state.get("method_budget_minutes", 120)) * 60,
-            use_llm_review=(bool(st.session_state.get("title_llm_review", True)) if title_resolution else
-                             bool(st.session_state.get("pdf_llm_review", True)) if tmp_pdf else
-                            bool(st.session_state.get("method_llm_review")) if method_selected else
-                            bool(st.session_state.get("repository_llm_review")) if experiment_profile else False),
-            allow_result_summary_review=(bool(st.session_state.get("repository_result_review"))
-                                         if experiment_profile and not title_resolution and not tmp_pdf else False),
+            use_llm_review=False, allow_result_summary_review=False,
             model_name=model_name, base_url=base_url,
             api_key=api_key,
             mock_mode=st.session_state.mock_mode,
@@ -637,7 +601,7 @@ st.markdown(f"""
             <p>依据论文与作者代码组织实验，记录执行过程、独立评估与复现结论。</p>
         </div>
     </div>
-    <div class="hero-steps"><span><b>01</b> 解析论文</span><i>→</i><span><b>02</b> 准备实验</span><i>→</i><span><b>03</b> 执行与核验</span><i>→</i><span><b>04</b> 生成报告</span></div>
+    <div class="hero-steps"><span><b>01</b> 解析论文</span><i>→</i><span><b>02</b> 准备实验</span><i>→</i><span><b>03</b> 执行实验</span><i>→</i><span><b>04</b> 生成报告</span></div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -655,7 +619,7 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
 with tab1:
     st.markdown("""<div class="section-heading"><div><span class="section-kicker">01 / EXPERIMENT WORKFLOW</span>
     <h2>复现流水线</h2><p>按实际执行顺序追踪各阶段；同一 Agent 的不同任务分别显示。</p></div>
-    <span class="section-aside">准备 · 执行 · 核验 · 报告</span></div>""",
+    <span class="section-aside">准备 · 执行 · 结果 · 报告</span></div>""",
                 unsafe_allow_html=True)
 
     # ---------- 后台复现实时进度（轮询进度文件） ----------
@@ -679,7 +643,7 @@ with tab1:
     pdf_source = (snap or {}).get("pdf_resolution") or {}
     if pdf_source:
         selected = get_profile(pdf_source["profile"])
-        st.caption("已根据 PDF 首页核验论文：" + pdf_source["title"])
+        st.caption("根据 PDF 首页识别论文：" + pdf_source["title"])
         st.markdown(f"作者仓库：[源码]({selected['repository']['url']}) · PDF SHA-256：`{pdf_source['sha256']}`")
     has_method_study = any(stage["id"] == "method_advice" and stage.get("status") != "skipped"
                            for stage in stages)
@@ -769,7 +733,7 @@ with tab1:
         enabled_count = sum(stage.get("status") != "skipped" for stage in stages)
         progress = completed / enabled_count if enabled_count else 0
         task_status = "整体任务仍在运行；" if st.session_state.running else ""
-        st.progress(progress, text=f"阶段完成: {completed}/{enabled_count}（{task_status}复现结论以数值验收为准）")
+        st.progress(progress, text=f"阶段完成: {completed}/{enabled_count}（{task_status}结果以真实命令退出状态为准）")
         st.caption("上方仅按阶段计数，不代表耗时比例；执行轮数和步骤数以实际运行记录为准。")
         with st.expander("各部分结束判定"):
             st.caption("阶段负责人返回结果，且所属执行轮次退出并完成清理，才确认该部分结束。"
@@ -832,14 +796,16 @@ with tab1:
             elif validation.get("status") in {"prepared", "environment_prepared", "smoke_passed"}:
                 st.info(validation.get("reason", "流程已结束，请查看实验结论"))
             elif validation.get('status') == 'author_code_completed':
-                st.success('所选仓库代码已运行完成，实际训练更新和所属进程结束已核验。')
+                st.success('所选仓库代码已运行完成，命令已正常退出。')
+                if validation.get('training_observed') is False:
+                    st.caption('本次未记录到优化器更新；详见作者程序输出。')
                 for warning in validation.get('warnings', []):
                     st.warning(warning)
                 comparison = validation.get('author_claim_comparison') or {}
                 if comparison.get('comparisons'):
-                    st.caption('已对比作者输出与论文宣称，详见报告中的差值和实验设置；尚未独立核验论文数值。')
+                    st.caption('已对比作者输出与论文宣称，详见报告中的差值和实验设置；本次未进行论文数值审核。')
                 else:
-                    st.caption('论文数值尚未核验；此结果不判定论文复现成功。')
+                    st.caption('本次完成的是代码运行，论文数值未做验收。')
             elif validation.get("status") == "method_experiment_completed":
                 optimization = data.get("optimization") or {}
                 st.success(("基线方法实验已完成" if optimization.get("mode") == "validate"
@@ -937,14 +903,12 @@ stateDiagram-v2
     READ_PAPER --> FIND_RESOURCES
     FIND_RESOURCES --> BUILD_ENV
     BUILD_ENV --> EXECUTE_CODE
-    EXECUTE_CODE --> VALIDATE
-    VALIDATE --> GENERATE_REPORT
+    EXECUTE_CODE --> GENERATE_REPORT
     GENERATE_REPORT --> COMPLETED
     READ_PAPER --> ERROR
     FIND_RESOURCES --> ERROR
     BUILD_ENV --> ERROR
     EXECUTE_CODE --> ERROR
-    VALIDATE --> ERROR
     GENERATE_REPORT --> ERROR
     ERROR --> INIT
     COMPLETED --> [*]
@@ -958,14 +922,13 @@ stateDiagram-v2
         {"状态": "READ_PAPER", "说明": "解析论文PDF/标题,提取结构化信息", "Agent": "PaperReader"},
         {"状态": "FIND_RESOURCES", "说明": "查找代码仓库和数据集", "Agent": "ResourceFinder"},
         {"状态": "BUILD_ENV", "说明": "构建环境 + 5轮依赖诊断", "Agent": "EnvBuilder"},
-        {"状态": "EXECUTE_CODE", "说明": "冒烟检查与完整实验执行", "Agent": "CodeExecutor"},
-        {"状态": "VALIDATE", "说明": "验证结果与论文一致性", "Agent": "ResultValidator"},
+        {"状态": "EXECUTE_CODE", "说明": "运行代码并记录真实输出", "Agent": "CodeExecutor"},
         {"状态": "GENERATE_REPORT", "说明": "生成Markdown复现报告", "Agent": "ReportGenerator"},
         {"状态": "COMPLETED", "说明": "流水线完成", "Agent": "—"},
         {"状态": "ERROR", "说明": "出错状态，可重试", "Agent": "—"},
     ]
     st.table(state_data)
-    st.caption("上图展示通用主流程；方法预设可在核验后进入智能建议或参数验证阶段，详细阶段以实际流水线为准。")
+    st.caption("上图展示当前主流程；运行完成以命令退出和进程清理状态为准。")
 
 
 # ===== Tab 5: 历史记录 =====

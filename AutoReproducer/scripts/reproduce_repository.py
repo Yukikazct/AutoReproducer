@@ -1,4 +1,4 @@
-"""Run a fixed real-paper experiment, optionally checking its public protocol via API."""
+"""Run a fixed real-paper experiment, without paper review gates."""
 import argparse
 import getpass
 import json
@@ -31,9 +31,9 @@ def main(argv=None):
     parser.add_argument("--max-candidates", type=int, choices=[1, 2, 3], default=3)
     parser.add_argument("--budget-seconds", type=int, default=7200, help="优化训练与评估总预算，最多7200秒")
     parser.add_argument("--offline", action="store_true", help="准备时只复用经版本/哈希校验的本地代码与数据；缺失即失败")
-    parser.add_argument("--llm-review", action="store_true", help="用真实API执行有公开来源依据的多Agent分析；密钥从环境或隐藏输入读取")
-    parser.add_argument("--analysis-mode", choices=["multi_agent", "public_protocol"], default="multi_agent")
-    parser.add_argument("--result-review", action="store_true", help="允许API分析本次指标、训练轮数和核验状态摘要；不发送路径、原始日志或文件")
+    parser.add_argument("--llm-review", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--analysis-mode", choices=["multi_agent", "public_protocol"], default="multi_agent", help=argparse.SUPPRESS)
+    parser.add_argument("--result-review", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     if args.prepare_only and args.prepare_environment:
         parser.error("--prepare-only and --prepare-environment are mutually exclusive")
@@ -41,10 +41,7 @@ def main(argv=None):
         parser.error("--budget-seconds must be between 1 and 7200")
     if args.prepare_environment and args.profile.startswith("dlinear"):
         parser.error("--prepare-environment is available for method experiment profiles")
-    if args.optimization != "off" and args.profile.startswith("dlinear"):
-        parser.error("DLinear preserves the author protocol; parameter optimization is available for SIREN and Neural ODE")
-    if args.result_review and not args.llm_review:
-        parser.error("--result-review requires --llm-review")
+
 
     # Resolve hidden input before handing control to a noninteractive worker.
     # Python older than 3.11 can still bootstrap without tomllib.
@@ -55,8 +52,9 @@ def main(argv=None):
             raise
     else:
         load_local_llm_settings()
-    use_llm_review = args.llm_review and not (args.prepare_only or args.prepare_environment)
-    needs_llm = use_llm_review or (args.optimization != "off" and not (args.prepare_only or args.prepare_environment))
+    use_llm_review = False  # Legacy CLI review flags cannot enable deleted stages.
+    needs_llm = False
+    args.optimization = "off"
     token = ""
     if needs_llm:
         token = os.environ.get("LLM_API_KEY") or (getpass.getpass("API Key (hidden): ") if sys.stdin.isatty() else "")

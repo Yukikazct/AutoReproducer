@@ -4,10 +4,12 @@ The repository file stays unchanged. The retry compiles one recorded call as
 numpy.float_power instead of numpy.power; every other AST node stays original.
 """
 import ast
+import builtins
 import hashlib
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 import runpy
+import re
 import sys
 import types
 
@@ -15,6 +17,36 @@ import numpy as np
 
 
 ERROR = 'Integers to negative integer powers are not allowed.'
+BUILTIN_ALIASES = {'bool', 'int', 'float', 'complex', 'object', 'str'}
+
+
+def diagnose_numpy_alias_error(exc, script, workspace, sources):
+    if not isinstance(exc, AttributeError):
+        return None
+    match = re.search(r"module 'numpy' has no attribute '([^']+)'", str(exc))
+    if not match or match[1] not in BUILTIN_ALIASES:
+        return None
+    alias, workspace = match[1], Path(workspace).resolve()
+    trace, candidate = exc.__traceback__, None
+    while trace:
+        source = Path(trace.tb_frame.f_code.co_filename).resolve()
+        if source.is_relative_to(workspace):
+            relative = source.relative_to(workspace).as_posix()
+            expected = sources.get(relative)
+            if expected and source.is_file() and hashlib.sha256(source.read_bytes()).hexdigest() == expected:
+                tree = ast.parse(source.read_bytes(), filename=str(source))
+                values = {**trace.tb_frame.f_globals, **trace.tb_frame.f_locals}
+                matches = [node for node in ast.walk(tree) if isinstance(node, ast.Attribute)
+                           and node.lineno == trace.tb_lineno and node.attr == alias
+                           and isinstance(node.value, ast.Name) and values.get(node.value.id) is np]
+                if len(matches) == 1:
+                    node = matches[0]
+                    candidate = {'kind': 'numpy_builtin_alias', 'alias': alias, 'path': relative,
+                        'source_sha256': expected, 'line': node.lineno, 'column': node.col_offset,
+                        'original_expression': ast.get_source_segment(source.read_text('utf-8'), node),
+                        'replacement': 'builtins.' + alias, 'error': str(exc)}
+        trace = trace.tb_next
+    return candidate
 
 
 def power_call(tree, line, column=None):
@@ -63,8 +95,28 @@ def diagnose_reciprocal_error(exc, script, workspace, sources):
 
 
 def run_entrypoint(script, repairs, workspace, sources):
+    for repair in repairs:
+        if repair.get('kind') not in ('numpy_builtin_alias', 'numpy_float_reciprocal'):
+            raise ValueError('Unknown numeric compatibility operation')
+        if repair.get('kind') != 'numpy_builtin_alias':
+            continue
+        alias = repair.get('alias')
+        source = (workspace / repair['path']).resolve(strict=True)
+        if (alias not in BUILTIN_ALIASES or not source.is_relative_to(workspace.resolve())
+                or repair.get('source_sha256') != sources.get(repair['path'])
+                or hashlib.sha256(source.read_bytes()).hexdigest() != repair['source_sha256']
+                or repair.get('replacement') != 'builtins.' + alias):
+            raise ValueError('NumPy alias repair does not match the original source')
+        matches = [node for node in ast.walk(ast.parse(source.read_bytes()))
+                   if isinstance(node, ast.Attribute) and node.attr == alias
+                   and node.lineno == repair['line'] and node.col_offset == repair['column']
+                   and ast.get_source_segment(source.read_text('utf-8'), node) == repair['original_expression']]
+        if len(matches) != 1:
+            raise ValueError('NumPy alias repair does not match the original expression')
+        setattr(np, alias, getattr(builtins, alias))
     relative = script.relative_to(workspace).as_posix()
-    repairs = [repair for repair in repairs if repair.get('path') == relative]
+    repairs = [repair for repair in repairs if repair.get('kind') == 'numpy_float_reciprocal'
+               and repair.get('path') == relative]
     if not repairs:
         return runpy.run_path(str(script), run_name='__main__')
     tree = ast.parse(script.read_bytes(), filename=str(script))

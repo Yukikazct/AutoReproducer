@@ -2,10 +2,8 @@
 
 职责（对齐方案 4.1 / 4.4）：
 1. 任务分解与流程控制：INIT -> READ_PAPER -> FIND_RESOURCES -> BUILD_ENV
-   -> EXECUTE_CODE -> VALIDATE -> GENERATE_REPORT
+   -> EXECUTE_CODE -> GENERATE_REPORT
    -> COMPLETED / ERROR；
-2. Prompt-Free 验证闭环：每步输出经 Verifier 校验，未通过时按修正建议
-   触发一次修正重试（预算内），形成「生成->验证->修正->再验证」；
 3. 预算统计：汇总 LLM 调用次数，纳入审计统计与报告。
 """
 from typing import Any, Dict, Optional
@@ -16,25 +14,17 @@ from src.agents.paper_reader import PaperReaderAgent
 from src.agents.resource_finder import ResourceFinderAgent
 from src.agents.env_builder import EnvBuilderAgent
 from src.agents.code_executor import CodeExecutorAgent
-from src.agents.result_validator import ResultValidatorAgent
 from src.agents.report_generator import ReportGeneratorAgent
-from src.agents.verifier import VerifierAgent
 from src.agents.optimizer import OptimizerAgent
 from src.resource_manager import ResourceManager
-
-# 每步验证失败时最多触发的修正重试次数（预算约束）
-MAX_FIX_RETRIES = 1
 
 # EnvBuilder 真实构建时使用的镜像名；成功构建后通过 env_config.image_tag
 # 透传给 CodeExecutor，让复现代码在本镜像内运行（含论文依赖）
 DEFAULT_IMAGE_TAG = "autorepro-env"
 
 _MAIN_PHASE_IDS = {"READ_PAPER": "generate_reader", "FIND_RESOURCES": "find_resources",
-                   "BUILD_ENV": "build_environment", "EXECUTE_CODE": "execute_code",
-                   "VALIDATE": "validate_result"}
-_VERIFY_PHASE_IDS = {"READ_PAPER": "verify_reader", "FIND_RESOURCES": "verify_finder",
-                     "BUILD_ENV": "verify_builder", "EXECUTE_CODE": "verify_executor",
-                     "VALIDATE": "verify_validator"}
+                   "BUILD_ENV": "build_environment", "EXECUTE_CODE": "execute_code"}
+
 
 
 class Orchestrator:
@@ -43,7 +33,7 @@ class Orchestrator:
     # 状态定义
     STATES = [
         "INIT", "READ_PAPER", "FIND_RESOURCES", "BUILD_ENV",
-        "EXECUTE_CODE", "VALIDATE", "OPTIMIZING", "OPTIMIZED",
+        "EXECUTE_CODE", "OPTIMIZING", "OPTIMIZED",
         "GENERATE_REPORT", "COMPLETED", "ERROR",
     ]
 
@@ -82,8 +72,6 @@ class Orchestrator:
             "executor": CodeExecutorAgent(self.llm, self.logger,
                                           use_docker=use_docker,
                                           mock_mode=mock_mode),
-            "validator": ResultValidatorAgent(self.llm, self.logger),
-            "verifier": VerifierAgent(self.llm, self.logger),
             "optimizer": OptimizerAgent(self.llm, self.logger,
                                         max_trials=self.max_trials),
             "reporter": ReportGeneratorAgent(self.logger),
@@ -103,6 +91,8 @@ class Orchestrator:
           - "enable_optimization": 可选布尔值，缺省 False；True 也记录为未开放并跳过
         """
         self.on_event = on_event
+        input_data = {**input_data, "author_execution_only": True, "use_llm_review": False,
+                      "allow_result_summary_review": False}
         self.state, self.error = "INIT", None
         from src.pdf_input import PDFInputError, resolve_pdf_request
         try:
@@ -175,13 +165,12 @@ class Orchestrator:
             ("FIND_RESOURCES", self.agents["finder"]),
             ("BUILD_ENV", self.agents["builder"]),
             ("EXECUTE_CODE", self.agents["executor"]),
-            ("VALIDATE", self.agents["validator"]),
         ]
         if self.on_event:
             planned = self._generic_plan(pipeline)
             if (not self.mock_mode and self.data.get("pdf_path")
                     and not self.data.get("code") and not self.data.get("corpus_paper")):
-                planned = planned[:4]
+                planned = planned[:2]
             self.on_event({"type": "pipeline_plan", "pipeline": "generic",
                            "stages": planned})
 
@@ -215,28 +204,15 @@ class Orchestrator:
                             {"error": build_res.get("error") or
                                       (build_res.get("stderr") or "")[-300:]})
 
-                # Main work and its quality review have independent stage rows.
                 self._emit_agent_completion(state_name, agent, result, attempt=1)
                 main_completed = True
-                # Prompt-Free 验证 + 修正闭环
-                self._verify_step(state_name, agent, result)
-
-                if state_name == "READ_PAPER" and not self.mock_mode:
-                    reviews = [item for item in self.data["verifications"]
-                               if item["state"] == "READ_PAPER"]
-                    if (not reviews or reviews[-1].get("pass") is not True) and not self._allow_discovery_review_advice(state_name):
-                        raise RuntimeError("论文解析结果未通过最终审查，未启动资源实验")
+                if state_name == "EXECUTE_CODE":
+                    from src.execution_completion import completed_execution
+                    self.data['validation'] = completed_execution(result, mock_mode=self.mock_mode)
 
                 if state_name == "FIND_RESOURCES":
-                    # The final reviewed Finder output owns the selection.
-                    # Never fetch an earlier attempt or replace author code
-                    # with a generated single-file smoke experiment.
                     if (not self.mock_mode and self.data.get("pdf_path")
                             and not self.data.get("code") and not self.data.get("corpus_paper")):
-                        reviews = [item for item in self.data["verifications"]
-                                   if item["state"] == "FIND_RESOURCES"]
-                        if (not reviews or reviews[-1].get("pass") is not True) and not self._allow_discovery_review_advice(state_name):
-                            raise RuntimeError("作者仓库发现结果未通过最终审查，未启动实验")
                         self.logger.end_plan(state_name)
                         return self._run_discovered_repository(input_data)
                     self._fetch_resources()
@@ -286,31 +262,6 @@ class Orchestrator:
         self._emit_state(self.state, "", "error" if self.error else "success")
         return self.get_result()
 
-    def _allow_discovery_review_advice(self, state_name):
-        """Execution-only discovery may proceed to the fetched identity review."""
-        if (self.data.get('author_execution_only') is not True or not self.data.get('pdf_path')
-                or (self.data.get('reading_coverage') or {}).get('complete') is not True
-                or not self.data.get('raw_text')):
-            return False
-        if state_name == 'READ_PAPER':
-            if not (self.data.get('paper_info') or {}).get('title'):
-                return False
-        elif state_name == 'FIND_RESOURCES':
-            from src.repository_evidence import normalize_repository_url
-            if not normalize_repository_url((self.data.get('resources') or {}).get('code_repo_url', '')):
-                return False
-        else:
-            return False
-        reviews = [item for item in self.data.get('verifications', []) if item['state'] == state_name]
-        if not reviews:
-            return False
-        reviews[-1].update(advisory=True, execution_allowed=True)
-        reason = '审查意见已保留；先核对实际仓库与论文内容，再验证代码运行。'
-        self.logger.log('Verifier', state_name, 'WARNING', reason, reviews[-1])
-        self._emit_state(state_name, 'Verifier', 'skipped', phase_id=_VERIFY_PHASE_IDS[state_name],
-                         reason=reason, outcome='advisory')
-        return True
-
     def _emit_execution_event(self, event):
         if self.on_event and event.get("type") in {"execution_step", "execution_output", "execution_run"}:
             self.on_event({**event, "phase_id": _MAIN_PHASE_IDS["EXECUTE_CODE"]})
@@ -337,7 +288,7 @@ class Orchestrator:
                 initial = self._generic_plan([
                     ("READ_PAPER", self.agents["reader"]),
                     ("FIND_RESOURCES", self.agents["finder"]),
-                ])[:4]
+                ])[:2]
                 event = {**event, "stages": initial + event.get("stages", [])}
             self.on_event(event)
 
@@ -355,18 +306,15 @@ class Orchestrator:
 
     def _generic_plan(self, pipeline):
         titles = {"READ_PAPER": "论文解析", "FIND_RESOURCES": "资源定位",
-                  "BUILD_ENV": "环境分析与配置", "EXECUTE_CODE": "代码执行",
-                  "VALIDATE": "论文数值比对"}
+                  "BUILD_ENV": "环境分析与配置", "EXECUTE_CODE": "代码执行"}
         stages = []
         for state, agent in pipeline:
-            stages += [{"id": _MAIN_PHASE_IDS[state], "agent": agent.name, "title": titles[state],
-                        "description": "执行本阶段工作；质量审查单独记录。", "status": "waiting"},
-                       {"id": _VERIFY_PHASE_IDS[state], "agent": "Verifier", "title": "核验" + titles[state],
-                        "description": "审查本阶段输出，按实际轮次记录修正和最终结果。", "status": "waiting"}]
+            stages.append({"id": _MAIN_PHASE_IDS[state], "agent": agent.name, "title": titles[state],
+                           "description": "执行本阶段工作并记录实际结果。", "status": "waiting"})
         stages += [{"id": "reserve_optimization", "agent": "Optimizer", "title": "智能优化（预留接口）",
                     "description": "当前版本尚未开放。", "status": "skipped"},
                    {"id": "generate_report", "agent": "ReportGenerator", "title": "报告生成",
-                    "description": "汇总真实执行与独立核验结果。", "status": "waiting"}]
+                    "description": "汇总真实命令、输出和退出状态。", "status": "waiting"}]
         return stages
 
     def _emit_agent_completion(self, state_name, agent, result, attempt):
@@ -380,17 +328,6 @@ class Orchestrator:
                     or final.get("exit_code") not in (None, 0)):
                 status, outcome = "error", "execution_failed"
                 reason = result.get("reason") or final.get("reason") or final.get("stderr") or "执行输出表明本阶段未成功。"
-        elif state_name == "VALIDATE":
-            outcome = result.get("status") or (
-                "reproduced" if result.get("is_reproduced") is True else "inconclusive")
-            # A completed comparison may reject the paper's numbers. Keep that
-            # conclusion separate from failure to execute the validation stage.
-            if (result.get("success") is False or result.get("result_level") == "failed"
-                    or outcome == "execution_failed"):
-                status = "error"
-            reason = result.get("reason")
-            if not reason and result.get("is_reproduced") is not True:
-                reason = "最终数值未通过确定性复现核验。"
         self._emit_state(state_name, agent.name, status, phase_id=_MAIN_PHASE_IDS[state_name],
                          attempt=attempt, reason=str(reason)[:600] if reason else None, outcome=outcome)
 
@@ -424,8 +361,6 @@ class Orchestrator:
                     self.data[key] = result[key]
             if result.get("effective_env_config"):
                 self.data["env_config"] = result["effective_env_config"]
-        elif state_name == "VALIDATE":
-            self.data["validation"] = result
 
     def _optimization_skip_reason(self) -> str:
         """优化未触发的原因（区分"复现失败"/"压根没跑起来"/"跑了但信息不足"）。"""
@@ -541,92 +476,6 @@ class Orchestrator:
         self.logger.log("Orchestrator", "materialize_workspace", "SUCCESS",
                         f"复现代码已物化到工作区: {ws / 'run.py'}")
 
-    def _verify_step(self, state_name: str, agent, result: dict) -> None:
-        """Prompt-Free 验证某步输出；未通过时按修正建议触发一次修正重试。"""
-        verifier = self.agents["verifier"]
-        def review(output, attempt):
-            self._emit_state(state_name, "Verifier", "running", phase_id=_VERIFY_PHASE_IDS[state_name], attempt=attempt)
-            try:
-                reviewed = verifier.run({
-                    "agent_name": agent.name,
-                    "system_prompt": (getattr(agent, "repository_system_prompt", "")
-                        if state_name in {"READ_PAPER", "FIND_RESOURCES"} and self.data.get("reading_purpose") == "repository_discovery"
-                        else getattr(agent, "system_prompt", "")) or agent.name,
-                    "output": output,
-                })
-                accepted = bool(reviewed.get("pass"))
-                issues = reviewed.get("issues") or []
-                reason = None if accepted else (
-                    "；".join(str(issue) for issue in issues[:3])[:600]
-                    if isinstance(issues, list) else str(issues)[:600])
-                self._accumulate_llm_calls(reviewed)
-            except Exception as exc:
-                self._emit_state(state_name, "Verifier", "error", phase_id=_VERIFY_PHASE_IDS[state_name],
-                                 attempt=attempt, reason=str(exc), outcome="exception")
-                raise
-            self._emit_state(state_name, "Verifier", "success" if accepted else "error",
-                             phase_id=_VERIFY_PHASE_IDS[state_name], attempt=attempt,
-                             reason=reason or (None if accepted else "质量审查未通过。"),
-                             outcome="accepted" if accepted else "rejected")
-            return reviewed
-
-        verif = review(result, 1)
-        self.data.setdefault("verifications", []).append(
-            {"state": state_name, "agent": agent.name, **verif})
-
-        if not verif.get("pass", False):
-            self.logger.log("Verifier", state_name, "WARNING",
-                            f"{agent.name} 输出未通过质量验证",
-                            {"issues": verif.get("issues", [])})
-            # 修正闭环：预算内重试一次（生成->验证->修正->再验证）
-            retries = 0
-            previous_output = result
-            while retries < MAX_FIX_RETRIES and not verif.get("pass", False):
-                retries += 1
-                suggestions = verif.get("fix_suggestions", []) or []
-                self.logger.log("Verifier", f"fix_{state_name}", "RUNNING",
-                                f"第 {retries} 次修正: {agent.name}",
-                                {"suggestions": suggestions})
-                self._emit_state(state_name, agent.name, "running", phase_id=_MAIN_PHASE_IDS[state_name], attempt=retries + 1)
-                try:
-                    issues = verif.get("issues") or []
-                    previous_final = previous_output.get("final") or {}
-                    previous_failure = (previous_output.get("reason")
-                                        or previous_final.get("stderr") or "")
-                    # Feedback belongs only to this retry. Keep the shared
-                    # stage context free of it and omit previous code/output.
-                    retry_input = {**self.data, "retry_feedback": {
-                        "agent": agent.name,
-                        "state": state_name,
-                        "attempt": retries + 1,
-                        "issues": list(issues) if isinstance(issues, (list, tuple)) else [str(issues)],
-                        "fix_suggestions": list(suggestions) if isinstance(suggestions, (list, tuple)) else [str(suggestions)],
-                        "previous_failure": str(previous_failure)[:2000],
-                    }}
-                    fixed_result = agent.run(retry_input)
-                    previous_output = fixed_result
-                    self._merge_result(state_name, fixed_result)
-                    self._accumulate_llm_calls(fixed_result)
-                    self._emit_agent_completion(state_name, agent, fixed_result, attempt=retries + 1)
-                except Exception as exc:
-                    self._emit_state(state_name, agent.name, "error", phase_id=_MAIN_PHASE_IDS[state_name],
-                                     attempt=retries + 1, reason=str(exc), outcome="exception")
-                    raise
-                verif = review(fixed_result, retries + 1)
-                self.data.setdefault("verifications", []).append(
-                    {"state": state_name, "agent": agent.name,
-                     "round": retries + 1, **verif})
-                self.data.setdefault("fix_records", []).append({
-                    "state": state_name,
-                    "agent": agent.name,
-                    "round": retries,
-                    "issues": verif.get("issues", []),
-                    "suggestions": suggestions,
-                })
-                if not verif.get("pass", False):
-                    self.logger.log("Verifier", f"fix_{state_name}", "WARNING",
-                                    f"{agent.name} 修正后仍未通过验证")
-
     def _fail(self, stage: str, message: str) -> None:
         """进入 ERROR 状态并记录日志。"""
         self.state = "ERROR"
@@ -638,7 +487,7 @@ class Orchestrator:
         self.logger.log("Orchestrator", stage, "ERROR", f"阶段失败: {message}")
 
     def _accumulate_llm_calls(self, result: dict) -> None:
-        """将 Agent / Verifier 输出的 llm_calls 增量累计进全局预算统计。"""
+        """将 Agent 输出的 llm_calls 增量累计进全局预算统计。"""
         calls = int((result or {}).get("llm_calls", 0) or 0)
         if calls:
             self.data["total_llm_calls"] = (
@@ -667,8 +516,7 @@ class Orchestrator:
             "READ_PAPER": ["FIND_RESOURCES", "ERROR"],
             "FIND_RESOURCES": ["BUILD_ENV", "ERROR"],
             "BUILD_ENV": ["EXECUTE_CODE", "ERROR"],
-            "EXECUTE_CODE": ["VALIDATE", "ERROR"],
-            "VALIDATE": ["GENERATE_REPORT", "ERROR"],
+            "EXECUTE_CODE": ["GENERATE_REPORT", "ERROR"],
             "OPTIMIZING": ["OPTIMIZED", "ERROR"],
             "OPTIMIZED": ["GENERATE_REPORT"],
             "GENERATE_REPORT": ["COMPLETED", "ERROR"],
