@@ -277,7 +277,7 @@ def render_paper_input():
                         and st.session_state.get('corpus_paper_select', '无') == '无'):
                     st.checkbox('先运行作者仓库代码', value=True,
                         key='author_execution_' + hashlib.sha256(uploaded_file.getvalue()).hexdigest(),
-                        help='先尝试运行作者命令；审核作为参考，缺少依赖时自动安装并重试。按真实进程核验结束，论文数值另行验收。关闭后要求完整论文数值复现。')
+                        help='找到仓库后直接获取源码，按 README 规划并运行原命令，跳过论文与仓库匹配审核。缺少依赖时自动安装并重试，完成后对比作者输出与论文宣称。关闭后要求完整论文数值复现。')
             links = preview.get("repository_links", [])
             if links:
                 primary = next((link for link in links if link.get("is_author_code")), None)
@@ -288,7 +288,7 @@ def render_paper_input():
                     candidate = next((link for link in links if link.get("evidence_type") != "reference"), None)
                     if candidate:
                         st.info("PDF 仓库候选链接：" + candidate["url"])
-                st.caption("启动后将读取固定 Git 版本的 README、论文引用与文件目录，由 LLM 联合核验作者实现关系。")
+                st.caption("默认先获取仓库源码并尝试运行；选择完整数值复现时另行核验论文与实现关系。")
                 with st.expander("PDF 仓库链接提取依据"):
                     for link in links[:12]:
                         kind = {"author_code_statement": "代码公开声明", "reference": "参考文献",
@@ -310,7 +310,7 @@ def render_paper_input():
                     st.text_input("补充 GitHub 仓库", key=repository_widget_key(pdf_hash), value=previous_url,
                                   placeholder="https://github.com/owner/repository",
                                   disabled=st.session_state.running)
-                    st.caption("填写后点击“开始复现”。系统将核对论文与仓库；报告记录为用户提供，作者身份另行标明。")
+                    st.caption("填写后点击“开始复现”。默认直接获取并尝试运行该仓库；报告记录为用户提供，作者归属未确认。")
     else:
         st.selectbox("真实论文实验", list(PROFILE_LABELS),
                      format_func=lambda key: display_text(PROFILE_LABELS[key]), key="experiment_profile")
@@ -835,7 +835,11 @@ with tab1:
                 st.success('所选仓库代码已运行完成，实际训练更新和所属进程结束已核验。')
                 for warning in validation.get('warnings', []):
                     st.warning(warning)
-                st.caption('论文数值尚未核验；此结果不判定论文复现成功。')
+                comparison = validation.get('author_claim_comparison') or {}
+                if comparison.get('comparisons'):
+                    st.caption('已对比作者输出与论文宣称，详见报告中的差值和实验设置；尚未独立核验论文数值。')
+                else:
+                    st.caption('论文数值尚未核验；此结果不判定论文复现成功。')
             elif validation.get("status") == "method_experiment_completed":
                 optimization = data.get("optimization") or {}
                 st.success(("基线方法实验已完成" if optimization.get("mode") == "validate"

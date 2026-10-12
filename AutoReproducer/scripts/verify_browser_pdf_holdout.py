@@ -135,9 +135,15 @@ def main(args):
                 assert data["pdf_input"]["sha256"] == pdf_hash
                 assert data["resources"]["code_repo_url"].casefold() == args.repo.casefold()
                 identity = data["resources"]["repository_identity"]
-                assert identity['status'] in {'author_verified', 'matching_implementation_verified'}
-                assert identity['review']['accepted'] is True
-                assert identity["review"]["repository_revision"] == data["repository"]["revision"]
+                if args.execution_only:
+                    assert identity['status'] == 'unreviewed_execution'
+                    assert identity['author_identity_confirmed'] is False
+                    assert identity['review']['status'] == 'skipped'
+                    assert identity['review']['execution_allowed'] is True
+                else:
+                    assert identity['status'] in {'author_verified', 'matching_implementation_verified'}
+                    assert identity['review']['accepted'] is True
+                    assert identity["review"]["repository_revision"] == data["repository"]["revision"]
                 assert not snapshot["active_runs"] and not snapshot["active_workers"] and not snapshot["active_executions"]
                 assert all(row["status"] not in {"running", "waiting", "error", "blocked"}
                            for row in snapshot["pipeline_stages"])
@@ -152,7 +158,10 @@ def main(args):
                 assert {event['execution_id'] for event in starts} == {event['execution_id'] for event in ends}
                 if args.execution_only:
                     page.get_by_text('所选仓库代码已运行完成，实际训练更新和所属进程结束已核验。', exact=True).wait_for(timeout=30000)
-                    page.get_by_text('论文数值尚未核验；此结果不判定论文复现成功。', exact=True).wait_for(timeout=30000)
+                    caption = ('已对比作者输出与论文宣称，详见报告中的差值和实验设置；尚未独立核验论文数值。'
+                               if (validation.get('author_claim_comparison') or {}).get('comparisons') else
+                               '论文数值尚未核验；此结果不判定论文复现成功。')
+                    page.get_by_text(caption, exact=True).wait_for(timeout=30000)
                 else:
                     page.get_by_text("完整实验已完成，论文数值验收通过。", exact=True).wait_for(timeout=30000)
                 page.get_by_text("任务完成", exact=True).wait_for(timeout=30000)
