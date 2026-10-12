@@ -15,6 +15,7 @@ from src.resource_events import ResourceEventLogger
 def executor(tmp_path):
     instance = ce.CodeExecutorAgent(None, logger=Mock())
     instance.env_config = {"auto_prepare": True, "dependency_health_check": True}
+    instance.deps_cache_root = tmp_path / 'deps'
     instance.resource_events = ResourceEventLogger(tmp_path / "events.jsonl")
     return instance
 

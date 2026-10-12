@@ -68,12 +68,13 @@ def test_prepare_only_reports_pending_real_data_and_starts_no_process(tmp_path, 
     assert not any(event.get('phase_id') == 'prepare_dataset' and event.get('status') == 'success' for event in events)
 
 
-@pytest.mark.parametrize('mode', ['valid', 'failed_process', 'missing_record', 'tampered_data'])
+@pytest.mark.parametrize('mode', ['valid', 'failed_process', 'missing_record', 'tampered_data', 'repaired_environment'])
 def test_dependency_then_data_order_and_no_training_with_unfrozen_data(tmp_path, monkeypatch, mode):
     _, service, request = configure_service(tmp_path, monkeypatch)
     calls = []
     def run(workspace, steps, environment, **kwargs):
-        identifier = steps[0]['id']
+        planned = steps['steps'] if isinstance(steps, dict) else steps
+        identifier = planned[0]['id']
         calls.append(identifier)
         runtime = Path(workspace) / '_autorepro_capture'
         if identifier == 'native_preflight':
@@ -94,12 +95,21 @@ def test_dependency_then_data_order_and_no_training_with_unfrozen_data(tmp_path,
             if mode == 'tampered_data':
                 target.write_bytes(b'changed after successful data process')
         else:
+            if mode == 'repaired_environment':
+                assert 'einops==0.8.0' in environment['requirements_txt']
+                assert environment['require_prepared'] is True
+                return {'success': False, 'final': {'stderr': 'Deliberate stop after checking inherited environment'}}
             pytest.fail('No author training may start in an environment preparation test')
-        return {'success': True, 'steps': [{'id': identifier, 'success': True, 'executed': True, 'exit_code': 0}]}
+        result = {'success': True, 'steps': [{'id': identifier, 'success': True, 'executed': True, 'exit_code': 0}]}
+        if mode == 'repaired_environment' and identifier == 'prepare_author_datasets':
+            result['effective_env_config'] = {**environment,
+                'requirements_txt': environment['requirements_txt'] + '\neinops==0.8.0\n'}
+        return result
     monkeypatch.setattr(service.runner, 'run', run)
     events = []
-    result = service.run({**request, 'prepare_environment': True}, on_event=events.append)
-    assert calls == ['native_preflight', 'prepare_author_datasets']
+    result = service.run({**request, 'prepare_environment': mode != 'repaired_environment'}, on_event=events.append)
+    assert calls[:2] == ['native_preflight', 'prepare_author_datasets']
+    assert len(calls) == (3 if mode == 'repaired_environment' else 2)
     assert result['data']['repository_executed'] is False
     assert result['data']['validation']['is_reproduced'] is None
     if mode == 'valid':
@@ -115,4 +125,4 @@ def test_dependency_then_data_order_and_no_training_with_unfrozen_data(tmp_path,
         assert data_success > env_success
     else:
         assert result['state'] == 'ERROR'
-        assert result['data']['validation']['failure_phase'] == 'prepare_dataset'
+        assert result['data']['validation']['failure_phase'] == ('execute_repository' if mode == 'repaired_environment' else 'prepare_dataset')

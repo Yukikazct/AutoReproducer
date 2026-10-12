@@ -1,0 +1,82 @@
+{
+  "tag": "author_ccassg_20261012_20",
+  "state": "COMPLETED",
+  "input": "real_browser_pdf_upload",
+  "source_sha256": "1b6f1a3af95f8136b6f0aa382b3feb4c73bee239ce0d4c70a064a32456f29879",
+  "source_git_base": "49beb9a940ebf3bbb5b699553429fa66812eec93",
+  "source_frozen_at": "2026-10-12T07:02:08.508252+00:00",
+  "pdf_sha256": "be3dfcecb83ac87ca01131895b08385383a9f428d6b5dafb318788d864e99855",
+  "progress_file": "progress_1791788848616.jsonl",
+  "run_id": "repository_3e3ee28e63ab44d882bd61e31dac039f",
+  "selected_repository": "https://github.com/hengruizhang98/CCA-SSG",
+  "repository_revision": "ce5b2c0ad4f05811008559f66e5e114dbd71a82b",
+  "native_preflight_pass": true,
+  "native_versions": {
+    "dgl": "1.1.2",
+    "networkx": "2.8.8",
+    "numpy": "1.26.4",
+    "psutil": "6.1.0",
+    "requests": "2.32.3",
+    "scipy": "1.14.1",
+    "torch": "2.5.1+cpu",
+    "tqdm": "4.67.1"
+  },
+  "author_identity_confirmed": true,
+  "steps": [
+    {
+      "id": "train_cora",
+      "argv": [
+        "python",
+        "main.py",
+        "--dataname",
+        "cora",
+        "--epochs",
+        "50",
+        "--lambd",
+        "1e-3",
+        "--dfr",
+        "0.1",
+        "--der",
+        "0.4",
+        "--lr2",
+        "1e-2",
+        "--wd2",
+        "1e-4"
+      ],
+      "cwd": ".",
+      "timeout_s": 7200
+    }
+  ],
+  "source_snapshot_verified": true,
+  "original_repository_source_verified": true,
+  "optimizer_steps": 2050,
+  "code_completed": true,
+  "paper_metrics_verified": false,
+  "dataset_provenance_verified": false,
+  "dependency_repair_count": 0,
+  "numeric_repair_count": 0,
+  "exit_code": 0,
+  "natural_return": true,
+  "execution_run_starts": 2,
+  "execution_run_ends": 2,
+  "active_runs_at_completion": 0,
+  "active_workers_at_completion": 0,
+  "active_executions_at_completion": 0,
+  "live_page_author_code_completed": true,
+  "live_page_paper_accepted": false,
+  "author_reported_linear_evaluation_accuracy": 0.817,
+  "author_reported_dataset": {
+    "name": "Cora",
+    "nodes": 2708,
+    "edges": 10556,
+    "features": 1433,
+    "classes": 7,
+    "train_samples": 140,
+    "validation_samples": 500,
+    "test_samples": 1000
+  },
+  "limitations": [
+    "Full dataset provenance was not independently frozen and checked.",
+    "Author-reported accuracy is a raw run output, not paper numerical acceptance."
+  ]
+}

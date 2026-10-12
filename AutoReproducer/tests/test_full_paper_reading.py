@@ -45,6 +45,23 @@ def document(monkeypatch, text):
     monkeypatch.setattr(pdf_input, 'supported_pdf_title', lambda _: 'Full Paper')
 
 
+@pytest.mark.parametrize('text', ['Full paper text', 'x' * (2 * READING_TEXT_LIMIT)], ids=['single_window', 'multiple_windows'])
+def test_authentication_error_is_reported_directly_without_json_repair_or_local_fallback(monkeypatch, text):
+    document(monkeypatch, text)
+    llm = BatchLLM()
+    llm.api_key = 'fixture-credential'
+
+    def failed_chat(prompt, **kwargs):
+        llm.calls.append((prompt, kwargs))
+        return '[LLM API Error: HTTP 401 Authentication failed for fixture-credential]'
+
+    monkeypatch.setattr(llm, 'chat', failed_chat)
+    with pytest.raises(RuntimeError, match='论文阅读 API 调用失败.*HTTP 401') as failure:
+        PaperReaderAgent(llm, logger=Mock()).run({'pdf_path': 'paper.pdf'})
+    assert 'fixture-credential' not in str(failure.value)
+    assert len(llm.calls) == 1
+
+
 def test_full_reader_and_independent_verifier_visit_every_character(monkeypatch):
     text = 'Full Paper\n' + 'a'*65000 + 'HIDDEN_PROTOCOL' + 'b'*(2*READING_TEXT_LIMIT) + 'LAST_APPENDIX'
     document(monkeypatch, text)

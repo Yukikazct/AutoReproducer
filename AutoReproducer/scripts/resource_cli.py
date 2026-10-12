@@ -222,6 +222,29 @@ def cmd_events(args) -> int:
     return 0
 
 
+def cmd_deps_prune(args) -> int:
+    import json
+    import math
+    from src.dependency_cache import cache_guard, DependencyCacheBusy
+    from src.dependency_management import prune_cache
+    if (not math.isfinite(args.cache_gb) or args.cache_gb <= 0
+            or not math.isfinite(args.min_free_gb) or args.min_free_gb < 0 or args.keep_days < 0):
+        print('依赖缓存容量必须为正数，可用空间与保留天数不能为负数', file=sys.stderr)
+        return 1
+    root = Path(os.environ.get('AUTOREPRO_DEPS_ROOT') or
+                str(Path(args.data_root or os.environ.get('AUTOREPRO_DATA_ROOT') or _PROJECT_ROOT / 'data') / 'deps'))
+    try:
+        with cache_guard(root, cleanup=True):
+            receipt = prune_cache(root, quota_bytes=int(args.cache_gb * 1024**3),
+                                  min_free_bytes=int(args.min_free_gb * 1024**3),
+                                  keep_days=args.keep_days, dry_run=not args.yes)
+        print(json.dumps(receipt, ensure_ascii=False, indent=2))
+        return 0 if not receipt['errors'] else 1
+    except DependencyCacheBusy as error:
+        print(str(error), file=sys.stderr)
+        return 2
+
+
 # ---------------- 主入口 ----------------
 
 def build_parser() -> argparse.ArgumentParser:
@@ -236,6 +259,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("status", help="查看 L0 配额占用与论文统计")
     sub.add_parser("list", help="列出已登记论文及资源状态")
+    p_deps = sub.add_parser('deps-prune', help='查看或执行依赖缓存配额和空间回收')
+    p_deps.add_argument('--cache-gb', type=float, default=float(os.environ.get('AUTOREPRO_DEPS_QUOTA_GB', '20')))
+    p_deps.add_argument('--min-free-gb', type=float, default=float(os.environ.get('AUTOREPRO_DEPS_MIN_FREE_GB', '2')))
+    p_deps.add_argument('--keep-days', type=int, default=30)
+    p_deps.add_argument('--yes', action='store_true', help='执行回收；默认仅显示计划')
     p_resources = sub.add_parser("resources", help="查看本地资源清单")
     p_resources.add_argument("--json", action="store_true")
     p_events = sub.add_parser("events", help="查看最近资源下载/安装事件")
@@ -274,6 +302,7 @@ def main(argv=None) -> int:
         "quota-check": cmd_quota_check,
         "resources": cmd_resources,
         "events": cmd_events,
+        'deps-prune': cmd_deps_prune,
     }
     return handlers[args.command](args)
 

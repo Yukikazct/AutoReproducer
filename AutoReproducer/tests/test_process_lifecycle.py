@@ -132,7 +132,10 @@ def test_windows_session_exit_and_force_kill_stop_tree_and_release_locks(tmp_pat
         shell=shutil.which('pwsh') or shutil.which('powershell')
         if not py or not shell:
             pytest.skip('Python launcher or PowerShell is unavailable')
-        launch_command=[py,f'-{sys.version_info.major}.{sys.version_info.minor}',str(owner)]
+        # Exercise the launcher without selecting a different global interpreter
+        # that may not contain the current test environment's dependencies.
+        launch_command=([py,str(owner)] if sys.prefix != sys.base_prefix else
+                        [py,f'-{sys.version_info.major}.{sys.version_info.minor}',str(owner)])
         quoted=' '.join("'"+part.replace("'","''")+"'" for part in launch_command)
         session_command=[shell,'-NoProfile','-Command','& '+quoted]
     else:
@@ -141,6 +144,8 @@ def test_windows_session_exit_and_force_kill_stop_tree_and_release_locks(tmp_pat
     launcher.write_text(f"import subprocess\nsubprocess.run({launch_command!r},check=True)\n",encoding='utf-8')
     project=Path(__file__).resolve().parents[1]
     environment={**os.environ,'PYTHONPATH':str(project),'AUTOREPRO_DEPS_ROOT':str(cache)}
+    if sys.prefix != sys.base_prefix:
+        environment['VIRTUAL_ENV']=sys.prefix
     log=(tmp_path/'owner.log').open('wb')
     process=subprocess.Popen(session_command,stdout=log,stderr=log,env=environment,
                              creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)

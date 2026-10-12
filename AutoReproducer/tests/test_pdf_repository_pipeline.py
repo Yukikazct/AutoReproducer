@@ -97,7 +97,10 @@ def test_structured_pdf_links_are_not_reclassified_from_flattened_cross_page_tex
         "extracted_repository_links": [mentioned],
     })["resources"]
     assert resources["repository_links"] == [mentioned]
-    assert resources["selection_evidence"] == mentioned
+    assert resources["selected_repo"] == MODEL_URL
+    assert resources["selection_evidence"] is None
+    assert REFERENCE_URL in resources["alternative_repos"]
+    assert resources["repository_identity"]["status"] == "candidate_unverified"
     assert "代码公开声明" not in resources["repository_identity"]["reason"]
 
 

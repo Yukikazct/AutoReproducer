@@ -268,8 +268,10 @@ def _discovered_plan_lines(data):
               '| 数值验收 | 作者报告与独立评估一致，再按冻结论文参考值与容差判定；实验完成和数值达标分别记录 |']
     review = plan.get("semantic_review") or {}
     if review:
-        lines += ["", "**执行前独立协议审查**", "",
+        lines += ["", "**执行前参考审查**" if review.get('advisory') else "**执行前独立协议审查**", "",
                   "- **状态**: " + ("通过" if review.get("accepted") is True else "未通过")]
+        if review.get('advisory'):
+            lines += ['- 审查意见作为参考；本次允许尝试运行，执行完成由真实进程和运行证据确认。']
         for name, check in (review.get("checks") or {}).items():
             status = "警告，须实际运行验证；" if check.get('severity') == 'warning' else ''
             lines.append("- " + _markdown_text(name) + "：" + status + _markdown_text(_txt(check.get("reason"))))
@@ -538,8 +540,11 @@ class ReportGeneratorAgent(BaseAgent):
                       f"- **参数**: {spec.get('parameters', {})}"]
             dataset = data.get("dataset_provenance") or {}
             if dataset:
-                lines += [f"- **真实数据SHA-256**: `{dataset.get('sha256', '')}`",
-                          f"- **数据切分**: {dataset.get('split', '')}"]
+                if dataset.get('verified'):
+                    lines += [f"- **真实数据SHA-256**: `{dataset.get('sha256', '')}`",
+                              f"- **数据切分**: {dataset.get('split', '')}"]
+                else:
+                    lines += ['- **数据来源核验**: 尚未完整核验；作者程序负责加载输入，不据此认定数据规模或论文数值通过。']
             lines += [f"- **协议说明**: {(spec.get('validation') or {}).get('note', '')}", ""]
             lines += [f"- **作者协议来源**: {(spec.get('validation') or {}).get('aggregation_source', '')}",
                       f"- **实现版本说明**: {(spec.get('validation') or {}).get('implementation_note', '')}", ""]
@@ -568,6 +573,13 @@ class ReportGeneratorAgent(BaseAgent):
                 succeeded = sum(repair.get("status") == "succeeded" for repair in cache_repairs)
                 lines.append(f"- **缓存修复**: {succeeded}/{len(cache_repairs)} 项完成；依赖版本与实验协议保持冻结")
         source_recoveries = data.get("public_source_recovery") or []
+        runtime_repairs = data.get('dependency_repair_attempts') or []
+        if runtime_repairs:
+            lines += ['', '### 根据运行报错补充依赖', '']
+            for repair in runtime_repairs:
+                lines.append('- 第 ' + str(repair['attempt']) + ' 轮：缺少 ' +
+                    _markdown_text(repair['module']) + '，安装 ' + _markdown_text(repair['requirement']) +
+                    ' 后重试；原失败日志保留在运行目录。')
         if source_recoveries:
             lines += ["", "### 公开证据自动恢复", "",
                       f"- **恢复来源数**: {len(source_recoveries)}；从固定官方网页读取原文并校验身份、定位与哈希"]
@@ -766,6 +778,8 @@ class ReportGeneratorAgent(BaseAgent):
         if reason and reason not in _txt(
                 (validation.get("validation") or {}).get("analysis")):
             lines.append(f"- **判定原因**: {reason}")
+        for warning in validation.get('warnings', []):
+            lines.append('- **待核验**: ' + _markdown_text(_txt(warning)))
         inner = validation.get("validation") or {}
         execution_level = {"failed": "执行失败", "incomplete": "执行证据不足",
                            "smoke_passed": "仅冒烟通过",

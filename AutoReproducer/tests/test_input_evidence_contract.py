@@ -94,7 +94,7 @@ def test_paper_code_url_precedes_lexical_repository_search(monkeypatch):
     monkeypatch.setattr(repo_discovery, "_search_github", Mock(side_effect=AssertionError("unneeded search")))
     result = ResourceFinderAgent(ScriptedLLM({}), logger=Mock()).run(
         {"paper_info": {"title": "Unknown paper", "code_url": "https://github.com/author/project"},
-         "raw_text": "Code: https://github.com/author/project"})["resources"]
+         "raw_text": "Our source code is available at https://github.com/author/project"})["resources"]
     assert result["selected_repo"] == "https://github.com/author/project"
     assert result["repository_identity"]["status"] == "paper_linked"
     assert result["repository_identity"]["source"] == "paper_code_url"
@@ -121,7 +121,7 @@ def test_model_metadata_repo_has_no_paper_link_evidence():
         {"paper_info": {"title": "Unknown paper", "code_url": "https://github.com/guess/project"},
          "raw_text": "This paper text contains no code URL."})["resources"]
     assert result["repository_identity"]["status"] == "candidate_unverified"
-    assert result["repository_identity"]["source"] == "paper_code_url"
+    assert result["repository_identity"]["source"] == "paper_metadata"
 
 
 def test_extracted_later_page_code_link_retains_identity_evidence():

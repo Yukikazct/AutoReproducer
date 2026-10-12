@@ -126,7 +126,8 @@ def test_similarly_named_sources_have_distinct_compact_stable_ids(tmp_path):
         path.write_text('same = 1\n', encoding='utf-8')
         fixture['snapshot']['files'][name] = hashlib.sha256(path.read_bytes()).hexdigest()
     packet = planner.build_evidence_packet(fixture['pdf'], fixture['workspace'], fixture['snapshot'])
-    refs = {key: ref for key, ref in planner._planning_excerpts(packet).items() if ref.get('path') in {'cpu/train.py', 'gpu/train.py'}}
+    refs = {key: ref for key, ref in planner._planning_excerpts(packet).items()
+            if ref.get('path') in {'cpu/train.py', 'gpu/train.py'} and ref['source'] == 'repository'}
     assert len(refs) == 2 and all(len(key) == 19 for key in refs)
     for key, ref in refs.items():
         citation = planner._citations({'citations': [{'id': key, 'evidence_id': key}]}, packet, fixture['workspace'])[key]

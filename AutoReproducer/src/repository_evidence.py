@@ -325,6 +325,22 @@ def extract_repository_links(pages, annotations=()):
     unique = []
     seen = set()
     for record in records:
+        # An underscore URL wrap may look like a complete (but nonexistent)
+        # repository to the text parser. Prefer the actual same-page URI only
+        # when the visible continuation confirms its exact remaining name.
+        # Keep genuinely different prefix repositories and ambiguous targets.
+        if record['source'] == 'pdf_text' and record['url'].endswith('_'):
+            confirmed = {candidate['url'].lower() for candidate in records
+                         if candidate['source'] == 'pdf_annotation'
+                         and candidate['page'] == record['page']
+                         and candidate['evidence_type'] == record['evidence_type']
+                         and candidate['url'].lower().startswith(record['url'].lower())
+                         and len(candidate['url']) > len(record['url'])
+                         and re.search(re.escape(record['raw_url']) + r'\s+'
+                                       + re.escape(candidate['url'][len(record['url']):])
+                                       + r'(?=[\s.,;:!?]|$)', record['context'], re.I)}
+            if len(confirmed) == 1:
+                continue
         key = (record["url"].lower(), record["page"], record["source"],
                record["raw_url"], record["context"])
         if key not in seen:

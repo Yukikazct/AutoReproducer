@@ -33,7 +33,8 @@ class ResourceFinderAgent(BaseAgent):
     """从论文信息中查找代码仓库、数据集和相关资源。"""
 
     system_prompt = "根据论文信息定位代码仓库与数据集,输出仓库 URL、数据源列表及置信度"
-    repository_system_prompt = ("当前任务仅整理本次 PDF 的仓库候选：实际链接和代码声明优先于模型猜测，"
+    repository_system_prompt = ("当前任务仅整理本次 PDF 的仓库候选：明确的作者代码声明优先；"
+        "普通链接可能指向依赖或基线，不能阻止在线搜索和模型选择匹配实现。"
         "引用仓库不能确认作者实现，用户输入来源须单独标记。"
         "数据集下载地址和预训练权重可留空，它们由后续完整实验规划确定，不是本阶段完成条件。"
         "仓库是否属于作者及是否匹配论文将在拉取固定源码后核验；本阶段不能宣称复现成功。")
@@ -73,12 +74,11 @@ class ResourceFinderAgent(BaseAgent):
         # source separately: model metadata alone does not prove authorship.
         query = build_repo_discovery_query(paper_info)
         paper_link = next((link for link in repository_links
-                           if link.get("evidence_type") != "reference"), None)
-        metadata_is_reference = bool(paper_repo and any(link["url"] == paper_repo for link in repository_links)
-                                     and all(link.get("evidence_type") == "reference"
-                                             for link in repository_links if link["url"] == paper_repo))
-        metadata_preferred = "" if metadata_is_reference else paper_repo
-        preferred = user_repo or (paper_link["url"] if paper_link else "") or metadata_preferred
+                           if link.get("is_author_code")
+                           and link.get("evidence_type") == "author_code_statement"), None)
+        # Metadata and ordinary PDF URLs may identify a framework or baseline.
+        # Only an explicit implementation declaration can bypass online search.
+        preferred = user_repo or (paper_link["url"] if paper_link else "")
         selection_evidence = next((link for link in repository_links if link["url"] == preferred), None)
         discovery = discover_repositories(
             query, preferred_url=preferred,
@@ -123,8 +123,10 @@ class ResourceFinderAgent(BaseAgent):
 论文标题: {paper_info.get('title', '未知')}
 方法: {paper_info.get('method', '未知')}
 已知代码仓库: {selected or '未找到'}
-论文原文仓库证据: {json.dumps(selection_evidence, ensure_ascii=False) if selection_evidence else '无'}
-若已知仓库有论文原文证据，保留该URL；其他候选不能替代原文链接。
+论文原文仓库证据: {json.dumps(repository_links, ensure_ascii=False)}
+搜索候选: {json.dumps(discovery.get('candidates', []), ensure_ascii=False)}
+只有明确的作者代码声明或用户指定仓库需要保留。普通链接可能是框架依赖或基线，
+应根据论文标题与方法选择实现候选；不能因为出现在 PDF 中就认为是作者代码。
 
 返回JSON格式:
 {{
@@ -135,7 +137,7 @@ class ResourceFinderAgent(BaseAgent):
     "confidence": 0.0-1.0
 }}
 """
-        llm_result = self.llm.chat(prompt, task="resource_finder")
+        llm_result = self.llm.chat(prompt, system_prompt=self.repository_system_prompt, task="resource_finder")
         parsed = self._parse_json(llm_result)
         if not parsed or not parsed.get("code_repo_url"):
             parsed = {
@@ -147,7 +149,24 @@ class ResourceFinderAgent(BaseAgent):
             }
 
         # 4. Retain a candidate while making its identity evidence explicit.
-        code_repo_url = selected or parsed.get("code_repo_url", "未找到")
+        model_repo = self._normalize_repository(parsed.get("code_repo_url", ""))
+        linked_fallback = next((link["url"] for link in repository_links
+                                if link.get("evidence_type") != "reference"), "")
+        code_repo_url = (selected if preferred else model_repo or selected or linked_fallback or paper_repo) or "未找到"
+        alternatives = list(dict.fromkeys(normalized for url in [
+            selected, paper_repo,
+            *(parsed.get("alternative_repos", []) if isinstance(parsed.get("alternative_repos"), list) else []),
+            *(url for item in discovery.get("candidates", []) for url in item.get("repo_urls", [])),
+            *github_urls,
+        ] if (normalized := self._normalize_repository(url)) and normalized != code_repo_url))
+        if selected and code_repo_url != selected:
+            discovery.pop("pinned_revision", None)
+            discovery["selection_source"] = "llm_candidate"
+        elif not selected and code_repo_url == paper_repo and not linked_fallback:
+            discovery["selection_source"] = "paper_metadata"
+        discovery["selected_repo"] = code_repo_url if code_repo_url != "未找到" else ""
+        selection_evidence = next((link for link in repository_links if link["url"] == code_repo_url
+                                   and link.get("evidence_type") != "reference"), None)
         if _is_placeholder_url(code_repo_url or ""):
             code_repo_url = "未找到"
         linked_implementation_urls = [link["url"] for link in repository_links
@@ -172,7 +191,7 @@ class ResourceFinderAgent(BaseAgent):
         resources: Dict = {
             "code_repo_url": code_repo_url,
             "selected_repo": code_repo_url,
-            "alternative_repos": parsed.get("alternative_repos", []),
+            "alternative_repos": alternatives,
             "dataset_url": parsed.get("dataset_url", "未找到"),
             "weights_url": parsed.get("weights_url", "未找到"),
             "confidence": max(_confidence(parsed.get("confidence")), 0.8)

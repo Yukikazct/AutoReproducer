@@ -11,7 +11,7 @@ from typing import Dict
 from src.base_agent import BaseAgent
 from src.llm.llm_client import LLMClient
 from src.repository_evidence import extract_repository_links, normalize_repository_url
-from src.paper_reading import (READING_TEXT_LIMIT, PaperReadingError, read_full_paper)
+from src.paper_reading import (READING_TEXT_LIMIT, PaperReadingError, read_full_paper, check_reading_api_response)
 
 
 def reading_context(text):
@@ -135,6 +135,7 @@ MSE/MAE 等保留原始单位。单位未知时留空，不按数值大小猜百
                        + json.dumps(feedback, ensure_ascii=False))
         llm_result = self.llm.chat(prompt, task="paper_reader", system_prompt=(
             self.repository_system_prompt if purpose == 'repository_discovery' else self.system_prompt))
+        check_reading_api_response(llm_result, self.llm)
         parsed = self._parse_json(llm_result)
         if batches and (not parsed or not parsed.get('title')
                         or getattr(self.llm, 'last_finish_reason', '') == 'length'):

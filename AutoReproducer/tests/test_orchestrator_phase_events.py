@@ -67,6 +67,30 @@ def phase_events(events, phase):
     return [event for event in events if event.get("phase_id") == phase]
 
 
+@pytest.mark.parametrize('state_name', ['READ_PAPER', 'FIND_RESOURCES'])
+def test_execution_discovery_advice_preserves_rejection_and_defers_to_git_review(pipeline, state_name):
+    pipeline.data = {'author_execution_only': True, 'pdf_path': 'uploaded.pdf',
+        'reading_coverage': {'complete': True}, 'raw_text': 'Actual paper text',
+        'paper_info': {'title': 'Public paper'},
+        'resources': {'code_repo_url': 'https://github.com/example/repo'},
+        'verifications': [{'state': state_name, **deepcopy(REJECTED)}]}
+    events = []
+    pipeline.on_event = events.append
+    assert pipeline._allow_discovery_review_advice(state_name) is True
+    review = pipeline.data['verifications'][-1]
+    assert review['pass'] is False and review['issues'] == REJECTED['issues']
+    assert review['advisory'] is True and review['execution_allowed'] is True
+    assert events[-1]['status'] == 'skipped' and events[-1]['outcome'] == 'advisory'
+    pipeline.data['author_execution_only'] = False
+    assert pipeline._allow_discovery_review_advice(state_name) is False
+    pipeline.data['author_execution_only'] = True
+    pipeline.data['reading_coverage']['complete'] = False
+    assert pipeline._allow_discovery_review_advice(state_name) is False
+    pipeline.data['reading_coverage']['complete'] = True
+    pipeline.data['resources']['code_repo_url'] = 'https://example.com/project'
+    assert pipeline._allow_discovery_review_advice('FIND_RESOURCES') is False
+
+
 def test_each_main_phase_finishes_before_its_independent_review(pipeline, tmp_path):
     result, events, snapshot, rows = run_with_snapshot(pipeline, tmp_path)
     plan = events[0]

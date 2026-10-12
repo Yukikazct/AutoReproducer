@@ -4,6 +4,8 @@
 
 共 21 个本地输入文件，按 SHA-256 去重后保存 **20 份 PDF**，合计 **35.93 MiB**。ReZero 的两份相同输入仅保留一份，原文件名映射保存在清单中；JacobiConv 的 v1/v2 和 ReZero 的 arXiv/出版版本内容不同，分别保留。
 
+2026-10-12 又归档了 [23 份候选 PDF](candidates_20261012/README.md)，合计 41.55 MiB；来源、原文仓库证据与当前试验状态见该目录的 [独立清单](candidates_20261012/manifest.json)。两个目录共保存 43 份 PDF。CCA-SSG 已完成原始作者命令，见[执行验收](../../docs/ccassg_author_execution_20261012.md)；论文数值尚未独立核验。资料收录不代表复现通过。
+
 这些文件是候选或回归资料；文件名中的 `holdout`、`independent` 或 `finaltest` 记录历史用途，不代表当前未见样本或复现通过。完整验收状态见 [独立新 PDF 验收记录](../../docs/independent_pdf_acceptance.md)，最新阻塞见 [Issue #30](https://github.com/Yukikazct/AutoReproducer/issues/30)。
 
 清单中的 `download_record` 来源由原下载记录及文件哈希核对；`existing_project_reference_no_download_receipt` 表示来源链接来自已有项目记录，但原始下载回执缺失，最终跳转地址和下载时间不作推断。

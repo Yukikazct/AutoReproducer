@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from src.dependency_cache import cache_guard, DependencyCacheBusy
+from src.dependency_management import environment_directories, read_metadata
 from src.safety.paths import is_link, workspace_path
 
 
@@ -451,18 +452,7 @@ def _shared_dir_size(path: Path, sizes) -> Tuple[int, int]:
 
 def _dependency_directories(root):
     """Only environment leaves are selectable; namespace directories never are."""
-    for path in sorted(root.iterdir()):
-        if not path.is_dir() or is_link(path) or path.name.startswith("."):
-            continue
-        if path.name != "repository":
-            yield path
-            continue
-        for runtime in sorted(path.iterdir()):
-            if not runtime.is_dir() or is_link(runtime) or runtime.name.startswith("."):
-                continue
-            for environment in sorted(runtime.iterdir()):
-                if environment.is_dir() and not is_link(environment) and not environment.name.startswith("."):
-                    yield environment
+    yield from environment_directories(root)
 
 
 def list_deps_cache(*, _sizes=None) -> List[Dict[str, Any]]:
@@ -516,6 +506,8 @@ def list_deps_cache(*, _sizes=None) -> List[Dict[str, Any]]:
             "module": meta.get("module", ""),
             "installed_at": meta.get("installed_at", ""),
             "last_used": meta.get("last_used", "") or mtime,
+            "base_environment": meta.get('base_environment', ''),
+            "shared_packages": meta.get('shared_packages', []),
         })
     return sorted(items, key=lambda i: i["last_used"], reverse=True)
 
@@ -536,7 +528,11 @@ def _delete_deps_cache(names=None, *, keep_days=None, on_skip=None):
     try:
         with cache_guard(root, cleanup=True):
             # Discover again under the same lock used by installers and runners.
-            for item in list_deps_cache():
+            inventory = list_deps_cache()
+            # Remove deltas first; a base still referenced by a retained delta
+            # cannot be removed even when selected explicitly.
+            inventory.sort(key=lambda row: not bool(row['base_environment']))
+            for item in inventory:
                 if cutoff is None and item["name"] not in selected:
                     continue
                 if cutoff is not None:
@@ -547,6 +543,11 @@ def _delete_deps_cache(names=None, *, keep_days=None, on_skip=None):
                     if used >= cutoff:
                         continue
                 try:
+                    references = [directory for directory in _dependency_directories(root)
+                                  if read_metadata(directory).get('base_environment') == item['name']]
+                    if references:
+                        skipped(f"依赖缓存 {item['name']} 仍被增量环境引用，已保留")
+                        continue
                     target = workspace_path(root, item["name"], "dependency cache", must_exist=True)
                     _, size = _dir_size(target)
                     # Do not trust an earlier UI inventory or a rewritten symlink.

@@ -7,7 +7,7 @@ import pytest
 
 from discovered_fixtures import identity_review, make_experiment, write_pdf
 from src.agents.repository_verifier import (RepositoryVerifierAgent, identity_view,
-                                           validate_identity_review)
+                                           validate_identity_review, parse_identity_response)
 from src.discovered_repository_plan import build_evidence_packet, propose_plan
 
 
@@ -122,8 +122,140 @@ def test_mock_llm_and_invalid_response_cannot_confirm_identity(packet):
         RepositoryVerifierAgent(Mock(mock_mode=True)).run(packet)
     llm = Mock(mock_mode=False)
     llm.chat.return_value = "[LLM API Error: timeout]"
-    with pytest.raises(ValueError, match="有效 JSON"):
+    with pytest.raises(ValueError, match="API 调用失败"):
         RepositoryVerifierAgent(llm).run(packet)
+    assert llm.chat.call_count == 1
+
+
+def test_malformed_identity_output_gets_one_format_retry_without_fabricating_verdict(packet):
+    llm = Mock(mock_mode=False, model='fixture-model')
+    valid = identity_review(identity_view(packet))
+    llm.chat.side_effect = ['{"verdict": "author_repository",', json.dumps(valid)]
+    result = RepositoryVerifierAgent(llm).run(packet)
+    assert result['accepted'] is True and llm.chat.call_count == 2
+    assert result['attempts'][0]['format_error']
+    llm.chat.side_effect = ['{"verdict":', '{"verdict":']
+    with pytest.raises(ValueError, match='有效 JSON') as failure:
+        RepositoryVerifierAgent(llm).run(packet)
+    assert len(failure.value.repository_review['attempts']) == 2
+
+
+@pytest.mark.parametrize('missing_closer,nested_metadata', [(True, False), (False, True), (True, True)])
+def test_complete_identity_values_survive_recoverable_json_structure(packet, missing_closer, nested_metadata):
+    original = identity_review(identity_view(packet))
+    original['reason'] += ' Braces {[]} and an escaped "quote" remain literal evidence.'
+    payload = ({'checks': {**original['checks'], 'reason': original['reason'], 'verdict': original['verdict']}}
+               if nested_metadata else original)
+    response = json.dumps(payload)
+    if missing_closer:
+        response = response[:-1]
+    llm = Mock(mock_mode=False, model='fixture-model')
+    llm.chat.return_value = response
+    result = RepositoryVerifierAgent(llm).run(packet)
+    assert result['accepted'] and llm.chat.call_count == 1
+    assert result['reason'] == original['reason']
+    audit = result['attempts'][0]
+    assert audit['response'] and audit['format_repairs']
+    assert audit['parsed_review']['checks'] == payload['checks']
+    assert audit['parsed_review']['verdict'] == original['verdict']
+
+
+def test_structural_recovery_never_changes_negative_findings_or_overrides_root_verdict(packet):
+    original = identity_review(identity_view(packet))
+    original['checks']['method_alignment']['passed'] = False
+    response = json.dumps({'checks': {**original['checks'], 'verdict': original['verdict'],
+                                      'reason': original['reason']}})[:-1]
+    llm = Mock(mock_mode=False)
+    llm.chat.return_value = response
+    with pytest.raises(ValueError, match='method_alignment') as failure:
+        RepositoryVerifierAgent(llm).run(packet)
+    assert llm.chat.call_count == 1
+    assert failure.value.repository_review['checks']['method_alignment']['passed'] is False
+    assert failure.value.repository_review['response_format_repairs']
+    original['verdict'] = 'unrelated'
+    original['checks']['verdict'] = 'author_repository'
+    parsed, _ = parse_identity_response(json.dumps(original)[:-1])
+    assert parsed['verdict'] == 'unrelated'
+    with pytest.raises(ValueError):
+        validate_identity_review(packet, parsed)
+
+
+@pytest.mark.parametrize('response', ['{"reason":"unfinished', '{"verdict":',
+                                     '{"checks":{]', '{"verdict":"author_repository",'])
+def test_truncated_values_and_invalid_separators_cannot_be_repaired(response):
+    with pytest.raises(json.JSONDecodeError):
+        parse_identity_response(response)
+
+
+def test_discovered_candidate_without_pdf_url_can_match_only_in_execution_objective(packet):
+    packet['pdf']['repository_links'] = []
+    packet['author_execution_only'] = True
+    packet['repository_input'] = {'source': 'model_discovered', 'url': packet['repository']['url']}
+    view = identity_view(packet)
+    assert view['pdf']['repository_links'] == [] and view['repository_input']['source'] == 'model_discovered'
+    review = {'verdict': 'matching_repository', 'reason': 'The actual paper title and method match the fetched implementation.',
+              'checks': {name: {'passed': True, 'reason': 'Same paper and original implementation are cited in the fetched sources.',
+                               'citations': ['pdf_p1_0', 'repo_0_0']}
+                         for name in ('paper_identity', 'author_implementation', 'method_alignment')}}
+    review['checks']['author_implementation'] = {'passed': False, 'reason': 'Author ownership is uncertain.', 'citations': []}
+    result = validate_identity_review(packet, review)
+    assert result['accepted'] is True and result['author_identity_confirmed'] is False
+    assert result['selection_source'] == 'model_discovered'
+    review['checks']['paper_identity']['passed'] = False
+    with pytest.raises(ValueError, match='paper_identity'):
+        validate_identity_review(packet, review)
+    packet['author_execution_only'] = False
+    with pytest.raises(ValueError, match='候选链接'):
+        identity_view(packet)
+
+
+def test_resource_discovery_is_not_misrepresented_as_a_pdf_link(tmp_path):
+    from src.discovered_repository_reproduction import author_repository_input
+    fixture = make_experiment(tmp_path)
+    write_pdf(fixture['pdf'], [['Separating Signed Signals', 'An original paper without a repository URL.']])
+    request = {'pdf_path': str(fixture['pdf']), 'author_execution_only': True,
+               'resources': {'code_repo_url': fixture['snapshot']['url']}}
+    _, _, evidence = author_repository_input(request, require_author=False)
+    assert evidence['source'] == 'model_discovered' and evidence['is_author_code'] is False and evidence['page'] is None
+    request['author_execution_only'] = False
+    with pytest.raises(ValueError, match='链接证据'):
+        author_repository_input(request, require_author=False)
+
+
+def test_pdf_linked_matching_implementation_can_run_without_certifying_authorship(packet):
+    packet['author_execution_only'] = True
+    review = {'verdict': 'matching_repository', 'reason': 'Same paper and method; ownership is uncertain.',
+        'checks': {name: {'passed': True, 'reason': 'The pinned README matches the paper.',
+                         'citations': ['pdf_p1_0', 'repo_0_0']}
+                   for name in ('paper_identity', 'method_alignment')}}
+    review['checks']['author_implementation'] = {'passed': False, 'reason': 'Unconfirmed ownership.', 'citations': []}
+    result = validate_identity_review(packet, review)
+    assert result['accepted'] and not result['author_identity_confirmed']
+    assert result['review_mode'] == 'implementation_execution'
+    llm = Mock(mock_mode=False)
+    llm.chat.return_value = json.dumps(review)
+    assert RepositoryVerifierAgent(llm).run(packet)['accepted']
+    assert 'Do not use uncertain solely for missing ownership' in llm.chat.call_args.args[0]
+    review['checks']['method_alignment']['passed'] = False
+    with pytest.raises(ValueError, match='method_alignment'):
+        validate_identity_review(packet, review)
+    review['checks']['method_alignment']['passed'] = True
+    packet['author_execution_only'] = False
+    with pytest.raises(ValueError, match='作者实现仓库'):
+        validate_identity_review(packet, review)
+
+
+def test_extra_check_metadata_and_nested_explanation_keep_verified_evidence(packet):
+    review = identity_review(packet)
+    review['checks']['reason'] = review.pop('reason')
+    review['checks']['confidence'] = 0.9
+    result = validate_identity_review(packet, review)
+    assert result['accepted'] is True
+    assert set(result['checks']) == {'paper_identity', 'author_implementation', 'method_alignment'}
+    assert result['reason'] == review['checks']['reason']
+    del review['checks']['method_alignment']
+    with pytest.raises(ValueError, match='缺少'):
+        validate_identity_review(packet, review)
 
 
 def test_semantic_rejection_is_not_retried_as_quote_repair(packet):
