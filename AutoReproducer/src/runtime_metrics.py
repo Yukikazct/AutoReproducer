@@ -61,7 +61,7 @@ def comparable_values(declared, actual, paper_unit="", actual_unit=""):
         "需显式定义单位后才能换算")
 
 
-def _select_records(records):
+def _select_records(records, preserve_contexts=False):
     selected = {}
     ranks = {}
     for record in records:
@@ -70,12 +70,13 @@ def _select_records(records):
         stage = str(record.get("stage") or "").lower()
         split = str(record.get("split") or "").lower()
         rank = (stage in _FINAL_STAGES, split in {"test", "eval", "evaluation"})
-        if key not in ranks or rank >= ranks[key]:
-            selected[key], ranks[key] = {**record, "name": key}, rank
+        identity = (key, split, record.get("dataset", ""), record.get("method", "")) if preserve_contexts else key
+        if identity not in ranks or rank >= ranks[identity]:
+            selected[identity], ranks[identity] = {**record, "name": key}, rank
     return list(selected.values())
 
 
-def _structured_records(payload, source):
+def _structured_records(payload, source, preserve_contexts=False):
     errors, records = [], []
     if isinstance(payload, dict) and "metrics" in payload:
         if payload.get("version", 1) != 1:
@@ -99,17 +100,17 @@ def _structured_records(payload, source):
                   "stage": str(entry.get("stage") or "final").lower(),
                   "split": str(entry.get("split") or "").lower()}
         records.append(record)
-    records = _select_records(records)
+    records = _select_records(records, preserve_contexts)
     for record in records:
         if record["stage"] not in _FINAL_STAGES:
             errors.append(f"{record['name']}: 结构化指标来自 {record['stage']} 阶段，缺少最终评估指标")
     return records, errors
 
 
-def parse_runtime_metrics(text, structured=None, expected_names=()):
+def parse_runtime_metrics(text, structured=None, expected_names=(), *, preserve_contexts=False):
     """返回 (最终指标记录, 解析错误)。损坏的结构化输出不能回退到历史文本。"""
     if structured is not None:
-        return _structured_records(structured, "execution.metrics")
+        return _structured_records(structured, "execution.metrics", preserve_contexts)
     lines = str(text or "").splitlines()
     marked = [(n, line.strip()[len(METRICS_MARKER):].strip())
               for n, line in enumerate(lines, 1) if line.strip().startswith(METRICS_MARKER)]
@@ -119,17 +120,24 @@ def parse_runtime_metrics(text, structured=None, expected_names=()):
             decoded = json.loads(payload)
         except (ValueError, TypeError):
             return [], [f"stdout:{line_number}: 最终结构化指标不是合法 JSON"]
-        return _structured_records(decoded, f"stdout:{line_number}")
+        return _structured_records(decoded, f"stdout:{line_number}", preserve_contexts)
 
     records = []
     known_names = _TEXT_METRICS | {norm_metric_key(key) for key in expected_names}
     for line_number, line in enumerate(lines, 1):
+        previous_end = 0
         for match in _METRIC_RE.finditer(line):
             # 脚本自印的论文参考值不能覆盖真实测量。
-            prefix = re.split(r"[,;，；]", line[:match.start()])[-1]
-            if _REFERENCE_RE.search(prefix):
+            prefix = re.split(r"[,;，；]", line[previous_end:match.start()])[-1]
+            previous_end = match.end()
+            reference_prefix = re.split(r"[,;，；]", line[:match.start()])[-1]
+            if _REFERENCE_RE.search(reference_prefix):
                 continue
             name = norm_metric_key(match["name"])
+            qualified = re.fullmatch(r"(test|eval|evaluation|validation|valid|val|train|training)_(.+)", name)
+            if preserve_contexts and qualified:
+                prefix += " " + qualified[1]
+                name = norm_metric_key(qualified[2])
             if name in {"epoch", "step", "seed", "version"}:
                 continue
             if name not in known_names and match["sep"] != "=":
@@ -138,11 +146,14 @@ def parse_runtime_metrics(text, structured=None, expected_names=()):
             split = ""
             if re.search(r"\b(?:test|eval|evaluation)\b|测试|评估", prefix, re.I):
                 split, stage = "test", "final"
+            elif re.search(r"\b(?:validation|valid|val)\b|验证", prefix, re.I):
+                split, stage = "validation", "validation"
             elif re.search(r"\b(?:train|training)\b|训练", prefix, re.I):
                 split, stage = "train", "train"
             records.append({"name": name, "value": metric_number(match["value"]),
                             "unit": "percent" if match["percent"] else "",
-                            "split": split, "stage": stage, "source": f"stdout:{line_number}"})
-    records = _select_records(records)
+                            "split": split, "stage": stage, "source": f"stdout:{line_number}",
+                            "source_quote": line.strip()})
+    records = _select_records(records, preserve_contexts)
     errors = [f"{r['name']}: 指标不是有限数值" for r in records if r["value"] is None]
     return records, errors

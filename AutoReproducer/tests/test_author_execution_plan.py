@@ -9,7 +9,7 @@ import zipfile
 
 import pytest
 
-from discovered_fixtures import PlannedLLM, make_experiment
+from discovered_fixtures import PlannedLLM, make_experiment, write_pdf
 from src import author_execution_plan as author
 from src.discovered_repository_plan import build_evidence_packet, PlanEvidenceError
 from src.method_adapters import read_json
@@ -51,6 +51,45 @@ def fixture_packet(tmp_path):
     packet = build_evidence_packet(fixture['pdf'], fixture['workspace'], fixture['snapshot'])
     packet['author_execution_only'] = True
     return fixture, packet
+
+
+@pytest.mark.parametrize('manual', [False, True])
+def test_execution_mode_fetches_repository_without_identity_review(tmp_path, monkeypatch, manual):
+    from src.agents.repository_verifier import RepositoryVerifierAgent
+    fixture, runner, request, _ = setup_service(tmp_path, monkeypatch)
+    runner.llm = AuthorLLM(fixture)
+    request.update(author_execution_only=True, prepare_only=True)
+    if manual:
+        request['preferred_repo_url'] = fixture['snapshot']['url']
+        # No repository link or author declaration in this PDF: a supplied
+        # runnable repository must still reach original-command planning.
+        method_quote = next(c['quote'] for c in fixture['proposal']['citations'] if c['id'] == 'paper_protocol')
+        metrics_quote = next(c['quote'] for c in fixture['proposal']['citations'] if c['id'] == 'paper_results')
+        write_pdf(fixture['pdf'], [['Invented manual repository paper', 'Abstract', method_quote],
+                                  ['Full methods on the next page.'], metrics_quote.splitlines()])
+    def reject(*args, **kwargs):
+        raise AssertionError('Removed identity gate must never be called for direct execution')
+    monkeypatch.setattr(RepositoryVerifierAgent, 'run', reject)
+    events = []
+    result = runner.run(request, on_event=events.append)
+    assert result['state'] == 'COMPLETED', result['error']
+    identity = result['data']['resources']['repository_identity']
+    assert identity['status'] == 'unreviewed_execution' and identity['author_identity_confirmed'] is False
+    stages = next(item for item in events if item['type'] == 'pipeline_plan')['stages']
+    assert stages[0]['title'] == '获取代码仓库'
+    assert not any(task['task'] == 'repository_identity_review' for _, task in runner.llm.calls)
+
+
+def test_strict_numerical_mode_retains_identity_review(tmp_path, monkeypatch):
+    from src.agents.repository_verifier import RepositoryVerifierAgent
+    _, runner, request, _ = setup_service(tmp_path, monkeypatch)
+    def reject(*args, **kwargs):
+        raise ValueError('Strict identity review rejected this fixture')
+    monkeypatch.setattr(RepositoryVerifierAgent, 'run', reject)
+    result = runner.run(request)
+    assert result['state'] == 'ERROR'
+    assert 'Strict identity review rejected' in result['error']
+    assert result['data']['repository_executed'] is False
 
 
 def test_explicit_execution_objective_does_not_need_metric_or_checkpoint_claims(tmp_path):

@@ -39,6 +39,54 @@ def _markdown_text(value: str) -> str:
                   value.replace("\n", " ").replace("\r", " "))
 
 
+def _author_claim_comparison_lines(comparison):
+    if not comparison:
+        return []
+    lines = ['', '### 作者输出与论文宣称对比', '',
+             _markdown_text(_txt(comparison.get('reason'))), '',
+             '本表使用作者程序输出，尚未独立复算。数值对比不影响代码完成状态。']
+    rows = comparison.get('comparisons') or []
+    if not rows:
+        return lines + ['实际输出中的指标保留在下方证据表；未将其他数据集或基线指标作为参考。', '']
+    lines += ['', '| 指标 / 数据集 / 方法 | 论文宣称 | 作者运行输出 | 差值（实际 − 论文） | 结论 |',
+              '| --- | --- | --- | --- | --- |']
+    def value_cell(node):
+        value = node.get('value')
+        suffix = {'percent': '%', 'fraction': '（比例）'}.get(node.get('unit'), '')
+        aggregation = {'single': '单次', 'mean': '均值', 'median': '中位数', 'best': '最佳', 'unknown': '统计方式未明确'}.get(node.get('aggregation'), '')
+        runs = node.get('runs')
+        return f"{value}{suffix}；{aggregation}" + (f"，{runs} 次" if runs else '')
+    for row in rows:
+        paper, actual = row['reference'], row['actual']
+        difference = row.get('difference')
+        delta = '无法比较' if difference is None else f"{difference:+.4g}"
+        if difference is not None:
+            delta += {'percentage_points': ' 个百分点', 'fraction': '（比例）'}.get(row.get('difference_unit'), '')
+            relative = row.get('relative_difference')
+            if relative is not None:
+                delta += f"；相对差异 {relative:+.2%}"
+        verdict = {'not_comparable': '设置或指标不对应', 'reference_only': '仅供参考，尚未验收'}.get(row['status'])
+        if verdict is None:
+            verdict = ('达到参考' if row['meets_reference'] else '未达到参考') if row.get('meets_reference') is not None else (
+                '在误差范围内' if row.get('within_tolerance') else '超出误差范围')
+        cells = [f"{row['metric']} / {paper.get('dataset')} / {paper.get('method')}",
+                 value_cell(paper), value_cell(actual), delta, verdict]
+        lines.append('| ' + ' | '.join(_markdown_text(cell) for cell in cells) + ' |')
+    lines += ['', f"参考阈值为项目约定的 {comparison.get('relative_tolerance', 0.05):.0%} 相对误差，非论文提供的标准。"]
+    citations = {ref['id']: ref for ref in comparison.get('citations', [])}
+    for row in rows:
+        paper, actual = row['reference'], row['actual']
+        lines += ['', '- **对比范围**: ' + _markdown_text(f"{row['metric']}；论文划分 {paper.get('split')} / 实际划分 {actual.get('split')}"),
+                  '- **实验设置**: ' + _markdown_text(_txt(row['settings'].get('reason'))),
+                  '- **实际来源**: ' + _markdown_text(_txt(actual.get('source')))]
+        for limitation in row.get('limitations', []):
+            lines.append('- **对比限制**: ' + _markdown_text(limitation))
+        pages = [str(citations[key]['page']) for key in paper.get('citations', []) if key in citations and citations[key]['source'] == 'pdf']
+        lines += ['- **论文来源**: PDF 第 ' + '、'.join(dict.fromkeys(pages)) + ' 页',
+                  '> ' + _markdown_text(paper['value_quote'])]
+    return lines + ['']
+
+
 def _disk_usage_lines(usage):
     components = (usage or {}).get("components") or []
     if not components:
@@ -753,7 +801,9 @@ class ReportGeneratorAgent(BaseAgent):
         elif validation.get("status") == "method_experiment_completed":
             state_text = "✅ 官方方法实验完成（不判定整篇论文数值复现）"
         elif validation.get('status') == 'author_code_completed':
-            state_text = '作者仓库代码运行完成（论文数值尚未核验）'
+            state_text = ('作者仓库代码运行完成（已对比作者输出，尚未独立核验论文数值）'
+                          if (validation.get('author_claim_comparison') or {}).get('comparisons') else
+                          '作者仓库代码运行完成（论文数值尚未核验）')
         elif validation.get("status") == "quality_target_not_met":
             state_text = "⚠️ 方法实验已运行，工程效果门槛未达到"
         elif validation.get("status") == "reference_not_met":
@@ -836,6 +886,7 @@ class ReportGeneratorAgent(BaseAgent):
                     pv = metric_cell(pv, metrics_comp.get("paper_units") or {}, pk)
                     av = metric_cell(av, metrics_comp.get("actual_units") or {}, ak)
                     lines.append(f"| {name} | {pv} | {av} |")
+        lines += _author_claim_comparison_lines(validation.get('author_claim_comparison'))
         records = validation.get("metric_records") or []
         if records:
             lines += ["", "### 实际指标证据", "| 指标 | 单位 | 数据划分 | 阶段 | 来源 |",

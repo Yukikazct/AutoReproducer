@@ -47,7 +47,7 @@ def repository_candidates(document, evidence, resources, *, execution_only=False
             if url:
                 candidates.append({'url': url, 'source': 'model_discovered', 'page': None,
                     'evidence_type': 'discovered_repository_candidate', 'is_author_code': False,
-                    'context': '发现阶段的备用候选；须读取固定 README 核验论文与方法'})
+                    'context': '发现阶段的备用候选；执行模式直接获取源码并尝试原始命令'})
     candidates.extend(links)
     unique, seen = [], set()
     for link in candidates:
@@ -92,7 +92,7 @@ def author_repository_input(request, *, require_author=True):
     if evidence is None:
         if not require_author and request.get('author_execution_only') is True:
             return document, selected, {'url': selected, 'raw_url': selected, 'page': None,
-                'source': 'model_discovered', 'context': '资源定位发现的候选；需以真实 README 和论文核对实现关系',
+                'source': 'model_discovered', 'context': '资源定位发现的候选；执行模式直接获取源码并尝试原始命令',
                 'evidence_type': 'discovered_repository_candidate', 'is_author_code': False}
         raise ValueError("原始 PDF 的作者代码声明没有确认所选仓库" if require_author
                          else "所选仓库没有实际 PDF 中的非参考文献链接证据")
@@ -329,10 +329,12 @@ class DiscoveredRepositoryReproduction:
                   ("generate_report", "GENERATE_REPORT", "ReportGenerator", "生成带来源证据的实验报告")]
         if execution_only:
             phases = [(identifier, state, agent,
-                       {'select_experiment': '选择原作者完整运行命令',
+                       {'prepare_repository': '获取代码仓库',
+                        'select_experiment': '选择原作者完整运行命令',
                         'execute_repository': '运行原作者命令并观察实际训练',
                         'verify_protocol': '核验原作者命令和所属进程已完成'}.get(identifier, title))
                       for identifier, state, agent, title in phases]
+            phases.insert(-1, ('compare_author_claims', 'VALIDATE', 'ResultValidator', '对比运行指标与论文宣称'))
         emit({"type": "pipeline_plan", "pipeline": "repository", "stages": [
             {"id": identifier, "agent": agent, "title": title, "status": "waiting"}
             for identifier, _, agent, title in phases]})
@@ -391,6 +393,9 @@ class DiscoveredRepositoryReproduction:
                         raise ValueError("导出的仓库与所选作者来源或固定版本不一致")
                     attempt.update(revision=revision, archive_sha256=snapshot.get("archive_sha256"),
                                    workspace=str(workspace.resolve()))
+                    # Allow discovered/user-provided URLs without a literal
+                    # author-code statement in the PDF. This flag only controls
+                    # evidence acquisition; execution mode skips the reviewer.
                     packet = build_evidence_packet(request["pdf_path"], workspace, snapshot, for_identity_review=True)
                     if execution_only:
                         packet['author_execution_only'] = True
@@ -402,7 +407,12 @@ class DiscoveredRepositoryReproduction:
                     if packet["pdf"]["sha256"] != document.sha256:
                         raise ValueError("原始 PDF 在仓库准备期间发生变化，不能使用不同论文继续规划")
                     write_json(run_dir / f"repository_identity_packet_{index + 1}.json", packet)
-                    review = RepositoryVerifierAgent(self.llm, self.logger).run(packet)
+                    if execution_only:
+                        review = {'status': 'skipped', 'author_identity_confirmed': False,
+                            'execution_allowed': True,
+                            'reason': '按执行目标直接获取仓库；未进行 LLM 论文与仓库匹配审核。'}
+                    else:
+                        review = RepositoryVerifierAgent(self.llm, self.logger).run(packet)
                     if snapshot.get('submodules_pending'):
                         materialize_submodules(self.root, snapshot, offline=offline)
                         packet = build_evidence_packet(request['pdf_path'], workspace, snapshot, for_identity_review=True)
@@ -423,14 +433,17 @@ class DiscoveredRepositoryReproduction:
                     write_json(run_dir / "repository_identity_attempts.json", attempts)
             data["repository_identity_attempts"] = attempts
             if review is None:
-                raise ValueError(("用户提供的仓库与论文实现内容未确认匹配；未启动实验。" if manual
+                raise ValueError(("无法获取候选仓库源码。" if execution_only else
+                                 "用户提供的仓库与论文实现内容未确认匹配；未启动实验。" if manual
                                  else "候选仓库与论文的作者实现关系未确认；未启动实验。")
                                  + "；".join(attempt.get("error", "") for attempt in attempts))
             evidence["semantic_review"] = review
             data["resources"].update(code_repo_url=url, selected_repo=url, selection_evidence=evidence,
-                repository_identity={"status": ("user_supplied_verified" if manual else "author_verified"
+                repository_identity={"status": ("unreviewed_execution" if execution_only else
+                                         "user_supplied_verified" if manual else "author_verified"
                                          if review['author_identity_confirmed'] else "matching_implementation_verified"),
-                                     "source": ("user_supplied_pinned_git_llm_review" if manual else
+                                     "source": ("pinned_git_direct_execution" if execution_only else
+                                         "user_supplied_pinned_git_llm_review" if manual else
                                          "discovered_pinned_git_llm_review" if evidence.get('source') == 'model_discovered'
                                          else "pdf_pinned_git_llm_review"),
                                      "author_identity_confirmed": review["author_identity_confirmed"],
@@ -666,6 +679,8 @@ class DiscoveredRepositoryReproduction:
                     event('prepare_dataset', 'skipped', '仅准备计划；作者加载器尚未下载真实数据')
                 for identifier in ("execute_repository", "verify_protocol"):
                     event(identifier, "skipped", "仅准备模式")
+                if execution_only:
+                    event('compare_author_claims', 'skipped', '尚未运行作者代码')
                 return
 
             def progress(item):
@@ -802,6 +817,8 @@ class DiscoveredRepositoryReproduction:
                     event('prepare_dataset', 'skipped', '仅准备环境；实际数据构造和训练尚未执行')
                 for identifier in ("execute_repository", "verify_protocol"):
                     event(identifier, "skipped", "仅准备实验环境")
+                if execution_only:
+                    event('compare_author_claims', 'skipped', '尚未运行作者代码')
                 return
             phase = "execute_repository"; event(phase, "running")
             verify_frozen_inputs()
@@ -845,7 +862,10 @@ class DiscoveredRepositoryReproduction:
                 validation['dataset_provenance_verified'] = data['dataset_provenance'].get('verified') is True
                 if validation.get('numeric_compatibility'):
                     validation.setdefault('warnings', []).append('执行包含实际报错后记录的浮点倒数兼容修复；原仓库文件未改写。')
-                if not data['resources']['repository_identity'].get('author_identity_confirmed'):
+                identity = data['resources']['repository_identity']
+                if identity.get('status') == 'unreviewed_execution':
+                    validation.setdefault('warnings', []).append('本次直接运行所选仓库；论文与实现关系、作者归属未审核。')
+                elif not identity.get('author_identity_confirmed'):
                     validation.setdefault('warnings', []).append('仓库实现与论文匹配；作者归属尚未确认。')
                 if not author_managed_data:
                     validation['completion_checks']['real_data_frozen'] = True
@@ -856,6 +876,16 @@ class DiscoveredRepositoryReproduction:
                 write_json(run_dir / 'author_execution_verification.json', validation)
                 write_json(run_dir / 'execution.json', execution)
                 event(phase, 'success', validation['reason'])
+                phase = 'compare_author_claims'; event(phase, 'running')
+                from src.author_claim_comparison import compare_author_claims
+                comparison = compare_author_claims(self.llm, read_json(run_dir / 'source_packet.json'),
+                                                    plan, workspace, execution)
+                validation['author_claim_comparison'] = comparison
+                validation['metric_records'] = comparison['metric_records']
+                write_json(run_dir / 'author_claim_comparison.json', comparison)
+                write_json(run_dir / 'author_execution_verification.json', validation)
+                write_json(run_dir / 'execution.json', execution)
+                event(phase, 'success' if comparison['comparisons'] else 'skipped', comparison['reason'])
                 return
             validation = verify_capture(plan, workspace, execution, data["spec_sha256"])
             data["validation"] = validation

@@ -12,6 +12,7 @@ COMPLETION_RULES = {
     "execute_repository": "本轮全部必需步骤返回结果，执行进程已退出并清理",
     "execute_code": "本轮执行及修复步骤返回结果，执行进程已退出并清理",
     "verify_protocol": "本轮协议、产物与独立指标核验返回结果",
+    "compare_author_claims": "作者输出与论文宣称对比已返回结果，或明确记录无法配对的原因",
     "method_advice": "建议、候选训练和所需确认返回最终结果，全部所属执行已退出并清理",
     "generate_report": "报告内容已生成，生成结果已返回",
 }

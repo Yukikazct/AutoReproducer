@@ -1,0 +1,216 @@
+{
+  "test_kind": "known_paper_regression",
+  "input": "real_browser_pdf_upload",
+  "paper": "Simplifying Graph Convolutional Networks",
+  "pdf_sha256": "1151ecd729ecbc9fe51e09d0a5ece2ae2f326bb03cd64f6a2158ec43c083af2e",
+  "repository": {
+    "url": "https://github.com/Tiiiger/SGC",
+    "revision": "2c7a2727e82e462d8ef9d6e57f0b08888e16488f"
+  },
+  "repository_review": {
+    "status": "skipped",
+    "author_identity_confirmed": false,
+    "execution_allowed": true,
+    "reason": "按执行目标直接获取仓库；未进行 LLM 论文与仓库匹配审核。"
+  },
+  "repository_identity_status": "unreviewed_execution",
+  "state": "COMPLETED",
+  "status": "author_code_completed",
+  "is_reproduced": null,
+  "paper_metrics_verified": false,
+  "original_command": [
+    "python",
+    "citation.py",
+    "--dataset",
+    "cora",
+    "--tuned",
+    "--no-cuda"
+  ],
+  "optimizer_steps": 100,
+  "natural_return": true,
+  "steps": [
+    {
+      "id": "train_cora",
+      "exit_code": 0,
+      "success": true,
+      "elapsed_s": 7.125
+    }
+  ],
+  "completion_checks": {
+    "all_required_author_commands_returned": true,
+    "observed_training_updates": true,
+    "owned_processes_finished": true,
+    "frozen_sources_verified": true,
+    "native_environment_verified": true,
+    "real_data_frozen": true
+  },
+  "numeric_compatibility": [],
+  "metric_records": [
+    {
+      "name": "accuracy",
+      "value": 0.794,
+      "unit": "",
+      "split": "validation",
+      "stage": "validation",
+      "source": "train_cora:stdout:3",
+      "source_quote": "Validation Accuracy: 0.7940 Test Accuracy: 0.8100",
+      "id": "train_cora:stdout:0",
+      "step_id": "train_cora"
+    },
+    {
+      "name": "accuracy",
+      "value": 0.81,
+      "unit": "",
+      "split": "test",
+      "stage": "final",
+      "source": "train_cora:stdout:3",
+      "source_quote": "Validation Accuracy: 0.7940 Test Accuracy: 0.8100",
+      "id": "train_cora:stdout:1",
+      "step_id": "train_cora"
+    }
+  ],
+  "comparison": {
+    "basis": "author_output",
+    "status": "partial",
+    "comparisons": [
+      {
+        "metric": "accuracy",
+        "reference": {
+          "name": "accuracy",
+          "value": 81.0,
+          "unit": "percent",
+          "dataset": "Cora",
+          "method": "SGC",
+          "split": "test",
+          "aggregation": "mean",
+          "runs": 10,
+          "value_quote": "SGC 81.0 ± 0.0 71.9 ± 0.1 78.9 ± 0.0",
+          "citations": [
+            "pdf_exp"
+          ],
+          "proposed_metric_name": "SGC",
+          "name_correction": "Method row label normalized to the cited runtime metric"
+        },
+        "actual": {
+          "unit": "fraction",
+          "dataset": "Cora",
+          "method": "SGC",
+          "split": "test",
+          "aggregation": "single",
+          "runs": 1,
+          "citations": [
+            "citation_py",
+            "metrics_py",
+            "args_py",
+            "utils_py",
+            "normalization_py",
+            "models_py"
+          ],
+          "value": 0.81,
+          "source": "train_cora:stdout:3",
+          "id": "train_cora:stdout:1"
+        },
+        "settings": {
+          "status": "different",
+          "reason": "论文报告的是在 Cora 上对 10 次运行取平均的测试准确率（Table 2，SGC 81.0 ± 0.0），而本次执行是单次运行（seed=42，runs=1），因此单次运行与论文均值必须区分。方法族一致（SGC，K=2 特征传播 + 逻辑回归），数据集一致（Cora，公开划分），但聚合方式不同（single vs mean over 10 runs）。此外，论文使用 Adam、lr=0.2、100 epochs，并在公开验证集上用 hyperopt 调 weight decay 60 次迭代；本次执行使用 --tuned 读取仓库中已调好的 SGC-tuning/cora.txt 权重衰减，未重新调参。论文未明确说明是否对特征做行归一化，而仓库代码在 load_citation 中对特征做 row_normalize，且邻接矩阵使用 AugNormAdj（带自环的对称归一化），这些预处理细节在论文正文中未完全披露。",
+          "citations": [
+            "pdf_exp",
+            "citation_py",
+            "args_py",
+            "utils_py",
+            "normalization_py",
+            "readme"
+          ]
+        },
+        "direction": "higher",
+        "status": "reference_only",
+        "limitations": [
+          "实验设置不同，数值差值仅供参考：论文报告的是在 Cora 上对 10 次运行取平均的测试准确率（Table 2，SGC 81.0 ± 0.0），而本次执行是单次运行（seed=42，runs=1），因此单次运行与论文均值必须区分。方法族一致（SGC，K=2 特征传播 + 逻辑回归），数据集一致（Cora，公开划分），但聚合方式不同（single vs mean over 10 runs）。此外，论文使用 Adam、lr=0.2、100 epochs，并在公开验证集上用 hyperopt 调 weight decay 60 次迭代；本次执行使用 --tuned 读取仓库中已调好的 SGC-tuning/cora.txt 权重衰减，未重新调参。论文未明确说明是否对特征做行归一化，而仓库代码在 load_citation 中对特征做 row_normalize，且邻接矩阵使用 AugNormAdj（带自环的对称归一化），这些预处理细节在论文正文中未完全披露。",
+          "统计方式不一致：论文 均值 / 本次 单次",
+          "运行次数不一致：论文 10 次 / 本次 1 次"
+        ],
+        "difference": 0.0,
+        "relative_difference": 0.0,
+        "difference_unit": "percentage_points",
+        "within_tolerance": null,
+        "meets_reference": null
+      }
+    ],
+    "citations": [
+      {
+        "id": "pdf_exp",
+        "source": "pdf",
+        "page": 6,
+        "pdf_sha256": "1151ecd729ecbc9fe51e09d0a5ece2ae2f326bb03cd64f6a2158ec43c083af2e",
+        "sha256": "24ddbb5ff6d46688e8a04a7ce1f99cb173d950d39cfa470fc98664a10baeb0ac",
+        "quote": "Simplifying Graph Convolutional Networks\n80\n79\n78\n77\n100 101 102 103\nRelative Training Time\n)%(ccAtseT\nPubmed\n97\nSGC GCN 96 1x 28x 2 D 6 G 0x I 4 G 1 A 5 T x L 90 N 9 e x t 95\n94\nFastGCN 6x 93 GIN AdaLNet\n89x 758x 92\n100 101 102\nRelative Training Time\n)%(1FtseT\nReddit\nGaAN\nSAGE-LSTM SGC SAGE-mean 180x 1x 29x\nDGI\nFastGCN 100x SAGE-GCN\n32x\nFigure 3. Performance over training time on Pubmed and Reddit. SGC is the fastest while achieving competitive performance. We are not\nable to benchmark the training time of GaAN and DGI on Reddit because the implementations are not released.\nTable 1. Dataset statistics of the citation networks and Reddit. Table 2. Test accuracy (%) averaged over 10 runs on citation net-\nDataset # Nodes # Edges Train/Dev/Test Nodes works. †We remove the outliers (accuracy < 75/65/75%) when\ncalculating their statistics due to high variance.\nCora 2, 708 5, 429 140/500/1, 000\nCiteseer 3, 327 4, 732 120/500/1, 000 Cora Citeseer Pubmed\nPubmed 19, 717 44, 338 60/500/1, 000\nNumbers from literature:\nReddit 233K 11.6M 152K/24K/55K GCN 81.5 70.3 79.0\nGAT 83.0 ± 0.7 72.5 ± 0.7 79.0 ± 0.3\nGLN 81.2 ± 0.1 70.9 ± 0.1 78.9 ± 0.1\nAGNN 83.1 ± 0.1 71.7 ± 0.1 79.9 ± 0.1\nLNet 79.5 ± 1.8 66.2 ± 1.9 78.3 ± 0.3\n5. Experiments and Discussion AdaLNet 80.4 ± 1.1 68.7 ± 1.0 78.1 ± 0.4\nDeepWalk 70.7 ± 0.6 51.4 ± 0.5 76.8 ± 0.6\nWe first evaluate SGC on citation networks and social net- DGI 82.3 ± 0.6 71.8 ± 0.7 76.8 ± 0.6\nworks and then extend our empirical analysis to a wide\nOur experiments:\nrange of downstream tasks. GCN 81.4 ± 0.4 70.9 ± 0.5 79.0 ± 0.4\nGAT 83.3 ± 0.7 72.6 ± 0.6 78.5 ± 0.3\n5.1. Citation Networks & Social Networks FastGCN 79.8 ± 0.3 68.8 ± 0.6 77.4 ± 0.3\nGIN 77.6 ± 1.1 66.1 ± 0.9 77.0 ± 1.2\nWe evaluate the semi-supervised node classification perfor- LNet 80.2 ± 3.0† 67.3 ± 0.5 78.3 ± 0.6†\nmance of SGC on the Cora, Citeseer, and Pubmed citation AdaLNet 81.9 ± 1.9† 70.6 ± 0.8† 77.8 ± 0.7†\nDGI 82.5 ± 0.7 71.6 ± 0.7 78.4 ± 0.7\nnetwork datasets (Table 2) (Sen et al., 2008). We supplement\nSGC 81.0 ± 0.0 71.9 ± 0.1 78.9 ± 0.0\nour citation network analysis by using SGC to inductively\npredict community structure on Reddit (Table 3), which\nconsists of a much larger graph. Dataset statistics are sum- Table 3. Test Micro F1 Score (%) averaged over 10 runs on Red-\nmarized in Table 1. dit. Performances of models are cited from their original papers.\nOOM: Out of memory.\nSetting Model Test F1\nDatasets and experimental setup. On the citation net- GaAN 96.4\nworks, we train SGC for 100 epochs using Adam (Kingma SAGE-mean 95.0\n& Ba, 2015) with learning rate 0.2. In addition, we use Supervised SAGE-LSTM 95.4\nweight decay and tune this hyperparameter on each dataset SAGE-GCN 93.0\nFastGCN 93.7\nusing hyperopt (Bergstra et al., 2015) for 60 iterations on\nGCN OOM\nthe public split validation set. Experiments on citation net-\nworks are conducted transductively. On the Reddit dataset, SAGE-mean 89.7\nUnsupervised SAGE-LSTM 90.7\nwe train SGC with L-BFGS (Liu & Nocedal, 1989) using\nSAGE-GCN 90.8\nno regularization, and remarkably, training converges in 2 DGI 94.0\nsteps. We evaluate SGC inductively by following Chen et al.\nRandom-Init DGI 93.3\n(2018): we train SGC on a subgraph comprising only train- No Learning SGC 94.9\ning nodes and test with the original graph. On all datasets,\nwe tune the number of epochs based on both convergence\nbehavior and validation accuracy."
+      },
+      {
+        "id": "metrics_py",
+        "source": "repository",
+        "path": "metrics.py",
+        "sha256": "b95e096099d2d705c52d168214c271d62a53f170ca281ecc7bd8a9ac1268ed91",
+        "revision": "2c7a2727e82e462d8ef9d6e57f0b08888e16488f",
+        "quote": "from sklearn.metrics import f1_score\r\n\r\ndef accuracy(output, labels):\r\n    preds = output.max(1)[1].type_as(labels)\r\n    correct = preds.eq(labels).double()\r\n    correct = correct.sum()\r\n    return correct / len(labels)\r\n\r\ndef f1(output, labels):\r\n    preds = output.max(1)[1]\r\n    preds = preds.cpu().detach().numpy()\r\n    labels = labels.cpu().detach().numpy()\r\n    micro = f1_score(labels, preds, average='micro')\r\n    macro = f1_score(labels, preds, average='macro')\r\n    return micro, macro\r\n"
+      },
+      {
+        "id": "citation_py",
+        "source": "repository",
+        "path": "citation.py",
+        "sha256": "4523ab96fced6309fca74c3004439be563b37d49a22e8357a329a0d727b88c4e",
+        "revision": "2c7a2727e82e462d8ef9d6e57f0b08888e16488f",
+        "quote": "import time\r\nimport argparse\r\nimport numpy as np\r\nimport torch\r\nimport torch.nn.functional as F\r\nimport torch.optim as optim\r\nfrom utils import load_citation, sgc_precompute, set_seed\r\nfrom models import get_model\r\nfrom metrics import accuracy\r\nimport pickle as pkl\r\nfrom args import get_citation_args\r\nfrom time import perf_counter\r\n\r\n# Arguments\r\nargs = get_citation_args()\r\n\r\nif args.tuned:\r\n    if args.model == \"SGC\":\r\n        with open(\"{}-tuning/{}.txt\".format(args.model, args.dataset), 'rb') as f:\r\n            args.weight_decay = pkl.load(f)['weight_decay']\r\n            print(\"using tuned weight decay: {}\".format(args.weight_decay))\r\n    else:\r\n        raise NotImplemented\r\n\r\n# setting random seeds\r\nset_seed(args.seed, args.cuda)\r\n\r\nadj, features, labels, idx_train, idx_val, idx_test = load_citation(args.dataset, args.normalization, args.cuda)\r\n\r\nmodel = get_model(args.model, features.size(1), labels.max().item()+1, args.hidden, args.dropout, args.cuda)\r\n\r\nif args.model == \"SGC\": features, precompute_time = sgc_precompute(features, adj, args.degree)\r\nprint(\"{:.4f}s\".format(precompute_time))\r\n\r\ndef train_regression(model,\r\n                     train_features, train_labels,\r\n                     val_features, val_labels,\r\n                     epochs=args.epochs, weight_decay=args.weight_decay,\r\n                     lr=args.lr, dropout=args.dropout):\r\n\r\n    optimizer = optim.Adam(model.parameters(), lr=lr,\r\n                           weight_decay=weight_decay)\r\n    t = perf_counter()\r\n    for epoch in range(epochs):\r\n        model.train()\r\n        optimizer.zero_grad()\r\n        output = model(train_features)\r\n        loss_train = F.cross_entropy(output, train_labels)\r\n        loss_train.backward()\r\n        optimizer.step()\r\n    train_time = perf_counter()-t\r\n\r\n    with torch.no_grad():\r\n        model.eval()\r\n        output = model(val_features)\r\n        acc_val = accuracy(output, val_labels)\r\n\r\n    return model, acc_val, train_time\r\n\r\ndef test_regression(model, test_features, test_labels):\r\n    model.eval()\r\n    return accuracy(model(test_features), test_labels)\r\n\r\nif args.model == \"SGC\":\r\n    model, acc_val, train_time = train_regression(model, features[idx_train], labels[idx_train], features[idx_val], labels[idx_val],\r\n                     args.epochs, args.weight_decay, args.lr, args.dropout)\r\n    acc_test = test_regression(model, features[idx_test], labels[idx_test])\r\n\r\nprint(\"Validation Accuracy: {:.4f} Test Accuracy: {:.4f}\".format(acc_val, acc_test))\r\nprint(\"Pre-compute time: {:.4f}s, train time: {:.4f}s, total: {:.4f}s\".format(precompute_time, train_time, precompute_time+train_time))\r\n"
+      },
+      {
+        "id": "args_py",
+        "source": "repository",
+        "path": "args.py",
+        "sha256": "be49b485eb0d7eb5bf1ce322b1600b7382ef511c19859494700b924be9893b58",
+        "revision": "2c7a2727e82e462d8ef9d6e57f0b08888e16488f",
+        "quote": "import argparse\r\nimport torch\r\n\r\ndef get_citation_args():\r\n    parser = argparse.ArgumentParser()\r\n    parser.add_argument('--no-cuda', action='store_true', default=False,\r\n                        help='Disables CUDA training.')\r\n    parser.add_argument('--seed', type=int, default=42, help='Random seed.')\r\n    parser.add_argument('--epochs', type=int, default=100,\r\n                        help='Number of epochs to train.')\r\n    parser.add_argument('--lr', type=float, default=0.2,\r\n                        help='Initial learning rate.')\r\n    parser.add_argument('--weight_decay', type=float, default=5e-6,\r\n                        help='Weight decay (L2 loss on parameters).')\r\n    parser.add_argument('--hidden', type=int, default=0,\r\n                        help='Number of hidden units.')\r\n    parser.add_argument('--dropout', type=float, default=0,\r\n                        help='Dropout rate (1 - keep probability).')\r\n    parser.add_argument('--dataset', type=str, default=\"cora\",\r\n                        help='Dataset to use.')\r\n    parser.add_argument('--model', type=str, default=\"SGC\",\r\n                        choices=[\"SGC\", \"GCN\"],\r\n                        help='model to use.')\r\n    parser.add_argument('--feature', type=str, default=\"mul\",\r\n                        choices=['mul', 'cat', 'adj'],\r\n                        help='feature-type')\r\n    parser.add_argument('--normalization', type=str, default='AugNormAdj',\r\n                       choices=['AugNormAdj'],\r\n                       help='Normalization method for the adjacency matrix.')\r\n    parser.add_argument('--degree', type=int, default=2,\r\n                        help='degree of the approximation.')\r\n    parser.add_argument('--per', type=int, default=-1,\r\n                        help='Number of each nodes so as to balance.')\r\n    parser.add_argument('--experiment', type=str, default=\"base-experiment\",\r\n                        help='feature-type')\r\n    parser.add_argument('--tuned', action='store_true', help='use tuned hyperparams')\r\n\r\n    args, _ = parser.parse_known_args()\r\n    args.cuda = not args.no_cuda and torch.cuda.is_available()\r\n    return args\r\n"
+      },
+      {
+        "id": "utils_py",
+        "source": "repository",
+        "path": "utils.py",
+        "sha256": "696cdff739fc3c60b04b14450613e0e206b9ee89b820d14f541581a80106c944",
+        "revision": "2c7a2727e82e462d8ef9d6e57f0b08888e16488f",
+        "quote": "import numpy as np\r\nimport scipy.sparse as sp\r\nimport torch\r\nimport sys\r\nimport pickle as pkl\r\nimport networkx as nx\r\nfrom normalization import fetch_normalization, row_normalize\r\nfrom time import perf_counter\r\n\r\ndef parse_index_file(filename):\r\n    \"\"\"Parse index file.\"\"\"\r\n    index = []\r\n    for line in open(filename):\r\n        index.append(int(line.strip()))\r\n    return index\r\n\r\ndef preprocess_citation(adj, features, normalization=\"FirstOrderGCN\"):\r\n    adj_normalizer = fetch_normalization(normalization)\r\n    adj = adj_normalizer(adj)\r\n    features = row_normalize(features)\r\n    return adj, features\r\n\r\ndef sparse_mx_to_torch_sparse_tensor(sparse_mx):\r\n    \"\"\"Convert a scipy sparse matrix to a torch sparse tensor.\"\"\"\r\n    sparse_mx = sparse_mx.tocoo().astype(np.float32)\r\n    indices = torch.from_numpy(\r\n        np.vstack((sparse_mx.row, sparse_mx.col)).astype(np.int64))\r\n    values = torch.from_numpy(sparse_mx.data)\r\n    shape = torch.Size(sparse_mx.shape)\r\n    return torch.sparse.FloatTensor(indices, values, shape)\r\n\r\ndef load_citation(dataset_str=\"cora\", normalization=\"AugNormAdj\", cuda=True):\r\n    \"\"\"\r\n    Load Citation Networks Datasets.\r\n    \"\"\"\r\n    names = ['x', 'y', 'tx', 'ty', 'allx', 'ally', 'graph']\r\n    objects = []\r\n    for i in range(len(names)):\r\n        with open(\"data/ind.{}.{}\".format(dataset_str.lower(), names[i]), 'rb') as f:\r\n            if sys.version_info > (3, 0):\r\n                objects.append(pkl.load(f, encoding='latin1'))\r\n            else:\r\n                objects.append(pkl.load(f))\r\n\r\n    x, y, tx, ty, allx, ally, graph = tuple(objects)\r\n    test_idx_reorder = parse_index_file(\"data/ind.{}.test.index\".format(dataset_str))\r\n    test_idx_range = np.sort(test_idx_reorder)\r\n\r\n    if dataset_str == 'citeseer':\r\n        # Fix citeseer dataset (there are some isolated nodes in the graph)\r\n        # Find isolated nodes, add them as zero-vecs into the right position\r\n        test_idx_range_full = range(min(test_idx_reorder), max(test_idx_reorder)+1)\r\n        tx_extended = sp.lil_matrix((len(test_idx_range_full), x.shape[1]))\r\n        tx_extended[test_idx_range-min(test_idx_range), :] = tx\r\n        tx = tx_extended\r\n        ty_extended = np.zeros((len(test_idx_range_full), y.shape[1]))\r\n        ty_extended[test_idx_range-min(test_idx_range), :] = ty\r\n        ty = ty_extended\r\n\r\n    features = sp.vstack((allx, tx)).tolil()\r\n    features[test_idx_reorder, :] = features[test_idx_range, :]\r\n    adj = nx.adjacency_matrix(nx.from_dict_of_lists(graph))\r\n    adj = adj + adj.T.multiply(adj.T > adj) - adj.multiply(adj.T > adj)\r\n    labels = np.vstack((ally, ty))\r\n    labels[test_idx_reorder, :] = labels[test_idx_range, :]\r\n\r\n    idx_test = test_idx_range.tolist()\r\n    idx_train = range(len(y))\r\n    idx_val = range(len(y), len(y)+500)\r\n\r\n    adj, features = preprocess_citation(adj, features, normalization)\r\n\r\n    # porting to pytorch\r\n    features = torch.FloatTensor(np.array(features.todense())).float()\r\n    labels = torch.LongTensor(labels)\r\n    labels = torch.max(labels, dim=1)[1]\r\n    adj = sparse_mx_to_torch_sparse_tensor(adj).float()\r\n    idx_train = torch.LongTensor(idx_train)\r\n    idx_val = torch.LongTensor(idx_val)\r\n    idx_test = torch.LongTensor(idx_test)\r\n\r\n    if cuda:\r\n        features = features.cuda()\r\n        adj = adj.cuda()\r\n        labels = labels.cuda()\r\n        idx_train = idx_train.cuda()\r\n        idx_val = idx_val.cuda()\r\n        idx_test = idx_test.cuda()\r\n\r\n    return adj, features, labels, idx_train, idx_val, idx_test\r\n\r\ndef sgc_precompute(features, adj, degree):\r\n    t = perf_counter()\r\n    for i in range(degree):\r\n        features = torch.spmm(adj, features)\r\n    precompute_time = perf_counter()-t\r\n    return features, precompute_time\r\n\r\ndef set_seed(seed, cuda):\r\n    np.random.seed(seed)\r\n    torch.manual_seed(seed)\r\n    if cuda: torch.cuda.manual_seed(seed)\r\n\r\ndef loadRedditFromNPZ(dataset_dir):\r\n    adj = sp.load_npz(dataset_dir+\"reddit_adj.npz\")\r\n    data = np.load(dataset_dir+\"reddit.npz\")\r\n\r\n    return adj, data['feats'], data['y_train'], data['y_val'], data['y_test'], data['train_index'], data['val_index'], data['test_index']\r\n\r\ndef load_reddit_data(data_path=\"data/\", normalization=\"AugNormAdj\", cuda=True):\r\n    adj, features, y_train, y_val, y_test, train_index, val_index, test_index = loadRedditFromNPZ(\"data/\")\r\n    labels = np.zeros(adj.shape[0])\r\n    labels[train_index]  = y_train\r\n    labels[val_index]  = y_val\r\n    labels[test_index]  = y_test\r\n    adj = adj + adj.T\r\n    train_adj = adj[train_index, :][:, train_index]\r\n    features = torch.FloatTensor(np.array(features))\r\n    features = (features-features.mean(dim=0))/features.std(dim=0)\r\n    adj_normalizer = fetch_normalization(normalization)\r\n    adj = adj_normalizer(adj)\r\n    adj = sparse_mx_to_torch_sparse_tensor(adj).float()\r\n    train_adj = adj_normalizer(train_adj)\r\n    train_adj = sparse_mx_to_torch_sparse_tensor(train_adj).float()\r\n    labels = torch.LongTensor(labels)\r\n    if cuda:\r\n        adj = adj.cuda()\r\n        train_adj = train_adj.cuda()\r\n        features = features.cuda()\r\n        labels = labels.cuda()\r\n    return adj, train_adj, features, labels, train_index, val_index, test_index\r\n"
+      },
+      {
+        "id": "normalization_py",
+        "source": "repository",
+        "path": "normalization.py",
+        "sha256": "3cbd1d4c0e95c5ea74519e134f99eea3c47619b4babe9cd0f09796e0cdf8de3b",
+        "revision": "2c7a2727e82e462d8ef9d6e57f0b08888e16488f",
+        "quote": "import numpy as np\r\nimport scipy.sparse as sp\r\nimport torch\r\n\r\ndef aug_normalized_adjacency(adj):\r\n   adj = adj + sp.eye(adj.shape[0])\r\n   adj = sp.coo_matrix(adj)\r\n   row_sum = np.array(adj.sum(1))\r\n   d_inv_sqrt = np.power(row_sum, -0.5).flatten()\r\n   d_inv_sqrt[np.isinf(d_inv_sqrt)] = 0.\r\n   d_mat_inv_sqrt = sp.diags(d_inv_sqrt)\r\n   return d_mat_inv_sqrt.dot(adj).dot(d_mat_inv_sqrt).tocoo()\r\n\r\ndef fetch_normalization(type):\r\n   switcher = {\r\n       'AugNormAdj': aug_normalized_adjacency,  # A' = (D + I)^-1/2 * ( A + I ) * (D + I)^-1/2\r\n   }\r\n   func = switcher.get(type, lambda: \"Invalid normalization technique.\")\r\n   return func\r\n\r\ndef row_normalize(mx):\r\n    \"\"\"Row-normalize sparse matrix\"\"\"\r\n    rowsum = np.array(mx.sum(1))\r\n    r_inv = np.power(rowsum, -1).flatten()\r\n    r_inv[np.isinf(r_inv)] = 0.\r\n    r_mat_inv = sp.diags(r_inv)\r\n    mx = r_mat_inv.dot(mx)\r\n    return mx\r\n"
+      },
+      {
+        "id": "models_py",
+        "source": "repository",
+        "path": "models.py",
+        "sha256": "90cdfa0cc55816e85555d1e2987b46e7de79aa831bcfb99eda6a6114c31ba29b",
+        "revision": "2c7a2727e82e462d8ef9d6e57f0b08888e16488f",
+        "quote": "import torch\r\nimport torch.nn as nn\r\nfrom torch.nn import Module\r\nimport torch.nn.functional as F\r\nimport math\r\n\r\nclass SGC(nn.Module):\r\n    \"\"\"\r\n    A Simple PyTorch Implementation of Logistic Regression.\r\n    Assuming the features have been preprocessed with k-step graph propagation.\r\n    \"\"\"\r\n    def __init__(self, nfeat, nclass):\r\n        super(SGC, self).__init__()\r\n\r\n        self.W = nn.Linear(nfeat, nclass)\r\n\r\n    def forward(self, x):\r\n        return self.W(x)\r\n\r\nclass GraphConvolution(Module):\r\n    \"\"\"\r\n    A Graph Convolution Layer (GCN)\r\n    \"\"\"\r\n\r\n    def __init__(self, in_features, out_features, bias=True):\r\n        super(GraphConvolution, self).__init__()\r\n        self.in_features = in_features\r\n        self.out_features = out_features\r\n        self.W = nn.Linear(in_features, out_features, bias=bias)\r\n        self.init()\r\n\r\n    def init(self):\r\n        stdv = 1. / math.sqrt(self.W.weight.size(1))\r\n        self.W.weight.data.uniform_(-stdv, stdv)\r\n\r\n    def forward(self, input, adj):\r\n        support = self.W(input)\r\n        output = torch.spmm(adj, support)\r\n\r\nclass GCN(nn.Module):\r\n    \"\"\"\r\n    A Two-layer GCN.\r\n    \"\"\"\r\n    def __init__(self, nfeat, nhid, nclass, dropout):\r\n        super(GCN, self).__init__()\r\n\r\n        self.gc1 = GraphConvolution(nfeat, nhid)\r\n        self.gc2 = GraphConvolution(nhid, nclass)\r\n        self.dropout = dropout\r\n\r\n    def forward(self, x, adj, use_relu=True):\r\n        x = self.gc1(x, adj)\r\n        if use_relu:\r\n            x = F.relu(x)\r\n        x = F.dropout(x, self.dropout, training=self.training)\r\n        x = self.gc2(x, adj)\r\n        return x\r\n\r\ndef get_model(model_opt, nfeat, nclass, nhid=0, dropout=0, cuda=True):\r\n    if model_opt == \"GCN\":\r\n        model = GCN(nfeat=nfeat,\r\n                    nhid=nhid,\r\n                    nclass=nclass,\r\n                    dropout=dropout)\r\n    elif model_opt == \"SGC\":\r\n        model = SGC(nfeat=nfeat,\r\n                    nclass=nclass)\r\n    else:\r\n        raise NotImplementedError('model:{} is not implemented!'.format(model_opt))\r\n\r\n    if cuda: model.cuda()\r\n    return model\r\n"
+      },
+      {
+        "id": "readme",
+        "source": "repository",
+        "path": "README.md",
+        "sha256": "025ac0e3cf195dcaba2e896cc0584b464dd6d8ce0cba483d6096ee77e32206d1",
+        "revision": "2c7a2727e82e462d8ef9d6e57f0b08888e16488f",
+        "quote": "## Simplifying Graph Convolutional Networks\r\n\r\n[![made-with-python](https://img.shields.io/badge/Made%20with-Python-red.svg)](#python)\r\n[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) \r\n\r\n#### Updates\r\n* As pointed out by #23, there was a subtle bug in our preprocessing code for the reddit dataset. After fixing this bug, SGC achieves a F1 score of 95.0 (previously, it was 94.9).\r\n* Practical advice: it is often very helpful to normalize the features to have zero mean with standard deviation one to accelerate the convergence of SGC (and many other linear models). For example, we apply this normalization for [the reddit dataset](./utils.py#L119). Please consider doing this when applying SGC to other datasets. For some relevant discussions, see [Ross et al, 2013](https://arxiv.org/pdf/1305.6646.pdf) and [Li and Zhang, 1998](https://www.jstor.org/stable/25051187?seq=1#metadata_info_tab_contents).\r\n\r\n#### Authors: \r\n* [Felix Wu](https://scholar.google.com.tw/citations?user=sNL8SSoAAAAJ&hl=en)*\r\n* [Tianyi Zhang](https://scholar.google.com/citations?user=OI0HSa0AAAAJ&hl=en)*\r\n* [Amauri Holanda de Souza Jr.](https://scholar.google.com/citations?hl=en&user=lP0LBI4AAAAJ&view_op=list_works&sortby=pubdate)*\r\n* [Christopher Fifty](https://scholar.google.com/citations?user=lg2M2RYAAAAJ&hl=en)\r\n* [Tao Yu](http://jhc.sjtu.edu.cn/public/home/taoyu/)\r\n* [Kilian Q. Weinberger](http://kilian.cs.cornell.edu/index.html)\r\n\r\n*: Equal Contribution\r\n\r\n### Overview\r\nThis repo contains an example implementation of the Simple Graph Convolution\r\n(SGC) model, described in the ICML2019 paper [Simplifying Graph Convolutional Networks](https://arxiv.org/abs/1902.07153).\r\n\r\nSGC removes the nonlinearities and collapes the weight matrices in Graph Convolutional Networks (GCNs) and is essentially a linear model. \r\nFor an illustration, ![](./model.jpg \"SGC\")\r\n\r\nSGC achieves competitive performance while saving much training time. For reference, on a GTX 1080 Ti,\r\n\r\nDataset | Metric | Training Time \r\n:------:|:------:|:-----------:|\r\nCora    | Acc: 81.0 %     | 0.13s\r\nCiteseer| Acc: 71.9 %     | 0.14s\r\nPubmed  | Acc: 78.9 %     | 0.29s\r\nReddit  | F1:  94.9 %     | 2.7s\r\n\r\nThis home repo contains the implementation for citation networks (Cora, Citeseer, and Pubmed) and social network (Reddit).\r\nWe have a work-in-progress branch [ablation](https://github.com/Tiiiger/SGC/tree/ablation), containing additional codebase for our ablation studies.\r\n\r\nIf you find this repo useful, please cite: \r\n```\r\n@InProceedings{pmlr-v97-wu19e,\r\n  title = \t {Simplifying Graph Convolutional Networks},\r\n  author = \t {Wu, Felix and Souza, Amauri and Zhang, Tianyi and Fifty, Christopher and Yu, Tao and Weinberger, Kilian},\r\n  booktitle = \t {Proceedings of the 36th International Conference on Machine Learning},\r\n  pages = \t {6861--6871},\r\n  year = \t {2019},\r\n  publisher = \t {PMLR},\r\n}\r\n```\r\n\r\n#### Other reference implementations\r\nOther reference implementations can be found in the follwing libraries. Note that in\r\nthese examples, the hyperparameters are potentially different and\r\nthe results would be different from the paper reported ones.\r\n\r\n- *Deep Graph Library*: [example](https://github.com/dmlc/dgl/tree/master/examples/pytorch/sgc).\r\n- *PyTorch Geometric*:\r\n[documentation](https://pytorch-geometric.readthedocs.io/en/latest/modules/nn.html#torch_geometric.nn.conv.SGConv)\r\nand [example](https://github.com/rusty1s/pytorch_geometric/blob/master/examples/sgc.py). \r\n- *Spektral*: [example](https://github.com/danielegrattarola/spektral/blob/master/examples/node_classification_simple_gc.py)\r\n- *StellarGraph*: [example](https://github.com/stellargraph/stellargraph/blob/develop/demos/node-classification/sgc/sgc-node-classification-example.ipynb)\r\n- *tf_geometric*: [example](https://github.com/CrawlScript/tf_geometric/blob/master/demo/demo_sgc.py)\r\n\r\n### Dependencies\r\nOur implementation works with PyTorch>=1.0.0 Install other dependencies: `$ pip install -r requirement.txt`\r\n\r\n### Data\r\nWe provide the citation network datasets under `data/`, which corresponds to [the public data splits](https://github.com/tkipf/gcn/tree/master/gcn/data).\r\nDue to space limit, please download reddit dataset from [FastGCN](https://github.com/matenure/FastGCN/issues/9) and put `reddit_adj.npz`, `reddit.npz` under `data/`.\r\n\r\n### Usage\r\nCitation Networks: We tune the only hyperparameter, weight decay, with hyperopt and put the resulting hyperparameter under `SGC-tuning`. \r\nSee `tuning.py` for more details on hyperparameter optimization.\r\n```\r\n$ python citation.py --dataset cora --tuned\r\n$ python citation.py --dataset citeseer --tuned --epochs 150 \r\n$ python citation.py --dataset pubmed --tuned\r\n```\r\n\r\nReddit:\r\n```\r\n$ python reddit.py --inductive --test\r\n```\r\n### Downstream\r\nWe collect the code base for downstream tasks under `downstream`. Currently, we\r\nare releasing only SGC implementation for text classification.\r\n\r\n### Acknowledgement\r\nThis repo is modified from [pygcn](https://github.com/tkipf/pygcn), and [FastGCN](https://github.com/matenure/FastGCN).\r\n\r\nWe thank *Deep Graph Library* team for helping providing a reference implementation of SGC and benchmarking SGC in *Deep Graph Library*.\r\nWe thank Matthias Fey, author of *PyTorch Geometric*, for his help on providing a reference implementation of SGC within *PyTorch Geometric*.\r\nWe thank Daniele Grattarola, author of *Spektral*, for his help on providing a reference implementation of SGC within *Spektral*.\r\n"
+      }
+    ]
+  },
+  "comparison_validation": "After the live browser pass, replayed the exact recorded API proposal and measurements with the final informational settings rule. No new training or independent acceptance is claimed for this replay.",
+  "live_browser": {
+    "live_page_completed": true,
+    "live_page_paper_accepted": false,
+    "live_page_author_code_completed": true
+  },
+  "browser_source_files": 118,
+  "browser_source_sha256": "4a045aa93d8e6507031bcf0fb179da7758eb5d6a441180b571f3c18b097c0b28",
+  "browser_production_sources_unchanged_during_run": true,
+  "known_limitation": "One original run versus paper mean over ten runs; output is not independently recomputed."
+}
