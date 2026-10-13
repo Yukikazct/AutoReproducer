@@ -48,14 +48,16 @@ def test_all_generic_review_agents_and_stages_are_removed(pipeline, mock_mode):
 
 
 @pytest.mark.parametrize('exit_code', [1, 2, 130])
-def test_failed_command_still_stops_before_report_without_reviews(pipeline, exit_code):
+def test_failed_command_keeps_error_state_and_generates_failure_report(pipeline, exit_code):
     pipeline.agents['executor'].run.return_value = {
         'success': False, 'executed': True,
         'final': {'success': False, 'exit_code': exit_code, 'stderr': 'Actual author error'}}
     events = []
     result = pipeline.run({'paper_title': 'Public paper'}, on_event=events.append)
     assert result['state'] == 'ERROR' and 'Actual author error' in result['error']
-    pipeline.agents['reporter'].run.assert_not_called()
+    pipeline.agents['reporter'].run.assert_called_once()
+    assert result['data']['validation']['status'] == 'execution_failed'
+    assert result['data']['report'] == 'Actual command output'
     assert any(e.get('phase_id') == 'execute_code' and e.get('status') == 'error' for e in events)
 
 

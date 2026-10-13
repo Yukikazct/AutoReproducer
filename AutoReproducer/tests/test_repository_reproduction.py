@@ -277,9 +277,9 @@ def test_reference_matching_values_need_both_explicit_verifications(missing_chec
     assert verdict["validation"]["metrics_within_tolerance"] is True
 
 
-def test_repository_api_transport_sends_only_public_protocol_and_keeps_local_evidence_local(
+def test_removed_review_never_opens_api_transport_and_preserves_author_outputs(
         tmp_path, monkeypatch):
-    """Exercise the real service/client through an intercepted HTTP transport."""
+    """Legacy review flags cannot send local run evidence to a model."""
     from src import execution_artifacts
     from src import repository_validation
     from src.llm import llm_client as client_module
@@ -349,41 +349,22 @@ def test_repository_api_transport_sends_only_public_protocol_and_keeps_local_evi
          "analysis_mode": "public_protocol",
          "api_key": private_key, "local_notes": private_log})
     assert result["state"] == "COMPLETED", result["error"]
-    assert result["data"]["validation"]["status"] == "reproduced"
-    assert client.get_call_count() == 1 and len(requests) == 1
-    body = requests[0].data.decode("utf-8")
-    payload = json.loads(body)
-    assert payload["model"] == "transport-test-model"
-    assert len(payload["messages"]) == 1 and payload["messages"][0]["role"] == "user"
-    prompt = payload["messages"][0]["content"]
-    public_sources = json.loads(prompt.partition("\n")[2])
-    assert set(public_sources) == {"paper", "published_table_row", "implementation_details",
-                                   "author_seed_statement", "author_script"}
-    assert "Table 2" in public_sources["published_table_row"]
-    assert "MSE 0.375; MAE 0.399" in public_sources["published_table_row"]
-    assert "seq_len=336, pred_len=96" in public_sources["author_script"]
-    for forbidden in [private_key, private_log, private_path, str(local_mse), str(local_mae),
-                      str(tmp_path), "LOCAL_STDERR_SENTINEL", "LOCAL_DATASET_CONTENTS_SENTINEL",
-                      "LOCAL_PROTOCOL_DETAILS_SENTINEL", "stdout", "stderr", "stdout_path",
-                      "run_dir", "dependencies_path", "pred.npy", "metrics.json"]:
-        assert forbidden not in body
-    # Authentication belongs in the transport header, never the model messages.
-    assert requests[0].get_header("Authorization") == "Bearer " + private_key
-    analysis = result["data"]["llm_analysis"]
-    assert analysis["input_scope"] == "public_paper_only" and analysis["source"] == "real_api"
-    assert analysis["usage"]["total_tokens"] == 176
-    assert result["data"]["total_llm_calls"] == 1
-    protocol.assert_called_once()
-    recomputed.assert_called_once()
-    figures.assert_called_once_with(private_path + "/artifacts", "full", logger.session_id)
+    assert result["data"]["validation"]["status"] == "author_code_completed"
+    assert result["data"]["validation"]["is_reproduced"] is None
+    assert client.get_call_count() == 0 and requests == []
+    assert "llm_analysis" not in result["data"]
+    assert result["data"]["total_llm_calls"] == 0
+    protocol.assert_not_called()
+    recomputed.assert_not_called()
+    figures.assert_not_called()
     actual_execution = result["data"]["execution"]
-    assert actual_execution["artifacts"] == [author_artifact, independent_artifact]
+    assert actual_execution["artifacts"] == [author_artifact]
     assert actual_execution["final"]["artifacts"] == actual_execution["artifacts"]
     assert published_artifact not in actual_execution["artifacts"]
     assert "existing author figure warning" in actual_execution["artifact_warnings"]
-    assert "independent figure warning" in actual_execution["artifact_warnings"]
     run_dir = Path(result["data"]["run_dir"])
-    assert json.loads((run_dir / "llm_analysis.json").read_text(encoding="utf-8"))["input_scope"] == "public_paper_only"
+    assert not (run_dir / "llm_analysis.json").exists()
+
 
 
 def tar_bytes(files, *, extra_member=None):

@@ -30,41 +30,37 @@ def setup(monkeypatch, tmp_path):
         resource_manager=ResourceManager(data_root=str(tmp_path / "data")))
     orch.agents["reader"].run = Mock(return_value={"paper_info": {"title": "Independent Fixture"}})
     orch.agents["finder"].run = Mock(return_value={"resources": {"code_repo_url": AUTHOR}})
-    orch.agents["verifier"].run = Mock(return_value=ACCEPTED)
-    for stage in ("builder", "executor", "validator"):
+    assert "verifier" not in orch.agents and "validator" not in orch.agents
+    for stage in ("builder", "executor"):
         orch.agents[stage].run = Mock(side_effect=AssertionError("Generated path reached"))
     orch._fetch_resources = Mock(side_effect=AssertionError("Smoke resource fetch reached"))
     run = Mock(return_value={"state": "COMPLETED", "error": None, "data": {
         "repository_executed": True, "execution_source": "author_repository",
-        "validation": {"is_reproduced": True}, "total_llm_calls": 2}})
+        "validation": {"is_reproduced": None, "status": "author_code_completed"}, "total_llm_calls": 2}})
     monkeypatch.setattr(service, "DiscoveredRepositoryReproduction", Mock(return_value=SimpleNamespace(run=run)))
     return orch, paper, run
 
 
-def test_dispatch_uses_final_reviewed_selection_before_any_smoke_fetch(setup):
+def test_dispatch_uses_finder_selection_before_any_smoke_fetch(setup):
     orch, paper, run = setup
-    orch.agents["finder"].run.side_effect = [
-        {"resources": {"code_repo_url": "https://github.com/fixture-laboratory/wrong"}},
-        {"resources": {"code_repo_url": AUTHOR}},
-    ]
-    orch.agents["verifier"].run.side_effect = [ACCEPTED, REJECTED, ACCEPTED]
     result = orch.run({"pdf_path": str(paper)})
     assert result["state"] == "COMPLETED"
     request = run.call_args.args[0]
     assert request["resources"]["code_repo_url"] == AUTHOR
     assert request["pdf_path"] == str(paper) and request["mock_mode"] is False
     assert result["data"]["repository_executed"] is True
-    assert len(result["data"]["fix_records"]) == 1
-    assert len(result["data"]["verifications"]) == 3
+    assert not result["data"]["fix_records"]
+    assert not result["data"]["verifications"]
+    orch.agents["finder"].run.assert_called_once()
     orch._fetch_resources.assert_not_called()
     orch.llm.chat.assert_not_called()
 
 
-def test_final_finder_rejection_blocks_service_and_generation(setup):
+def test_actual_finder_exception_blocks_service_and_generation(setup):
     orch, paper, run = setup
-    orch.agents["verifier"].run.side_effect = [ACCEPTED, REJECTED, REJECTED]
+    orch.agents["finder"].run.side_effect = RuntimeError("Repository lookup failed")
     result = orch.run({"pdf_path": str(paper)})
-    assert result["state"] == "ERROR" and "最终审查" in result["error"]
+    assert result["state"] == "ERROR" and "Repository lookup failed" in result["error"]
     run.assert_not_called()
     orch._fetch_resources.assert_not_called()
     orch.agents["executor"].run.assert_not_called()

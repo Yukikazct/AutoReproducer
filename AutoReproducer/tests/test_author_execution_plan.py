@@ -101,6 +101,7 @@ def test_explicit_execution_objective_does_not_need_metric_or_checkpoint_claims(
     assert plan['scope'] == author.SCOPE
     assert plan['metrics'] == [] and plan['capture'] == {'kind': 'author_process', 'device': 'cpu'}
     assert plan['steps'][0]['argv'] == fixture['proposal']['steps'][0]['argv']
+    assert all(step['timeout_s'] is None for step in plan['steps'])
     assert plan['reviews_removed'] is True
     assert 'semantic_review' not in plan
     assert all(kwargs['task'] != 'author_execution_plan_review' for _, kwargs in llm.calls)

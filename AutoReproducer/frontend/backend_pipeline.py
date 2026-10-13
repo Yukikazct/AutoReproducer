@@ -19,6 +19,7 @@ read_snapshot() 聚合以上事件为前端可直接渲染的视图：
 import json
 import os
 import shutil
+import tempfile
 import threading
 import time
 import uuid
@@ -33,7 +34,7 @@ from src.project_paths import get_data_root
 
 
 # Contract checked by the web loader before starting a new background thread.
-BACKEND_API_VERSION = 4
+BACKEND_API_VERSION = 5
 
 
 def __getattr__(name):
@@ -142,12 +143,17 @@ def run_pipeline_core(progress_path: str,
                       _managed_runtime: bool = False,
                       _append_progress: bool = False,
                       _runtime_preparation: Optional[dict] = None) -> Dict[str, Any]:
-    """后台执行完整复现流水线（复现 -> 验证 -> 优化 -> 报告）。
+    """后台执行论文阅读、仓库发现、环境准备、代码运行与报告流程。
 
     与前端解耦：不触碰 st.session_state，进度实时写入 progress_path；
     返回最终 result（与 app.py 旧 run_pipeline 结构一致，供 done 事件与
     前端结果摘要复用）。临时 PDF 由调用方负责清理。
     """
+    # Old sessions and API callers may still send the removed review controls.
+    # Normalize before worker handoff as well as before direct orchestration.
+    use_llm_review = allow_result_summary_review = enable_optimization = False
+    optimization_mode = "off"
+    author_execution_only = True
     store = ProgressStore(progress_path, reset=not _append_progress)
     from src.title_routing import resolve_title_request
     resolved = {"paper_title": paper_title, "pdf_path": pdf_path,
@@ -217,14 +223,20 @@ def run_pipeline_core(progress_path: str,
     logger = AuditLogger()
     error_msg: Optional[str] = None
     emitted = 0
+    log_emit_lock = threading.RLock()
 
     def _emit_new_logs() -> None:
         """只把新增的审计日志追加进进度文件，避免每次全量重发造成重复。"""
         nonlocal emitted
-        entries = logger.get_summary()
-        for entry in entries[emitted:]:
-            store.emit({"type": "log", "log": entry})
-        emitted = len(entries)
+        with log_emit_lock:
+            entries = list(logger.get_summary())
+            for entry in entries[emitted:]:
+                store.emit({"type": "log", "phase_id": state.get("phase_id", ""), "log": entry})
+                emitted += 1
+
+    # Flush on every audit entry, including downloads, LLM requests and repair
+    # attempts inside a long phase. State events remain a compatibility fallback.
+    logger.on_entry = lambda entry: _emit_new_logs()
 
     llm = LLMClient(
         mock_mode=mock_mode,
@@ -245,6 +257,8 @@ def run_pipeline_core(progress_path: str,
     def _on_event(event):
         if event.get("type") == "state":
             _set_current(event["state"])
+            if event.get("phase_id"):
+                state["phase_id"] = event["phase_id"]
             store.emit({**event, "agent": display_names.get(event.get("agent"), event.get("agent", ""))})
         elif event.get("type") in {"repository_step", "repository_output", "execution_step", "execution_output", "execution_run", "repository_environment"}:
             store.emit(event)
@@ -346,6 +360,24 @@ def run_pipeline_core(progress_path: str,
         "report_path": report_path,
         "session_id": logger.session_id,
     }
+    if report_path:
+        # Progress files are disposable; retain the structured inputs alongside
+        # the report so history can regenerate it without rerunning the paper.
+        temporary = None
+        try:
+            from src.report_revisions import sanitize_report_result
+            archive = Path(report_path).with_suffix(".result.json")
+            with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=archive.parent,
+                                             suffix=".tmp", delete=False) as output:
+                temporary = Path(output.name)
+                json.dump(sanitize_report_result(result), output, ensure_ascii=False, indent=2)
+            os.replace(temporary, archive)
+        except (OSError, TypeError, ValueError):
+            store.emit({"type": "report_archive", "status": "warning",
+                        "reason": "结构化报告归档未保存，请保留本次进度记录以便重新生成报告。"})
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
     _emit_state(store, _current(), "", "success")
     return _mark_result(result)
 
@@ -358,7 +390,6 @@ def _run_prepared_pipeline(store: ProgressStore, request: dict, reason: str) -> 
     """
     from src.runtime_preparation import (
         prepare_runtime, run_owned_process, safe_runtime_diagnostic,
-        PRESET_WORKER_PREPARATION_ALLOWANCE_S,
     )
     stage = {"id": "prepare_runtime", "agent": "🔧 EnvBuilder",
              "title": "自动准备运行环境", "description": reason, "status": "waiting"}
@@ -412,7 +443,9 @@ def _run_prepared_pipeline(store: ProgressStore, request: dict, reason: str) -> 
         completed = run_owned_process(
             [prepared.executable, "-X", "utf8", "-m", "frontend.preset_worker"],
             cwd=Path(__file__).resolve().parents[1], input=json.dumps(payload), env=worker_env,
-            timeout_s=max(7200, int(request.get("budget_seconds", 7200))) + PRESET_WORKER_PREPARATION_ALLOWANCE_S,
+            # The worker owns training as well as preparation. A legacy budget
+            # must never stop an author command that is still running.
+            timeout_s=None,
             on_cleanup=confirmed_cleanup,
         )
         # Normal return also carries the run_owned_process cleanup contract.

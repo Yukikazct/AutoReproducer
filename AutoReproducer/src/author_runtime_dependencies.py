@@ -2,7 +2,6 @@
 from copy import deepcopy
 import re
 import sys
-import time
 
 from packaging.requirements import InvalidRequirement, Requirement
 
@@ -59,6 +58,8 @@ def run_with_dependency_repair(runner, workspace, steps, environment, plan, pack
                                run_dir, data, on_event, verify_inputs, repair_numeric=None):
     """Retry after cleanup, retaining every failed run and the unchanged argv."""
     effective = deepcopy(environment)
+    # Retry allowance counts actual failures, never time spent running code.
+    effective.pop('deadline_monotonic', None)
     data.setdefault('dependency_repair_attempts', [])
     repairs = data['dependency_repair_attempts']
     numeric_repairs = data.setdefault('numeric_repair_attempts', [])
@@ -87,9 +88,6 @@ def run_with_dependency_repair(runner, workspace, steps, environment, plan, pack
             on_event({'type': 'log', 'log': {'agent': 'CodeExecutor', 'action': 'repair_numeric_type',
                 'status': 'RUNNING', 'detail': '原命令发生 NumPy 兼容错误；记录兼容修复后重试同一命令。',
                 'data': numeric_repairs[-1]}})
-            if effective.get('deadline_monotonic') is not None:
-                raw_steps = steps.get('steps', []) if isinstance(steps, dict) else steps
-                effective['deadline_monotonic'] = time.monotonic() + sum(step['timeout_s'] for step in raw_steps) + 2
             continue
         if fix['package'] in seen:
             return result
@@ -108,8 +106,6 @@ def run_with_dependency_repair(runner, workspace, steps, environment, plan, pack
                 lines.append(requirement)
         effective.update(requirements_txt='\n'.join(lines) + '\n', auto_prepare=True, require_prepared=False,
                          exclude_environment_preparation_from_deadline=True)
-        if effective.get('deadline_monotonic') is not None:
-            raw_steps = steps.get('steps', []) if isinstance(steps, dict) else steps
-            effective['deadline_monotonic'] = time.monotonic() + sum(step['timeout_s'] for step in raw_steps) + 2
+        effective.pop('deadline_monotonic', None)
         write_json(run_dir / 'runtime_repair_environment.json', effective)
     return result

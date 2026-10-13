@@ -44,10 +44,10 @@ def supervised(command, limit, parent_pid):
         if not parent.alive():
             return 130, False
         process = subprocess.Popen(command)
-        deadline = time.monotonic() + limit
+        deadline = None if limit is None else time.monotonic() + limit
         while process.poll() is None:
             abandoned = not parent.alive()
-            timed_out = time.monotonic() >= deadline
+            timed_out = deadline is not None and time.monotonic() >= deadline
             if abandoned or timed_out:
                 code = 130 if abandoned else 124
                 print(MARKER + json.dumps({"phase": "execution", "timeout": timed_out and not abandoned,
@@ -68,7 +68,7 @@ def supervised(command, limit, parent_pid):
 
 def main(argv=None):
     phase, seconds, *command = list(sys.argv[1:] if argv is None else argv)
-    limit = float(seconds)
+    limit = None if seconds.lower() in {"none", "null"} else float(seconds)
     if command[:1] == ["--start-gate"]:
         gate, command = command[1], command[2:]
         deadline = time.monotonic() + 10

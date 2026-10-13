@@ -222,6 +222,12 @@ class Orchestrator:
                 self.logger.end_plan(state_name)
             except Exception as e:
                 self.logger.end_plan(state_name)
+                if state_name == "EXECUTE_CODE":
+                    self.data["validation"] = {
+                        "status": "execution_failed", "result_level": "failed",
+                        "is_reproduced": None, "reviews_removed": True,
+                        "reason": str(e), "failure_phase": "execute_code",
+                    }
                 if not main_completed:
                     self._emit_state(state_name, agent.name, "error", phase_id=_MAIN_PHASE_IDS[state_name],
                                      attempt=1, reason=str(e), outcome="exception")
@@ -229,14 +235,15 @@ class Orchestrator:
                 break
 
         # 优化仅保留未来参数接口：成功、失败或显式请求均不启动优化。
-        if self.state != "ERROR":
+        pipeline_failed = self.state == "ERROR"
+        if not pipeline_failed:
             self.logger.log("Orchestrator", "skip_OPTIMIZING", "SKIP",
                             self.data["optimization"]["reason"], self.data["optimization"])
             self._emit_state(self.state, "Optimizer", "skipped", phase_id="reserve_optimization",
                              reason=self.data["optimization"]["reason"], outcome="not_implemented")
 
         # 报告生成（合并复现 + 优化）
-        if self.state != "ERROR":
+        if not pipeline_failed or self.data.get("execution"):
             self.state = "GENERATE_REPORT"
             self._emit_state(self.state, "ReportGenerator", "running", phase_id="generate_report", attempt=1)
             self.logger.begin_plan("GENERATE_REPORT")
@@ -250,6 +257,8 @@ class Orchestrator:
                 self.logger.end_plan("GENERATE_REPORT")
                 self._emit_state(self.state, "ReportGenerator", "error", phase_id="generate_report", attempt=1, reason=str(e))
                 self._fail("GENERATE_REPORT", str(e))
+            if pipeline_failed:
+                self.state = "ERROR"
 
         if self.state != "ERROR":
             # 三层存储：COMPLETED 前落盘资源 manifest 与存储统计

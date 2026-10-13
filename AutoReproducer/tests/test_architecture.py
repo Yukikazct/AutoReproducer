@@ -225,9 +225,10 @@ class TestEndToEnd:
         data = e2e_result["data"]
         assert data.get("paper_info", {}).get("title")
 
-    def test_reproduction_success(self, e2e_result):
+    def test_mock_completion_is_not_a_reproduction_claim(self, e2e_result):
         data = e2e_result["data"]
-        assert data.get("validation", {}).get("is_reproduced") is True
+        assert data["validation"]["is_reproduced"] is None
+        assert data["validation"]["result_level"] == "mock_demo"
 
     def test_optimization_is_reserved_and_disabled(self, e2e_result):
         opt = e2e_result["data"].get("optimization", {})
@@ -246,8 +247,8 @@ class TestEndToEnd:
         # 关键内容块齐全
         for section in ["## 1. 论文信息", "## 2. 资源定位",
                         "## 3. 环境配置", "## 4. 代码执行",
-                        "## 5. 验证结果", "## 6. 智能优化",
-                        "## 8. 审计与用量统计"]:
+                        "## 5. 运行结果", "## 6. 智能优化",
+                        "## 7. 运行与用量统计"]:
             assert section in report, f"报告缺少章节 {section}"
 
     def test_budget_stats_in_audit(self, e2e_result):
@@ -257,17 +258,16 @@ class TestEndToEnd:
 
     def test_audit_ledger_written(self, e2e_result):
         """审计账本应真实落盘（data/experiment_ledger）。"""
-        data_dir = (Path(__file__).resolve().parents[1]
-                    / "data" / "experiment_ledger")
+        from src.project_paths import get_data_root
+        data_dir = get_data_root() / "experiment_ledger"
         assert data_dir.exists(), "实验账本目录不存在"
         entries = list(data_dir.glob("ledger_*.jsonl"))
         assert entries, "未找到实验账本文件"
 
-    def test_verification_records(self, e2e_result):
+    def test_removed_review_stages_do_not_produce_records(self, e2e_result):
         data = e2e_result["data"]
-        assert data.get("verifications"), "缺少 Prompt-Free 验证记录"
-        for v in data["verifications"]:
-            assert "pass" in v
+        assert not data.get("verifications")
+        assert data["validation"]["reviews_removed"] is True
 
 
 # ============================================================

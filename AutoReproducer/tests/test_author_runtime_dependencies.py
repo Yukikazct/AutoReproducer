@@ -71,14 +71,16 @@ class FailingRunner:
 def test_two_missing_modules_install_and_retry_same_author_argv_without_ending_task(tmp_path):
     runner = FailingRunner(["ModuleNotFoundError: No module named 'einops'",
                             "ModuleNotFoundError: No module named 'yaml'", ''])
-    steps = [{'argv': ['python', 'train.py', '--epochs', '200'], 'timeout_s': 300}]
+    steps = [{'argv': ['python', 'train.py', '--epochs', '200'], 'timeout_s': None}]
     frozen_requirement = 'torch==' + compatibility_pins()['torch'] + '\n'
-    environment = {'requirements_txt': frozen_requirement, 'auto_prepare': False, 'require_prepared': True}
+    environment = {'requirements_txt': frozen_requirement, 'auto_prepare': False, 'require_prepared': True,
+                   'deadline_monotonic': 0}
     data, events, validations = {}, [], []
     result = run_with_dependency_repair(runner, tmp_path, steps, environment, plan(), {'file_inventory': {}},
                                        tmp_path, data, events.append, lambda: validations.append(True))
     assert result['success'] is True and len(runner.calls) == 3
     assert all(call[0] == steps for call in runner.calls)
+    assert all(call[1].get('deadline_monotonic') is None for call in runner.calls)
     assert 'einops==0.8.0' in runner.calls[1][1]['requirements_txt']
     assert 'pyyaml==6.0.2' in runner.calls[2][1]['requirements_txt']
     assert runner.calls[1][1]['auto_prepare'] is True and runner.calls[1][1]['require_prepared'] is False

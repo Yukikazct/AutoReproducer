@@ -91,9 +91,9 @@ class RepositoryRunner:
                 executable = relative_path(argv[0], "executable")
                 if "/" in argv[0] or "\\" in argv[0]:
                     self._contained(root, cwd.relative_to(root) / executable, "executable")
-            timeout = step.get("timeout_s", 600)
-            if (isinstance(timeout, bool) or not isinstance(timeout, (int, float))
-                    or not math.isfinite(timeout) or timeout <= 0):
+            timeout = step.get("timeout_s")
+            if timeout is not None and (isinstance(timeout, bool) or not isinstance(timeout, (int, float))
+                                       or not math.isfinite(timeout) or timeout <= 0):
                 raise ValueError(f"invalid timeout_s for step {identifier}")
             extra_env = step.get("env", {})
             if (not isinstance(extra_env, dict)
@@ -108,7 +108,7 @@ class RepositoryRunner:
                     or identifier in dependencies or not set(dependencies) <= identifiers):
                 raise ValueError(f"invalid depends_on for step {identifier}")
             planned.append({"id": identifier, "argv": argv, "cwd": str(cwd),
-                            "timeout_s": float(timeout), "env": dict(extra_env),
+                            "timeout_s": None if timeout is None else float(timeout), "env": dict(extra_env),
                             "kind": step.get("kind", "run"), "depends_on": list(dependencies),
                             "requires": declared_paths(step.get("requires"), identifier,
                                                        "requires", allow_glob=False),
@@ -220,8 +220,9 @@ class RepositoryRunner:
         environment["PYTHONUNBUFFERED"] = "1"
         environment["AUTOREPRO_PARENT_PID"] = str(os.getpid())
         supervisor = Path(__file__).with_name("sandbox_timeout.py")
+        limit = step["timeout_s"]
         command = [sys.executable, "-S", str(supervisor), "execution",
-                   str(step["timeout_s"] + 1.0), *step["argv"]]
+                   "none" if limit is None else str(limit + 1.0), *step["argv"]]
         gate = run_dir / f"{step['id']}.start"
         if os.name == "nt":
             command = command[:5] + ["--start-gate", str(gate)] + command[5:]
@@ -266,10 +267,10 @@ class RepositoryRunner:
                     # The host owns the process group and acts before the
                     # standalone supervisor's fallback deadline, while the
                     # group leader is still alive (required on macOS).
-                    deadline = time.monotonic() + step["timeout_s"]
+                    deadline = None if limit is None else time.monotonic() + limit
                     while process.poll() is None:
                         output()
-                        if time.monotonic() >= deadline:
+                        if deadline is not None and time.monotonic() >= deadline:
                             timed_out = True
                             job.close()
                             cleanup = self._kill_group(process)
@@ -531,7 +532,8 @@ class RepositoryRunner:
                         remaining = deadline - time.monotonic() - 2
                         if remaining <= 0:
                             return reject("实验总时间预算耗尽", 124)
-                        step = {**step, "timeout_s": min(step["timeout_s"], remaining)}
+                        step = {**step, "timeout_s": remaining if step["timeout_s"] is None
+                                else min(step["timeout_s"], remaining)}
                     try:
                         record = self._execute(root, step, run_dir, emit)
                     except KeyboardInterrupt as exc:

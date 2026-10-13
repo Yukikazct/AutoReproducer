@@ -1,4 +1,4 @@
-"""Exact title input must reach the reviewed route through real entrypoints."""
+"""Exact title input reaches execution without reviving removed review stages."""
 import json
 from pathlib import Path
 import subprocess
@@ -70,7 +70,7 @@ def test_title_resolves_before_store_host_handoff_and_preserves_private_options(
     assert request["experiment_profile"] == PROFILE
     assert request["title_resolution"] == RESOLUTION
     assert request["paper_title"] == TITLE
-    assert request["use_llm_review"] is review
+    assert request["use_llm_review"] is False
     assert request["allow_result_summary_review"] is False
     assert request["optimization_mode"] == "off"
     assert request["prepare_only"] is False and request["prepare_environment"] is False
@@ -85,7 +85,7 @@ def test_title_resolves_before_store_host_handoff_and_preserves_private_options(
 
 
 @pytest.mark.parametrize("review", [True, False])
-def test_direct_orchestrator_title_dispatches_reviewed_pipeline_without_generic_agents(monkeypatch, tmp_path, review):
+def test_direct_orchestrator_title_dispatches_without_reviews_or_generic_agents(monkeypatch, tmp_path, review):
     llm = LLMClient(mock_mode=False, api_key="fixture-key", base_url="https://api.invalid", model="fixture-model")
     llm.chat = Mock(side_effect=AssertionError("Generic title agents must not run"))
     manager = Mock(data_root=tmp_path)
@@ -116,7 +116,7 @@ def test_direct_orchestrator_title_dispatches_reviewed_pipeline_without_generic_
     routed = reviewed.run.call_args.args[0]
     assert routed["experiment_profile"] == PROFILE
     assert routed["title_resolution"] == RESOLUTION
-    assert routed["use_llm_review"] is review
+    assert routed["use_llm_review"] is False
     assert routed["allow_result_summary_review"] is False
     assert routed["optimization_mode"] == "off"
     assert reviewed.run.call_args.kwargs["on_event"] == events.append
@@ -151,15 +151,13 @@ def title_app(monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize("stale_action", ["仅准备源码和命令", "准备实验环境"])
-@pytest.mark.parametrize("review", [None, False])
-def test_actual_title_start_preserves_title_review_and_ignores_stale_preset_options(title_app, stale_action, review):
+@pytest.mark.parametrize("review", [None, False, True])
+def test_actual_title_start_ignores_stale_review_and_preset_options(title_app, stale_action, review):
     app, start = title_app
-    review_widget = app.sidebar.checkbox(key="title_llm_review")
-    assert review_widget.value is True
+    assert "title_llm_review" not in [widget.key for widget in app.sidebar.checkbox]
     assert any("rtqichen/torchdiffeq" in notice.value for notice in app.success)
     if review is not None:
-        review_widget.set_value(review).run()
-        assert not app.exception
+        app.session_state["title_llm_review"] = review
 
     # These are selections from a different input mode, not title-mode consent.
     app.session_state["experiment_profile"] = "siren_camera_quick"
@@ -176,7 +174,7 @@ def test_actual_title_start_preserves_title_review_and_ignores_stale_preset_opti
     assert request["paper_title"] == TITLE
     assert request["experiment_profile"] == PROFILE
     assert request["title_resolution"] == RESOLUTION
-    assert request["use_llm_review"] is (True if review is None else review)
+    assert request["use_llm_review"] is False
     assert request["optimization_mode"] == "off"
     assert request["enable_optimization"] is False
     assert request["prepare_only"] is False

@@ -534,7 +534,8 @@ class RepositoryReproduction:
                             "select_experiment")
             from copy import deepcopy
             profile = deepcopy(profile)
-            profile['steps'] = [{**step, 'depends_on': []} for step in profile['steps'] if step.get('kind') != 'check']
+            profile['steps'] = [{**step, 'depends_on': [], 'timeout_s': None}
+                                for step in profile['steps'] if step.get('kind') != 'check']
             profile['validation'] = {**profile['validation'], 'scope': 'author_code_execution', 'reviews_removed': True}
             adapter = get_adapter(profile)
             data.update(paper_title=profile["paper"]["title"], paper_info=profile["paper"],
@@ -556,9 +557,11 @@ class RepositoryReproduction:
             offline = bool(input_data.get("offline"))
 
             def prepare():
+                self.logger.log("ResourceFinder", "prepare_repository", "RUNNING", "正在获取作者仓库的固定版本：" + profile["repository"]["url"])
                 snapshot = export_repository(self.root, profile, run_dir / "repo", offline=offline)
                 data["repository"] = snapshot
                 write_json(run_dir / "repository.json", snapshot)
+                self.logger.log("ResourceFinder", "prepare_repository", "RUNNING", "源码已就绪；正在准备数据集：" + profile["dataset"].get("name", ""))
                 dataset = adapter.prepare_dataset(self.root, profile, run_dir / "repo", offline=offline)
                 data["dataset_provenance"] = dataset
                 write_json(run_dir / "dataset.json", dataset)

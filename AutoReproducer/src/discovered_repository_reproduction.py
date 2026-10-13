@@ -347,9 +347,11 @@ class DiscoveredRepositoryReproduction:
                 attempt = {"repository_url": candidate_url, "accepted": False}
                 attempts.append(attempt)
                 try:
+                    self.logger.log("ResourceFinder", phase, "RUNNING", f"正在定位候选仓库版本（{index + 1}/{len(unique)}）：{candidate_url}")
                     revision, pin_evidence = resolve_repository_revision(
                         candidate_url, pin if candidate_url.casefold() == url.casefold() else "", offline=offline)
                     workspace = run_dir / ("repo" if index == 0 else f"candidate_repos/{index + 1}")
+                    self.logger.log("ResourceFinder", phase, "RUNNING", "正在获取源码：" + revision)
                     snapshot = export_repository(self.root, {"repository": {"url": candidate_url, "revision": revision}},
                                                  workspace, offline=offline, required_files=[], include_submodules=False)
                     if snapshot.get("resolved_sha") != revision or snapshot.get("url") != candidate_url:
@@ -359,8 +361,10 @@ class DiscoveredRepositoryReproduction:
                     # Allow discovered/user-provided URLs without a literal
                     # author-code statement in the PDF. This flag only controls
                     # evidence acquisition; execution mode skips the reviewer.
+                    self.logger.log("ResourceFinder", phase, "RUNNING", "源码已就绪；正在读取 README、依赖声明与论文运行线索")
                     packet = build_evidence_packet(request["pdf_path"], workspace, snapshot, for_identity_review=True)
                     packet['author_execution_only'] = True
+                    packet['limits']['training_timeout_s'] = None
                     bind_full_paper_notes(packet, request)
                     if manual:
                         packet["repository_input"] = {"source": "user_supplied", "url": url}
@@ -373,6 +377,7 @@ class DiscoveredRepositoryReproduction:
                         materialize_submodules(self.root, snapshot, offline=offline)
                         packet = build_evidence_packet(request['pdf_path'], workspace, snapshot, for_identity_review=True)
                         packet['author_execution_only'] = execution_only
+                        packet['limits']['training_timeout_s'] = None
                         bind_full_paper_notes(packet, request)
                         packet['repository_input'] = {'source': candidate['source'], 'url': candidate_url}
                     selected = True
@@ -383,6 +388,7 @@ class DiscoveredRepositoryReproduction:
                 except Exception as exc:
                     selected = False
                     attempt.update(error=str(exc))
+                    self.logger.log("ResourceFinder", phase, "WARNING", "当前候选准备失败：" + str(exc))
                     if digest(Path(request["pdf_path"])) != document.sha256:
                         raise ValueError("原始 PDF 在仓库准备期间发生变化，不能继续") from exc
                 finally:
@@ -587,6 +593,7 @@ class DiscoveredRepositoryReproduction:
                 data["validation"] = {"status": "prepared", "is_reproduced": None,
                     "result_level": "prepared", "reason": ('源码与协议已冻结；作者加载器数据仍待依赖准备后下载，尚未执行训练'
                     if loaders else '源码和完整原命令已冻结；实际数据将在作者执行中构造，尚未训练'
+                    if execution_only else '源码和完整原命令已冻结；实际数据将在作者执行中构造，尚未训练'
                     if runtime_loaders else '源码、完整真实数据与协议已冻结，尚未执行训练')}
                 event(phase, "success", "执行计划已准备，未安装或训练")
                 if loaders or runtime_loaders:
@@ -673,7 +680,7 @@ class DiscoveredRepositoryReproduction:
             if loaders:
                 phase = 'prepare_dataset'; event(phase, 'running')
                 dataset_step = [{'id': 'prepare_author_datasets', 'kind': 'check', 'required': True,
-                    'argv': ['python', '-u', f'{CAPTURE_DIR}/prepare_datasets.py'], 'cwd': '.', 'timeout_s': 600,
+                    'argv': ['python', '-u', f'{CAPTURE_DIR}/prepare_datasets.py'], 'cwd': '.', 'timeout_s': None,
                     'env': {'CUDA_VISIBLE_DEVICES': ''}, 'artifacts': [f'{CAPTURE_DIR}/prepared_datasets.json']}]
                 dataset_execution = run_steps(dataset_step,
                     {**environment, 'auto_prepare': False, 'require_prepared': True})
@@ -728,7 +735,7 @@ class DiscoveredRepositoryReproduction:
                                      "repository_executed": False, "reason": "环境已准备，尚未执行作者训练"}
                 data["validation"] = {"status": "environment_ready", "is_reproduced": None,
                                       "result_level": "prepared", "reason": ('原生环境已准备；原作者命令尚未构造实际数据或开始训练'
-                                      if native_pending else '真实数据、协议和原生环境已准备，尚未执行训练')}
+                                      if native_pending or execution_only else '真实数据、协议和原生环境已准备，尚未执行训练')}
                 if runtime_loaders:
                     event('prepare_dataset', 'skipped', '仅准备环境；实际数据构造和训练尚未执行')
                 for identifier in ("execute_repository", "finish_execution"):
@@ -736,11 +743,10 @@ class DiscoveredRepositoryReproduction:
                 return
             phase = "execute_repository"; event(phase, "running")
             verify_frozen_inputs()
-            # Preparation does not consume the separately frozen author runtime
-            # deadline. The fresh evaluator has its own bounded 300-second step.
+            # Running author code has no elapsed-time budget. Only cancellation,
+            # its exit status and the bounded error-repair loop can end execution.
             prepared_environment = {**environment, "auto_prepare": False, "require_prepared": True,
-                "exclude_environment_preparation_from_deadline": True,
-                "deadline_monotonic": time.monotonic() + sum(step["timeout_s"] for step in steps) + 2}
+                                    "deadline_monotonic": None}
             execution = run_steps(execution_plan, prepared_environment)
             data["execution"] = execution
             training_id = next(step["id"] for step in plan["steps"] if step["kind"] == "train")
@@ -756,6 +762,7 @@ class DiscoveredRepositoryReproduction:
                     execution.get("final", {}).get("stderr", ""))[-2000:])
             event(phase, "success")
             phase = "finish_execution"; event(phase, "running")
+            verify_frozen_inputs()
             from src.author_execution_plan import verify_author_execution
             validation = verify_author_execution(plan, workspace, execution, data['spec_sha256'])
             validation.update(reviews_removed=True, paper_metrics_verified=False,

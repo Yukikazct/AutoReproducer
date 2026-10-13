@@ -9,7 +9,7 @@ from src.orchestrator import Orchestrator
 from src.resource_manager import ResourceManager
 
 
-def pipeline(tmp_path, *, requested=False, workspace=False, reproduced=True):
+def pipeline(tmp_path, *, requested=False, workspace=False):
     llm = LLMClient(mock_mode=True)
     llm.chat = Mock(side_effect=AssertionError("This reservation test must not call any model"))
     orch = Orchestrator(llm_client=llm, mock_mode=True,
@@ -21,7 +21,6 @@ def pipeline(tmp_path, *, requested=False, workspace=False, reproduced=True):
         "reader": {"paper_info": {"title": "Public paper", "method": "DLinear", "metrics": {"mse": 0.375}}},
         "finder": {"resources": {}}, "builder": {"env_config": {}},
         "executor": {"code": "print('baseline')", "executed": True, "final": {"success": True, "exit_code": 0}},
-        "validator": {"is_reproduced": reproduced, "status": "reproduced" if reproduced else "not_reproduced"},
         "reporter": {"report": "Reserved optimization interface"},
     }
     for name, output in outputs.items():
@@ -30,21 +29,21 @@ def pipeline(tmp_path, *, requested=False, workspace=False, reproduced=True):
     orch.agents["optimizer"].simulator = Mock(side_effect=AssertionError("Neither hash simulation nor retraining may run"))
     orch._fetch_resources = Mock()
     orch._finalize_storage = Mock()
-    orch._verify_step = Mock()
     orch._materialize_workspace = Mock(side_effect=AssertionError("Do not create an optimization workspace"))
     return orch
 
 
-@pytest.mark.parametrize("requested,workspace,reproduced", [
-    (False, False, True), (False, True, True), (True, False, True),
-    (True, True, True), (True, True, False), (False, False, False),
-])
-def test_reserved_flag_never_runs_optimization_or_creates_workspace(tmp_path, requested, workspace, reproduced):
-    orch = pipeline(tmp_path, requested=requested, workspace=workspace, reproduced=reproduced)
+@pytest.mark.parametrize("requested", [False, True])
+@pytest.mark.parametrize("workspace", [False, True])
+def test_reserved_flag_never_runs_optimization_or_creates_workspace(tmp_path, requested, workspace):
+    orch = pipeline(tmp_path, requested=requested, workspace=workspace)
     events = []
     result = orch.run({"paper_title": "Public paper"}, on_event=events.append)
     assert result["state"] == "COMPLETED"
-    assert result["data"]["validation"]["is_reproduced"] is reproduced
+    assert result["data"]["validation"]["is_reproduced"] is None
+    assert result["data"]["validation"]["status"] == "mock_demo"
+    assert "validator" not in orch.agents and "verifier" not in orch.agents
+    assert not any(event.get("state") == "VALIDATE" for event in events)
     optimization = result["data"]["optimization"]
     assert optimization == {
         "optimized": False, "requested": requested, "available": False,
@@ -73,6 +72,7 @@ def test_run_flag_overrides_constructor_reservation(tmp_path, constructed, input
     orch.agents["optimizer"].run.assert_not_called()
 
 
-def test_current_state_graph_goes_from_validation_to_report(tmp_path):
+def test_current_state_graph_goes_from_execution_to_report(tmp_path):
     orch = pipeline(tmp_path)
-    assert orch._get_transitions("VALIDATE") == ["GENERATE_REPORT", "ERROR"]
+    assert orch._get_transitions("EXECUTE_CODE") == ["GENERATE_REPORT", "ERROR"]
+    assert orch._get_transitions("VALIDATE") == []

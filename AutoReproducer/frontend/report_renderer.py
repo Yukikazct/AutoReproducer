@@ -10,6 +10,7 @@ from urllib.parse import unquote
 from frontend.display_text import report_display_text
 from src.execution_artifacts import (PROJECT_ROOT, MAX_IMAGE_BYTES,
                                      verified_report_image_bytes)
+from src.report_revisions import resolve_report_revision
 
 
 DEFAULT_REPORT_PATH = PROJECT_ROOT / "data" / "reports" / "report.md"
@@ -92,3 +93,23 @@ def build_report_bundle(report, report_path):
         for target, raw in figures.items():
             archive.writestr(target, raw)
     return buffer.getvalue()
+
+
+def report_downloads(result, *, key, st_module=None, data_root=None):
+    """Use the same persisted report revision for Markdown and ZIP downloads."""
+    if st_module is None:
+        import streamlit as st_module
+    current = resolve_report_revision(result, data_root=data_root)
+    data = current.get("data") or {}
+    report = data.get("report") or ""
+    if not report:
+        return
+    path = Path(current.get("report_path") or data.get("report_path") or DEFAULT_REPORT_PATH)
+    st_module.download_button("下载报告", data=report, file_name=path.name,
+                              mime="text/markdown", key=f"{key}_markdown")
+    try:
+        st_module.download_button("下载报告和图片（ZIP）", data=build_report_bundle(report, path),
+                                  file_name=path.stem + ".zip", mime="application/zip",
+                                  key=f"{key}_zip")
+    except ValueError as exc:
+        st_module.warning(str(exc))

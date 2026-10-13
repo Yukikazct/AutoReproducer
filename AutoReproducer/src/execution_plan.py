@@ -12,7 +12,7 @@ PLAN_VERSION = 1
 MODES = {"repository"}
 KINDS = {"check", "run", "train", "eval", "prepare"}
 STEP_ID = re.compile(r"[A-Za-z0-9_-]+")
-DEFAULT_TIMEOUT_S = 600.0
+DEFAULT_TIMEOUT_S = None
 
 
 class RepositoryModeFallbackRejected(RuntimeError):
@@ -66,9 +66,9 @@ def _step(step, position):
     if kind not in KINDS:
         raise ValueError(f"step {identifier} kind must be one of {sorted(KINDS)}")
     timeout = step.get("timeout_s", DEFAULT_TIMEOUT_S)
-    if (isinstance(timeout, bool) or not isinstance(timeout, (int, float))
-            or not math.isfinite(timeout) or timeout <= 0):
-        raise ValueError(f"step {identifier} timeout_s must be a positive number")
+    if timeout is not None and (isinstance(timeout, bool) or not isinstance(timeout, (int, float))
+                               or not math.isfinite(timeout) or timeout <= 0):
+        raise ValueError(f"step {identifier} timeout_s must be null or a positive number")
     env = step.get("env", {})
     if not isinstance(env, dict) or any(
             not isinstance(key, str) or not key or "=" in key or "\x00" in key
@@ -90,7 +90,7 @@ def _step(step, position):
         raise ValueError(f"step {identifier} cannot depend on itself")
     return {"id": identifier, "kind": kind, "argv": list(argv),
             "cwd": relative_path(step.get("cwd", "."), "cwd").as_posix() or ".",
-            "env": dict(env), "timeout_s": float(timeout),
+            "env": dict(env), "timeout_s": None if timeout is None else float(timeout),
             "depends_on": dependencies, "required": required,
             "requires": _declared_paths(step.get("requires"), identifier, "requires", allow_glob=False),
             "artifacts": _declared_paths(step.get("artifacts"), identifier, "artifacts", allow_glob=True)}

@@ -456,13 +456,15 @@ def test_stdin_payload_roundtrips_without_exposing_it_in_argv():
     assert payload not in str(result.args)
 
 
-@pytest.mark.parametrize("mode", ["timeout", "cancel"])
+@pytest.mark.parametrize("mode", ["timeout", "cancel", "cancel_unlimited"])
 def test_owned_process_cleans_descendants_on_timeout_or_cancel(tmp_path, mode):
     sentinel = tmp_path / "orphan.txt"
     child = "import time;from pathlib import Path;time.sleep(1.2);Path(" + repr(str(sentinel)) + ").write_text('orphan')"
     launcher = "import subprocess,sys,time;subprocess.Popen([sys.executable,'-c'," + repr(child) + "]);time.sleep(10)"
     started = time.monotonic()
-    options = {"timeout_s": .4} if mode == "timeout" else {"timeout_s": 10, "cancel_check": lambda: time.monotonic()-started > .4}
+    options = {"timeout_s": .4} if mode == "timeout" else {
+        "timeout_s": None if mode == "cancel_unlimited" else 10,
+        "cancel_check": lambda: time.monotonic()-started > .4}
     expected = runtime.RuntimePreparationTimeout if mode == "timeout" else KeyboardInterrupt
     with pytest.raises(expected):
         runtime.run_owned_process([sys.executable, "-I", "-c", launcher], **options)

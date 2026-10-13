@@ -236,7 +236,7 @@ def test_method_cancellation_writes_final_result_and_releases_owner_lock(tmp_pat
     adapter.prepare_dataset.return_value = {}
     adapter.materialize.return_value = {"files": {}}
     adapter.public_sources.return_value = []
-    adapter.steps.return_value = [{"id": "train", "argv": ["python", "-c", "print(1)"]}]
+    adapter.steps.return_value = [{"id": "train", "kind": "train", "argv": ["python", "-c", "print(1)"]}]
     monkeypatch.setattr("src.method_reproduction.get_adapter", lambda p: adapter)
     monkeypatch.setattr("src.agents.report_generator.ReportGeneratorAgent.run", lambda *a, **kw: {"report": "interrupted"})
     logger = Mock(); logger.get_stats.return_value = {}

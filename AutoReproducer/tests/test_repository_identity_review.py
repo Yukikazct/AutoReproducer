@@ -280,49 +280,36 @@ def test_bad_citation_gets_one_bounded_repair_then_still_requires_source_evidenc
     assert llm.chat.call_count == 4
 
 
-def test_service_rejects_first_candidate_and_verifies_actual_alternative(tmp_path, monkeypatch):
+def test_service_uses_selected_candidate_without_identity_review(tmp_path, monkeypatch):
     import shutil
     from src import discovered_repository_reproduction as service
-    from src import discovered_repository_plan as planner
+    from src import author_execution_plan as planner
     from src.audit.audit_logger import AuditLogger
     from discovered_fixtures import PlannedLLM
     author = make_experiment(tmp_path, "signals")
     other = make_experiment(tmp_path, "pairs")
     write_pdf(author["pdf"], [["Separating Signed Signals", "Abstract",
-              "Our experiments are implemented here: " + author["snapshot"]["url"],
-              "We compare with baseline source code at " + other["snapshot"]["url"]]])
-
+              "Our code: " + author["snapshot"]["url"], "Baseline: " + other["snapshot"]["url"]]])
     def export(root, profile, workspace, **kwargs):
-        fixture = author if profile["repository"]["url"] == author["snapshot"]["url"] else other
-        shutil.copytree(fixture["workspace"], workspace)
-        return {**fixture["snapshot"], "resolved_sha": "a" * 40}
-
-    llm = PlannedLLM(author["proposal"])
-    chat = llm.chat
-
-    def review(prompt, **kwargs):
-        if kwargs["task"] == "repository_identity_review" and other["snapshot"]["url"] in json.loads(
-                prompt.split("Fetched evidence:\n", 1)[1])["repository"]["url"]:
-            llm.calls.append((prompt, kwargs))
-            return json.dumps({"verdict": "third_party", "reason": "Different paper and baseline."})
-        return chat(prompt, **kwargs)
-
-    llm.chat = review
+        shutil.copytree(other["workspace"], workspace)
+        return {**other["snapshot"], "resolved_sha": "a" * 40}
+    llm = PlannedLLM(other["proposal"])
     monkeypatch.setattr(service, "export_repository", export)
     monkeypatch.setattr(service, "resolve_repository_revision", lambda *a, **kw: ("a" * 40, {}))
-    propose = Mock(side_effect=ValueError("Fixture stops after verified selection"))
-    monkeypatch.setattr(planner, "propose_plan", propose)
-    from src.agents.experiment_protocol import ExperimentProtocolAgent
-    monkeypatch.setattr(ExperimentProtocolAgent, 'run', Mock(return_value={'scope':'identity_fixture'}))
+    reviewer = Mock(side_effect=AssertionError("Removed identity reviewer must not run"))
+    monkeypatch.setattr(RepositoryVerifierAgent, "run", reviewer)
+    propose = Mock(side_effect=ValueError("Stop at original command planning"))
+    monkeypatch.setattr(planner, "propose_author_execution_plan", propose)
     runner = service.DiscoveredRepositoryReproduction(tmp_path / "service", AuditLogger(log_dir=str(tmp_path / "logs")), llm=llm)
     runner.runner.run = Mock(side_effect=AssertionError("Selection test cannot execute training"))
     result = runner.run({"pdf_path": str(author["pdf"]), "resources": {
         "code_repo_url": other["snapshot"]["url"],
         "repository_identity": {"status": "author_verified", "review": {"accepted": True}}}})
     data = result["data"]
-    assert data["resources"]["code_repo_url"] == author["snapshot"]["url"]
-    assert data["resources"]["repository_identity"]["status"] == "author_verified"
-    assert [attempt["accepted"] for attempt in data["repository_identity_attempts"]] == [False, True]
-    assert propose.call_args.args[1]["repository_identity_pending"] is False
-    assert propose.call_args.args[1]["repository_identity_review"]["accepted"]
+    assert data["resources"]["code_repo_url"] == other["snapshot"]["url"]
+    assert data["resources"]["repository_identity"]["status"] == "unreviewed_execution"
+    assert data["resources"]["repository_identity"]["author_identity_confirmed"] is False
+    assert [attempt["accepted"] for attempt in data["repository_identity_attempts"]] == [True]
+    propose.assert_called_once()
+    reviewer.assert_not_called()
     runner.runner.run.assert_not_called()

@@ -86,5 +86,7 @@ def test_docker_dependency_timeout_is_not_mislabeled_as_code_timeout(tmp_path, m
     assert result["execution_phase"] == "dependencies"
     assert "代码尚未执行" in result["stderr"]
     assert "Installing numpy" in result["stdout"]
-    assert calls[0][1]["timeout"] > ce.DOCKER_TIMEOUT_SMOKE + ce.DOCKER_PIP_TIMEOUT
+    assert calls[0][1]["timeout"] is None
+    assert 'execution None' in ' '.join(calls[0][0])
+    assert str(ce.DOCKER_PIP_TIMEOUT) in ' '.join(calls[0][0])
     assert MARKER not in result["stderr"]

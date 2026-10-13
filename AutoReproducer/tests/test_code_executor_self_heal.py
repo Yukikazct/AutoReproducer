@@ -35,6 +35,11 @@ def _isolate_cache(tmp_path, monkeypatch):
     """隔离 L0 依赖缓存：进程内缓存与磁盘 heal 目录不跨用例污染。"""
     ce_mod._INSTALLED_DEPS.clear()
     monkeypatch.setattr(ce_mod, "DEPS_CACHE_ROOT", tmp_path / "deps")
+    # These unit tests supply simulated script results at the process boundary.
+    # Actual process ownership and cancellation are exercised by lifecycle tests.
+    import src.runtime_preparation as runtime
+    monkeypatch.setattr(runtime, 'run_owned_process',
+                        lambda cmd, **kw: ce_mod.subprocess.run(cmd, **kw))
     # 引擎探测不依赖本机 Docker Desktop 状态（详见 test_sandbox_hardening）
     monkeypatch.setattr(BaseAgent, "docker_engine_available",
                         staticmethod(lambda *a, **k: (True, None)))

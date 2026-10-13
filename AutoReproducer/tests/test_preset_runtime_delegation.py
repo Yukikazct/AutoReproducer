@@ -40,6 +40,7 @@ def test_owned_worker_preserves_bootstrap_order_and_private_request(recover, tmp
                                api_key=secret, offline=True)
     assert result['state'] == 'COMPLETED'
     assert result['data']['runtime_preparation']['reused'] is True
+    assert captured['timeout_s'] is None
     assert secret not in ' '.join(captured['argv'])
     assert secret not in path.read_text(encoding='utf-8')
     assert 'sk-host-fixture-987654321' not in json.dumps(captured['env'])

@@ -33,9 +33,15 @@ from src.base_agent import BaseAgent
 from src.corpus import list_papers
 from src.repository_profiles import PAPER_TITLE
 from src.title_routing import resolve_title_request
-from src.method_budget import CONFIRMATION_RESERVE_SECONDS, optimization_budget_error
 from frontend.display_text import display_text
-from frontend.report_renderer import render_report, build_report_bundle
+from frontend.live_progress import (elapsed_seconds, progress_signature,
+                                    recent_progress_runs, render_activity, resolve_progress_run)
+from frontend import progress_state
+if getattr(progress_state, "PROGRESS_VIEW_VERSION", 0) != 2:
+    progress_state = importlib.reload(progress_state)
+from frontend.report_renderer import render_report, report_downloads
+from src.report_revisions import (can_regenerate_report, needs_report_upgrade,
+                                  regenerate_report, resolve_report_revision)
 from frontend.llm_config import (
     CONNECT_TEST_TIMEOUT,
     resolve_llm_config,
@@ -52,7 +58,7 @@ PROFILE_LABELS = repository_entrypoint.profile_labels()
 get_profile = repository_entrypoint.get_profile
 
 # Only refresh the small loader. Older active pipeline modules keep their globals.
-if pipeline_entrypoint.BACKEND_API_VERSION != 4:
+if pipeline_entrypoint.BACKEND_API_VERSION != 5:
     pipeline_entrypoint = importlib.reload(pipeline_entrypoint)
 
 _pipeline_backend = pipeline_entrypoint.load_backend_pipeline()
@@ -71,13 +77,9 @@ from frontend.history_manager import (
     delete_session,
     delete_sessions,
     clear_sessions,
+    get_session_report_result,
+    get_project_data_dir,
 )
-
-# 页面自动刷新（可选依赖）：未安装时退化为手动刷新
-try:
-    from streamlit_autorefresh import st_autorefresh
-except ImportError:
-    st_autorefresh = None
 
 # 页面配置
 st.set_page_config(
@@ -119,13 +121,20 @@ if "progress_file" not in st.session_state:
     previous = ProgressStore.read_snapshot(resume) if resume else None
     st.session_state.progress_file = (
         resume if previous and previous["done"] and previous["result"] else None)
+    linked_run = resolve_progress_run(get_project_data_dir(), st.query_params.get("run", ""))
+    if linked_run:
+        st.session_state.progress_file = linked_run
 if "pipeline_note" not in st.session_state:
     st.session_state.pipeline_note = None
 
 # 先读取后台状态，再渲染侧边栏和主区域。终态时停止轮询后也能立即
 # 更新「开始复现」按钮、系统状态和顶部提示，避免留在上一阶段。
 pf = st.session_state.progress_file
+_progress_signature = progress_signature(pf)
 snap = ProgressStore.read_snapshot(pf) if pf else None
+if pf and resolve_progress_run(get_project_data_dir(), Path(pf).name) == str(Path(pf).resolve()):
+    if st.query_params.get("run") != Path(pf).name:
+        st.query_params["run"] = Path(pf).name
 if snap:
     # 每次使用当前任务的完整快照，避免切换进度文件时残留上次的完成状态。
     st.session_state.result = snap["result"]
@@ -134,6 +143,30 @@ if snap:
     st.session_state.pipeline_stages = snap.get("pipeline_stages", [])
     st.session_state.current_state = snap["state"]
     st.session_state.logs = snap["logs"]
+
+if st.session_state.result:
+    st.session_state.result = resolve_report_revision(
+        st.session_state.result, data_root=get_project_data_dir())
+
+
+def report_upgrade_controls(result, *, key):
+    """An old session can update its presentation without rerunning the job."""
+    result = resolve_report_revision(result, data_root=get_project_data_dir())
+    if st.session_state.pop(key + "_updated", False):
+        st.success("报告格式已更新；原报告、运行日志和执行结果已保留。")
+    if needs_report_upgrade(result):
+        st.info("该报告使用旧格式，可从已保存的结果更新实测指标表；不会重新训练或调用模型。")
+        if can_regenerate_report(result) and not st.session_state.running:
+            if st.button("重新生成报告", key=key):
+                try:
+                    result = regenerate_report(result, data_root=get_project_data_dir())
+                    st.session_state[key + "_updated"] = True
+                    st.rerun()
+                except (OSError, ValueError) as exc:
+                    st.warning(f"报告更新失败：{exc}")
+        else:
+            st.caption("任务未结束或未保留结构化结果，暂无法重新生成；原报告仍可查看和下载。")
+    return result
 
 
 @st.fragment
@@ -494,9 +527,6 @@ def _new_progress_file() -> str:
 # 启动按钮处理：后台线程执行流水线，主线程立即返回并轮询进度
 if start_btn and not st.session_state.running:
     pt = st.session_state.paper_title.strip() if input_mode == "论文标题" else ""
-    budget_error = (optimization_budget_error(st.session_state.get("method_budget_minutes", 120) * 60)
-                    if method_selected and st.session_state.get("method_action") == "运行实验"
-                    and st.session_state.get("method_optimization") == "validate" else "")
     if experiment_profile and st.session_state.mock_mode:
         st.sidebar.error("官方仓库预设需要关闭 Mock 模式，才能执行真实论文代码。")
     elif manual_repo_error:
@@ -506,8 +536,6 @@ if start_btn and not st.session_state.running:
     elif not experiment_profile and not pt and not uploaded_file:
         st.sidebar.error("请先上传PDF文件" if input_mode == "上传PDF"
                          else "请先输入论文标题")
-    elif budget_error:
-        st.sidebar.error(budget_error)
     elif requires_api and not st.session_state.mock_mode and config_missing(base_url, model_name):
         st.error("真实模式缺少 LLM 配置（"
                  + "、".join(config_missing(base_url, model_name))
@@ -547,7 +575,7 @@ if start_btn and not st.session_state.running:
             prepare_environment=method_selected and st.session_state.get("method_action") == "准备实验环境",
             optimization_mode="off",
             max_candidates=int(st.session_state.get("method_max_candidates", 3)),
-            budget_seconds=int(st.session_state.get("method_budget_minutes", 120)) * 60,
+            budget_seconds=7200,  # Legacy argument; current execution has no deadline.
             use_llm_review=False, allow_result_summary_review=False,
             model_name=model_name, base_url=base_url,
             api_key=api_key,
@@ -571,6 +599,7 @@ if reset_btn and not st.session_state.running:
     st.session_state.pipeline_stages = []
     st.session_state.connection_result = None
     st.session_state.progress_file = None
+    st.query_params.pop("run", None)
     st.session_state.pipeline_note = None
     st.rerun()
 
@@ -615,6 +644,47 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 # 新版 Streamlit 支持按所选标签延迟执行；旧版保留显式加载入口。
+_poll_initialized = False
+
+
+@st.fragment(run_every=2 if st.session_state.running and pf else None)
+def poll_live_progress():
+    # Native Streamlit polling works across tabs without an iframe dependency.
+    # A timer only rereads files; it never relaunches a task or fabricates progress.
+    global _poll_initialized
+    # Always finish the initial page render, even if a busy worker appends
+    # between the snapshot read and this fragment. Only timer ticks rerun it.
+    if _poll_initialized and pf and progress_signature(pf) != _progress_signature:
+        st.rerun()
+    _poll_initialized = True
+    if pf:
+        if st.button("刷新运行状态", key="refresh_live_progress"):
+            st.rerun()
+        age = elapsed_seconds((snap or {}).get("updated_at"))
+        if st.session_state.running:
+            st.caption("监控每 2 秒自动读取后台记录。"
+                       + (f"最近一条事件在 {age} 秒前。" if age is not None else "等待第一条后台事件。"))
+            for row in (snap or {}).get("pipeline_stages", []):
+                if row.get("status") == "running":
+                    duration = elapsed_seconds(row.get("started_at"))
+                    st.caption("当前阶段：" + display_text(row.get("title", row["id"]))
+                               + (f" · 已持续 {duration} 秒" if duration is not None else ""))
+            if age is not None and age >= 30:
+                st.caption("后台暂未产生新日志，仍等待阶段返回；不能据此判定任务已完成。")
+
+
+poll_live_progress()
+
+if not pf:
+    resumable = recent_progress_runs(get_project_data_dir())
+    if resumable:
+        with st.expander("恢复已有任务监控", expanded=True):
+            st.caption("刷新页面后可重新连接已有运行记录；按时间从新到旧排列。")
+            selected_run = st.selectbox("运行记录", resumable, key="resume_progress_selection")
+            if st.button("恢复监控", key="resume_progress"):
+                st.session_state.progress_file = resolve_progress_run(get_project_data_dir(), selected_run)
+                st.rerun()
+
 _lazy_tabs = "on_change" in inspect.signature(st.tabs).parameters
 _previous_tab = st.session_state.get("workspace_tabs", "")
 if _previous_tab and display_text(_previous_tab) != _previous_tab:
@@ -634,15 +704,6 @@ with tab1:
     # ---------- 后台复现实时进度（轮询进度文件） ----------
     if snap and snap.get("error"):
         st.error(f"后台流水线异常: {snap['error']}")
-
-    if st.session_state.running and pf:
-        if st_autorefresh is not None:
-            st_autorefresh(interval=2000, key=f"ar_{pf}")
-            st.info("复现流水线正在后台运行，页面每 2 秒自动刷新，"
-                    "实时展示各阶段进度。")
-        else:
-            st.warning("未安装 streamlit-autorefresh，页面不会自动刷新；"
-                       "可刷新浏览器页面查看最新进度。")
 
     stages = st.session_state.pipeline_stages
     execution_context = (snap or {}).get("execution_context") or {}
@@ -711,6 +772,12 @@ with tab1:
         if stage.get("completion_pending"):
             status_text = "结束确认中"
         details = []
+        if stage.get("started_at"):
+            details.append("开始于 " + stage["started_at"][11:19])
+        if stage.get("finished_at") and stage.get("completion_confirmed"):
+            duration = elapsed_seconds(stage.get("started_at"), stage["finished_at"])
+            details.append("结束于 " + stage["finished_at"][11:19]
+                           + (f"（{duration} 秒）" if duration is not None else ""))
         if stage.get("attempt", 0) > 1:
             details.append(f"第 {stage['attempt']} 次尝试")
         if stage.get("calls"):
@@ -725,6 +792,10 @@ with tab1:
             details.append(stage["completion_reason"])
         if status == "running":
             details.extend("当前执行：" + context["label"] for context in phase_executions)
+            latest_activity = next((row for row in reversed((snap or {}).get("activities", []))
+                                    if row.get("phase_id") == stage["id"]), None)
+            if latest_activity:
+                details.append("最近动态：" + latest_activity["message"][-500:])
         detail_text = escape(display_text(" · ".join(details))).replace("\r", "").replace("\n", "<br>")
         detail_html = f'<p>{detail_text}</p>' if details else ""
         # 连续 HTML 不插入空行，避免 Markdown 将后续卡片识别为缩进代码块。
@@ -759,6 +830,8 @@ with tab1:
 </section>""", unsafe_allow_html=True)
     elif st.session_state.running:
         st.info("正在准备实验，阶段状态将在这里更新。")
+    if snap:
+        render_activity(snap, st_module=st)
     if snap and snap.get("execution_output"):
         with st.expander("代码执行输出（最近16000字符）", expanded=True):
             if active_executions:
@@ -861,12 +934,15 @@ with tab1:
 with tab2:
     st.markdown('<div class="section-heading"><div><span class="section-kicker">02 / REPRODUCTION REPORT</span><h2>复现报告</h2><p>查看实验结论、执行证据与验证结果。</p></div></div>', unsafe_allow_html=True)
     if st.session_state.result and st.session_state.result.get("data", {}).get("report"):
+        st.session_state.result = report_upgrade_controls(st.session_state.result, key="upgrade_current_report")
         report = st.session_state.result["data"]["report"]
         # 深色 IDE 面板渲染已回滚（见 CHANGELOG [2026.09.20-12]）：
         # 面板在真实浏览器里代码不可见，改回原生 Markdown 渲染。
         result = st.session_state.result
         report_path = result.get("report_path") or result["data"].get("report_path")
         render_report(report, report_path, st_module=st)
+        report_downloads(result, key="current_report", st_module=st,
+                         data_root=get_project_data_dir())
     else:
         st.markdown('<div class="empty-state"><span class="empty-symbol" aria-hidden="true"></span><span class="section-kicker">YOUR NEXT DISCOVERY</span><div class="empty-title">报告将在这里生成</div><p>在左侧提交论文并启动复现。<br>完成后，实验记录与运行结果会整理为可下载的报告。</p></div>', unsafe_allow_html=True)
 
@@ -962,25 +1038,9 @@ def render_history():
         st.session_state[_ck] = False
 
     # -- 当前会话报告下载（如果本次复现已完成） --
-    if st.session_state.result and st.session_state.result.get("report_path"):
-        rp = st.session_state.result["report_path"]
-        if os.path.exists(rp):
-            with open(rp, "r", encoding="utf-8") as fh:
-                report_content = fh.read()
-            st.download_button(
-                "下载本次复现报告",
-                data=report_content,
-                file_name=os.path.basename(rp),
-                mime="text/markdown",
-                use_container_width=True,
-            )
-            try:
-                bundle = build_report_bundle(report_content, rp)
-                st.download_button("下载报告和图片（ZIP）", data=bundle,
-                                   file_name=Path(rp).stem + ".zip", mime="application/zip",
-                                   use_container_width=True)
-            except ValueError as exc:
-                st.warning(str(exc))
+    if st.session_state.result:
+        report_downloads(st.session_state.result, key="history_current", st_module=st,
+                         data_root=get_project_data_dir())
 
 # -- 存储仪表板 --
     # -- 资源下载/安装监控 --
@@ -1228,16 +1288,18 @@ def render_history():
                         st.caption(f"日志条目: {log_entries}")
 
                         # 报告下载
-                        if report_path and os.path.exists(report_path):
-                            with open(report_path, "r", encoding="utf-8") as fh:
-                                report_data = fh.read()
-                            st.download_button(
-                                "下载报告",
-                                data=report_data,
-                                file_name=os.path.basename(report_path),
-                                mime="text/markdown",
-                                key=f"dl_{sid}",
-                            )
+                        historical_result = get_session_report_result(sess)
+                        if historical_result:
+                            historical_result = report_upgrade_controls(historical_result, key=f"upgrade_{sid}")
+                            report_downloads(historical_result, key=f"dl_{sid}", st_module=st,
+                                             data_root=get_project_data_dir())
+                            if st.button("查看报告", key=f"view_report_{sid}", disabled=st.session_state.running):
+                                st.session_state.result = historical_result
+                                st.session_state.progress_file = None
+                                st.session_state.current_state = historical_result.get("state", "COMPLETED")
+                                st.session_state.logs = historical_result.get("audit_logs", [])
+                                st.session_state["_hist_flash"] = "历史报告已载入，可在复现报告页查看。"
+                                st.rerun()
                         else:
                             st.caption("无报告文件")
 

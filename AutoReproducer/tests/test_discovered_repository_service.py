@@ -74,24 +74,16 @@ def use_preinstalled_cache(monkeypatch, runner, cache):
     monkeypatch.setattr(runner.runner, "cached_environment", lambda _config: cache)
 
 
-@pytest.mark.parametrize("family,steps,samples,dependency_warning", [
-    ("signals", 40, 4, False), ("pairs", 60, 8, False), ("signals", 40, 4, True)])
-def test_two_actual_author_entrypoints_complete_service_and_report(
-        tmp_path, monkeypatch, cpu_dependency_cache, family, steps, samples, dependency_warning):
-    review = accepted_review()
-    if dependency_warning:
-        review['checks']['dependency_compatibility'].update(passed=False, severity='warning',
-            reason='Reviewed modern versions require actual runtime API verification.')
-    fixture, runner, request, llm = setup_service(tmp_path, monkeypatch, family, review=review)
+@pytest.mark.parametrize("family,steps", [("signals", 40), ("pairs", 60)])
+def test_two_actual_author_entrypoints_complete_service_and_report(tmp_path, monkeypatch, cpu_dependency_cache, family, steps):
+    fixture, runner, request, llm = setup_service(tmp_path, monkeypatch, family)
     use_preinstalled_cache(monkeypatch, runner, cpu_dependency_cache)
     processes, events = [], []
     popen = subprocess.Popen
-
     def remember_process(*args, **kwargs):
         process = popen(*args, **kwargs)
         processes.append(process)
         return process
-
     monkeypatch.setattr(subprocess, "Popen", remember_process)
     result = runner.run(request, on_event=events.append)
     assert result["state"] == "COMPLETED", result["error"]
@@ -99,48 +91,29 @@ def test_two_actual_author_entrypoints_complete_service_and_report(
     run_dir = Path(data["run_dir"])
     workspace = run_dir / "repo"
     validation, execution = data["validation"], data["execution"]
-    assert validation["is_reproduced"] is True
+    assert validation["is_reproduced"] is None
+    assert validation["status"] == "author_code_completed"
     assert data["repository_executed"] is True
-    assert validation["training_summary"] == {"optimizer_steps": steps, "steps_completed": steps,
-                                              "test_samples": samples, "complete": True,
-                                              "runs_completed": 1, "runs_required": 1}
-    assert all(validation['completion_checks'].values())
-    assert '各阶段完成依据' in data['report']
-    assert validation["metrics_comparison"]["paper"]["accuracy"] == 100.0
-    assert validation["metrics_comparison"]["actual"]["accuracy"] == 100.0
-    assert validation["independent_metrics"]["numpy_torch_crosscheck"] is True
-    assert validation["independent_metrics"]["evaluation"] == "fresh_process_torchscript_forward_numpy_metrics"
-    assert read_json(workspace / CAPTURE_DIR / "capture.json")["optimizer_steps"] == steps
-    assert data["native_preflight"]["native_probe_pass"] is True
-    assert data["native_preflight"]["versions"] == {"torch": compatibility_pins()["torch"], "numpy": "1.26.4"}
-    assert [record["id"] for record in execution["steps"]] == ["train", "independent_evaluation"]
+    assert all(validation["completion_checks"].values())
+    assert validation["author_execution"][0]["optimizer_steps"] == steps
+    assert [record["id"] for record in execution["steps"]] == ["train"]
     assert all(record["executed"] and record["success"] and record["exit_code"] == 0
-               and not record["timed_out"] for record in execution["steps"])
+               and not record["timed_out"] and record["timeout_s"] is None for record in execution["steps"])
     assert all(process.poll() is not None for process in processes)
-    assert len(processes) >= 3  # native probe, author training, fresh evaluation
+    assert len(processes) >= 2
     for name, sha in fixture["snapshot"]["files"].items():
         assert digest(workspace / name) == sha
-    last_phases = {event["phase_id"]: event["status"] for event in events
-                   if event.get("type") == "state"}
-    assert len(last_phases) == 8 and set(last_phases.values()) == {"success"}
+    phases = {event["phase_id"]: event["status"] for event in events if event.get("type") == "state"}
+    assert phases["execute_repository"] == phases["finish_execution"] == "success"
+    assert not any(key.startswith(("review_", "verify_")) for key in phases)
     assert read_json(run_dir / "run_status.json")["status"] == "completed"
     with FileLock(str(run_dir / ".run.lock"), timeout=0):
         pass
-    assert llm.get_call_count() == 4
-    frozen = read_json(run_dir / "experiment_spec.json")["spec"]
-    assert frozen == data["grounded_repository_plan"]
-    assert frozen["semantic_review"]["accepted"] is True
+    assert {options["task"] for _, options in llm.calls} == {"author_execution_plan"}
+    assert read_json(run_dir / "experiment_spec.json")["spec"] == data["grounded_repository_plan"]
     report = (run_dir / "report.md").read_text(encoding="utf-8")
-    assert report == data["report"]
-    assert "| accuracy |" in report
-    metric_rows = [line for line in report.splitlines() if line.startswith("| accuracy |")]
-    assert any(row.count("100") == 2 and "N/A" not in row for row in metric_rows)
-    assert "fixed test split" in report
-    assert str(samples) in report and str(steps) in report
-    assert "最多10轮" not in report
-    if dependency_warning:
-        assert frozen['semantic_review']['checks']['dependency_compatibility']['passed'] is False
-        assert '警告，须实际运行验证' in report
+    assert report == data["report"] and "| accuracy |" in report
+    assert str(steps) in report
 
 
 def test_dependency_warning_cannot_skip_failed_runtime_preflight(tmp_path, monkeypatch):
@@ -157,24 +130,15 @@ def test_dependency_warning_cannot_skip_failed_runtime_preflight(tmp_path, monke
     assert runner.runner.run.call_args.args[1][0]['id'] == 'native_preflight'
 
 
-def test_rejected_semantics_retains_audit_and_never_starts_runtime(tmp_path, monkeypatch):
+def test_old_semantic_review_does_not_block_preparation(tmp_path, monkeypatch):
     review = accepted_review()
     review["accepted"] = False
-    review["checks"]["same_experiment"].update(passed=False, reason="The quoted baseline row uses train data.")
-    _, runner, request, _ = setup_service(tmp_path, monkeypatch, review=review)
-    runner.runner.run = Mock(side_effect=AssertionError("Unverified plan cannot execute"))
-    events = []
-    result = runner.run(request, on_event=events.append)
-    assert result["state"] == "ERROR"
-    data = result["data"]
-    assert data["repository_executed"] is False and data["validation"]["is_reproduced"] is None
-    assert data["validation"]["failure_phase"] == "plan_repository"
-    rejection = read_json(Path(data["run_dir"]) / "plan_rejection.json")
-    assert rejection["candidate"]["repository"] == {
-        key: data["repository"][key] for key in ("url", "revision")}
-    assert rejection["semantic_review"]["checks"]["same_experiment"]["passed"] is False
-    assert "baseline row uses train data" in data["report"]
-    assert not (Path(data["run_dir"]) / "repo" / CAPTURE_DIR).exists()
+    _, runner, request, llm = setup_service(tmp_path, monkeypatch, review=review)
+    runner.runner.run = Mock(side_effect=AssertionError("Prepare-only cannot execute"))
+    result = runner.run({**request, "prepare_only": True, "author_execution_only": False})
+    assert result["state"] == "COMPLETED", result["error"]
+    assert result["data"]["validation"]["status"] == "prepared"
+    assert {options["task"] for _, options in llm.calls} == {"author_execution_plan"}
     runner.runner.run.assert_not_called()
 
 
@@ -189,7 +153,7 @@ def test_prepare_only_is_prepared_and_marks_training_stages_skipped(tmp_path, mo
     assert result["data"]["validation"]["is_reproduced"] is None
     assert not result["data"]["repository_executed"]
     last = {event["phase_id"]: event["status"] for event in events if event.get("type") == "state"}
-    assert last["execute_repository"] == last["verify_protocol"] == "skipped"
+    assert last["execute_repository"] == last["finish_execution"] == "skipped"
     runner.runner.run.assert_not_called()
 
 
@@ -217,10 +181,10 @@ def test_pdf_changed_during_repository_export_cannot_start_planning(tmp_path, mo
 
 
 def test_pdf_changed_after_planning_cannot_claim_prepared(tmp_path, monkeypatch):
-    from src import discovered_repository_plan as planner
+    from src import author_execution_plan as planner
     fixture, runner, request, _ = setup_service(tmp_path, monkeypatch)
     request["prepare_only"] = True
-    propose = planner.propose_plan
+    propose = planner.propose_author_execution_plan
 
     def replace_pdf_after_plan(*args, **kwargs):
         plan = propose(*args, **kwargs)
@@ -228,7 +192,7 @@ def test_pdf_changed_after_planning_cannot_claim_prepared(tmp_path, monkeypatch)
             stream.write(b"\n% changed after planning\n")
         return plan
 
-    monkeypatch.setattr(planner, "propose_plan", replace_pdf_after_plan)
+    monkeypatch.setattr(planner, "propose_author_execution_plan", replace_pdf_after_plan)
     runner.runner.run = Mock(side_effect=AssertionError("Changed PDF cannot execute"))
     result = runner.run(request)
     assert result["state"] == "ERROR"
@@ -239,7 +203,7 @@ def test_pdf_changed_after_planning_cannot_claim_prepared(tmp_path, monkeypatch)
 
 
 @pytest.mark.parametrize("change_during,expected_phase", [
-    ("preflight", "prepare_environment"), ("execution", "verify_protocol"),
+    ("preflight", "prepare_environment"), ("execution", "finish_execution"),
 ])
 def test_pdf_identity_rechecked_after_native_preparation_and_execution(
         tmp_path, monkeypatch, change_during, expected_phase):
@@ -252,11 +216,17 @@ def test_pdf_identity_rechecked_after_native_preparation_and_execution(
         if stage == "preflight":
             service.write_json(Path(workspace) / CAPTURE_DIR / "preflight.json",
                                {"native_probe_pass": True, "device": "cpu"})
+        else:
+            config = read_json(Path(workspace) / CAPTURE_DIR / "config.json")
+            service.write_json(Path(workspace) / CAPTURE_DIR / "author_train.json", {
+                "spec_sha256": config["spec_sha256"], "step": config["steps"][0],
+                "natural_return": True, "optimizer_steps": 40, "numeric_compatibility": []})
         if stage == change_during:
             with fixture["pdf"].open("ab") as stream:
                 stream.write(b"\n% changed during observed process phase\n")
         # A claimed completed boundary cannot bypass the host's PDF check.
-        return {"success": True, "steps": [{"id": "train", "executed": True}], "final": {}}
+        return {"success": True, "steps": [{"id": "train", "executed": True,
+                                             "success": True, "exit_code": 0}], "final": {}}
 
     monkeypatch.setattr(runner.runner, "run", completed_runtime)
     result = runner.run(request)
@@ -268,27 +238,17 @@ def test_pdf_identity_rechecked_after_native_preparation_and_execution(
 
 
 @pytest.mark.parametrize("persistence_failure", [False, True])
-def test_requested_sources_survive_planning_rejection_without_hiding_reason(
-        tmp_path, monkeypatch, persistence_failure):
-    from src import discovered_repository_plan as planner
-    review = accepted_review()
-    review["accepted"] = False
-    reason = "The paper row is a different experiment; original semantic rejection."
-    review["checks"]["same_experiment"].update(passed=False, reason=reason)
-    _, runner, request, llm = setup_service(tmp_path, monkeypatch, review=review)
-    llm.prefixes = [{"request_files": ["author_model.py"]}]
-    build_packet = planner.build_evidence_packet
-
-    def omit_model_initially(*args, **kwargs):
-        packet = build_packet(*args, **kwargs)
-        del packet["repository"]["files"]["author_model.py"]
-        return packet
-
-    monkeypatch.setattr(planner, "build_evidence_packet", omit_model_initially)
+def test_requested_sources_survive_planning_rejection_without_hiding_reason(tmp_path, monkeypatch, persistence_failure):
+    from src import author_execution_plan as planner
+    _, runner, request, _ = setup_service(tmp_path, monkeypatch)
+    reason = "Original entrypoint is not runnable"
+    def reject(llm, packet, workspace):
+        packet["requested_source_record"] = {"path": "author_model.py"}
+        raise ValueError(reason)
+    monkeypatch.setattr(planner, "propose_author_execution_plan", reject)
     if persistence_failure:
         persist = service.write_json
         writes = 0
-
         def fail_final_packet(path, value):
             nonlocal writes
             if Path(path).name == "source_packet.json":
@@ -296,34 +256,27 @@ def test_requested_sources_survive_planning_rejection_without_hiding_reason(
                 if writes == 2:
                     raise OSError("fixture packet storage unavailable")
             return persist(path, value)
-
         monkeypatch.setattr(service, "write_json", fail_final_packet)
-    runner.runner.run = Mock(side_effect=AssertionError("Rejected plan cannot execute"))
+    runner.runner.run = Mock(side_effect=AssertionError("Failed plan cannot execute"))
     result = runner.run(request)
-    assert result["state"] == "ERROR"
-    assert reason in result["error"]
+    assert result["state"] == "ERROR" and reason in result["error"]
     assert result["data"]["validation"]["failure_phase"] == "plan_repository"
-    assert llm.get_call_count() == 5
-    run_dir = Path(result["data"]["run_dir"])
-    rejection = read_json(run_dir / "plan_rejection.json")
-    assert rejection["semantic_review"]["checks"]["same_experiment"]["reason"] == reason
     if persistence_failure:
         assert "storage unavailable" in result["data"]["source_packet_persistence_error"]
     else:
-        packet = read_json(run_dir / "source_packet.json")
-        assert "author_model.py" in packet["repository"]["files"]
-        assert "SignalModel" in packet["repository"]["files"]["author_model.py"]["text"]
+        packet = read_json(Path(result["data"]["run_dir"]) / "source_packet.json")
+        assert packet["requested_source_record"]["path"] == "author_model.py"
     runner.runner.run.assert_not_called()
 
 
 def test_exception_without_message_stays_error_and_cannot_report_completed(tmp_path, monkeypatch):
-    from src.agents.experiment_protocol import ExperimentProtocolAgent
+    from src import author_execution_plan
     _, runner, request, _ = setup_service(tmp_path, monkeypatch)
-    monkeypatch.setattr(ExperimentProtocolAgent, 'run', Mock(side_effect=ValueError()))
+    monkeypatch.setattr(author_execution_plan, 'propose_author_execution_plan', Mock(side_effect=ValueError()))
     runner.runner.run = Mock(side_effect=AssertionError('Rejected protocol cannot execute'))
     result = runner.run(request)
     assert result['state'] == 'ERROR' and result['error'] == 'ValueError'
-    assert result['data']['validation']['failure_phase'] == 'select_experiment'
+    assert result['data']['validation']['failure_phase'] == 'plan_repository'
     runner.runner.run.assert_not_called()
 
 
@@ -343,7 +296,7 @@ def test_report_interruption_retains_completed_native_execution_summary(
         runner.run(request, on_event=events.append)
     before = completed["data"]
     assert before["execution"]["success"] is True
-    assert before["validation"]["is_reproduced"] is True
+    assert before["validation"]["is_reproduced"] is None
     run_dir = Path(before["run_dir"])
     result = read_json(run_dir / "result.json")
     assert result["state"] == "ERROR" and result["error"] == "interrupted"
@@ -354,7 +307,7 @@ def test_report_interruption_retains_completed_native_execution_summary(
         "phase": "generate_report", "reason": "fixture interruption during report"}
     assert read_json(run_dir / "run_status.json")["status"] == "interrupted"
     phases = {event["phase_id"]: event["status"] for event in events if event.get("type") == "state"}
-    assert phases["execute_repository"] == phases["verify_protocol"] == "success"
+    assert phases["execute_repository"] == phases["finish_execution"] == "success"
     assert phases["generate_report"] == "error"
     with FileLock(str(run_dir / ".run.lock"), timeout=0):
         pass

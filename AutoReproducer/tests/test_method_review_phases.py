@@ -1,4 +1,4 @@
-"""Online review failures belong to the role that actually produced them."""
+"""Legacy method review settings cannot add blocking phases or model calls."""
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -20,7 +20,8 @@ def method_run(tmp_path, monkeypatch):
     adapter = SimpleNamespace(prepare_dataset=Mock(return_value={}), materialize=Mock(return_value={}),
         public_sources=Mock(return_value=[SOURCE]),
         steps=Mock(side_effect=lambda profile, train=True: [
-            {"id": "train" if train else "import_check", "argv": ["python", "-c", "print(1)"]}]),
+            {"id": "train" if train else "import_check", "kind": "train" if train else "check",
+             "argv": ["python", "-c", "print(1)"]}]),
         verify_environment=Mock(),
         verify=Mock(return_value={"status": "method_experiment_completed", "is_reproduced": None}))
     monkeypatch.setattr("src.method_reproduction.get_adapter", lambda profile: adapter)
@@ -29,8 +30,9 @@ def method_run(tmp_path, monkeypatch):
         return {"url": "https://example.org/repository", "path": str(workspace)}
     monkeypatch.setattr("src.repository_reproduction.export_repository", export)
     monkeypatch.setattr("src.agents.report_generator.ReportGeneratorAgent.run",
-                        lambda *args, **kwargs: {"report": "saved review report"})
-    runner = SimpleNamespace(run=Mock(return_value={"success": True, "artifacts": [], "final": {}}))
+                        lambda *args, **kwargs: {"report": "saved execution report"})
+    runner = SimpleNamespace(run=Mock(return_value={"success": True, "executed": True,
+        "artifacts": [], "final": {"success": True, "exit_code": 0, "stdout": ""}}))
     logger = Mock()
     logger.get_stats.return_value = {}
     llm = SimpleNamespace(mock_mode=False, base_url="https://example.org", model="test-model",
@@ -47,59 +49,23 @@ def method_run(tmp_path, monkeypatch):
     return run, runner
 
 
-def accepted_response(role):
-    evidence = [{"source_id": SOURCE["source_id"], "quote": SOURCE["content"]},
-                {"source_id": SOURCE["source_id"], "quote": "official model"}]
-    if role in {"builder", "verifier"}:
-        evidence.append({"source_id": "project_frozen_contract", "quote": '"seed": 2021'})
-    return {"response": json.dumps({"status": "accepted", "summary": "The supplied code supports this review.",
-            "evidence": evidence})}
-
-
-@pytest.mark.parametrize("failed_role", ROLES)
-def test_each_review_rejection_preserves_prior_success_and_blocks_unstarted_roles(method_run, monkeypatch, failed_role):
+@pytest.mark.parametrize("legacy_response", ["accepted", "insufficient_evidence", "invalid JSON"])
+def test_legacy_reviewer_responses_do_not_change_execution(method_run, monkeypatch, legacy_response):
     run, runner = method_run
-    index = ROLES.index(failed_role)
-    rejected = {"response": json.dumps({"status": "insufficient_evidence",
-                "summary": "Missing source mapping for " + failed_role, "evidence": []})}
-    request = Mock(side_effect=[accepted_response(role) for role in ROLES[:index]] + [rejected])
+    request = Mock(return_value={"response": legacy_response})
     monkeypatch.setattr("src.method_advice.request_text", request)
     result, rows = run()
-    assert result["state"] == "ERROR"
-    assert [identifier for identifier, row in rows.items() if row["status"] == "error"] == ["review_" + failed_role]
-    for role in ROLES[:index]:
-        assert rows["review_" + role]["status"] == "success"
-    for role in ROLES[index + 1:]:
-        assert rows["review_" + role]["status"] == "blocked"
-        assert "未执行" in rows["review_" + role]["reason"]
-    assert rows["execute_repository"]["status"] == "blocked"
+    assert result["state"] == "COMPLETED", result["error"]
+    assert not any(identifier.startswith("review_") for identifier in rows)
+    assert rows["execute_repository"]["status"] == "success"
     assert rows["generate_report"]["status"] == "success"
-    assert failed_role in rows["review_" + failed_role]["reason"]
-    runner.run.assert_called_once()
-    assert [step["id"] for step in runner.run.call_args.args[1]] == ["import_check"]
-    assert "deadline_monotonic" not in runner.run.call_args.args[2]
-    assert request.call_count == index + 1
-    data = result["data"]
-    assert data["analysis_status"] == "public_readiness_rejected"
-    assert data["validation"]["status"] == "analysis_failed"
-    assert data["validation"]["failure_phase"] == "review_" + failed_role
-    saved = json.loads((Path(data["run_dir"]) / "method_analysis.json").read_text(encoding="utf-8"))
-    assert saved == data["method_analysis"]
-    assert saved["failed_role"] == failed_role
-    assert [review["role"] for review in saved["reviews"]] == list(ROLES[:index])
-    assert saved["attempts"][-1]["raw_response"] == rejected["response"]
-
-
-def test_successful_reviews_are_also_saved_before_training(method_run, monkeypatch):
-    run, runner = method_run
-    monkeypatch.setattr("src.method_advice.request_text", Mock(side_effect=[accepted_response(role) for role in ROLES]))
-    result, rows = run()
-    assert result["state"] == "COMPLETED"
-    assert all(rows["review_" + role]["status"] == "success" for role in ROLES)
     assert runner.run.call_count == 2
-    assert [step["id"] for step in runner.run.call_args_list[0].args[1]] == ["import_check"]
+    assert [step["id"] for step in runner.run.call_args_list[0].args[1]] == ["prepare_dependencies"]
     assert [step["id"] for step in runner.run.call_args_list[1].args[1]] == ["train"]
+    request.assert_not_called()
     data = result["data"]
-    saved = json.loads((Path(data["run_dir"]) / "method_analysis.json").read_text(encoding="utf-8"))
-    assert saved == data["method_analysis"]
-    assert saved["status"] == "accepted" and len(saved["reviews"]) == 4
+    assert data["validation"]["status"] == "author_code_completed"
+    assert data["validation"]["is_reproduced"] is None
+    assert not (Path(data["run_dir"]) / "method_analysis.json").exists()
+    saved = json.loads((Path(data["run_dir"]) / "result.json").read_text(encoding="utf-8"))
+    assert saved["data"]["validation"] == data["validation"]

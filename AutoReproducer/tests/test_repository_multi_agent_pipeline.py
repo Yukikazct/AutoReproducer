@@ -1,10 +1,4 @@
-"""Service-level analysis gates/accounting; no HTTP, packages, or training.
-
-The service still uses its frozen commands, final-test metric parser,
-deterministic verdict, audit logger, report generator and JSON persistence.
-Public source loading and model analyses are injected at their public methods;
-their client counter advances as actual attempted calls would.
-"""
+"""Preset execution and persistence without legacy model review gates."""
 from copy import deepcopy
 import json
 from pathlib import Path
@@ -14,10 +8,10 @@ from unittest.mock import Mock
 
 import pytest
 
-from src import execution_artifacts, repository_reproduction as reproduction
+from src import repository_reproduction as reproduction
 from src import repository_validation
 from src.audit.audit_logger import AuditLogger
-from src.repository_analysis import RepositoryAnalysis, RepositoryAnalysisError, STAGES
+from src.repository_analysis import RepositoryAnalysis
 from src.repository_profiles import get_profile
 from src.repository_public_sources import RepositoryPublicSources
 
@@ -41,17 +35,6 @@ class CountedClient:
 
     def chat(self, *args, **kwargs):
         raise AssertionError("These service tests must never open an API transport")
-
-
-def accepted_analysis(packet, names, calls):
-    return {"version": 1, "status": "accepted", "source": "real_api",
-            "input_scope": "public_sources_only", "model": CountedClient.model,
-            "calls": calls, "gate": {"pass": True}, "analyses": {},
-            "sources": [{key: source[key] for key in ("source_id", "url", "locator")}
-                        for source in packet["sources"]],
-            "stages": [{"name": name, "attempted": True, "completed": True,
-                        "accepted": True, "calls": 1, "usage": {}}
-                       for name in names]}
 
 
 @pytest.fixture
@@ -78,7 +61,6 @@ def pipeline(tmp_path, monkeypatch):
 
     def public_sources(workspace, snapshot, spec, *, offline):
         assert offline is True
-        assert spec == profile
         assert workspace == snapshot["path"]
         timeline.append("public_sources")
         return deepcopy(packet)
@@ -101,14 +83,15 @@ def pipeline(tmp_path, monkeypatch):
                         "test 2785\nmse:0.389, mae:0.407\n"),
              "stderr": "LOCAL_STDERR_SENTINEL", "stdout_path": private_path + "/train.stdout.log"}
     completed = {"mode": "repository", "success": True, "executed": True,
-                 "steps": [{"id": "import_check", "success": True, "exit_code": 0}, final],
+                 "steps": [final],
                  "final": final, "artifacts": [], "llm_calls": 0,
                  "environment": {"dependencies_path": private_path + "/deps"}}
 
     def execute(workspace, steps, environment, *, use_docker, on_event):
-        assert timeline[-1] == "analysis:verifier:accepted", timeline
+        assert not timeline, "Review stages must not precede execution"
         # Commands remain the production profile, with no generated replacement.
-        assert steps == profile["steps"]
+        assert steps == [{**step, "depends_on": [], "timeout_s": None}
+                         for step in profile["steps"] if step.get("kind") != "check"]
         assert environment["requirements_txt"] == profile["environment"]["requirements_txt"]
         assert use_docker is False
         timeline.append("runner")
@@ -123,32 +106,11 @@ def pipeline(tmp_path, monkeypatch):
                                   "artifact_dir": private_path + "/artifacts",
                                   "source": private_path + "/results/pred.npy"})
     monkeypatch.setattr(reproduction, "recompute_dlinear_metrics", recompute)
-    monkeypatch.setattr(execution_artifacts, "collect_images", Mock(return_value={"artifacts": []}))
 
-    def analyze(analysis, actual_packet, actual_profile, on_stage=None):
-        assert analysis.llm is client
-        assert actual_packet == packet and actual_profile == profile
-        assert timeline == ["public_sources"]
-        for name in STAGES:
-            on_stage(name, {"status": "started"})
-            client.attempted_calls(1)
-            timeline.append(f"analysis:{name}:accepted")
-            on_stage(name, {"status": "accepted"})
-        return accepted_analysis(packet, STAGES, calls=4)
-
-    analysis_mock = Mock()
-
-    def analysis_entry(analysis, *args, **kwargs):
-        analysis_mock(*args, **kwargs)
-        return analyze(analysis, *args, **kwargs)
-
-    monkeypatch.setattr(RepositoryAnalysis, "run", analysis_entry)
-    review_mock = Mock(side_effect=AssertionError("Result summary requires explicit authorization"))
-
-    def review_entry(analysis, *args, **kwargs):
-        return review_mock(*args, **kwargs)
-
-    monkeypatch.setattr(RepositoryAnalysis, "review_result_summary", review_entry)
+    analysis_mock = Mock(side_effect=AssertionError("Deleted readiness review must not run"))
+    review_mock = Mock(side_effect=AssertionError("Deleted result review must not run"))
+    monkeypatch.setattr(RepositoryAnalysis, "run", analysis_mock)
+    monkeypatch.setattr(RepositoryAnalysis, "review_result_summary", review_mock)
     service = reproduction.RepositoryReproduction(tmp_path / "data", logger, runner=runner, llm=client)
     return SimpleNamespace(service=service, profile=profile, client=client, logger=logger,
                            runner=runner, source_mock=source_mock, analysis_mock=analysis_mock,
@@ -175,230 +137,81 @@ def assert_call_delta(pipeline, result, expected):
     assert saved["data"]["total_llm_calls"] == expected
 
 
-def test_preanalysis_gates_execution_and_authorized_result_review_shares_only_small_summary(pipeline):
-    def review(summary, packet, profile, on_stage=None):
-        assert pipeline.timeline[-1] == "runner"
-        assert summary == {"metrics": {"mse": .389, "mae": .407}, "epochs_completed": 7,
-                           "protocol_pass": True, "independent_metrics_pass": True}
-        assert packet == pipeline.packet and profile == pipeline.profile
-        rendered = json.dumps(summary)
-        for private in (pipeline.private_log, pipeline.private_path, "LOCAL_STDERR_SENTINEL",
-                        "LOCAL_DATA_CONTENTS_SENTINEL", "LOCAL_PROTOCOL_DETAILS_SENTINEL",
-                        "LOCAL_USER_NOTES_SENTINEL", "stdout", "pred.npy"):
-            assert private not in rendered
-        on_stage("result_validator", {"status": "started"})
-        pipeline.client.attempted_calls(1)
-        on_stage("result_validator", {"status": "accepted"})
-        return accepted_analysis(packet, ["result_validator"], calls=1)
+def assert_no_reviews(pipeline, result):
+    for function in (pipeline.source_mock, pipeline.analysis_mock, pipeline.review_mock,
+                     pipeline.protocol, pipeline.recompute):
+        function.assert_not_called()
+    assert_call_delta(pipeline, result, 0)
+    for name in ("repository_analysis.json", "result_analysis.json"):
+        assert not (Path(result["data"]["run_dir"]) / name).exists()
 
-    pipeline.review_mock.side_effect = review
-    result = invoke(pipeline, authorize_result_review=True)
+
+@pytest.mark.parametrize("review", [False, True])
+@pytest.mark.parametrize("result_review", [False, True])
+def test_legacy_flags_cannot_restore_reviews_or_claim_numeric_reproduction(pipeline, review, result_review):
+    result = invoke(pipeline, use_llm_review=review, authorize_result_review=result_review)
     assert result["state"] == "COMPLETED", result["error"]
-    assert result["data"]["validation"]["status"] == "reproduced"
-    assert result["data"]["analysis_status"] == "completed"
-    pipeline.source_mock.assert_called_once()
-    pipeline.analysis_mock.assert_called_once()
+    assert result["data"]["validation"]["status"] == "author_code_completed"
+    assert result["data"]["validation"]["is_reproduced"] is None
+    records = result["data"]["validation"]["metric_records"]
+    assert {record["name"]: record["value"] for record in records} == {"mse": .389, "mae": .407}
     pipeline.runner.run.assert_called_once()
-    pipeline.protocol.assert_called_once()
-    pipeline.recompute.assert_called_once()
-    pipeline.review_mock.assert_called_once()
-    assert_call_delta(pipeline, result, 5)
-    run_dir = Path(result["data"]["run_dir"])
-    assert json.loads((run_dir / "repository_analysis.json").read_text(encoding="utf-8"))["status"] == "accepted"
-    assert json.loads((run_dir / "result_analysis.json").read_text(encoding="utf-8"))["status"] == "accepted"
+    assert_no_reviews(pipeline, result)
 
 
-def test_readiness_rejection_preserves_partial_analysis_and_never_executes(pipeline):
-    partial = {"status": "failed", "calls": 999, "analyses": {"reader": {"accepted": True}},
-               "stages": [{"name": "reader", "attempted": True, "completed": True,
-                           "accepted": True, "calls": 1},
-                          {"name": "finder", "attempted": True, "completed": True,
-                           "accepted": False, "calls": 1}],
-               "gate": {"pass": False, "reason": "Public source mapping rejected"}}
-
-    def reject(analysis, packet, profile, on_stage=None):
-        pipeline.client.attempted_calls(2)
-        on_stage("finder", {"status": "started"})
-        on_stage("finder", {"status": "rejected"})
-        raise RepositoryAnalysisError("Public source mapping rejected", partial)
-
-    pipeline.monkeypatch.setattr(RepositoryAnalysis, "run", reject)
-    result = invoke(pipeline, authorize_result_review=True)
-    assert result["state"] == "ERROR"
-    assert "Public source mapping rejected" in result["error"]
-    assert result["data"]["execution"]["not_runnable"] is True
-    assert result["data"]["execution"]["executed"] is False
-    assert result["data"]["validation"]["status"] == "analysis_failed"
-    assert result["data"]["repository_analysis"] == partial
-    pipeline.runner.run.assert_not_called()
-    pipeline.protocol.assert_not_called()
-    pipeline.recompute.assert_not_called()
-    pipeline.review_mock.assert_not_called()
-    assert_call_delta(pipeline, result, 2)  # Claimed stage metadata is not a counter.
-    run_dir = Path(result["data"]["run_dir"])
-    assert json.loads((run_dir / "repository_analysis.json").read_text(encoding="utf-8")) == partial
-    assert (run_dir / "report.md").is_file()
-
-
-@pytest.mark.parametrize("attempted_result_calls", [0, 1])
-def test_failed_result_explanation_preserves_deterministic_reproduction_and_counts_only_attempts(
-        pipeline, attempted_result_calls):
-    partial = {"status": "failed", "calls": 999, "analyses": {}, "stages": [],
-               "gate": {"pass": False, "reason": "Result explanation rejected"}}
-
-    def reject_summary(summary, packet, profile, on_stage=None):
-        pipeline.client.attempted_calls(attempted_result_calls)
-        raise RepositoryAnalysisError("Result explanation rejected", partial)
-
-    pipeline.review_mock.side_effect = reject_summary
-    result = invoke(pipeline, authorize_result_review=True)
-    assert result["state"] == "COMPLETED", result["error"]
-    assert result["error"] is None
-    assert result["data"]["execution"]["executed"] is True
-    verdict = result["data"]["validation"]
-    assert verdict["status"] == "reproduced" and verdict["is_reproduced"] is True
-    assert verdict["validation"]["verdict_source"] == "deterministic"
-    assert result["data"]["analysis_status"] == "result_analysis_failed"
-    assert result["data"]["analysis_error"] == "Result explanation rejected"
-    assert result["data"]["result_analysis"] == partial
-    pipeline.runner.run.assert_called_once()
-    pipeline.review_mock.assert_called_once()
-    assert_call_delta(pipeline, result, 4 + attempted_result_calls)
-    run_dir = Path(result["data"]["run_dir"])
-    assert json.loads((run_dir / "result_analysis.json").read_text(encoding="utf-8")) == partial
-    assert json.loads((run_dir / "result.json").read_text(encoding="utf-8"))["data"]["validation"]["status"] == "reproduced"
-
-
-def test_without_result_authorization_only_four_public_readiness_calls_are_made(pipeline):
-    result = invoke(pipeline, authorize_result_review=False)
-    assert result["state"] == "COMPLETED", result["error"]
-    assert result["data"]["validation"]["status"] == "reproduced"
-    assert result["data"]["analysis_status"] == "public_readiness_accepted"
-    assert "result_analysis" not in result["data"]
-    pipeline.runner.run.assert_called_once()
-    pipeline.review_mock.assert_not_called()
-    assert_call_delta(pipeline, result, 4)
-    assert not (Path(result["data"]["run_dir"]) / "result_analysis.json").exists()
-
-
-def test_real_phase_order_separates_readiness_from_local_verification(pipeline):
+def test_execution_proceeds_to_report_with_no_review_phases(pipeline):
     events = []
-    result = invoke(pipeline, authorize_result_review=False, events=events)
+    result = invoke(pipeline, events=events, authorize_result_review=True)
     assert result["state"] == "COMPLETED", result["error"]
     plan = next(event["stages"] for event in events if event["type"] == "pipeline_plan")
-    assert [stage["id"] for stage in plan] == [
-        "select_experiment", "prepare_repository", "prepare_environment_plan", "load_public_sources",
-        "analyze_reader", "analyze_finder", "analyze_builder", "review_readiness", "prepare_dependencies", "execute_repository",
-        "verify_protocol", "validate_metrics", "review_result_summary", "generate_report"]
-    assert next(stage for stage in plan if stage["id"] == "review_result_summary")["status"] == "skipped"
-    states = [event for event in events if event["type"] == "state" and event.get("phase_id")]
-    transitions = [(event["phase_id"], event["status"]) for event in states]
-    assert transitions.index(("review_readiness", "success")) < transitions.index(("execute_repository", "running"))
-    assert transitions.index(("execute_repository", "success")) < transitions.index(("verify_protocol", "running"))
-    assert transitions.index(("verify_protocol", "success")) < transitions.index(("validate_metrics", "running"))
-    assert next(event for event in states if event["phase_id"] == "verify_protocol" and event["status"] == "success")["outcome"] == "pass"
-    assert next(event for event in states if event["phase_id"] == "validate_metrics" and event["status"] == "success")["outcome"] == "reproduced"
-    assert_call_delta(pipeline, result, 4)
+    assert [stage["id"] for stage in plan] == ["select_experiment", "prepare_repository",
+        "prepare_environment_plan", "prepare_dependencies", "execute_repository", "generate_report"]
+    states = [(event["phase_id"], event["status"]) for event in events
+              if event.get("type") == "state" and event.get("phase_id")]
+    assert states.index(("execute_repository", "success")) < states.index(("generate_report", "running"))
+    assert_no_reviews(pipeline, result)
 
 
-def test_bounded_analysis_correction_keeps_phase_id_and_attempt_metadata(pipeline):
-    def correct(analysis, packet, profile, on_stage):
-        on_stage("reader", {"status": "started", "attempt": 1, "calls": 0})
-        pipeline.client.attempted_calls(1)
-        on_stage("reader", {"status": "failed", "attempt": 1, "calls": 1, "reason": "Citation mismatch"})
-        on_stage("reader", {"status": "started", "attempt": 2, "calls": 0})
-        pipeline.client.attempted_calls(1)
-        on_stage("reader", {"status": "accepted", "attempt": 2, "calls": 1})
-        for name in STAGES[1:]:
-            on_stage(name, {"status": "started", "attempt": 1, "calls": 0})
-            pipeline.client.attempted_calls(1)
-            pipeline.timeline.append(f"analysis:{name}:accepted")
-            on_stage(name, {"status": "accepted", "attempt": 1, "calls": 1})
-        return accepted_analysis(packet, STAGES, calls=5)
-
-    pipeline.monkeypatch.setattr(RepositoryAnalysis, "run", correct)
+@pytest.mark.parametrize("failure", ["nonzero", "cancelled", "timed_out", "unfinished"])
+def test_actual_execution_failures_still_persist_error_and_report(pipeline, failure):
+    final = {"success": True, "exit_code": 0, "stdout": "", "stderr": ""}
+    if failure == "nonzero":
+        final.update(exit_code=1, success=False, stderr="Actual author error")
+    elif failure == "unfinished":
+        final["exit_code"] = None
+    else:
+        final[failure] = True
+    pipeline.runner.run.side_effect = None
+    pipeline.runner.run.return_value = {"executed": True, "success": final["success"],
+                                       "final": final, "steps": [final], "artifacts": []}
     events = []
-    result = invoke(pipeline, authorize_result_review=False, events=events)
-    assert result["state"] == "COMPLETED", result["error"]
-    reader = [event for event in events if event.get("phase_id") == "analyze_reader"]
-    assert [(event["attempt"], event["status"]) for event in reader] == [
-        (1, "running"), (1, "error"), (2, "running"), (2, "success")]
-    assert reader[1]["reason"] == "Citation mismatch" and reader[-1]["calls"] == 1
-    assert_call_delta(pipeline, result, 5)
-
-
-def test_final_verification_exception_marks_its_own_phase_and_validate_state(pipeline):
-    pipeline.protocol.side_effect = RuntimeError("local protocol checker failed")
-    events = []
-    result = invoke(pipeline, authorize_result_review=False, events=events)
+    result = invoke(pipeline, events=events, authorize_result_review=True)
     assert result["state"] == "ERROR"
-    assert result["error"].startswith("VALIDATE 阶段失败:")
-    verification = [event for event in events if event.get("phase_id") == "verify_protocol"]
-    assert verification[0]["status"] == "running"
-    assert verification[-1]["status"] == "error"
-    assert verification[-1]["reason"] == "local protocol checker failed"
-    assert any(event.get("phase_id") == "execute_repository" and event["status"] == "success" for event in events)
-    pipeline.recompute.assert_not_called()
+    assert result["error"].startswith("EXECUTE_CODE 阶段失败:")
+    assert result["data"]["validation"]["status"] == "execution_failed"
+    assert any(event.get("phase_id") == "execute_repository" and event["status"] == "error" for event in events)
     assert (Path(result["data"]["run_dir"]) / "report.md").is_file()
+    assert_no_reviews(pipeline, result)
 
 
-def test_completed_validation_keeps_inconclusive_outcome_distinct_from_success(pipeline):
-    pipeline.protocol.return_value = {"pass": False, "reason": "Full protocol was not verified"}
+@pytest.mark.parametrize("review", [False, True])
+def test_prepare_only_does_not_run_author_commands_or_reviewers(pipeline, review):
     events = []
-    result = invoke(pipeline, authorize_result_review=False, events=events)
-    assert result["data"]["validation"]["status"] == "inconclusive"
-    assert result["data"]["validation"]["is_reproduced"] is None
-    local_check = [event for event in events if event.get("phase_id") == "verify_protocol"][-1]
-    metric_validation = [event for event in events if event.get("phase_id") == "validate_metrics"][-1]
-    assert local_check["status"] == "error" and local_check["outcome"] == "fail"
-    assert metric_validation["status"] == "success" and metric_validation["outcome"] == "inconclusive"
-
-
-def test_result_explanation_failure_does_not_overwrite_metric_phase(pipeline):
-    partial = {"status": "failed", "stages": [], "calls": 0,
-               "gate": {"pass": False, "reason": "summary rejected"}}
-    pipeline.review_mock.side_effect = RepositoryAnalysisError("summary rejected", partial)
-    events = []
-    result = invoke(pipeline, authorize_result_review=True, events=events)
-    assert result["state"] == "COMPLETED"
-    assert result["data"]["validation"]["status"] == "reproduced"
-    metric_phase = [event for event in events if event.get("phase_id") == "validate_metrics"][-1]
-    review_phase = [event for event in events if event.get("phase_id") == "review_result_summary"][-1]
-    assert metric_phase["status"] == "success" and metric_phase["outcome"] == "reproduced"
-    assert review_phase["status"] == "error" and review_phase["reason"] == "summary rejected"
-
-
-@pytest.mark.parametrize("analysis_enabled", [False, True])
-def test_prepare_only_plan_skips_every_unexecuted_review_and_experiment(pipeline, analysis_enabled):
-    events = []
-    result = invoke(pipeline, authorize_result_review=True, events=events,
-                    prepare_only=True, use_llm_review=analysis_enabled)
+    result = invoke(pipeline, events=events, prepare_only=True,
+                    authorize_result_review=True, use_llm_review=review)
     assert result["data"]["validation"]["status"] == "prepared"
     plan = next(event["stages"] for event in events if event["type"] == "pipeline_plan")
-    enabled = [stage["id"] for stage in plan if stage["status"] != "skipped"]
-    assert enabled == ["select_experiment", "prepare_repository", "prepare_environment_plan", "generate_report"]
+    assert [stage["id"] for stage in plan if stage["status"] != "skipped"] == [
+        "select_experiment", "prepare_repository", "prepare_environment_plan", "generate_report"]
     pipeline.runner.run.assert_not_called()
-    pipeline.analysis_mock.assert_not_called()
-    pipeline.review_mock.assert_not_called()
-    assert_call_delta(pipeline, result, 0)
+    assert_no_reviews(pipeline, result)
 
 
-def test_no_analysis_plan_and_reserved_optimization_do_not_execute_model_or_optimizer(pipeline):
-    pipeline.runner.run.side_effect = None
-    pipeline.runner.run.return_value = {"success": False, "executed": False,
-                                       "final": {"stderr": "Execution unavailable", "exit_code": -2}}
-    events = []
-    result = invoke(pipeline, authorize_result_review=True, events=events,
-                    use_llm_review=False, enable_optimization=True)
-    plan = next(event["stages"] for event in events if event["type"] == "pipeline_plan")
-    enabled = [stage["id"] for stage in plan if stage["status"] != "skipped"]
-    assert enabled == ["select_experiment", "prepare_repository", "prepare_environment_plan", "prepare_dependencies", "execute_repository",
-                       "verify_protocol", "validate_metrics", "generate_report"]
+def test_reserved_optimization_never_adds_execution_or_model_calls(pipeline):
+    result = invoke(pipeline, authorize_result_review=True, enable_optimization=True)
+    assert result["state"] == "COMPLETED", result["error"]
     optimization = result["data"]["optimization"]
     assert optimization["requested"] is True and optimization["available"] is False
     assert optimization["optimized"] is False and optimization["status"] == "not_implemented"
-    assert any(event.get("phase_id") == "verify_protocol" and event["status"] == "blocked" for event in events)
-    assert all(stage["agent"] != "Optimizer" for stage in plan)
-    pipeline.analysis_mock.assert_not_called()
-    pipeline.review_mock.assert_not_called()
-    assert_call_delta(pipeline, result, 0)
+    pipeline.runner.run.assert_called_once()
+    assert_no_reviews(pipeline, result)

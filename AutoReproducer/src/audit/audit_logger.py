@@ -35,6 +35,7 @@ class AuditLogger:
         self.ledger_dir.mkdir(parents=True, exist_ok=True)
         self.session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.entries: List[Dict[str, Any]] = []
+        self.on_entry = None
         self.llm_calls = 0
         self._start_time = time.time()
         # ---- P1-⑫ 用量计量 ----
@@ -61,6 +62,13 @@ class AuditLogger:
         }
         self.entries.append(entry)
         self._flush(entry)
+        # Observers receive entries while the phase is still running. A broken
+        # display must not turn a successful experiment into an execution error.
+        if self.on_entry is not None:
+            try:
+                self.on_entry(entry)
+            except Exception:
+                pass
         return entry
 
     def log_experiment(self, phase: str, decision: str,

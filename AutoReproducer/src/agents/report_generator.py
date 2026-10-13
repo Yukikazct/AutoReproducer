@@ -11,6 +11,7 @@ from src.metric_keys import norm_metric_key
 from src.runtime_metrics import metric_unit
 from src.storage_usage import format_bytes
 from src.execution_artifacts import default_report_path, markdown_image_target
+from src.report_revisions import REPORT_FORMAT_VERSION, REPORT_FORMAT_MARKER
 
 
 def _fmt(value, spec: str = ".2f", default: float = 0.0) -> str:
@@ -472,6 +473,8 @@ def _result_analysis_lines(data):
 class ReportGeneratorAgent(BaseAgent):
     """生成 Markdown 格式的复现 + 优化报告。"""
 
+    format_version = REPORT_FORMAT_VERSION
+
     def __init__(self, logger=None):
         super().__init__("ReportGenerator", logger)
 
@@ -484,10 +487,13 @@ class ReportGeneratorAgent(BaseAgent):
         self.log("generate_report", "SUCCESS",
                  f"报告生成完成 ({len(report)} 字符)",
                  {"report_length": len(report)})
-        return {"report": report, "report_length": len(report)}
+        return {"report": report, "report_length": len(report),
+                "report_format_version": REPORT_FORMAT_VERSION}
 
-    def _build_report(self, data: dict, *, report_path=None) -> str:
+    @staticmethod
+    def _build_report(data: dict, *, report_path=None, artifact_resolver=None) -> str:
         report_path = report_path or data.get("report_path") or default_report_path()
+        artifact_resolver = artifact_resolver or markdown_image_target
         paper_info = data.get("paper_info", {}) or {}
         resources = data.get("resources", {}) or {}
         execution = data.get("execution", {}) or {}
@@ -501,6 +507,7 @@ class ReportGeneratorAgent(BaseAgent):
         is_rezero = (data.get("experiment_spec") or {}).get("adapter_id") == "rezero"
 
         lines = ["# 论文复现与优化报告",
+                 REPORT_FORMAT_MARKER,
                  "",
                  f"**生成时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
                  f"**工具**: AutoReproducer v0.2.0",
@@ -765,7 +772,7 @@ class ReportGeneratorAgent(BaseAgent):
             for index, artifact in enumerate(artifacts, 1):
                 name = _txt(artifact.get("name"), f"图 {index}")
                 name = _markdown_text(name)
-                url = markdown_image_target(artifact, report_path)
+                url = artifact_resolver(artifact, report_path)
                 if url:
                     # Use a fixed alt label so sandbox filenames cannot inject Markdown.
                     lines += [f"**图 {index}**：{name}", "",
@@ -802,6 +809,8 @@ class ReportGeneratorAgent(BaseAgent):
             state_text = "⚠️ 无法核验（论文未声明参考指标数值）"
         elif validation.get("status") == "execution_failed":
             state_text = "❌ 执行失败（不能判定论文数值复现）"
+        elif validation.get("status") == "mock_demo":
+            state_text = "模拟流程已完成（未执行真实论文实验）"
         elif validation.get("status") == "execution_incomplete":
             state_text = "⚠️ 无法核验（执行证据不足）"
         elif validation.get("status") == "invalid_metrics":

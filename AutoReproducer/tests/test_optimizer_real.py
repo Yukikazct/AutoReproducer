@@ -169,7 +169,8 @@ def test_full_pipeline_with_workspace_preserves_reproduction_and_skips_optimizat
     data = result["data"]
 
     assert result["state"] == "COMPLETED"
-    assert data["validation"]["is_reproduced"] is True
+    assert data["validation"]["is_reproduced"] is None
+    assert data["validation"]["result_level"] == "mock_demo"
     opt = data.get("optimization", {})
     assert opt.get("optimized") is False
     assert opt["status"] == "disabled" and opt["available"] is False

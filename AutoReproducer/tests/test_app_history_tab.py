@@ -111,6 +111,37 @@ def test_history_tab_has_per_session_checkbox(at):
     assert "confirm_batch_del" in keys
 
 
+def test_history_report_upgrade_and_open_use_saved_values(at, tmp_path, monkeypatch):
+    from src.agents.report_generator import ReportGeneratorAgent
+    from src.llm.llm_client import LLMClient
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("History report updates must stay local")
+
+    monkeypatch.setattr(ReportGeneratorAgent, "run", forbidden)
+    monkeypatch.setattr(LLMClient, "__init__", forbidden)
+    path = tmp_path / "reports" / f"ResNet 复现_{SID_DONE}.md"
+    old_report = path.read_bytes()
+    saved = {"state": "COMPLETED", "report_path": str(path), "data": {
+        "report": path.read_text(encoding="utf-8"), "paper_info": {"title": "Saved experiment"},
+        "execution": {"final": {"success": True, "exit_code": 0}},
+        "validation": {"status": "author_code_completed", "is_reproduced": None,
+                       "reviews_removed": True, "metric_records": [{"name": "accuracy", "value": 0.845}]}}}
+    archive = path.with_suffix(".result.json")
+    archive.write_text(json.dumps(saved), encoding="utf-8")
+    old_archive = archive.read_bytes()
+    at.run()
+    at.button(key=f"upgrade_{SID_DONE}").click().run()
+    assert not at.exception
+    assert not any(button.key == f"upgrade_{SID_DONE}" for button in at.button)
+    at.button(key=f"view_report_{SID_DONE}").click().run()
+    assert not at.exception
+    assert "| accuracy | 0.845 |" in "\n".join(item.value for item in at.markdown)
+    assert at.session_state["result"]["data"]["validation"] == saved["data"]["validation"]
+    assert path.read_bytes() == old_report
+    assert archive.read_bytes() == old_archive
+
+
 def test_filter_narrows_visible_list(at):
     """状态筛选后「可见」条数随之变化，并提示可见列表里有 RUNNING。"""
     at.selectbox(key="hist_state_filter").set_value("RUNNING")

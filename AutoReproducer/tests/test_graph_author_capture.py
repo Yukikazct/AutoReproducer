@@ -157,7 +157,8 @@ class SignalModel(torch.nn.Module):
 
 @pytest.mark.parametrize('device', ['cpu', 'cuda'])
 def test_pyg_native_repetitions_dictionary_validation_and_fresh_reload(tmp_path, device):
-    fixture, plan, spec_hash, execution = run_series(tmp_path, device, use_pyg_function_loop)
+    fixture, plan, spec_hash, execution = run_series(tmp_path, device, use_pyg_function_loop,
+                                                  required_modules=('torch_geometric',))
     result = verify_capture(plan, fixture['workspace'], execution, spec_hash)
     assert result['is_reproduced'] and result['independent_metrics_pass']
     assert [row['accuracy'] for row in result['independent_metrics']['runs']] == [1., 1., 1.]
@@ -182,7 +183,8 @@ def test_single_native_entrypoint_exports_a_complete_pyg_argument(tmp_path):
             fixture['snapshot']['files'][name] = hashlib.sha256(path.read_bytes()).hexdigest()
             next(c for c in fixture['proposal']['citations'] if c.get('path') == name)['quote'] = text
         fixture['proposal']['capture']['forward_args'] = ['data']
-    fixture, plan, spec_hash, _, execution = run_fixture(tmp_path, mutate=use_record)
+    fixture, plan, spec_hash, _, execution = run_fixture(tmp_path, mutate=use_record,
+                                                       required_modules=('torch_geometric',))
     result = verify_capture(plan, fixture['workspace'], execution, spec_hash)
     assert result['is_reproduced'] and result['independent_metrics']['predictions_match']
 

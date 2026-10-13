@@ -7,7 +7,8 @@ def completed_execution(execution, *, mock_mode=False):
             or final.get('exit_code') not in (None, 0) or execution.get('not_runnable')):
         raise RuntimeError(execution.get('reason') or final.get('stderr') or '代码执行失败。')
     if mock_mode:
-        return {'status': 'mock_demo', 'is_reproduced': None,
+        return {'status': 'mock_demo', 'result_level': 'mock_demo', 'is_reproduced': None,
+                'reviews_removed': True, 'paper_metrics_verified': False,
                 'reason': '模拟流程结束；未执行真实作者代码。'}
     steps = execution.get('steps') or [final]
     if (execution.get('executed', final.get('exit_code') is not None) is not True

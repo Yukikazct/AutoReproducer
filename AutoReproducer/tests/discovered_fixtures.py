@@ -173,6 +173,10 @@ class PlannedLLM:
 
     def chat(self, prompt, **kwargs):
         self.calls.append((prompt, kwargs))
+        if kwargs["task"] == "author_execution_plan":
+            proposal = deepcopy(self.proposal)
+            proposal.update(scope="author_code_execution", device=proposal.get("capture", {}).get("device", "cpu"))
+            return json.dumps(self.prefixes.pop(0) if self.prefixes else proposal)
         if kwargs["task"] == "repository_identity_review":
             view = json.loads(prompt.split("Fetched evidence:\n", 1)[1])
             return json.dumps(identity_review(view))

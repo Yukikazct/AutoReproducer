@@ -29,7 +29,8 @@ def main(argv=None):
     parser.add_argument("--prepare-environment", action="store_true", help="方法预设：准备代码、数据、依赖和设备，不训练")
     parser.add_argument("--optimization", choices=["off", "suggest", "validate"], default="off")
     parser.add_argument("--max-candidates", type=int, choices=[1, 2, 3], default=3)
-    parser.add_argument("--budget-seconds", type=int, default=7200, help="优化训练与评估总预算，最多7200秒")
+    parser.add_argument("--budget-seconds", type=int, default=7200,
+                        help="旧版参数，仅保留调用兼容；不限制作者代码运行时间")
     parser.add_argument("--offline", action="store_true", help="准备时只复用经版本/哈希校验的本地代码与数据；缺失即失败")
     parser.add_argument("--llm-review", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--analysis-mode", choices=["multi_agent", "public_protocol"], default="multi_agent", help=argparse.SUPPRESS)
@@ -37,8 +38,6 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.prepare_only and args.prepare_environment:
         parser.error("--prepare-only and --prepare-environment are mutually exclusive")
-    if not 1 <= args.budget_seconds <= 7200:
-        parser.error("--budget-seconds must be between 1 and 7200")
     if args.prepare_environment and args.profile.startswith("dlinear"):
         parser.error("--prepare-environment is available for method experiment profiles")
 
@@ -60,7 +59,6 @@ def main(argv=None):
         token = os.environ.get("LLM_API_KEY") or (getpass.getpass("API Key (hidden): ") if sys.stdin.isatty() else "")
 
     from src.runtime_preparation import runtime_requirement, prepare_runtime, run_owned_process, safe_runtime_diagnostic
-    from src.runtime_preparation import PRESET_WORKER_PREPARATION_ALLOWANCE_S
     reason = runtime_requirement()
     if reason:
         print(reason, flush=True)
@@ -74,7 +72,7 @@ def main(argv=None):
         completed = run_owned_process(
             [prepared.executable, "-X", "utf8", str(Path(__file__).resolve()), *forwarded],
             cwd=Path(__file__).resolve().parents[1],
-            timeout_s=max(7200, args.budget_seconds) + PRESET_WORKER_PREPARATION_ALLOWANCE_S,
+            timeout_s=None,
             env=worker_env,
         )
         def private_output(value):
