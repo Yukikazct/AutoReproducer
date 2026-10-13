@@ -18,28 +18,13 @@ import zipfile
 from urllib.parse import urlsplit
 
 from src.safety.paths import workspace_path
+from src.dependency_versions import (
+    CPU_COMPATIBILITY_PINS, CUDA_COMPATIBILITY_PINS, compatibility_pins,
+)
 
 
 CPU_INDEX_URL = "https://download.pytorch.org/whl/cpu"
-CPU_COMPATIBILITY_PINS = {
-    "torch": "2.5.1+cpu", "torchvision": "0.20.1+cpu", "numpy": "1.26.4",
-    "scipy": "1.14.1", "pandas": "2.2.3", "scikit-learn": "1.5.2",
-    "matplotlib": "3.9.2", "pillow": "10.4.0", "networkx": "2.8.8",
-    "tqdm": "4.67.1", "hyperopt": "0.2.7", "seaborn": "0.13.2", "tensorboardx": "2.6.2.2",
-    "googledrivedownloader": "0.4", "requests": "2.32.3",
-    "torch-geometric": "2.6.1", "pyyaml": "6.0.2", "absl-py": "2.1.0", "tensorboard": "2.18.0",
-    "torch-scatter": "2.1.2+pt25cpu",
-    "torch-sparse": "0.6.18+pt25cpu", "dgl": "1.1.2",
-    "aiohttp": "3.10.10", "fsspec": "2024.10.0", "jinja2": "3.1.6",
-    "psutil": "6.1.0", "pyparsing": "3.2.0",
-    "optuna": "3.6.1", "deeprobust": "0.2.11", "ogb": "1.3.6",
-}
 CUDA_INDEX_URL = "https://download.pytorch.org/whl/cu121"
-CUDA_COMPATIBILITY_PINS = {**{name: version for name, version in CPU_COMPATIBILITY_PINS.items() if name != 'dgl'},
-                           "torch": "2.5.1+cu121",
-                           "torchvision": "0.20.1+cu121",
-                           "torch-scatter": "2.1.2+pt25cu121",
-                           "torch-sparse": "0.6.18+pt25cu121"}
 GRAPH_WHEEL_LINKS = {
     "cpu": "https://data.pyg.org/whl/torch-2.5.0+cpu.html",
     "cuda": "https://data.pyg.org/whl/torch-2.5.0+cu121.html",
@@ -792,7 +777,10 @@ def _requirements(value, citations, packet, device="cpu", step=None, *, datasets
     if not isinstance(compatibility, list) or (not compatibility and step is None):
         raise PlanEvidenceError("Frozen compatibility dependency pins are required")
     names = set()
-    pins = CUDA_COMPATIBILITY_PINS if device == "cuda" else CPU_COMPATIBILITY_PINS
+    try:
+        pins = compatibility_pins(device)
+    except ValueError as exc:
+        raise PlanEvidenceError(str(exc), category="runtime_unsupported") from exc
     missing_imports = []
     for requirement in compatibility:
         if not isinstance(requirement, str) or not re.fullmatch(r"[\w-]+==[\w.+-]+", requirement):
@@ -1338,6 +1326,10 @@ Unknown or unsupported details require {"unsupported":"concrete reason"}.
 
 
 def _prompt(packet, feedback):
+    try:
+        cuda_pins = _canonical(compatibility_pins("cuda"))
+    except ValueError as exc:
+        cuda_pins = str(exc)
     return """Produce one source-grounded plan BEFORE execution. Every citation
 should be {id,evidence_id}, selecting an existing evidence_excerpts ID. The
 program resolves the exact original text, source, page/path and immutable hash;
@@ -1406,9 +1398,9 @@ Do not promise a fixed optimizer step count if the author actually early-stops.
 If the paper reports a mean over N runs, a single native run cannot verify that
 mean. Require an author entrypoint that implements all N runs or return unsupported.
 Available reviewed pins:
-""" + _canonical(CPU_COMPATIBILITY_PINS) + "\n\nCapture schema:\n" + _capture_schema() + (
+""" + _canonical(compatibility_pins("cpu")) + "\n\nCapture schema:\n" + _capture_schema() + (
         "\n\nPrior validation feedback (repair citations/schema only before training):\n" + feedback if feedback else ""
-    ) + "\nReviewed CUDA pins (only source-required CUDA execution):\n" + _canonical(CUDA_COMPATIBILITY_PINS) + (
+    ) + "\nReviewed CUDA pins (only source-required CUDA execution):\n" + cuda_pins + (
         "\nA native entrypoint containing all repetitions may use torch_classification_series. "
         "Capture a unique author function's final locals at its natural return; preserve all native "
         "splits, runs and early-stop rules. When that function only retains a best-validation test scalar, "

@@ -1,5 +1,7 @@
 """Fault-inject cached package damage; probes are real and pip is offline."""
 import json
+import importlib.metadata
+import shutil
 import subprocess
 from pathlib import Path
 from unittest.mock import Mock
@@ -189,6 +191,25 @@ def test_global_package_cannot_mask_missing_cached_module(monkeypatch, tmp_path)
     (metadata / "METADATA").write_text("Name: packaging\nVersion: 99\n", encoding="utf-8")
     instance = executor()
     assert "outside the managed cache" in instance._check_local_dependency_health(directory, "packaging", "cached")
+
+
+def test_health_probe_imports_packaging_from_the_managed_environment(monkeypatch, tmp_path):
+    import packaging
+
+    version = importlib.metadata.version('packaging')
+    requirements = f'packaging=={version}'
+    directory = ce.DEPS_CACHE_ROOT / ce.reqs_digest(requirements)
+    directory.mkdir(parents=True)
+    shutil.copytree(Path(packaging.__file__).parent, directory / 'packaging')
+    metadata = directory / f'packaging-{version}.dist-info'
+    metadata.mkdir()
+    (metadata / 'METADATA').write_text(f'Name: packaging\nVersion: {version}\n', encoding='utf-8')
+    (directory / '.ready').write_text('ok\n', encoding='utf-8')
+    calls = fake_installer(monkeypatch, lambda *args: pytest.fail('healthy packaging must not invoke pip'))
+    instance = executor()
+    instance.env_config['requirements_txt'] = requirements
+    assert prepare(instance, tmp_path) is None
+    assert calls == [] and instance._deps_dir == str(directory)
 
 
 def test_health_probe_timeout_is_bounded_and_not_ready(monkeypatch, tmp_path):

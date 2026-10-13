@@ -1,6 +1,7 @@
 """Prepare a compatible, owned Python runtime without modifying the host venv.
 
-This module intentionally uses only the standard library. A Store-backed host
+Bootstrap imports use only the standard library; dependency probes load the
+declared application packages. A Store-backed host
 may coordinate recovery, but every executable used for real work is checked
 before it is started and is assigned to a Windows job before its first thread
 is resumed. Missing app dependencies are installed only in our managed venv.
@@ -33,11 +34,16 @@ from src.safety.paths import workspace_path
 
 
 SUPPORTED_VERSIONS = {(3, 11), (3, 12)}
-APP_REQUIREMENTS = (
-    "streamlit>=1.37.0", "streamlit-autorefresh>=1.0.0",
-    "pdfplumber>=0.10.0", "PyPDF2>=3.0.0", "filelock>=3.15.4,<4",
+# The ordinary installer and automatic host recovery share one production
+# manifest. Resolve it from this source checkout, independently of the cwd.
+APP_REQUIREMENTS = tuple(
+    line.strip() for line in (Path(__file__).resolve().parents[1] / "requirements.txt").read_text("utf-8").splitlines()
+    if line.strip() and not line.lstrip().startswith("#")
 )
-APP_IMPORTS = ("streamlit", "streamlit_autorefresh", "pdfplumber", "PyPDF2", "filelock")
+APP_IMPORTS = tuple(
+    {"Pillow": "PIL"}.get(name, name.replace("-", "_"))
+    for name in (re.match(r"[A-Za-z0-9_.-]+", requirement).group() for requirement in APP_REQUIREMENTS)
+)
 PYTHON_RELEASE = "3.12.10"
 PUBLIC_INDEXES = ("https://pypi.tuna.tsinghua.edu.cn/simple", "https://pypi.org/simple")
 # Queueing, pinned wheel downloads/probes and public analysis occur before the
@@ -92,20 +98,31 @@ def runtime_requirement():
         validate_windows_venv()
     except ValueError:
         return "当前 Python 来自 Windows Store，正在自动切换到可安全管理训练进程的环境"
-    for requirement in APP_REQUIREMENTS:
-        name, minimum = requirement.split(">=", 1)
-        minimum = tuple(int(part) for part in minimum.split(",", 1)[0].split("."))
+    return _application_dependency_issue(APP_REQUIREMENTS, APP_IMPORTS)
+
+
+def _application_dependency_issue(requirements, imports):
+    """Check all declared bounds identically in the host and recovery probes."""
+    try:
+        # A missing/broken packaging install must itself trigger recovery; it
+        # must never prevent this module from loading on an unprepared host.
+        from packaging.requirements import Requirement
+    except Exception:
+        return "应用依赖缺失，正在自动修复独立运行环境"
+    for value in requirements:
         try:
-            version = tuple(int(part) for part in re.match(r"\d+(?:\.\d+)*", importlib.metadata.version(name)).group().split("."))
+            requirement = Requirement(value)
+            version = importlib.metadata.version(requirement.name)
+            compatible = requirement.specifier.contains(version)
         except Exception:
             # Malformed metadata is an unhealthy installation too. Native
             # package imports may raise ValueError/RuntimeError/SyntaxError,
             # so recovery must not depend on one exception spelling.
             return "应用依赖缺失，正在自动修复独立运行环境"
-        if version < minimum or (name == "filelock" and version >= (4,)):
+        if not compatible:
             return "应用依赖版本不兼容，正在自动修复独立运行环境"
     try:
-        for name in APP_IMPORTS:
+        for name in imports:
             importlib.import_module(name)
     except Exception:
         return "应用依赖无法加载，正在自动修复独立运行环境"
@@ -125,6 +142,9 @@ def _clean_environment(env=None):
         environment.pop(name, None)
     environment["PYTHONNOUSERSITE"] = "1"
     environment["PYTHONUTF8"] = "1"
+    # PYTHONIOENCODING overrides UTF-8 mode for redirected streams. A legacy
+    # Windows shell value must not disagree with our UTF-8 output decoder.
+    environment["PYTHONIOENCODING"] = "utf-8"
     environment["PYTHONUNBUFFERED"] = "1"
     return environment
 
@@ -255,17 +275,16 @@ def _probe(executable, *, cancel_check=None, deadline=None):
 
 
 def _healthy(executable, project_root, *, cancel_check, deadline):
-    script = ("import sys,importlib,importlib.metadata,re;sys.path.insert(0,sys.argv[1]);"
+    script = ("import sys;sys.path.insert(0,sys.argv[1]);"
               "from src.process_lifecycle import validate_windows_venv;validate_windows_venv();"
-              f"[importlib.import_module(name) for name in {APP_IMPORTS!r}];"
-              f"reqs={APP_REQUIREMENTS!r};"
-              "\nfor req in reqs:\n name,minimum=req.split('>=',1);"
-              "current=tuple(map(int,re.match(r'\\d+(?:\\.\\d+)*',importlib.metadata.version(name)).group().split('.')));"
-              "floor=tuple(map(int,minimum.split(',')[0].split('.')));"
-              "assert current>=floor and (name!='filelock' or current<(4,))\n"
+              "from src.runtime_preparation import _application_dependency_issue;"
+              f"issue=_application_dependency_issue({APP_REQUIREMENTS!r},{APP_IMPORTS!r});"
+              "assert issue is None,issue;"
               "print('AUTOREPRO_RUNTIME_READY')")
     try:
-        result = run_owned_process([str(executable), "-I", "-c", script, str(project_root)],
+        # -I ignores PYTHONUTF8; pass the flag explicitly for Chinese health
+        # diagnostics under Windows' default locale as well as UTF-8 mode.
+        result = run_owned_process([str(executable), "-I", "-X", "utf8", "-c", script, str(project_root)],
                                    timeout_s=min(30, deadline-time.monotonic()), cancel_check=cancel_check)
         return result.returncode == 0 and "AUTOREPRO_RUNTIME_READY" in result.stdout
     except (OSError, RuntimePreparationTimeout):

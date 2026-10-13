@@ -46,6 +46,7 @@ from src.agents.dependency_resolver import (
     find_missing_module, python_package_for, align_runtime_requirements, MODULE_TO_PYPI,
 )
 from src.resource_events import ResourceEventLogger
+from src.project_paths import get_deps_root
 from src.execution_artifacts import prepare_plot_runtime, collect_images, FONT_PATH
 from src.storage_usage import directory_usage, docker_image_usage, disk_usage_snapshot, unmeasured_disk_usage
 from src.dependency_cache import (
@@ -207,9 +208,7 @@ _HARDEN_INCOMPATIBLE_HINTS = (
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 # 隔离依赖安装根目录：data/deps/<依赖清单 sha1 前 16 位>/
 # 同一依赖清单跨论文跨会话只落一份，多论文共享去重；可配 AUTOREPRO_DEPS_ROOT 覆盖。
-DEPS_CACHE_ROOT = Path(os.environ.get(
-    "AUTOREPRO_DEPS_ROOT",
-    str(_PROJECT_ROOT / "data" / "deps")))
+DEPS_CACHE_ROOT = get_deps_root()
 # 安装完成标志文件：存在即视为该隔离目录已就绪
 _DEPS_READY_MARK = ".ready"
 # 隔离目录自带的元数据文件名（requirements / 安装与最后使用时间），

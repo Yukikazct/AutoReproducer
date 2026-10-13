@@ -8,7 +8,7 @@ import json
 import logging
 import os
 import re
-import shutil
+import stat
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -17,10 +17,13 @@ from typing import Any, Dict, List, Optional, Tuple
 from src.dependency_cache import cache_guard, DependencyCacheBusy
 from src.dependency_management import environment_directories, read_metadata
 from src.safety.paths import is_link, workspace_path
+from src.safety.files import remove_tree
+from src.project_paths import get_data_root
+from src.resource_events import read_resource_events
 
 
 def get_project_data_dir() -> Path:
-    return Path("data")
+    return get_data_root()
 
 
 def _parse_session_id(filename: str) -> Optional[str]:
@@ -175,14 +178,8 @@ def get_storage_stats(*, _sizes=None) -> Dict[str, Any]:
         if not d.exists():
             stats[sub] = {"files": 0, "bytes": 0}
             continue
-        if _sizes is None:
-            files = list(d.glob("**/*"))
-            total_bytes = sum(f.stat().st_size for f in files if f.is_file())
-            stats[sub] = {"files": len([f for f in files if f.is_file()]),
-                          "bytes": total_bytes}
-        else:
-            count, total_bytes = _shared_dir_size(d, _sizes)
-            stats[sub] = {"files": count, "bytes": total_bytes}
+        count, total_bytes = _shared_dir_size(d, {} if _sizes is None else _sizes)
+        stats[sub] = {"files": count, "bytes": total_bytes}
         total += total_bytes
     stats["total"] = {"bytes": total}
     return stats
@@ -227,9 +224,9 @@ def cleanup_runtime(keep_days: int = 7) -> Tuple[int, int]:
         try:
             stale = f.stat().st_mtime < cutoff
             if stale or _is_finished_progress(f):
-                freed += f.stat().st_size
-                f.unlink()
-                removed += 1
+                count, size = _unlink_files([f])
+                freed += size
+                removed += count
         except Exception:
             pass
     return removed, freed
@@ -289,6 +286,8 @@ def _scan_progress_sid(path: Path) -> Optional[str]:
 
 def _related_files(session_id: str) -> List[Path]:
     """收集某会话关联的全部文件（ledger/logs/reports/runtime 四类）。"""
+    if not re.fullmatch(r"[a-zA-Z0-9_-]+", session_id):
+        return []
     base = get_project_data_dir()
     files: List[Path] = []
 
@@ -337,8 +336,12 @@ def _unlink_files(paths: List[Path]) -> Tuple[int, int]:
     freed = 0
     for p in paths:
         try:
-            freed += p.stat().st_size
+            base = get_project_data_dir().absolute()
+            relative = p.absolute().relative_to(base)
+            p = workspace_path(base, relative, "history file", must_exist=True)
+            size = p.stat().st_size
             p.unlink()
+            freed += size
             removed += 1
         except Exception:
             pass
@@ -394,58 +397,55 @@ def clear_sessions() -> Tuple[int, int]:
 
 
 # ---------------- 依赖缓存管理（data/deps/） ----------------
-# 与 src.agents.code_executor 的 _DEPS_META_NAME 必须一致；那边是写入方，
-# 这里是读取方。本模块刻意不 import src.*（纯 stdlib，便于单测与前端加载），
-# 故用同名常量 + 一条一致性测试来钉住，而不是跨层 import。
+# 与写入方 code_executor 保持一致，避免加载执行器及其 Agent 依赖。
 _DEPS_META_NAME = "meta.json"
 
 
-def _deps_root() -> Path:
+def _deps_root(data_root=None) -> Path:
     """依赖缓存根目录（尊重 AUTOREPRO_DEPS_ROOT 覆盖，与执行器同口径）。"""
     override = os.environ.get("AUTOREPRO_DEPS_ROOT", "").strip()
     if override:
-        return Path(override)
-    return get_project_data_dir() / "deps"
+        return Path(override).expanduser().absolute()
+    return (get_data_root(data_root) if data_root is not None else get_project_data_dir()) / "deps"
 
 
 def _dir_size(path: Path) -> Tuple[int, int]:
     """返回 (文件数, 字节数)。"""
-    files = 0
-    total = 0
-    for f in path.rglob("*"):
-        try:
-            if f.is_file():
-                files += 1
-                total += f.stat().st_size
-        except OSError:
-            continue
-    return files, total
+    return _shared_dir_size(path, {})
 
 
 def _shared_dir_size(path: Path, sizes) -> Tuple[int, int]:
     """Scan each directory once and retain child totals for this UI snapshot.
 
     DirEntry reuses directory-entry metadata on Windows, avoiding repeated
-    Path.is_file/stat calls for every installed dependency. Like Path.rglob,
-    directory symlinks are not traversed; file symlinks keep their target size.
+    Path.is_file/stat calls for every installed dependency. Symbolic links and
+    Windows junctions are excluded; vanished directories tolerate live cleanup.
     """
     key = os.path.normcase(os.path.abspath(path))
     if key in sizes:
         return sizes[key]
+    if is_link(path):
+        return 0, 0
     count = total = 0
-    with os.scandir(path) as entries:
-        for entry in entries:
-            try:
-                if entry.is_dir(follow_symlinks=False):
-                    child_count, child_bytes = _shared_dir_size(Path(entry.path), sizes)
-                    count += child_count
-                    total += child_bytes
-                elif entry.is_file():
-                    count += 1
-                    total += entry.stat().st_size
-            except OSError:
-                # A concurrent install or cleanup can remove a displayed file.
-                continue
+    try:
+        with os.scandir(path) as entries:
+            for entry in entries:
+                try:
+                    info = entry.stat(follow_symlinks=False)
+                    if (entry.is_symlink() or getattr(info, "st_file_attributes", 0)
+                            & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)):
+                        continue
+                    if entry.is_dir(follow_symlinks=False):
+                        child_count, child_bytes = _shared_dir_size(Path(entry.path), sizes)
+                        count += child_count
+                        total += child_bytes
+                    elif entry.is_file(follow_symlinks=False):
+                        count += 1
+                        total += info.st_size
+                except OSError:
+                    continue
+    except OSError:
+        pass
     sizes[key] = (count, total)
     return sizes[key]
 
@@ -455,7 +455,7 @@ def _dependency_directories(root):
     yield from environment_directories(root)
 
 
-def list_deps_cache(*, _sizes=None) -> List[Dict[str, Any]]:
+def list_deps_cache(*, _sizes=None, data_root=None) -> List[Dict[str, Any]]:
     """列出依赖缓存里每个隔离安装目录。
 
     依赖缓存按「归一化后的依赖清单」哈希寻址，**跨论文跨会话共享**，因此
@@ -470,7 +470,7 @@ def list_deps_cache(*, _sizes=None) -> List[Dict[str, Any]]:
       requirements 原始依赖清单（旧目录为空）
       installed_at / last_used  ISO 时间串（旧目录回退到目录 mtime）
     """
-    root = _deps_root()
+    root = _deps_root(data_root)
     items: List[Dict[str, Any]] = []
     if not root.is_dir():
         return items
@@ -543,8 +543,17 @@ def _delete_deps_cache(names=None, *, keep_days=None, on_skip=None):
                     if used >= cutoff:
                         continue
                 try:
-                    references = [directory for directory in _dependency_directories(root)
-                                  if read_metadata(directory).get('base_environment') == item['name']]
+                    references = []
+                    for directory in _dependency_directories(root):
+                        base = read_metadata(directory).get('base_environment')
+                        if not base:
+                            continue
+                        try:
+                            reference = workspace_path(root, base, "base dependency environment")
+                            if reference == (root / item['name']).resolve():
+                                references.append(directory)
+                        except (OSError, ValueError, TypeError):
+                            continue
                     if references:
                         skipped(f"依赖缓存 {item['name']} 仍被增量环境引用，已保留")
                         continue
@@ -552,7 +561,7 @@ def _delete_deps_cache(names=None, *, keep_days=None, on_skip=None):
                     _, size = _dir_size(target)
                     # Do not trust an earlier UI inventory or a rewritten symlink.
                     target = workspace_path(root, item["name"], "dependency cache", must_exist=True)
-                    shutil.rmtree(target)
+                    remove_tree(target)
                     removed += 1
                     freed += size
                 except (OSError, ValueError) as exc:
@@ -580,31 +589,17 @@ def cleanup_deps_cache(keep_days: int = 30, *, on_skip=None) -> Tuple[int, int]:
     return _delete_deps_cache(keep_days=keep_days, on_skip=on_skip)
 
 
-def list_resource_events(limit: int = 500) -> List[Dict[str, Any]]:
+def list_resource_events(limit: int = 500, *, data_root=None) -> List[Dict[str, Any]]:
     """读取下载/安装事件，供前端和 CLI 展示最近资源活动。"""
-    path = get_project_data_dir() / "resource_events.jsonl"
-    if not path.is_file():
-        return []
-    events: List[Dict[str, Any]] = []
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return events
-    for line in lines[-max(1, limit):]:
-        try:
-            item = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(item, dict):
-            events.append(item)
-    return list(reversed(events))
+    base = get_data_root(data_root) if data_root is not None else get_project_data_dir()
+    return list(reversed(read_resource_events(base / "resource_events.jsonl", limit)))
 
 
-def list_resource_inventory(*, deps_items=None, _sizes=None) -> List[Dict[str, Any]]:
+def list_resource_inventory(*, deps_items=None, _sizes=None, data_root=None) -> List[Dict[str, Any]]:
     """从磁盘和 manifest 汇总依赖、数据集、代码和权重资源。"""
-    base = get_project_data_dir()
+    base = get_data_root(data_root) if data_root is not None else get_project_data_dir()
     rows: List[Dict[str, Any]] = []
-    for item in list_deps_cache() if deps_items is None else deps_items:
+    for item in list_deps_cache(data_root=data_root) if deps_items is None else deps_items:
         rows.append({
             "type": "dependency", "id": item["name"], "paper_id": "",
             "state": "ready" if (Path(item["path"]) / ".ready").is_file()
@@ -619,10 +614,12 @@ def list_resource_inventory(*, deps_items=None, _sizes=None) -> List[Dict[str, A
                 manifest = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 continue
+            if not isinstance(manifest, dict) or not isinstance(manifest.get("resources", {}), dict):
+                continue
             pid = manifest.get("paper_id", path.stem)
             resources = manifest.get("resources", {})
             for kind, resource_path in resources.items():
-                if not resource_path:
+                if not isinstance(resource_path, str) or not resource_path:
                     continue
                 p = Path(resource_path)
                 rows.append({
@@ -654,6 +651,8 @@ def collect_storage_snapshot() -> Dict[str, Any]:
 
 def get_session_detail(session_id: str) -> Optional[Dict[str, Any]]:
     """获取单次会话的详细记录（ledger + logs）。"""
+    if not re.fullmatch(r"[a-zA-Z0-9_-]+", session_id):
+        return None
     base = get_project_data_dir()
     detail: Dict[str, Any] = {"session_id": session_id, "ledger": [], "logs": []}
 

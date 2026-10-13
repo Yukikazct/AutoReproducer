@@ -19,6 +19,7 @@ from src.audit.audit_logger import AuditLogger
 from src.discovered_repository_runtime import CAPTURE_DIR
 from src.method_adapters import digest, read_json
 from src.runtime_platform import runtime_fingerprint
+from src.dependency_versions import compatibility_pins
 
 
 def setup_service(tmp_path, monkeypatch, family="signals", review=None):
@@ -47,11 +48,12 @@ def setup_service(tmp_path, monkeypatch, family="signals", review=None):
 def cpu_dependency_cache():
     """Reuse an already installed exact CPU build; never install during tests."""
     root = Path(__file__).resolve().parents[1] / "data" / "deps" / "repository" / runtime_fingerprint()
+    torch_version = compatibility_pins()["torch"]
     caches = [path for path in root.glob("*") if (path / ".ready").is_file()
-              and (path / "torch-2.5.1+cpu.dist-info").is_dir()
+              and (path / f"torch-{torch_version}.dist-info").is_dir()
               and (path / "numpy-1.26.4.dist-info").is_dir()]
     if not caches:
-        pytest.skip("Native fixture requires a preinstalled torch 2.5.1+cpu / NumPy 1.26.4 cache")
+        pytest.skip(f"Native fixture requires a preinstalled torch {torch_version} / NumPy 1.26.4 cache")
     return caches[0]
 
 
@@ -110,7 +112,7 @@ def test_two_actual_author_entrypoints_complete_service_and_report(
     assert validation["independent_metrics"]["evaluation"] == "fresh_process_torchscript_forward_numpy_metrics"
     assert read_json(workspace / CAPTURE_DIR / "capture.json")["optimizer_steps"] == steps
     assert data["native_preflight"]["native_probe_pass"] is True
-    assert data["native_preflight"]["versions"] == {"torch": "2.5.1+cpu", "numpy": "1.26.4"}
+    assert data["native_preflight"]["versions"] == {"torch": compatibility_pins()["torch"], "numpy": "1.26.4"}
     assert [record["id"] for record in execution["steps"]] == ["train", "independent_evaluation"]
     assert all(record["executed"] and record["success"] and record["exit_code"] == 0
                and not record["timed_out"] for record in execution["steps"])

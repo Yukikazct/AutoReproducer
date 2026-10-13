@@ -7,6 +7,8 @@ import re
 from PyPDF2 import PdfWriter
 from PyPDF2.generic import DecodedStreamObject, DictionaryObject, NameObject
 
+from src.dependency_versions import compatibility_pins
+
 
 def write_pdf(path, pages):
     writer = PdfWriter()
@@ -134,7 +136,7 @@ def make_experiment(root, family="signals"):
         "parameters": {"epochs": epochs, "seed": 7},
         "parameter_citations": {"epochs": ["script", "paper_results"], "seed": ["script", "paper_results"]},
         "requirements": {"author": ["torch==1.13.1"],
-                         "compatibility": ["torch==2.5.1+cpu", "numpy==1.26.4"],
+                         "compatibility": ["torch==" + compatibility_pins()["torch"], "numpy==1.26.4"],
                          "reason": "Basic tensor and optimizer APIs remain compatible; NumPy is evaluator-only.",
                          "citations": ["requirements", "script"]},
         "datasets": [{"kind": "bundled", "paths": ["dataset.json"], "citations": ["readme", "script"]}],

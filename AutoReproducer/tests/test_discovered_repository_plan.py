@@ -8,6 +8,7 @@ import pytest
 
 from discovered_fixtures import PlannedLLM, accepted_review, make_experiment
 from src import discovered_repository_plan as planner
+from src.dependency_versions import compatibility_pins
 
 
 @pytest.fixture
@@ -67,7 +68,7 @@ def test_two_unregistered_papers_keep_all_pages_and_independent_verifier(tmp_pat
     expected = frozen.pop("plan_sha256")
     assert hashlib.sha256(planner._canonical(frozen).encode()).hexdigest() == expected
     assert result["requirements"]["author"] == ["torch==1.13.1"]
-    assert result["requirements"]["runtime_required"] == ["torch==2.5.1+cpu", "numpy==1.26.4"]
+    assert result["requirements"]["runtime_required"] == ["torch==" + compatibility_pins()["torch"], "numpy==1.26.4"]
     assert result["datasets"][0]["files_sha256"] == {
         "dataset.json": fixture["snapshot"]["files"]["dataset.json"]}
 
@@ -84,7 +85,7 @@ def test_two_unregistered_papers_keep_all_pages_and_independent_verifier(tmp_pat
     (lambda p: p["requirements"].update(author=["numpy==1.26.4"]), "Original dependencies"),
     (lambda p: p["requirements"].update(author=["torch==1.13"]), "Original dependencies"),
     (lambda p: p["requirements"].update(compatibility=["torch==1.0", "numpy==1.26.4"]), "version map"),
-    (lambda p: p["requirements"].update(compatibility=["torch==2.5.1+cpu"]), "torch and numpy"),
+    (lambda p: p["requirements"].update(compatibility=["torch==" + compatibility_pins()["torch"]]), "torch and numpy"),
     (lambda p: p["requirements"]["compatibility"].append("scipy==1.14.1"), "lacks source/import"),
     (lambda p: p["steps"][0].update(argv=["python", "-c", "print(1)"]), "Generated code"),
     (lambda p: p["steps"][0].update(argv=["python", "-m", "train"]), "Generated code"),

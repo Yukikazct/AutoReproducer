@@ -376,9 +376,9 @@ def test_run_pipeline_core_reports_stage_error(tmp_path, monkeypatch):
     assert result["state"] == "ERROR"
     assert result["error"] and "boom" in result["error"]
 
-    # ledger 末条 FINISH 记录携带终态（真实落盘到项目 data/experiment_ledger）
-    root = Path(__file__).resolve().parents[1]
-    ledger_file = (root / "data" / "experiment_ledger"
+    # ledger 末条 FINISH 记录携带终态，使用测试配置的数据根。
+    from src.project_paths import get_data_root
+    ledger_file = (get_data_root() / "experiment_ledger"
                    / f"ledger_{result['session_id']}.jsonl")
     records = [json.loads(line) for line in
                ledger_file.read_text(encoding="utf-8").splitlines() if line.strip()]

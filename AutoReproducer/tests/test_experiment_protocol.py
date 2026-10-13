@@ -9,6 +9,7 @@ import pytest
 from discovered_fixtures import PlannedLLM, accepted_review, fixture_protocol, make_experiment
 from src.agents.experiment_protocol import ExperimentProtocolAgent, bind_plan_to_protocol, validate_experiment_protocol
 from src import discovered_repository_plan as planner
+from src.dependency_versions import compatibility_pins
 
 
 def protocol_fixture(tmp_path):
@@ -26,7 +27,7 @@ def test_selected_experiment_binds_command_numbers_repetitions_and_device(tmp_pa
     plan = planner.propose_plan(llm, packet, fixture['workspace'])
     assert plan['experiment_protocol']['protocol_sha256'] == protocol['protocol_sha256']
     assert plan['requirements']['import_evidence']
-    assert plan['requirements']['compatibility'] == ['numpy==1.26.4','torch==2.5.1+cpu']
+    assert plan['requirements']['compatibility'] == ['numpy==1.26.4', 'torch==' + compatibility_pins()['torch']]
     assert 'experiment_protocol' in llm.calls[0][0]
     for mutation, match in [
         (lambda p:p['metrics'][0].update(reference=98), 'selected paper reference'),
@@ -396,12 +397,13 @@ def test_only_unambiguous_native_long_option_abbreviations_are_compiled(tmp_path
 def test_unused_reviewed_packages_are_omitted_and_required_imports_are_hash_bound(tmp_path):
     fixture, packet, raw, protocol = protocol_fixture(tmp_path)
     proposal = deepcopy(fixture['proposal'])
-    proposal['requirements']['compatibility'].extend(['pandas==2.2.3','torchvision==0.20.1+cpu'])
+    unused = ['pandas==2.2.3', 'torchvision==' + compatibility_pins()['torchvision']]
+    proposal['requirements']['compatibility'].extend(unused)
     packet['experiment_protocol'] = protocol
     result = planner.validate_plan(proposal, packet, fixture['workspace'])
     requirements = result['requirements']
-    assert requirements['omitted_unused_proposals'] == ['pandas==2.2.3','torchvision==0.20.1+cpu']
-    assert requirements['compatibility'] == ['numpy==1.26.4','torch==2.5.1+cpu']
+    assert requirements['omitted_unused_proposals'] == unused
+    assert requirements['compatibility'] == ['numpy==1.26.4', 'torch==' + compatibility_pins()['torch']]
     assert all(item['sha256'] == fixture['snapshot']['files'][item['path']] for item in requirements['import_evidence'])
 
 

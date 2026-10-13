@@ -101,6 +101,7 @@ print('Test Accuracy:', np.mean(accuracies))
 
 
 def run_series(root, device="cpu", mutate=None):
+    cache = cuda_dependency_cache() if device == "cuda" else None
     fixture = series_fixture(root, device)
     if mutate:
         mutate(fixture)
@@ -110,7 +111,6 @@ def run_series(root, device="cpu", mutate=None):
     manifest = materialize_capture(fixture["workspace"], plan, spec_hash, snapshot=fixture["snapshot"])
     environment = native_environment()
     if device == "cuda":
-        cache = cuda_dependency_cache()
         extra = environment.get('AUTOREPRO_TEST_CUDA_DEPS', '')
         environment["PYTHONPATH"] = str(cache) + (os.pathsep + extra if extra else '')
         environment.pop("CUDA_VISIBLE_DEVICES", None)

@@ -28,6 +28,7 @@ load_local_llm_settings()
 from src.orchestrator import Orchestrator
 from src.llm.llm_client import LLMClient
 from src.audit.audit_logger import AuditLogger
+from src.project_paths import get_data_root
 from src.base_agent import BaseAgent
 from src.corpus import list_papers
 from src.repository_profiles import PAPER_TITLE
@@ -138,7 +139,7 @@ if snap:
 @st.fragment
 def render_llm_settings():
     """配置和连接测试局部刷新，反馈直接显示在按钮旁。"""
-    with st.expander("LLM API 配置", expanded=not st.session_state.mock_mode):
+    with st.expander("LLM API 配置", expanded=False):
         base_url = st.text_input(
             "API 地址（OpenAI 兼容）",
             value=os.environ.get("LLM_BASE_URL", "https://api.deepseek.com"),
@@ -325,77 +326,77 @@ with st.sidebar:
     st.markdown("""
     <div class="sidebar-brand">
         <span class="brand-icon" aria-hidden="true">AR</span>
-        <div><strong>AutoReproducer</strong><small>论文代码运行与实验记录</small></div>
+        <div><strong>AutoReproducer</strong><small>RESEARCH WORKSPACE</small></div>
     </div>
-    <div class="sidebar-intro">配置复现任务</div>
-    <p class="sidebar-help">设置运行环境与论文来源，提交可追踪的复现实验。</p>
+    <div class="sidebar-intro">新建复现实验</div>
+    <p class="sidebar-help">准备论文，开始新的实验。</p>
     """, unsafe_allow_html=True)
 
-# 模式选择
-    st.session_state.mock_mode = st.toggle(
-        "Mock 演示模式（无需 API）",
-        value=st.session_state.mock_mode,
-        help="演示界面与流程，不执行真实论文实验或调用模型服务")
+    with st.expander("运行环境", expanded=False):
+        st.session_state.mock_mode = st.toggle(
+            "Mock 演示模式（无需 API）",
+            value=st.session_state.mock_mode,
+            help="演示界面与流程，不执行真实论文实验或调用模型服务")
 
-    # Docker 沙箱执行开关（真实模式生效）。
-    # 默认**关闭**：容器沙箱的代价是每次运行都要在容器里现装依赖（tmpfs 随
-    # `--rm` 清空，numpy 级别约 20 秒、torch 级别几分钟），默认开着会让用户
-    # 的第一次真实运行无声地落在容器里、慢且难解释；本地隔离执行（依赖装进
-    # data/deps/<hash>/，多论文共享）才是开箱即跑的那条路。
-    # 要用容器随时手动打开——今天它已在真实容器里实测跑通。
-    if "use_docker" not in st.session_state:
-        st.session_state.use_docker = False
-    if "docker_probe" not in st.session_state:
-        st.session_state.docker_probe = None       # None = 尚未探测
-
-    # 引擎存活探测：CLI 二进制在 PATH 上 ≠ Docker Desktop 的引擎在跑。
-    # 只看 `shutil.which("docker")` 会把「装了没启动」报成「已就绪」，
-    # 随后 `docker run` 甩出 npipe 原始报错（用户实测踩到）。
-    # 只在真实模式探测：Mock 模式不执行代码、用不上 Docker，也不必让
-    # Mock 用例背上真实探测。结果缓存进 session_state —— 每轮 rerun 都
-    # 跑一次探测不划算，而引擎可能被用户中途启动，所以留「重新检测」按钮
-    # 作为显式刷新路径。
-    if st.session_state.mock_mode:
-        docker_available, docker_reason = False, ""
-    else:
-        if st.session_state.docker_probe is None:
-            st.session_state.docker_probe = BaseAgent.docker_engine_available()
-        docker_available, docker_reason = st.session_state.docker_probe
-        if not docker_available:
-            # 引擎不在就把开关拉回关闭：显示开着却跑不了是最坏的组合
+        # Docker 沙箱执行开关（真实模式生效）。
+        # 默认**关闭**：容器沙箱的代价是每次运行都要在容器里现装依赖（tmpfs 随
+        # `--rm` 清空，numpy 级别约 20 秒、torch 级别几分钟），默认开着会让用户
+        # 的第一次真实运行无声地落在容器里、慢且难解释；本地隔离执行（依赖装进
+        # data/deps/<hash>/，多论文共享）才是开箱即跑的那条路。
+        # 要用容器随时手动打开——今天它已在真实容器里实测跑通。
+        if "use_docker" not in st.session_state:
             st.session_state.use_docker = False
+        if "docker_probe" not in st.session_state:
+            st.session_state.docker_probe = None       # None = 尚未探测
 
-    st.session_state.use_docker = st.toggle(
-        "Docker 沙箱执行（真实模式）",
-        value=st.session_state.use_docker,
-        disabled=st.session_state.mock_mode or not docker_available,
-        help="真实模式下启用 Docker 隔离执行：依赖在容器内安装，"
-             "不污染本机环境；未安装 Docker 或 Mock 模式时自动降级为本地隔离执行")
-    if st.session_state.mock_mode:
-        st.caption("Mock 模式不执行真实代码，无需 Docker")
-    elif not docker_available:
-        st.caption(f"{docker_reason}，将使用本地隔离执行（依赖安装在隔离目录）")
-        if st.button("重新检测 Docker", key="docker_recheck",
-                     use_container_width=True,
-                     help="启动 Docker Desktop 后点此重新探测，无需刷新页面"):
-            st.session_state.docker_probe = None
-            st.rerun()
-    else:
-        st.caption("Docker 已就绪 ("
-                   + ("将使用容器沙箱，首跑会在容器内安装依赖，偏慢"
-                      if st.session_state.use_docker
-                      else "未启用容器沙箱，将使用本地隔离执行")
-                   + ")")
+        # 引擎存活探测：CLI 二进制在 PATH 上 ≠ Docker Desktop 的引擎在跑。
+        # 只看 `shutil.which("docker")` 会把「装了没启动」报成「已就绪」，
+        # 随后 `docker run` 甩出 npipe 原始报错（用户实测踩到）。
+        # 只在真实模式探测：Mock 模式不执行代码、用不上 Docker，也不必让
+        # Mock 用例背上真实探测。结果缓存进 session_state —— 每轮 rerun 都
+        # 跑一次探测不划算，而引擎可能被用户中途启动，所以留「重新检测」按钮
+        # 作为显式刷新路径。
+        if st.session_state.mock_mode:
+            docker_available, docker_reason = False, ""
+        else:
+            if st.session_state.docker_probe is None:
+                st.session_state.docker_probe = BaseAgent.docker_engine_available()
+            docker_available, docker_reason = st.session_state.docker_probe
+            if not docker_available:
+                # 引擎不在就把开关拉回关闭：显示开着却跑不了是最坏的组合
+                st.session_state.use_docker = False
+
+        st.session_state.use_docker = st.toggle(
+            "Docker 沙箱执行（真实模式）",
+            value=st.session_state.use_docker,
+            disabled=st.session_state.mock_mode or not docker_available,
+            help="真实模式下启用 Docker 隔离执行：依赖在容器内安装，"
+                 "不污染本机环境；未安装 Docker 或 Mock 模式时自动降级为本地隔离执行")
+        if st.session_state.mock_mode:
+            st.caption("Mock 模式不执行真实代码，无需 Docker")
+        elif not docker_available:
+            st.caption(f"{docker_reason}，将使用本地隔离执行（依赖安装在隔离目录）")
+            if st.button("重新检测 Docker", key="docker_recheck",
+                         use_container_width=True,
+                         help="启动 Docker Desktop 后点此重新探测，无需刷新页面"):
+                st.session_state.docker_probe = None
+                st.rerun()
+        else:
+            st.caption("Docker 已就绪 ("
+                       + ("将使用容器沙箱，首跑会在容器内安装依赖，偏慢"
+                          if st.session_state.use_docker
+                          else "未启用容器沙箱，将使用本地隔离执行")
+                       + ")")
+
+        # 预留可选入口；当前版本不执行优化，也不消耗优化预算。
+        st.session_state.enable_optimization = False
+        st.checkbox("启用智能优化（预留）", key="enable_optimization", disabled=True)
+        st.caption("通用流程暂不执行优化；SIREN 与 Neural ODE 预设提供真实建议和参数验证选项。")
 
     render_llm_settings()
     base_url = st.session_state.llm_base_url
     api_key = st.session_state.llm_api_key
     model_name = st.session_state.llm_model
-
-    # 预留可选入口；当前版本不执行优化，也不消耗优化预算。
-    st.session_state.enable_optimization = False
-    st.checkbox("启用智能优化（预留）", key="enable_optimization", disabled=True)
-    st.caption("通用流程暂不执行优化；SIREN 与 Neural ODE 预设提供真实建议和参数验证选项。")
 
     # 论文输入
     render_paper_input()
@@ -414,17 +415,16 @@ with st.sidebar:
     method_selected = bool(experiment_profile and get_profile(experiment_profile).get("adapter_id") in {"siren", "neural_ode"})
     requires_api = not experiment_profile
 
-    # 语料对照层（可选）：选择真实论文作为轻量锚点
-    st.markdown('<div class="sidebar-section-label"><span>02</span> 语料对照 <em>可选</em></div>',
-                unsafe_allow_html=True)
-    _corpus = [p["id"] for p in list_papers()]
-    _corpus_choice = st.selectbox(
-        "选择 PaperGuru-Benchmark 论文", ["无"] + _corpus, index=0,
-        key="corpus_paper_select")
-    corpus_paper = None if _corpus_choice == "无" else _corpus_choice
-    if corpus_paper:
-        st.caption(f"当前任务会使用 {corpus_paper} 的依赖和参考指标。"
-                   "仅运行上传的 PDF 时，请将语料对照设为“无”。")
+    # 低频选项收纳在折叠区，保留论文输入与启动操作的空间。
+    with st.expander("语料对照 · 可选", expanded=False):
+        _corpus = [p["id"] for p in list_papers()]
+        _corpus_choice = st.selectbox(
+            "选择 PaperGuru-Benchmark 论文", ["无"] + _corpus, index=0,
+            key="corpus_paper_select")
+        corpus_paper = None if _corpus_choice == "无" else _corpus_choice
+        if corpus_paper:
+            st.caption(f"当前任务会使用 {corpus_paper} 的依赖和参考指标。"
+                       "仅运行上传的 PDF 时，请将语料对照设为“无”。")
 
     title_resolution = None
     if input_mode == "论文标题":
@@ -464,12 +464,12 @@ with st.sidebar:
             st.caption("任务结束后可重置")
 
     # 系统状态
-    st.markdown("---")
-    st.markdown('<div class="sidebar-section-label"><span>03</span> 系统状态</div>',
-                unsafe_allow_html=True)
+    _sidebar_state_label = ("运行中" if st.session_state.running else
+                            {"INIT": "等待开始", "COMPLETED": "已完成", "ERROR": "运行异常"}
+                            .get(st.session_state.current_state, st.session_state.current_state))
     st.markdown(
-        f'<div class="sidebar-status"><span>当前状态</span>'
-        f'<strong>{escape(st.session_state.current_state)}</strong></div>',
+        f'<div class="sidebar-status" data-state="{escape(st.session_state.current_state, quote=True)}"><span>工作台状态</span>'
+        f'<strong>{escape(_sidebar_state_label)}</strong></div>',
         unsafe_allow_html=True)
 
 
@@ -485,8 +485,7 @@ def _save_uploaded_pdf(uploaded_file) -> str:
 
 def _new_progress_file() -> str:
     """创建本次复现的进度文件路径（data/runtime/progress_<毫秒>.jsonl）。"""
-    runtime_dir = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "data", "runtime")
+    runtime_dir = get_data_root() / "runtime"
     os.makedirs(runtime_dir, exist_ok=True)
     return os.path.join(runtime_dir,
                         f"progress_{int(time.time() * 1000)}.jsonl")
@@ -589,19 +588,29 @@ _hero_status = ("running" if st.session_state.running else
                 "error" if st.session_state.current_state == "ERROR" else
                 "success" if st.session_state.current_state == "COMPLETED" else
                 "idle")
+_mode_label = "Mock 演示" if st.session_state.mock_mode else "真实运行"
+_runtime_label = ("流程演示" if st.session_state.mock_mode else
+                  "Docker 沙箱" if st.session_state.use_docker else "本地隔离环境")
 st.markdown(f"""
 <div class="hero">
     <div class="hero-top">
-        <span class="hero-eyebrow">AUTOREPRODUCER / RESEARCH WORKSPACE</span>
+        <span class="hero-eyebrow"><span class="eyebrow-mark" aria-hidden="true"></span> YOUR RESEARCH WORKSPACE</span>
         <span class="hero-status hero-status-{_hero_status}">{escape(_state_label)}</span>
     </div>
     <div class="hero-content">
-        <div>
+        <div class="hero-copy">
             <h1>论文复现工作台</h1>
-            <p>依据论文与作者代码组织实验，记录执行过程、独立评估与复现结论。</p>
+            <p>从论文到代码，让每一步实验都有据可查。</p>
+            <div class="workspace-context"><span>{escape(_mode_label)}</span><span>{escape(_runtime_label)}</span><span>实验全程记录</span></div>
+        </div>
+        <div class="hero-visual" aria-hidden="true">
+            <div class="visual-orbit"></div>
+            <div class="paper-sheet paper-sheet-back"></div>
+            <div class="paper-sheet"><span class="paper-tag">PAPER</span><div class="paper-line paper-line-title"></div><div class="paper-line"></div><div class="paper-line paper-line-short"></div><div class="paper-chart"><i></i><i></i><i></i><i></i><i></i><i></i></div></div>
+            <div class="visual-caption"><span class="visual-symbol">↗</span><span>让研究走向实践<small>READ · RUN · RECORD</small></span></div>
         </div>
     </div>
-    <div class="hero-steps"><span><b>01</b> 解析论文</span><i>→</i><span><b>02</b> 准备实验</span><i>→</i><span><b>03</b> 执行实验</span><i>→</i><span><b>04</b> 生成报告</span></div>
+    <div class="hero-steps" aria-label="复现流程"><span><b>01</b> 解析论文</span><span><b>02</b> 准备实验</span><span><b>03</b> 执行实验</span><span><b>04</b> 生成报告</span></div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -618,8 +627,8 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
 # ===== Tab 1: 流水线状态 =====
 with tab1:
     st.markdown("""<div class="section-heading"><div><span class="section-kicker">01 / EXPERIMENT WORKFLOW</span>
-    <h2>复现流水线</h2><p>按实际执行顺序追踪各阶段；同一 Agent 的不同任务分别显示。</p></div>
-    <span class="section-aside">准备 · 执行 · 结果 · 报告</span></div>""",
+    <h2>复现流水线</h2><p>从论文解析到报告生成，实时追踪每个阶段。</p></div>
+    <span class="section-aside">每一步，清晰可追溯</span></div>""",
                 unsafe_allow_html=True)
 
     # ---------- 后台复现实时进度（轮询进度文件） ----------
@@ -742,8 +751,14 @@ with tab1:
                        "结束条件": display_text(stage.get("completion_rule", "负责人返回结果且所属执行全部结束")),
                        "结束已确认": "是" if stage.get("completion_confirmed") else "否"}
                       for stage in stages])
-    else:
-        st.info("启动后将按实际执行顺序显示阶段状态。")
+    elif not st.session_state.running and not st.session_state.result:
+        st.markdown("""<section class="start-guide">
+<div class="guide-intro"><span class="empty-symbol" aria-hidden="true"></span><div><span class="section-kicker">START A NEW EXPERIMENT</span><h3>从一篇论文，开始新的实验</h3><p>在左侧选择输入方式，点击「开始复现」。运行过程与结果会呈现在这里。</p></div></div>
+<div class="guide-options"><div class="guide-option"><span class="option-mark">01</span><h4>上传论文 PDF</h4><p>从论文正文提取方法与代码线索。</p><span class="option-note">适合手头已有论文</span></div><div class="guide-option"><span class="option-mark">02</span><h4>输入论文标题</h4><p>用标题查找论文与对应的作者仓库。</p><span class="option-note">适合快速开始探索</span></div><div class="guide-option"><span class="option-mark">03</span><h4>选择官方预设</h4><p>使用已配置的作者实验与运行命令。</p><span class="option-note">适合体验完整流程</span></div></div>
+<div class="guide-footnote"><span aria-hidden="true">↖</span> 首次使用？展开左侧「LLM API 配置」，连接模型服务。</div>
+</section>""", unsafe_allow_html=True)
+    elif st.session_state.running:
+        st.info("正在准备实验，阶段状态将在这里更新。")
     if snap and snap.get("execution_output"):
         with st.expander("代码执行输出（最近16000字符）", expanded=True):
             if active_executions:
@@ -853,7 +868,7 @@ with tab2:
         report_path = result.get("report_path") or result["data"].get("report_path")
         render_report(report, report_path, st_module=st)
     else:
-        st.markdown('<div class="empty-state"><div class="empty-title">报告将在这里生成</div><p>在左侧提交论文并启动复现，完成后即可查看实验报告。</p></div>', unsafe_allow_html=True)
+        st.markdown('<div class="empty-state"><span class="empty-symbol" aria-hidden="true"></span><span class="section-kicker">YOUR NEXT DISCOVERY</span><div class="empty-title">报告将在这里生成</div><p>在左侧提交论文并启动复现。<br>完成后，实验记录与运行结果会整理为可下载的报告。</p></div>', unsafe_allow_html=True)
 
 # ===== Tab 3: 审计日志 =====
 with tab3:
@@ -890,7 +905,7 @@ with tab3:
             ):
                 st.json(log)
     else:
-        st.markdown('<div class="empty-state"><div class="empty-title">暂无运行记录</div><p>启动复现后，这里会记录各 Agent 的执行过程。</p></div>', unsafe_allow_html=True)
+        st.markdown('<div class="empty-state"><span class="empty-symbol empty-symbol-log" aria-hidden="true"></span><span class="section-kicker">EVERY STEP, RECORDED</span><div class="empty-title">暂无运行记录</div><p>启动复现后，这里会记录各 Agent 的执行过程。<br>你可以按执行角色与状态筛选，定位关键步骤。</p></div>', unsafe_allow_html=True)
 
 # ===== Tab 4: 状态机 =====
 with tab4:
@@ -996,7 +1011,7 @@ def render_history():
                  for row in inventory],
                 use_container_width=True, hide_index=True)
         else:
-            st.info("暂无资源清单。运行一次复现后，依赖和数据集会显示在这里。")
+            st.caption("暂无资源清单。运行一次复现后，依赖和数据集会显示在这里。")
         if events:
             st.markdown("**最近资源事件**")
             st.dataframe(
@@ -1013,7 +1028,16 @@ def render_history():
     st.markdown("#### 存储占用")
     try:
         storage = snapshot["storage"]
-        cols = st.columns(3)
+        overview = [
+            ("已统计占用", storage.get("total", {}).get("bytes", 0)),
+            ("依赖缓存", storage.get("deps", {}).get("bytes", 0)),
+            ("代码与数据", sum(storage.get(key, {}).get("bytes", 0)
+                               for key in ("repos", "datasets"))),
+            ("报告与日志", sum(storage.get(key, {}).get("bytes", 0)
+                               for key in ("reports", "logs", "experiment_ledger", "runtime"))),
+        ]
+        for column, (label, size) in zip(st.columns(4), overview):
+            column.metric(label, format_size(size))
         metrics = [
             ("实验账本", "experiment_ledger"),
             ("审计日志", "logs"),
@@ -1027,11 +1051,13 @@ def render_history():
             ("归档快照", "archive"),
             ("其他", "pinn-output"),
         ]
-        for i, (label, key) in enumerate(metrics):
-            with cols[i % 3]:
-                info = storage.get(key, {"files": 0, "bytes": 0})
-                st.metric(label, f"{info['files']} 文件", format_size(info["bytes"]))
-        st.caption(f"总计: {format_size(storage.get('total', {}).get('bytes', 0))}")
+        with st.expander("查看各目录占用"):
+            st.dataframe([
+                {"存储类别": label,
+                 "文件数": storage.get(key, {}).get("files", 0),
+                 "占用": format_size(storage.get(key, {}).get("bytes", 0))}
+                for label, key in metrics
+            ], use_container_width=True, hide_index=True)
     except Exception as e:
         st.error(f"获取存储统计失败: {e}")
 
@@ -1130,7 +1156,7 @@ def render_history():
     try:
         sessions = list_sessions()
         if not sessions:
-            st.info("暂无历史复现记录。完成一次复现后将在此展示。")
+            st.markdown('<div class="empty-state empty-state-compact"><span class="empty-symbol" aria-hidden="true"></span><div class="empty-title">让每次实验都有迹可循</div><p>暂无历史复现记录。完成一次复现后，可在这里回顾报告与运行日志。</p></div>', unsafe_allow_html=True)
         else:
             # --- 筛选 ---
             # 「其他」兜住状态机中间态（INIT / GENERATE_CODE 等），
@@ -1286,6 +1312,6 @@ with tab5:
 # 底部信息
 st.markdown("""
 <div class="app-footer">
-    <span>AutoReproducer</span><span>论文复现实验管理 · v0.2.0</span>
+    <span><i aria-hidden="true"></i> AutoReproducer <small>研究，从复现开始。</small></span><span>论文复现实验管理 · v0.2.0</span>
 </div>
 """, unsafe_allow_html=True)

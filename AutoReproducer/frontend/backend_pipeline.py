@@ -29,6 +29,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from src.llm.llm_client import LLMClient
 from src.audit.audit_logger import AuditLogger
+from src.project_paths import get_data_root
 
 
 # Contract checked by the web loader before starting a new background thread.
@@ -289,7 +290,7 @@ def run_pipeline_core(progress_path: str,
     report_text = data.get("report", "")
     if report_text:
         try:
-            reports_dir = Path(__file__).resolve().parents[1] / "data" / "reports"
+            reports_dir = get_data_root() / "reports"
             reports_dir.mkdir(parents=True, exist_ok=True)
             # 使用流水线 session_id 作为文件名时间戳，与 ledger 文件名保持一致
             ts = logger.session_id

@@ -1,6 +1,7 @@
 """Reuse wheel environments and bound the managed cache without touching runs."""
 import importlib.metadata
 import json
+import math
 import os
 import re
 import shutil
@@ -13,6 +14,7 @@ from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name
 
 from src.safety.paths import is_link, workspace_path
+from src.safety.files import remove_tree
 
 
 def read_metadata(directory):
@@ -72,6 +74,8 @@ def environment_paths(root, directory, *, require_ready=False):
 
 def requirement_signature(requirements):
     """Only plain wheel requirements and reviewed public supplemental indexes."""
+    if not isinstance(requirements, str):
+        return None
     packages, options = {}, []
     for raw in requirements.splitlines():
         line = raw.strip()
@@ -191,27 +195,56 @@ def directory_bytes(directory):
 def prune_cache(root, *, protected=(), quota_bytes=20 * 1024**3,
                 min_free_bytes=2 * 1024**3, keep_days=30, dry_run=False):
     """Caller holds the root lock; referenced bases and active paths stay intact."""
+    for name, value in (('quota_bytes', quota_bytes), ('min_free_bytes', min_free_bytes),
+                        ('keep_days', keep_days)):
+        if not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+            raise ValueError(f'{name} must be a finite non-negative number')
     root = Path(root).absolute()
     root.mkdir(parents=True, exist_ok=True)
     protected = {Path(path).resolve() for path in protected}
-    rows = []
+    rows, errors, unmeasured = [], [], []
     for directory in environment_directories(root):
         try:
             checked = workspace_path(root, directory.relative_to(root), 'dependency eviction', must_exist=True)
-            meta = read_metadata(checked)
-            stamp = meta.get('last_used')
-            used = datetime.fromisoformat(stamp).astimezone(timezone.utc).timestamp() if stamp else checked.stat().st_mtime
-            rows.append({'path': checked, 'bytes': directory_bytes(checked), 'used': used,
-                         'ready': (checked / '.ready').is_file(), 'base': meta.get('base_environment')})
-        except (OSError, ValueError, TypeError):
+            used = checked.stat().st_mtime
+        except (OSError, ValueError) as error:
+            # Do not hide incomplete accounting from the maintenance receipt.
+            name = directory.relative_to(root).as_posix()
+            errors.append({'environment': name, 'reason': str(error)})
+            unmeasured.append(name)
             continue
+        meta = read_metadata(checked)
+        try:
+            stamp = meta.get('last_used')
+            if stamp:
+                used = datetime.fromisoformat(stamp).astimezone(timezone.utc).timestamp()
+        except (OSError, ValueError, TypeError, OverflowError):
+            pass  # Damaged recency metadata falls back to the directory mtime.
+        base = None
+        if meta.get('base_environment'):
+            try:
+                base = workspace_path(root, meta['base_environment'], 'base dependency environment')
+            except (OSError, ValueError, TypeError):
+                pass
+        size = 0
+        try:
+            size = directory_bytes(checked)
+        except (OSError, ValueError) as error:
+            name = directory.relative_to(root).as_posix()
+            errors.append({'environment': name, 'reason': str(error)})
+            unmeasured.append(name)
+            # An unmeasurable child still owns its base. Keep both in the graph
+            # so a link or permission error cannot cause the base to be evicted.
+            protected.add(checked)
+        rows.append({'path': checked, 'bytes': size, 'used': used,
+                     'ready': (checked / '.ready').is_file(), 'base': base})
     remaining = {row['path']: row for row in rows}
     total, free = sum(row['bytes'] for row in rows), shutil.disk_usage(root).free
     now = datetime.now(timezone.utc).timestamp()
-    removed, errors = [], []
+    removed = []
     # Re-evaluate references after each child eviction, allowing its base to follow.
     while True:
-        referenced = {root / row['base'] for row in remaining.values() if row['base']}
+        referenced = {row['base'] for row in remaining.values() if row['base']}
         eligible = []
         for row in remaining.values():
             if row['path'] in protected or row['path'] in referenced:
@@ -229,7 +262,7 @@ def prune_cache(root, *, protected=(), quota_bytes=20 * 1024**3,
             try:
                 checked = workspace_path(root, row['path'].relative_to(root), 'dependency eviction', must_exist=True)
                 directory_bytes(checked)  # Reject links introduced after inventory.
-                shutil.rmtree(checked)
+                remove_tree(checked)
             except (OSError, ValueError) as error:
                 errors.append({'environment': row['path'].relative_to(root).as_posix(), 'reason': str(error)})
                 protected.add(row['path'])
@@ -241,4 +274,6 @@ def prune_cache(root, *, protected=(), quota_bytes=20 * 1024**3,
     return {'removed': removed, 'errors': errors, 'freed_bytes': sum(row['bytes'] for row in removed),
             'remaining_bytes': total, 'free_bytes': free, 'quota_bytes': quota_bytes,
             'min_free_bytes': min_free_bytes, 'dry_run': dry_run,
-            'quota_satisfied': total <= quota_bytes, 'space_satisfied': free >= min_free_bytes}
+            'unmeasured_environments': unmeasured,
+            'quota_satisfied': not unmeasured and total <= quota_bytes,
+            'space_satisfied': free >= min_free_bytes}

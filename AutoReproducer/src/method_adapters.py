@@ -9,6 +9,7 @@ import uuid
 from pathlib import Path
 
 from src.method_profiles import SIREN_NOTEBOOK_SHA256
+from src.dependency_versions import compatibility_pins
 from src.preset_downloads import atomic_cache_bytes, download_bytes
 from src.safety.paths import workspace_path
 
@@ -142,7 +143,7 @@ class SirenAdapter:
                 imported["torch"] != "2.5.1+cu121" or imported["cuda"] != "12.1"
                 or imported.get("torchvision") != "0.20.1+cu121"):
             raise ValueError("CUDA 运行环境与冻结版本不一致")
-        if profile["adapter_id"] == "neural_ode" and (imported["torch"] != "2.5.1+cpu"
+        if profile["adapter_id"] == "neural_ode" and (imported["torch"] != compatibility_pins("cpu")["torch"]
                 or Path(imported.get("author_package", "")).resolve() != (root / "torchdiffeq/__init__.py").resolve()):
             raise ValueError("Neural ODE 未从固定作者仓库与 CPU 环境导入")
 

@@ -210,3 +210,44 @@ def test_subcommand_required(cli_env):
     env, _ = cli_env
     res = run_cli(env)
     assert res.returncode != 0
+
+
+@pytest.mark.parametrize("size", ["-1", "nan", "inf"])
+def test_quota_check_rejects_invalid_sizes(cli_env, size):
+    env, _ = cli_env
+    result = run_cli(env, "quota-check", "--size-gb", size)
+    assert result.returncode == 1
+    assert "非负有限数" in result.stderr
+
+
+def test_zero_quota_option_is_respected(cli_env):
+    env, _ = cli_env
+    result = run_cli(env, "--quota-gb", "0", "quota-check", "--size-gb", "0.1")
+    assert result.returncode == 2
+    assert "0.0B" in result.stderr
+
+
+def test_prune_reports_remaining_dependency_usage(cli_env):
+    env, data_root = cli_env
+    _seed_paper(data_root, "paper")
+    deps = data_root / "deps"
+    deps.mkdir()
+    (deps / "dependency.bin").write_bytes(b"\0" * (1536 * 1024))
+    result = run_cli(env, "prune", "--yes")
+    assert result.returncode == 2
+    assert (deps / "dependency.bin").exists()
+
+
+def test_prune_preserves_l0_when_archive_is_unsupported(cli_env, tmp_path, require_symlinks):
+    env, data_root = cli_env
+    _seed_paper(data_root, "paper")
+    repo = data_root / "repos" / "paper"
+    (repo / "big.bin").write_bytes(b"\0" * (1536 * 1024))
+    external = tmp_path / "external.txt"
+    external.write_text("keep")
+    (repo / "link.txt").symlink_to(external)
+    result = run_cli(env, "prune", "--yes")
+    assert result.returncode == 1
+    assert "符号链接" in result.stderr
+    assert (repo / "big.bin").exists()
+    assert external.read_text() == "keep"

@@ -1,10 +1,13 @@
 """Graph packages need source imports, matching wheels and native health probes."""
 import hashlib
+from types import SimpleNamespace
 
 import pytest
 
 from discovered_fixtures import make_experiment
 from src import discovered_repository_plan as planner
+from src import dependency_versions
+from src.dependency_versions import compatibility_pins
 from src.discovered_repository_reproduction import environment_for_plan
 from src.agents.code_executor import _reviewed_pip_requirement_sources
 
@@ -20,14 +23,22 @@ def test_original_graph_tools_keep_matching_native_dependencies(tmp_path):
     citations = planner._citations(fixture['proposal'], packet, fixture['workspace'])
     requirements = planner._requirements(fixture['proposal']['requirements'], citations, packet,
                                          step=fixture['proposal']['steps'][0])
-    assert {'deeprobust==0.2.11', 'ogb==1.3.6', 'torch==2.5.1+cpu',
-            'torchvision==0.20.1+cpu', 'pandas==2.2.3'} <= set(requirements['compatibility'])
+    pins = compatibility_pins()
+    assert {'deeprobust==0.2.11', 'ogb==1.3.6', 'torch==' + pins['torch'],
+            'torchvision==' + pins['torchvision'], 'pandas==2.2.3'} <= set(requirements['compatibility'])
 
 
-@pytest.mark.parametrize('device,suffix', [('cpu', 'cpu'), ('cuda', 'cu121')])
-def test_actual_graph_imports_compile_package_aliases_and_runtime_dependencies(tmp_path, device, suffix):
+@pytest.mark.parametrize('platform_name,device,suffix', [
+    ('linux', 'cpu', 'cpu'), ('win32', 'cpu', 'cpu'), ('darwin', 'cpu', 'cpu'),
+    ('linux', 'cuda', 'cu121'), ('win32', 'cuda', 'cu121'),
+])
+def test_actual_graph_imports_compile_package_aliases_and_runtime_dependencies(
+        tmp_path, monkeypatch, platform_name, device, suffix):
+    monkeypatch.setattr(dependency_versions, 'sys', SimpleNamespace(platform=platform_name))
     fixture = make_experiment(tmp_path)
-    fixture['proposal']['requirements']['compatibility'][0] = f'torch==2.5.1+{suffix}'
+    torch_suffix = '' if platform_name == 'darwin' else '+' + suffix
+    graph_suffix = '' if platform_name == 'darwin' else '+pt25' + suffix
+    fixture['proposal']['requirements']['compatibility'][0] = 'torch==2.5.1' + torch_suffix
     path = fixture['workspace'] / 'train.py'
     source = ('import torch_geometric\nfrom torch_sparse import coalesce\n'
               + ('import dgl\n' if device == 'cpu' else '') + path.read_text('utf-8'))
@@ -39,8 +50,8 @@ def test_actual_graph_imports_compile_package_aliases_and_runtime_dependencies(t
     requirements = planner._requirements(fixture['proposal']['requirements'], citations, packet,
                                          device=device, step=fixture['proposal']['steps'][0])
     pins = set(requirements['compatibility'])
-    assert {f'torch==2.5.1+{suffix}', 'torch-geometric==2.6.1',
-            f'torch-sparse==0.6.18+pt25{suffix}', f'torch-scatter==2.1.2+pt25{suffix}',
+    assert {'torch==2.5.1' + torch_suffix, 'torch-geometric==2.6.1',
+            'torch-sparse==0.6.18' + graph_suffix, 'torch-scatter==2.1.2' + graph_suffix,
             'psutil==6.1.0', 'fsspec==2024.10.0', 'jinja2==3.1.6', 'aiohttp==3.10.10'} <= pins
     assert ('dgl==1.1.2' in pins) == (device == 'cpu')
     environment = environment_for_plan({'capture': {'device': device}, 'requirements': requirements})

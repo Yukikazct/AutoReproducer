@@ -208,12 +208,12 @@ def verify_snapshot(workspace, snapshot, generated):
 
 
 def environment_for_plan(plan):
-    from src.discovered_repository_plan import (CPU_COMPATIBILITY_PINS, CPU_INDEX_URL,
-                                               CUDA_COMPATIBILITY_PINS, CUDA_INDEX_URL, GRAPH_WHEEL_LINKS)
+    from src.discovered_repository_plan import (CPU_INDEX_URL, CUDA_INDEX_URL, GRAPH_WHEEL_LINKS)
+    from src.dependency_versions import compatibility_pins
     device = (plan.get("capture") or {}).get("device", "cpu")
     if device not in {"cpu", "cuda"}:
         raise ValueError("作者执行设备不在已审阅环境中")
-    version_map = CUDA_COMPATIBILITY_PINS if device == "cuda" else CPU_COMPATIBILITY_PINS
+    version_map = compatibility_pins(device)
     index_url = CUDA_INDEX_URL if device == "cuda" else CPU_INDEX_URL
     requirements = plan.get("requirements") or {}
     pins = requirements.get("compatibility") or []

@@ -6,11 +6,14 @@ from pathlib import Path
 import subprocess
 import sys
 import zipfile
+from types import SimpleNamespace
 
 import pytest
 
 from discovered_fixtures import PlannedLLM, make_experiment, write_pdf
 from src import author_execution_plan as author
+from src import dependency_versions
+from src.dependency_versions import compatibility_pins
 from src.discovered_repository_plan import build_evidence_packet, PlanEvidenceError
 from src.method_adapters import read_json
 from test_discovered_repository_runtime import native_environment
@@ -122,7 +125,7 @@ def test_execution_can_try_original_command_without_claims_or_exact_argument_quo
     proposal['requirements'] = {}
     plan = author.validate_author_execution_plan(proposal, packet, fixture['workspace'])
     assert plan['steps'][0]['argv'][-2:] == ['--epochs', '17']
-    assert 'torch==2.5.1+cpu' in plan['requirements']['compatibility']
+    assert 'torch==' + compatibility_pins()['torch'] in plan['requirements']['compatibility']
     assert plan['pre_execution_review'] == 'disabled'
 
 
@@ -146,7 +149,10 @@ def test_runtime_dataset_observer_is_not_an_execution_prerequisite(tmp_path):
 
 @pytest.mark.parametrize('call', ['model.cuda()', 'torch.cuda.set_device(0)'])
 @pytest.mark.parametrize('gpu_available,cpu_option,expected', [(True, False, 'cuda'), (False, False, 'cpu'), (True, True, 'cpu')])
-def test_original_cuda_calls_select_matching_wheels_on_available_host(tmp_path, gpu_available, cpu_option, expected, call):
+@pytest.mark.parametrize('platform_name', ['linux', 'win32'])
+def test_original_cuda_calls_select_matching_wheels_on_available_host(
+        tmp_path, monkeypatch, gpu_available, cpu_option, expected, call, platform_name):
+    monkeypatch.setattr(dependency_versions, 'sys', SimpleNamespace(platform=platform_name))
     fixture, _ = fixture_packet(tmp_path)
     script = fixture['workspace'] / 'train.py'
     script.write_text(script.read_text('utf-8') + '\n' + call + '\n', encoding='utf-8')

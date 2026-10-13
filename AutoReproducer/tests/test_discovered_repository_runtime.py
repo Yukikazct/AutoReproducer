@@ -197,7 +197,8 @@ def test_external_sparse_operators_register_in_fresh_evaluator(tmp_path):
         path.write_text(model, encoding='utf-8')
         fixture['snapshot']['files']['author_model.py'] = hashlib.sha256(path.read_bytes()).hexdigest()
         next(item for item in fixture['proposal']['citations'] if item['id'] == 'model')['quote'] = model
-        fixture['proposal']['requirements']['compatibility'].append('torch-sparse==0.6.18+pt25cpu')
+        from src.dependency_versions import compatibility_pins
+        fixture['proposal']['requirements']['compatibility'].append('torch-sparse==' + compatibility_pins()['torch-sparse'])
         fixture['proposal']['requirements']['citations'].append('model')
     fixture, plan, digest, manifest, execution = run_fixture(tmp_path, mutate=extension_model)
     config = read_json(fixture['workspace'] / '_autorepro_capture/config.json')

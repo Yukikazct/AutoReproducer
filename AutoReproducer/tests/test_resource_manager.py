@@ -314,3 +314,366 @@ def test_stats_aggregates_papers(mgr):
     assert stats["papers"][0]["title"] == "T"
     assert stats["papers"][0]["code_bytes"] > 0
     assert stats["usage"]["bytes"] > 0
+
+
+@pytest.mark.parametrize("paper_id", [
+    "../outside", "a/b", "a\\b", "/tmp/outside", "..", "",
+    "CON", "nul.txt", "COM1", "LPT¹.csv", "trailing.", "trailing ", "name?",
+])
+def test_managed_paths_reject_invalid_ids(mgr, paper_id):
+    with pytest.raises(ValueError):
+        mgr.cleanup(paper_id)
+    with pytest.raises(ValueError):
+        mgr.save_manifest({"paper_id": paper_id})
+
+
+def test_manifest_failure_keeps_previous_complete_document(mgr, monkeypatch):
+    mgr.save_manifest({"paper_id": "paper", "paper_title": "previous"})
+
+    def fail_replace(*args):
+        raise OSError("disk full")
+
+    monkeypatch.setattr("src.resource_manager.os.replace", fail_replace)
+    with pytest.raises(OSError, match="disk full"):
+        mgr.save_manifest({"paper_id": "paper", "paper_title": "next"})
+    assert mgr.get_manifest("paper")["paper_title"] == "previous"
+    assert list(mgr.manifests_root.iterdir()) == [mgr._manifest_path("paper")]
+
+
+def test_concurrent_manifest_readers_see_complete_documents(mgr):
+    from concurrent.futures import ThreadPoolExecutor
+
+    mgr.save_manifest({"paper_id": "paper", "value": "initial"})
+
+    def write(value):
+        for _ in range(20):
+            mgr.save_manifest({"paper_id": "paper", "value": value * 1000})
+
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        writers = [executor.submit(write, value) for value in ("a", "b")]
+        for _ in range(200):
+            loaded = mgr.get_manifest("paper")
+            assert loaded and loaded["value"] in ("initial", "a" * 1000, "b" * 1000)
+        for writer in writers:
+            writer.result()
+
+
+def test_archive_failure_preserves_previous_archive(mgr, monkeypatch):
+    repo = mgr._repo_dir("paper")
+    repo.mkdir()
+    (repo / "file.txt").write_text("version one")
+    archive = Path(mgr.archive("paper")["archive"])
+    previous = archive.read_bytes()
+
+    def fail_write(*args):
+        raise OSError("archive disk full")
+
+    monkeypatch.setattr(zipfile.ZipFile, "write", fail_write)
+    with pytest.raises(OSError, match="disk full"):
+        mgr.archive("paper")
+    assert archive.read_bytes() == previous
+    assert list(mgr.archive_root.iterdir()) == [archive]
+
+
+def test_archive_rejects_destination_inside_resources(mgr):
+    repo = mgr._repo_dir("paper")
+    repo.mkdir()
+    with pytest.raises(ValueError, match="资源内部"):
+        mgr.archive("paper", dest_dir=str(repo / "archives"))
+
+
+def test_archive_cleaned_resources_does_not_replace_previous_backup(mgr):
+    repo = mgr._repo_dir("paper")
+    repo.mkdir()
+    (repo / "file.txt").write_text("backup content")
+    mgr.save_manifest(mgr.build_manifest("paper"))
+    archive = Path(mgr.archive("paper")["archive"])
+    previous = archive.read_bytes()
+    mgr.cleanup("paper")
+    with pytest.raises(ValueError, match="保留已有归档"):
+        mgr.archive("paper")
+    assert archive.read_bytes() == previous
+
+
+def test_archive_rejects_symlinks_without_touching_target(mgr, tmp_path, require_symlinks):
+    external = tmp_path / "external.txt"
+    external.write_text("external")
+    repo = mgr._repo_dir("paper")
+    repo.mkdir()
+    (repo / "link.txt").symlink_to(external)
+    with pytest.raises(ValueError, match="符号链接"):
+        mgr.archive("paper")
+    assert external.read_text() == "external"
+    assert not (mgr.archive_root / "paper.zip").exists()
+
+
+def test_cleanup_rejects_symlink_cache_root(mgr, tmp_path, require_symlinks):
+    outside = tmp_path / "outside" / "paper"
+    outside.mkdir(parents=True)
+    (outside / "keep.txt").write_text("keep")
+    mgr.repos_root.rmdir()
+    mgr.repos_root.symlink_to(outside.parent, target_is_directory=True)
+    with pytest.raises(ValueError, match="符号链接"):
+        mgr.cleanup("paper")
+    assert (outside / "keep.txt").read_text() == "keep"
+
+
+@pytest.mark.parametrize("unsafe", [
+    "repos/paper/../../escaped.txt", "repos/paper/../../../escaped.txt",
+    "/repos/paper/escaped.txt", "repos/paper/..\\escaped.txt",
+    "repos/other/file.txt",
+])
+def test_restore_validates_entire_archive_before_modifying_l0(mgr, tmp_path, unsafe):
+    repo = mgr._repo_dir("paper")
+    repo.mkdir()
+    (repo / "file.txt").write_text("original")
+    archive = tmp_path / "bad.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("repos/paper/file.txt", "replacement")
+        zf.writestr(unsafe, "unwanted")
+    result = mgr.restore(str(archive))
+    assert not result["ok"]
+    assert (repo / "file.txt").read_text() == "original"
+    assert not (tmp_path / "escaped.txt").exists()
+    assert not list(mgr.data_root.glob(".restore-*"))
+
+
+def test_restore_rejects_existing_symlink_parent(mgr, tmp_path, require_symlinks):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    repo = mgr._repo_dir("paper")
+    repo.mkdir()
+    (repo / "redirect").symlink_to(outside, target_is_directory=True)
+    archive = tmp_path / "archive.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("repos/paper/redirect/unwanted.txt", "unwanted")
+    assert not mgr.restore(str(archive))["ok"]
+    assert not list(outside.iterdir())
+
+
+def test_restore_corrupt_payload_keeps_existing_files(mgr, tmp_path):
+    repo = mgr._repo_dir("paper")
+    repo.mkdir()
+    (repo / "file.txt").write_text("original")
+    archive = tmp_path / "bad.zip"
+    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_STORED) as zf:
+        zf.writestr("repos/paper/file.txt", "replacement")
+        zf.writestr("repos/paper/other.txt", "corrupt-me")
+    archive.write_bytes(archive.read_bytes().replace(b"corrupt-me", b"broken-now"))
+    result = mgr.restore(str(archive))
+    assert not result["ok"]
+    assert (repo / "file.txt").read_text() == "original"
+    assert not (repo / "other.txt").exists()
+
+
+def test_restore_rebases_manifest_and_preserves_empty_dirs_and_permissions(mgr, tmp_path):
+    repo = mgr._repo_dir("paper")
+    (repo / "empty").mkdir(parents=True)
+    script = repo / "train.sh"
+    script.write_text("#!/bin/sh\ntrue\n")
+    script.chmod(0o755)
+    mgr.fetch_dataset("paper", "MNIST")
+    weights = repo / "weights" / "model.bin"
+    weights.parent.mkdir()
+    weights.write_bytes(b"weights")
+    manifest = mgr.build_manifest("paper")
+    manifest["cleaned_at"] = "old timestamp"
+    mgr.save_manifest(manifest)
+    archive = mgr.archive("paper")
+    new_manager = ResourceManager(data_root=str(tmp_path / "new-root"))
+    result = new_manager.restore(archive["archive"], paper_id="paper")
+    assert result["ok"]
+    new_repo = new_manager._repo_dir("paper")
+    assert (new_repo / "empty").is_dir()
+    if os.name != "nt":
+        assert (new_repo / "train.sh").stat().st_mode & 0o111
+    restored_manifest = new_manager.get_manifest("paper")
+    assert "cleaned_at" not in restored_manifest
+    assert restored_manifest["resources"] == {
+        "code": str(new_repo),
+        "dataset": str(new_manager._dataset_dir("paper") / "dataset_smoke"),
+        "weights": str(new_repo / "weights" / "model.bin"),
+    }
+    assert not new_manager.restore(archive["archive"], paper_id="another")["ok"]
+
+
+def test_cleanup_reports_failures_and_retains_live_manifest_paths(mgr, monkeypatch):
+    repo = mgr._repo_dir("paper")
+    repo.mkdir()
+    (repo / "file.txt").write_text("keep")
+    mgr.fetch_dataset("paper", "MNIST")
+    mgr.save_manifest(mgr.build_manifest("paper"))
+    original_rmtree = __import__("shutil").rmtree
+
+    def fail_repo(path, *args, **kwargs):
+        if path == repo:
+            raise PermissionError("busy repository")
+        return original_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr("src.resource_manager.shutil.rmtree", fail_repo)
+    result = mgr.cleanup("paper")
+    assert not result["ok"]
+    assert str(repo) not in result["removed"]
+    assert "busy repository" in result["errors"][0]
+    manifest = mgr.get_manifest("paper")
+    assert manifest["resources"]["code"] == str(repo)
+    assert manifest["resources"]["dataset"] == ""
+    assert not manifest.get("cleaned_at")
+
+
+def test_cleanup_can_remove_manifest(mgr):
+    mgr.save_manifest(mgr.build_manifest("paper"))
+    assert mgr.cleanup("paper", keep_manifest=False)["ok"]
+    assert mgr.get_manifest("paper") is None
+
+
+def test_zero_quota_is_respected(tmp_path):
+    manager = ResourceManager(data_root=str(tmp_path), quota_bytes=0)
+    assert manager.quota_usage()["quota"] == 0
+
+
+@pytest.mark.parametrize("alias", [
+    "repos/paper/FILE.txt", "repos/paper/file.txt.", "repos/paper/file.txt ",
+    "repos/paper/CON", "repos/paper/LPT1.log", "repos/paper/aux.txt",
+    "repos/paper/name:stream", "repos/paper/file?.txt",
+])
+def test_restore_rejects_windows_names_and_aliases_before_publication(mgr, tmp_path, alias):
+    repo = mgr._repo_dir("paper")
+    repo.mkdir()
+    original = repo / "file.txt"
+    original.write_text("original")
+    archive = tmp_path / "windows-alias.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("repos/paper/file.txt", "replacement")
+        zf.writestr(alias, "aliased content")
+    result = mgr.restore(str(archive))
+    assert not result["ok"]
+    assert result["restored"] == []
+    assert original.read_text() == "original"
+
+
+@pytest.mark.parametrize("first,second", [
+    ("repos/paper/dir/a.txt", "repos/paper/DIR/b.txt"),
+    ("repos/paper/caf\u00e9.txt", "repos/paper/cafe\u0301.txt"),
+])
+def test_restore_rejects_parent_and_unicode_aliases(mgr, tmp_path, first, second):
+    archive = tmp_path / "aliases.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr(first, "one")
+        zf.writestr(second, "two")
+    assert not mgr.restore(str(archive))["ok"]
+    assert not mgr._repo_dir("paper").exists()
+
+
+def test_manifest_retries_only_transient_windows_sharing_errors(mgr, monkeypatch):
+    original_replace = os.replace
+    attempts = []
+    sleeps = []
+
+    def locked_then_available(source, destination):
+        attempts.append(source)
+        if len(attempts) < 3:
+            error = PermissionError("Windows sharing conflict")
+            error.winerror = 32
+            raise error
+        return original_replace(source, destination)
+
+    monkeypatch.setattr("src.resource_manager.os.replace", locked_then_available)
+    monkeypatch.setattr("src.resource_manager.time.sleep", sleeps.append)
+    mgr.save_manifest({"paper_id": "paper", "paper_title": "saved"})
+    assert mgr.get_manifest("paper")["paper_title"] == "saved"
+    assert len(attempts) == 3
+    assert sum(sleeps) <= 0.5
+
+
+def test_windows_sharing_retries_are_bounded(mgr, monkeypatch):
+    mgr.save_manifest({"paper_id": "paper", "paper_title": "previous"})
+    sleeps = []
+
+    def locked(*args):
+        error = PermissionError("permanently locked")
+        error.winerror = 32
+        raise error
+
+    monkeypatch.setattr("src.resource_manager.os.replace", locked)
+    monkeypatch.setattr("src.resource_manager.time.sleep", sleeps.append)
+    with pytest.raises(PermissionError, match="permanently locked"):
+        mgr.save_manifest({"paper_id": "paper", "paper_title": "next"})
+    assert mgr.get_manifest("paper")["paper_title"] == "previous"
+    assert len(sleeps) == 10
+    assert sum(sleeps) <= 0.5
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Requires native Windows file sharing semantics")
+@pytest.mark.parametrize("operation", ["manifest", "archive"])
+def test_windows_locked_destination_preserves_previous_file(mgr, operation):
+    import ctypes
+    from ctypes import wintypes
+
+    repo = mgr._repo_dir("paper")
+    repo.mkdir()
+    (repo / "file.txt").write_text("original")
+    manifest = mgr.build_manifest("paper")
+    if operation == "manifest":
+        destination = Path(mgr.save_manifest(manifest))
+        publish = lambda: mgr.save_manifest({**manifest, "paper_title": "new"})
+    else:
+        destination = Path(mgr.archive("paper")["archive"])
+        publish = lambda: mgr.archive("paper")
+    original = destination.read_bytes()
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                                  wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD,
+                                  wintypes.HANDLE]
+    kernel.CreateFileW.restype = wintypes.HANDLE
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel.CloseHandle.restype = wintypes.BOOL
+    # Read/write sharing is allowed; replacement/deletion explicitly is not.
+    handle = kernel.CreateFileW(str(destination), 0x80000000, 0x1 | 0x2,
+                                None, 3, 0, None)
+    if handle == ctypes.c_void_p(-1).value:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        with pytest.raises(OSError):
+            publish()
+        assert destination.read_bytes() == original
+        assert not list(destination.parent.glob("*.tmp"))
+    finally:
+        kernel.CloseHandle(handle)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Requires native Windows junction support")
+def test_windows_junction_is_not_traversed_by_cleanup_or_restore(mgr, tmp_path):
+    import subprocess
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    keep = outside / "keep.txt"
+    keep.write_text("keep")
+    repo = mgr.repos_root / "paper"
+    subprocess.run(["cmd", "/c", "mklink", "/J", str(repo), str(outside)],
+                   check=True, capture_output=True)
+    try:
+        with pytest.raises(ValueError):
+            mgr.cleanup("paper")
+        with pytest.raises(ValueError):
+            mgr.archive("paper")
+        archive = tmp_path / "junction.zip"
+        with zipfile.ZipFile(archive, "w") as zf:
+            zf.writestr("repos/paper/keep.txt", "replacement")
+        assert not mgr.restore(str(archive))["ok"]
+        assert keep.read_text() == "keep"
+    finally:
+        repo.rmdir()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Requires native Windows chmod behavior")
+def test_windows_restores_posix_readonly_modes_as_writable_files(mgr, tmp_path):
+    archive = tmp_path / "posix-mode.zip"
+    member = zipfile.ZipInfo("repos/paper/train.sh")
+    member.create_system = 3
+    member.external_attr = (0o100555 << 16)
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr(member, "#!/bin/sh\ntrue\n")
+    assert mgr.restore(str(archive))["ok"]
+    assert mgr.cleanup("paper")["ok"]

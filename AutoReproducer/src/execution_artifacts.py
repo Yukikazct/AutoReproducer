@@ -6,9 +6,10 @@ import re
 import tempfile
 from pathlib import Path
 from urllib.parse import quote, unquote
+from src.project_paths import get_data_root
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-ARTIFACT_ROOT = PROJECT_ROOT / "data" / "reports" / "artifacts"
+ARTIFACT_ROOT = get_data_root() / "reports" / "artifacts"
 FONT_PATH = PROJECT_ROOT / "assets" / "fonts" / "NotoSansSC.ttf"
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
 MAX_TOTAL_BYTES = 32 * 1024 * 1024
@@ -117,7 +118,7 @@ def verified_image_bytes(artifact: dict) -> bytes | None:
 
 def default_report_path() -> Path:
     """The default report base is stable even when the process changes CWD."""
-    return PROJECT_ROOT / "data" / "reports" / "report.md"
+    return get_data_root() / "reports" / "report.md"
 
 
 def _report_file(report_path: str | Path) -> Path:

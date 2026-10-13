@@ -1,6 +1,5 @@
 """Coordinate local dependency users and cleanup across threads and processes."""
 import os
-import shutil
 import threading
 import weakref
 from contextlib import contextmanager
@@ -9,6 +8,7 @@ from pathlib import Path
 from filelock import FileLock, Timeout
 
 from src.safety.paths import is_link, workspace_path
+from src.safety.files import remove_tree
 
 
 LOCK_TIMEOUT = 60
@@ -45,7 +45,7 @@ def reset_managed_environment(root, directory):
         for parent, directories, files in os.walk(checked, followlinks=False):
             if any(is_link(Path(parent) / name) for name in directories + files):
                 raise ValueError("dependency repair target contains a symlink or junction")
-        shutil.rmtree(checked)
+        remove_tree(checked)
     checked.mkdir(parents=True, exist_ok=True)
     return checked
 
@@ -53,7 +53,6 @@ def reset_managed_environment(root, directory):
 DEPENDENCY_HEALTH_PROBE = r'''
 import importlib, importlib.metadata, json, os, re, sys
 from pathlib import Path
-from packaging.specifiers import SpecifierSet
 
 target = Path(sys.argv[1]).resolve(strict=True)
 requirements = json.loads(sys.argv[2])
@@ -62,6 +61,10 @@ expected_versions = json.loads(sys.argv[4]) if len(sys.argv) > 4 else {}
 if any(req['module'] == 'dgl' for req in requirements):
     os.environ['DGLBACKEND'] = 'pytorch'
 sys.path[:0] = [str(path) for path in targets]
+# packaging can itself be one of the managed dependencies. Import the probe's
+# helper only after selecting the cache, otherwise sys.modules keeps the host
+# copy and a healthy managed packaging install is incorrectly rejected.
+from packaging.specifiers import SpecifierSet
 canonical = lambda name: re.sub(r"[-_.]+", "-", name).lower()
 distributions = {}
 for path in targets:

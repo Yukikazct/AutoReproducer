@@ -16,10 +16,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-
-# 项目根目录（src/audit/audit_logger.py -> parents[2] 为仓库内 AutoReproducer 包根）
-_PROJECT_ROOT = Path(__file__).resolve().parents[2]
-
+from src.project_paths import get_data_root
 
 class AuditLogger:
     """审计日志记录器：追踪每一步的决策依据，并落盘为可回放的账本。
@@ -31,7 +28,7 @@ class AuditLogger:
     def __init__(self, log_dir: Optional[str] = None,
                  ledger_dir: Optional[str] = None):
         # 默认落在项目根 data/ 下，避免随 CWD 漂移
-        base = _PROJECT_ROOT / "data"
+        base = get_data_root()
         self.log_dir = Path(log_dir) if log_dir else (base / "logs")
         self.ledger_dir = Path(ledger_dir) if ledger_dir else (base / "experiment_ledger")
         self.log_dir.mkdir(parents=True, exist_ok=True)

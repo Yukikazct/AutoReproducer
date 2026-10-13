@@ -195,6 +195,7 @@ def test_report_default_path_and_data_field_ignore_cwd(tmp_path, monkeypatch):
     artifact = _collected_image(tmp_path)
     project_root = tmp_path / "project"
     monkeypatch.setattr(artifacts, "PROJECT_ROOT", project_root)
+    monkeypatch.setenv("AUTOREPRO_DATA_ROOT", str(project_root / "data"))
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
     monkeypatch.chdir(elsewhere)

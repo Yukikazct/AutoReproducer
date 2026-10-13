@@ -8,7 +8,8 @@ from packaging.requirements import InvalidRequirement, Requirement
 
 from src.agents.code_executor import _safe_install_diagnostic
 from src.agents.dependency_resolver import find_missing_module, python_package_for
-from src.discovered_repository_plan import CPU_COMPATIBILITY_PINS, CUDA_COMPATIBILITY_PINS, _PACKAGE_IMPORTS, _RUNTIME_DEPENDENCIES
+from src.discovered_repository_plan import GRAPH_WHEEL_LINKS, _PACKAGE_IMPORTS, _RUNTIME_DEPENDENCIES
+from src.dependency_versions import compatibility_pins
 from src.method_adapters import write_json
 
 MAX_DEPENDENCY_REPAIRS = 8
@@ -38,7 +39,7 @@ def repair_requirement(stderr, plan, packet):
         if normalize(requirement.name) == normalize(package) and not requirement.url:
             declared = str(requirement)
             break
-    pins = CUDA_COMPATIBILITY_PINS if plan['capture']['device'] == 'cuda' else CPU_COMPATIBILITY_PINS
+    pins = compatibility_pins(plan['capture']['device'])
     # Known native pairs retain their compatible pins; other packages prefer
     # the author's requirement. Undeclared dependencies are installed only
     # after their genuine runtime error, then cache health checks their import.
@@ -46,8 +47,11 @@ def repair_requirement(stderr, plan, packet):
     additions = [requirement]
     for dependency in _RUNTIME_DEPENDENCIES.get(package, ()):
         additions.append(dependency + '==' + pins[dependency])
+    options = (["--find-links " + GRAPH_WHEEL_LINKS[plan['capture']['device']]]
+               if any(item.split('==')[0] in {'torch-scatter', 'torch-sparse'} for item in additions)
+               else [])
     return {'module': module, 'package': package, 'requirement': requirement,
-            'additions': additions, 'author_declaration': declared,
+            'additions': additions, 'requirement_options': options, 'author_declaration': declared,
             'source': 'actual_missing_module_error'}
 
 
@@ -99,7 +103,7 @@ def run_with_dependency_repair(runner, workspace, steps, environment, plan, pack
                   'data': repair}})
         existing = effective.get('requirements_txt', '')
         lines = existing.splitlines()
-        for requirement in fix['additions']:
+        for requirement in [*fix.get('requirement_options', []), *fix['additions']]:
             if requirement not in lines:
                 lines.append(requirement)
         effective.update(requirements_txt='\n'.join(lines) + '\n', auto_prepare=True, require_prepared=False,

@@ -28,6 +28,93 @@ def test_runtime_requirement_detects_missing_app_dependencies(monkeypatch):
     assert "依赖缺失" in runtime.runtime_requirement()
 
 
+@pytest.mark.parametrize('package', ['packaging', 'numpy', 'Pillow'])
+def test_runtime_requirement_detects_missing_direct_dependencies(monkeypatch, package):
+    monkeypatch.setattr(runtime.sys, 'version_info', (3, 12, 10))
+    monkeypatch.setattr(runtime, 'validate_windows_venv', lambda: None)
+    original = runtime.importlib.metadata.version
+
+    def version(name):
+        if name == package:
+            raise runtime.importlib.metadata.PackageNotFoundError(name)
+        return original(name)
+
+    monkeypatch.setattr(runtime.importlib.metadata, 'version', version)
+    assert '依赖缺失' in runtime.runtime_requirement()
+
+
+@pytest.mark.parametrize('package, version', [('filelock', '4.0'), ('numpy', '3.0'), ('Pillow', '13.0')])
+def test_runtime_requirement_enforces_production_upper_bounds(monkeypatch, package, version):
+    monkeypatch.setattr(runtime.sys, 'version_info', (3, 12, 10))
+    monkeypatch.setattr(runtime, 'validate_windows_venv', lambda: None)
+    original = runtime.importlib.metadata.version
+    monkeypatch.setattr(runtime.importlib.metadata, 'version', lambda name: version if name == package else original(name))
+    assert '版本不兼容' in runtime.runtime_requirement()
+
+
+@pytest.mark.parametrize('required, healthy', [('packaging>=23.2', True), ('packaging>=1000', False)])
+def test_isolated_health_probe_uses_the_same_declared_constraints(monkeypatch, required, healthy):
+    monkeypatch.setattr(runtime, 'APP_REQUIREMENTS', (required,))
+    monkeypatch.setattr(runtime, 'APP_IMPORTS', ('packaging',))
+    assert runtime._healthy(sys.executable, Path(__file__).resolve().parents[1], cancel_check=None,
+                            deadline=time.monotonic() + 10) is healthy
+
+
+def test_isolated_health_probe_preserves_chinese_diagnostics(monkeypatch):
+    monkeypatch.setattr(runtime, 'APP_REQUIREMENTS', ('packaging>=1000',))
+    monkeypatch.setattr(runtime, 'APP_IMPORTS', ('packaging',))
+    monkeypatch.setenv('PYTHONUTF8', '0')
+    monkeypatch.setenv('PYTHONIOENCODING', 'cp1252')
+    original = runtime.run_owned_process
+    output = []
+
+    def observed(*args, **kwargs):
+        result = original(*args, **kwargs)
+        output.append(result)
+        return result
+
+    monkeypatch.setattr(runtime, 'run_owned_process', observed)
+    assert not runtime._healthy(sys.executable, Path(__file__).resolve().parents[1], cancel_check=None,
+                                deadline=time.monotonic() + 10)
+    assert '应用依赖版本不兼容' in output[0].stderr
+
+
+def test_owned_process_uses_utf8_with_legacy_stdio_in_a_chinese_directory(tmp_path):
+    workspace = tmp_path / '依赖 环境'
+    workspace.mkdir()
+    message = '依赖安装完成，版本校验通过'
+    program = (
+        'import sys;from pathlib import Path;'
+        f'text={message!r};print(text);print(text,file=sys.stderr);'
+        "Path('状态 文件.txt').write_text(text,encoding='utf-8')"
+    )
+    environment = dict(os.environ, PYTHONUTF8='0', PYTHONIOENCODING='cp1252',
+                       PYTHONHOME=str(workspace / 'invalid-python-home'), PYTHONPATH=str(workspace / 'invalid-path'))
+    result = runtime.run_owned_process([sys.executable, '-c', program], cwd=workspace,
+                                       env=environment, timeout_s=10)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == result.stderr.strip() == message
+    assert (workspace / '状态 文件.txt').read_text('utf-8') == message
+
+
+def test_bootstrap_reads_production_manifest_outside_project_without_site_packages(tmp_path):
+    project = Path(__file__).resolve().parents[1]
+    program = (
+        "import json,sys;sys.path.insert(0,sys.argv[1]);"
+        "from src.runtime_preparation import APP_REQUIREMENTS,APP_IMPORTS;"
+        "print(json.dumps({'requirements':APP_REQUIREMENTS,'imports':APP_IMPORTS}))"
+    )
+    result = subprocess.run([sys.executable, '-I', '-S', '-c', program, str(project)],
+                            cwd=tmp_path, capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    record = json.loads(result.stdout)
+    manifest = [line.strip() for line in (project / 'requirements.txt').read_text('utf-8').splitlines()
+                if line.strip() and not line.lstrip().startswith('#')]
+    assert record['requirements'] == manifest
+    assert {'packaging', 'numpy', 'PIL'} <= set(record['imports'])
+    assert not any(requirement.startswith('pytest') for requirement in record['requirements'])
+
+
 @pytest.mark.parametrize("exception", [ImportError("corrupt package"), ValueError("numpy.dtype size changed"),
                                       RuntimeError("native library unavailable"), SyntaxError("corrupt source")])
 def test_runtime_requirement_detects_broken_installed_dependency(monkeypatch, exception):

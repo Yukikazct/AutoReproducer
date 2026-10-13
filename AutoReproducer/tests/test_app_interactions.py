@@ -284,7 +284,8 @@ def test_terminal_progress_updates_controls_in_same_render(app, tmp_path, termin
     assert app.session_state["running"] is False
     assert app.session_state["current_state"] == terminal
     assert next(b for b in app.sidebar.button if "开始复现" in b.label).disabled is False
-    assert terminal in " ".join(m.value for m in app.sidebar.markdown)
+    status_text = {"COMPLETED": "已完成", "ERROR": "运行异常"}[terminal]
+    assert f"<strong>{status_text}</strong>" in " ".join(m.value for m in app.sidebar.markdown)
 
 
 def test_numerical_mismatch_is_not_presented_as_reproduction_success(app, tmp_path):

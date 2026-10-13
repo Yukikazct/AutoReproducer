@@ -30,6 +30,7 @@
   python scripts/resource_cli.py quota-check --size-gb 1.5
 """
 import argparse
+import math
 import os
 import sys
 from pathlib import Path
@@ -46,7 +47,9 @@ from frontend.history_manager import (  # noqa: E402
 
 def _manager(args) -> ResourceManager:
     quota = None
-    if getattr(args, "quota_gb", None):
+    if getattr(args, "quota_gb", None) is not None:
+        if not math.isfinite(float(args.quota_gb)) or float(args.quota_gb) < 0:
+            raise ValueError("L0 配额必须是非负有限数")
         quota = int(float(args.quota_gb) * 1024 ** 3)
     return ResourceManager(data_root=args.data_root, quota_bytes=quota)
 
@@ -159,19 +162,26 @@ def cmd_prune(args) -> int:
             continue
         done[pid] = True
         arc = mgr.archive(pid)
-        if arc.get("entries"):
-            archives.append(arc["archive"])
-        mgr.cleanup(pid, keep_manifest=True)
+        if not arc.get("entries"):
+            print(f"归档为空，保留 L0 资源: {pid}", file=sys.stderr)
+            return 1
+        archives.append(arc["archive"])
+        result = mgr.cleanup(pid, keep_manifest=True)
+        if not result["ok"]:
+            print("清理未完成: " + "; ".join(result["errors"]), file=sys.stderr)
+            return 1
         print(f"已归档并清理: {pid} -> {arc['archive']}")
-    print(f"配额腾出检查: {mgr.quota_usage()['human']} "
-          f"/ {mgr.quota_usage()['quota_human']}")
-    return 0
+    remaining = mgr.quota_usage()
+    print(f"配额腾出检查: {remaining['human']} / {remaining['quota_human']}")
+    return 0 if remaining["bytes"] <= mgr.quota_bytes else 2
 
 
 def cmd_quota_check(args) -> int:
     """拉取前配额预检：模拟下载 size_gb 后是否超限；超限则拒绝。"""
     mgr = _manager(args)
     usage = mgr.quota_usage()
+    if not math.isfinite(args.size_gb) or args.size_gb < 0:
+        raise ValueError("预计下载体积必须是非负有限数")
     need = float(args.size_gb) * 1024 ** 3
     after = usage["bytes"] + need
     if after <= mgr.quota_bytes:
@@ -195,7 +205,7 @@ def cmd_quota_check(args) -> int:
 
 
 def cmd_resources(args) -> int:
-    rows = list_resource_inventory()
+    rows = list_resource_inventory(data_root=args.data_root)
     if args.json:
         import json
         print(json.dumps(rows, ensure_ascii=False, indent=2))
@@ -208,7 +218,7 @@ def cmd_resources(args) -> int:
 
 
 def cmd_events(args) -> int:
-    events = list_resource_events(limit=args.limit)
+    events = list_resource_events(limit=args.limit, data_root=args.data_root)
     if args.json:
         import json
         print(json.dumps(events, ensure_ascii=False, indent=2))
@@ -304,7 +314,11 @@ def main(argv=None) -> int:
         "events": cmd_events,
         'deps-prune': cmd_deps_prune,
     }
-    return handlers[args.command](args)
+    try:
+        return handlers[args.command](args)
+    except (OSError, ValueError) as exc:
+        print(f"资源操作失败: {exc}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

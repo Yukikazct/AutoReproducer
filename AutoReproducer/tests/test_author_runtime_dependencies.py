@@ -7,6 +7,7 @@ import pytest
 from src.author_runtime_dependencies import MAX_DEPENDENCY_REPAIRS, repair_requirement, run_with_dependency_repair
 from src.discovered_repository_plan import _author_imports, _citations, _requirements, build_evidence_packet
 from src.discovered_repository_reproduction import environment_for_plan
+from src.dependency_versions import compatibility_pins
 from discovered_fixtures import make_experiment
 
 
@@ -27,7 +28,7 @@ def test_readme_pin_is_preferred_and_native_package_aliases_keep_matching_pair()
     packet = {'file_inventory': {}}
     assert repair_requirement("ModuleNotFoundError: No module named 'einops'", plan(), packet)['requirement'] == 'einops==0.8.0'
     fix = repair_requirement("ModuleNotFoundError: No module named 'torchvision'", plan(), packet)
-    assert fix['requirement'] == 'torchvision==0.20.1+cpu'
+    assert fix['requirement'] == 'torchvision==' + compatibility_pins()['torchvision']
 
 
 def test_unknown_imports_use_author_declarations_or_wait_for_actual_error(tmp_path):
@@ -71,7 +72,8 @@ def test_two_missing_modules_install_and_retry_same_author_argv_without_ending_t
     runner = FailingRunner(["ModuleNotFoundError: No module named 'einops'",
                             "ModuleNotFoundError: No module named 'yaml'", ''])
     steps = [{'argv': ['python', 'train.py', '--epochs', '200'], 'timeout_s': 300}]
-    environment = {'requirements_txt': 'torch==2.5.1+cpu\n', 'auto_prepare': False, 'require_prepared': True}
+    frozen_requirement = 'torch==' + compatibility_pins()['torch'] + '\n'
+    environment = {'requirements_txt': frozen_requirement, 'auto_prepare': False, 'require_prepared': True}
     data, events, validations = {}, [], []
     result = run_with_dependency_repair(runner, tmp_path, steps, environment, plan(), {'file_inventory': {}},
                                        tmp_path, data, events.append, lambda: validations.append(True))
@@ -83,7 +85,7 @@ def test_two_missing_modules_install_and_retry_same_author_argv_without_ending_t
     assert len(data['dependency_repair_attempts']) == 2 and len(validations) == 3
     assert 'einops==0.8.0' in result['effective_env_config']['requirements_txt']
     assert 'pyyaml==6.0.2' in result['effective_env_config']['requirements_txt']
-    assert environment['requirements_txt'] == 'torch==2.5.1+cpu\n'
+    assert environment['requirements_txt'] == frozen_requirement
 
 
 def test_repeated_missing_module_does_not_retry_forever_or_report_success(tmp_path):

@@ -1,5 +1,6 @@
 """Frozen official method experiments, distinct from paper-table reproduction."""
 from copy import deepcopy
+from src.dependency_versions import compatibility_pins
 
 SIREN_SHA = "4df34baee3f0f9c8f351630992c1fe1f69114b5f"
 SIREN_NOTEBOOK_SHA256 = "ac8bbdb970916bfb344d406d11d98a9746565036fae4d251dd1e67a70f7b1be6"
@@ -14,6 +15,7 @@ def method_profile(profile_id):
     if profile_id not in METHOD_LABELS:
         raise ValueError(f"未适配的论文预设: {profile_id}")
     if profile_id == "neural_ode_spiral":
+        torch_version = compatibility_pins("cpu")["torch"]
         return deepcopy({
             "version": 1, "id": profile_id, "adapter_id": "neural_ode", "label": METHOD_LABELS[profile_id],
             "paper": {"title": "Neural Ordinary Differential Equations", "url": "https://arxiv.org/abs/1806.07366",
@@ -30,7 +32,8 @@ def method_profile(profile_id):
             "parameters": {"seed": 2021, "steps": 2000, "data_size": 1000, "batch_time": 10,
                            "batch_size": 20, "learning_rate": .001, "device": "cpu", "solver": "dopri5",
                            "rtol": 1e-7, "atol": 1e-9, "protocol": "official_fit"},
-            "environment": {"requirements_txt": "--extra-index-url https://download.pytorch.org/whl/cpu\ntorch==2.5.1+cpu\n" + COMMON_REQUIREMENTS,
+            "environment": {"requirements_txt": "--extra-index-url https://download.pytorch.org/whl/cpu\n"
+                                              + f"torch=={torch_version}\n" + COMMON_REQUIREMENTS,
                             "note": "固定 torchdiffeq 作者源码，Python 3.11/3.12 与 PyTorch 2.5.1 CPU 兼容环境。"},
             "validation": {"level": "method", "scope": "official_method_experiment",
                            "note": "官方螺旋拟合方法实验；MAE 为轨迹拟合误差，不是论文完整基准。独立参考轨迹使用高精度 SciPy DOP853。"},

@@ -203,3 +203,68 @@ def test_resolver_wheel_must_have_source_hash():
     invalid['install'][0]['download_info']['archive_info']['hashes'] = {}
     with pytest.raises(ValueError, match='SHA-256'):
         wheel_resolution(invalid)
+
+
+@pytest.mark.parametrize('requirements', [None, [], {'package': '1.0'}, 7])
+def test_reuse_skips_malformed_requirement_metadata(tmp_path, requirements):
+    ready(tmp_path / 'broken', 'package==1.0')
+    (tmp_path / 'broken' / 'meta.json').write_text(json.dumps({'requirements': requirements}), 'utf-8')
+    assert compatible_candidates(tmp_path, 'package==1.0') == []
+    assert choose_base(tmp_path, 'package==1.0', wheel_resolution(report(('package', '1.0')))) is None
+
+
+def test_gc_uses_directory_recency_when_metadata_timestamp_is_invalid(tmp_path):
+    root = tmp_path / 'deps'
+    ready(root / 'base', 'package', last_used='2000-01-01T00:00:00')
+    ready(root / 'delta', 'package', last_used={'invalid': 'timestamp'}, base_environment='base')
+    with cache_guard(root):
+        receipt = prune_cache(root, protected=[root / 'delta'], quota_bytes=0, min_free_bytes=0)
+    assert receipt['removed'] == []
+    assert (root / 'base').is_dir()
+
+
+def test_gc_normalizes_portable_base_references(tmp_path):
+    root = tmp_path / 'deps'
+    runtime = root / 'repository' / 'runtime'
+    ready(runtime / 'base', 'package', last_used='2000-01-01T00:00:00')
+    ready(runtime / 'delta', 'package', base_environment=r'repository\runtime\base')
+    assert environment_paths(root, runtime / 'delta', require_ready=True)[1] == runtime / 'base'
+    with cache_guard(root):
+        receipt = prune_cache(root, protected=[runtime / 'delta'], quota_bytes=0, min_free_bytes=0)
+    assert receipt['removed'] == []
+
+
+def test_gc_preserves_references_when_an_environment_cannot_be_measured(tmp_path, require_symlinks):
+    root = tmp_path / 'deps'
+    ready(root / 'base', 'package', last_used='2000-01-01T00:00:00')
+    ready(root / 'delta', 'package', base_environment='base')
+    outside = tmp_path / 'outside.txt'
+    outside.write_text('keep', 'utf-8')
+    (root / 'delta' / 'linked.txt').symlink_to(outside)
+    with cache_guard(root):
+        receipt = prune_cache(root, quota_bytes=0, min_free_bytes=0)
+    assert receipt['removed'] == []
+    assert receipt['errors'] and receipt['errors'][0]['environment'] == 'delta'
+    assert receipt['unmeasured_environments'] == ['delta']
+    assert not receipt['quota_satisfied']
+    assert (root / 'base').is_dir() and outside.read_text('utf-8') == 'keep'
+
+
+def test_gc_ignores_invalid_base_metadata_without_aborting_cleanup(tmp_path):
+    root = tmp_path / 'deps'
+    ready(root / 'broken', 'package', base_environment=['not-a-path'])
+    with cache_guard(root):
+        receipt = prune_cache(root, quota_bytes=0, min_free_bytes=0)
+    assert [row['environment'] for row in receipt['removed']] == ['broken']
+
+
+@pytest.mark.parametrize('limits', [
+    {'quota_bytes': -1}, {'min_free_bytes': -1}, {'keep_days': -1},
+    {'quota_bytes': float('nan')}, {'min_free_bytes': float('inf')}, {'keep_days': '30'},
+])
+def test_gc_rejects_invalid_limits_before_removing_environments(tmp_path, limits):
+    root = tmp_path / 'deps'
+    ready(root / 'keep', 'package', last_used='2000-01-01T00:00:00')
+    with cache_guard(root), pytest.raises(ValueError, match='finite non-negative'):
+        prune_cache(root, **limits)
+    assert (root / 'keep').is_dir()

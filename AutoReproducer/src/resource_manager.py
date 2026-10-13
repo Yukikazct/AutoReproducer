@@ -23,17 +23,25 @@ import hashlib
 import json
 import os
 import shutil
+import stat
 import subprocess
+import tempfile
+import time
+import unicodedata
 import zipfile
-from pathlib import Path
+import zlib
+from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional
+from src.project_paths import get_data_root
 from src.resource_events import ResourceEventLogger
+from src.safety.files import remove_tree
+from src.safety.paths import is_link, workspace_path
 
 # src/resource_manager.py -> parents[1] 为仓库内 AutoReproducer 包根
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 # 统一缓存根（data 之下，与存量 manifest 绝对路径一致）
-DATA_ROOT = Path(os.environ.get("AUTOREPRO_DATA_ROOT", str(_PROJECT_ROOT / "data")))
+DATA_ROOT = get_data_root()
 REPOS_ROOT = DATA_ROOT / "repos"          # 代码仓库：data/repos/<paper_id>/
 DATASETS_ROOT = DATA_ROOT / "datasets"    # 数据集：data/datasets/<paper_id>/
 MANIFESTS_ROOT = DATA_ROOT / "manifests"  # 资源清单：data/manifests/<paper_id>.json
@@ -50,6 +58,8 @@ _SMOKE_ROWS = 8
 # 明显是占位符的代码仓库 URL（存量测试语料常用），不应真实克隆：
 # host 为 example.com/example.org，或路径含 /example/
 _PLACEHOLDER_HOSTS = ("example.com", "example.org")
+_WINDOWS_DEVICE_NAMES = {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"} | {
+    prefix + digit for prefix in ("COM", "LPT") for digit in "123456789¹²³"}
 
 
 def _is_placeholder_url(url: str) -> bool:
@@ -90,6 +100,68 @@ def _git_available() -> bool:
     return shutil.which("git") is not None
 
 
+def _portable_component(value: str) -> bool:
+    """A component usable without aliases on both Windows and POSIX."""
+    if (not isinstance(value, str) or not value or value in (".", "..")
+            or value.endswith((" ", "."))
+            or any(char in value for char in '/\\:<>"|?*')
+            or any(ord(char) < 32 for char in value)):
+        return False
+    device = value.split(".", 1)[0].rstrip(" ").upper()
+    return device not in _WINDOWS_DEVICE_NAMES
+
+
+def _validate_paper_id(paper_id: str) -> str:
+    """资源 ID 必须是跨平台可用的单个目录名。"""
+    if not _portable_component(paper_id):
+        raise ValueError(f"无效的 paper_id: {paper_id!r}")
+    return paper_id
+
+
+def _archive_parts(name: str, aliases: Dict[str, str]) -> List[str]:
+    """Reject Windows devices, separators and case/Unicode path aliases."""
+    parts = name.rstrip("/").split("/")
+    if not all(_portable_component(part) for part in parts):
+        raise ValueError(f"归档路径不能跨平台安全恢复: {name}")
+    for length in range(1, len(parts) + 1):
+        prefix = "/".join(parts[:length])
+        key = unicodedata.normalize("NFC", prefix).casefold()
+        if key in aliases and aliases[key] != prefix:
+            raise ValueError(f"归档路径大小写或 Unicode 别名冲突: {name}")
+        aliases[key] = prefix
+    return parts
+
+
+def _replace_file(source: Path, destination: Path) -> None:
+    """Briefly retry Windows sharing conflicts; permanent locks still fail."""
+    for attempt in range(11):
+        try:
+            os.replace(source, destination)
+            return
+        except OSError as exc:
+            if attempt == 10 or getattr(exc, "winerror", None) not in (5, 32, 33):
+                raise
+            time.sleep(0.05)
+
+
+def _atomic_json(path: Path, value: Dict) -> None:
+    """同目录临时文件 + 原子替换，读者只能看到完整的新/旧 JSON。"""
+    payload = json.dumps(value, ensure_ascii=False, indent=2)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=path.parent,
+                prefix=f".{path.name}.", suffix=".tmp", delete=False) as stream:
+            temporary = Path(stream.name)
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        _replace_file(temporary, path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
 class ResourceManager:
     """论文资源（代码 / 数据集 / 权重）的懒加载与 L0 缓存管理。
 
@@ -102,12 +174,14 @@ class ResourceManager:
                  quota_bytes: Optional[int] = None,
                  dataset_registry: Optional[Any] = None,
                  logger: Optional[Any] = None):
-        self.data_root = Path(data_root) if data_root else DATA_ROOT
+        self.data_root = get_data_root(data_root)
         self.repos_root = self.data_root / "repos"
         self.datasets_root = self.data_root / "datasets"
         self.manifests_root = self.data_root / "manifests"
         self.archive_root = self.data_root / "archive"
-        self.quota_bytes = quota_bytes or _L0_QUOTA
+        self.quota_bytes = _L0_QUOTA if quota_bytes is None else quota_bytes
+        if self.quota_bytes < 0:
+            raise ValueError("L0 配额不能为负数")
         if dataset_registry is None:
             from src.dataset_registry import DatasetRegistry
             dataset_registry = DatasetRegistry()
@@ -138,18 +212,24 @@ class ResourceManager:
         """论文稳定 ID：corpus 语料键直接可用，否则 sha1(title) 前 12 位
         （与存量 manifest 的 12 位十六进制 paper_id 风格一致）。"""
         if corpus_key:
-            return corpus_key
+            return _validate_paper_id(corpus_key)
         digest = hashlib.sha1(paper_title.encode("utf-8")).hexdigest()
         return digest[:12]
 
     def _repo_dir(self, paper_id: str) -> Path:
-        return self.repos_root / paper_id
+        return self._managed_path(self.repos_root, paper_id)
 
     def _dataset_dir(self, paper_id: str) -> Path:
-        return self.datasets_root / paper_id
+        return self._managed_path(self.datasets_root, paper_id)
 
     def _manifest_path(self, paper_id: str) -> Path:
-        return self.manifests_root / f"{paper_id}.json"
+        return self._managed_path(self.manifests_root, paper_id, ".json")
+
+    def _managed_path(self, root: Path, paper_id: str, suffix: str = "") -> Path:
+        path = root / (_validate_paper_id(paper_id) + suffix)
+        workspace_path(self.data_root, path.relative_to(self.data_root),
+                       "资源路径不能包含符号链接")
+        return path
 
     # ---------------- 懒加载：代码 ----------------
 
@@ -656,8 +736,7 @@ class ResourceManager:
 
     def save_manifest(self, manifest: Dict) -> str:
         path = self._manifest_path(manifest["paper_id"])
-        path.write_text(json.dumps(manifest, ensure_ascii=False,
-                                   indent=2), encoding="utf-8")
+        _atomic_json(path, manifest)
         return str(path)
 
     def get_manifest(self, paper_id: str) -> Optional[Dict]:
@@ -665,7 +744,10 @@ class ResourceManager:
         if not path.is_file():
             return None
         try:
-            return json.loads(path.read_text(encoding="utf-8"))
+            manifest = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(manifest, dict) and manifest.get("paper_id") == paper_id:
+                return manifest
+            return None
         except (OSError, json.JSONDecodeError):
             return None
 
@@ -679,7 +761,11 @@ class ResourceManager:
             except (OSError, json.JSONDecodeError):
                 continue
             if isinstance(data, dict) and data.get("paper_id"):
-                out.append(data)
+                try:
+                    if self._manifest_path(data["paper_id"]) == f:
+                        out.append(data)
+                except ValueError:
+                    continue
         return out
 
     # ---------------- 清理 / 归档 ----------------
@@ -688,82 +774,210 @@ class ResourceManager:
         """清理 L0 条目（代码仓库 + 数据集 + 本地权重），manifest 记录
         cleaned_at（兼容存量 test_cleanup.json 字段）。"""
         removed: List[str] = []
+        errors: List[str] = []
         for root in (self._repo_dir(paper_id), self._dataset_dir(paper_id)):
             if root.exists():
-                shutil.rmtree(root, ignore_errors=True)
-                removed.append(str(root))
-        result = {"paper_id": paper_id, "removed": removed}
+                try:
+                    remove_tree(root)
+                    removed.append(str(root))
+                except OSError as exc:
+                    errors.append(f"{root}: {exc}")
+        result = {"paper_id": paper_id, "removed": removed,
+                  "ok": not errors, "errors": errors}
         if keep_manifest:
             manifest = self.get_manifest(paper_id)
             if manifest:
-                manifest["cleaned_at"] = _now_iso()
-                for key in ("code", "dataset", "weights"):
-                    manifest["resources"][key] = ""
+                resources = manifest.setdefault("resources", {})
+                if not self._repo_dir(paper_id).exists():
+                    resources.update(code="", weights="")
+                if not self._dataset_dir(paper_id).exists():
+                    resources["dataset"] = ""
+                if not errors:
+                    manifest["cleaned_at"] = _now_iso()
                 self.save_manifest(manifest)
                 result["manifest"] = str(self._manifest_path(paper_id))
+        elif not errors:
+            self._manifest_path(paper_id).unlink(missing_ok=True)
         return result
 
     def archive(self, paper_id: str, dest_dir: Optional[str] = None,
                 include_manifest: bool = True) -> Dict:
         """打包整篇论文的 L0 资源为 zip（L1 温存储对接）。
 
+        校验完整归档后原子替换目标；失败时保留旧归档。
+        符号链接无法可靠往返，拒绝归档以避免后续清理丢失资源。
         返回 {"archive", "bytes", "entries"}；缺资源时仅打包存在的部分。
         """
+        _validate_paper_id(paper_id)
+        roots = (self._repo_dir(paper_id), self._dataset_dir(paper_id))
         dest = Path(dest_dir) if dest_dir else self.archive_root
+        for root in roots:
+            if dest.resolve().is_relative_to(root.resolve()):
+                raise ValueError("归档目标不能位于待归档资源内部")
         os.makedirs(dest, exist_ok=True)
         zip_path = dest / f"{paper_id}.zip"
         entries = 0
-        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-            for root in (self._repo_dir(paper_id), self._dataset_dir(paper_id)):
-                if root.exists():
-                    arc_dir = root.relative_to(self.data_root).as_posix()
-                    for f in sorted(root.rglob("*")):
-                        if f.is_file():
-                            arc = f"{arc_dir}/{f.relative_to(root).as_posix()}"
-                            zf.write(f, arc)
+        resource_entries = 0
+        aliases: Dict[str, str] = {}
+        fd, name = tempfile.mkstemp(prefix=f".{paper_id}.", suffix=".zip.tmp", dir=dest)
+        os.close(fd)
+        temporary = Path(name)
+        try:
+            with zipfile.ZipFile(temporary, "w", zipfile.ZIP_DEFLATED) as zf:
+                for root in roots:
+                    if root.exists():
+                        pending = [root]
+                        while pending:
+                            path = pending.pop()
+                            if is_link(path) or not (path.is_dir() or path.is_file()):
+                                raise ValueError(f"归档不支持符号链接或特殊文件: {path}")
+                            member = path.relative_to(self.data_root).as_posix()
+                            _archive_parts(member, aliases)
+                            zf.write(path, member)
                             entries += 1
-            if include_manifest:
-                manifest = self.get_manifest(paper_id)
-                if manifest:
-                    zf.writestr("manifest.json",
-                                json.dumps(manifest, ensure_ascii=False,
-                                           indent=2))
-                    entries += 1
+                            resource_entries += 1
+                            if path.is_dir():
+                                pending.extend(reversed(sorted(path.iterdir())))
+                if include_manifest:
+                    manifest = self.get_manifest(paper_id)
+                    if manifest:
+                        zf.writestr("manifest.json", json.dumps(
+                            manifest, ensure_ascii=False, indent=2))
+                        entries += 1
+            if not resource_entries and zip_path.exists():
+                raise ValueError("L0 无资源，保留已有归档")
+            with zipfile.ZipFile(temporary) as zf:
+                corrupt = zf.testzip()
+                if corrupt:
+                    raise ValueError(f"归档校验失败: {corrupt}")
+            with temporary.open("r+b") as stream:
+                stream.flush()
+                os.fsync(stream.fileno())
+            _replace_file(temporary, zip_path)
+        finally:
+            temporary.unlink(missing_ok=True)
         return {"archive": str(zip_path),
                 "bytes": zip_path.stat().st_size, "entries": entries}
 
     def restore(self, archive_path: str, paper_id: Optional[str] = None) -> Dict:
-        """从 L1 归档 zip 恢复回 L0（repos / datasets / manifests）。"""
+        """先验证并暂存完整 zip，再恢复 L0；拒绝越界、链接和论文混包。
+
+        paper_id 指定时校验归档身份。支持旧版无目录条目的 zip，恢复后
+        将 manifest 的资源路径重定位到当前 data_root。
+        """
         archive = Path(archive_path)
         if not archive.is_file():
             return {"ok": False, "detail": f"归档不存在: {archive_path}"}
         restored: List[str] = []
         manifest: Optional[Dict] = None
-        with zipfile.ZipFile(archive) as zf:
-            for member in zf.namelist():
-                if member == "manifest.json":
-                    continue
-                parts = member.split("/", 1)
-                if len(parts) != 2 or not parts[0] or not parts[1]:
-                    continue
-                if parts[0] == "repos":
-                    target = self.repos_root / parts[1]
-                elif parts[0] == "datasets":
-                    target = self.datasets_root / parts[1]
-                else:
-                    continue
-                os.makedirs(target.parent, exist_ok=True)
-                with zf.open(member) as src, open(target, "wb") as dst:
-                    shutil.copyfileobj(src, dst)
-                restored.append(str(target))
-            if "manifest.json" in zf.namelist():
-                manifest = json.loads(
-                    zf.read("manifest.json").decode("utf-8"))
-        if manifest:
-            self.save_manifest(manifest)
-        return {"ok": True, "restored": restored,
-                "manifest": manifest or self.get_manifest(
-                    paper_id or Path(archive).stem)}
+        try:
+            if paper_id is not None:
+                _validate_paper_id(paper_id)
+            with zipfile.ZipFile(archive) as zf, tempfile.TemporaryDirectory(
+                    prefix=".restore-", dir=self.data_root) as temporary:
+                members = []
+                identities = set()
+                seen = set()
+                aliases: Dict[str, str] = {}
+                for member in zf.infolist():
+                    name = member.filename
+                    parts = _archive_parts(name, aliases)
+                    mode = member.external_attr >> 16
+                    if (name.startswith("/") or "\\" in name
+                            or any(part in ("", ".", "..") or ":" in part for part in parts)
+                            or any(ord(char) < 32 for char in name)
+                            or name.rstrip("/") in seen
+                            or stat.S_ISLNK(mode)
+                            or stat.S_IFMT(mode) not in (0, stat.S_IFREG, stat.S_IFDIR)):
+                        raise ValueError(f"不安全或重复的归档路径: {name}")
+                    seen.add(name.rstrip("/"))
+                    if name == "manifest.json":
+                        manifest = json.loads(zf.read(member).decode("utf-8"))
+                        if (not isinstance(manifest, dict)
+                                or not isinstance(manifest.get("resources", {}), dict)):
+                            raise ValueError("归档 manifest 格式无效")
+                        identities.add(_validate_paper_id(manifest.get("paper_id")))
+                        continue
+                    if (len(parts) < 2 or parts[0] not in ("repos", "datasets")
+                            or (len(parts) == 2 and not member.is_dir())):
+                        raise ValueError(f"不支持的归档路径: {name}")
+                    identities.add(_validate_paper_id(parts[1]))
+                    target = self.data_root.joinpath(*parts)
+                    self._check_restore_target(target, member.is_dir())
+                    members.append((member, Path(*parts), target))
+                if len(identities) != 1:
+                    raise ValueError("归档必须包含且仅包含一篇论文的资源")
+                identity = identities.pop()
+                if paper_id is not None and paper_id != identity:
+                    raise ValueError(f"归档 paper_id 不匹配: {identity}")
+                self._manifest_path(identity)
+
+                # 完整解压到暂存目录；CRC/格式失败不覆盖现有资源。
+                stage = Path(temporary)
+                for member, relative, _target in members:
+                    target = stage / relative
+                    if member.is_dir():
+                        target.mkdir(parents=True, exist_ok=True)
+                    else:
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        with zf.open(member) as source, target.open("xb") as output:
+                            shutil.copyfileobj(source, output)
+                        permissions = (member.external_attr >> 16) & 0o777
+                        # Windows chmod only toggles read-only; POSIX execute
+                        # bits have no meaning and may make cleanup fail there.
+                        if permissions and os.name != "nt":
+                            target.chmod(permissions)
+
+                for member, relative, target in members:
+                    self._check_restore_target(target, member.is_dir())
+                    if member.is_dir():
+                        target.mkdir(parents=True, exist_ok=True)
+                    else:
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        _replace_file(stage / relative, target)
+                        restored.append(str(target))
+                manifest = manifest or self.get_manifest(identity) or self.build_manifest(identity)
+                self._rebase_manifest(manifest)
+                self.save_manifest(manifest)
+            return {"ok": True, "restored": restored, "manifest": manifest}
+        except (OSError, ValueError, RuntimeError, EOFError, zipfile.BadZipFile, zlib.error,
+                NotImplementedError) as exc:
+            return {"ok": False, "detail": f"归档恢复失败: {exc}", "restored": restored}
+
+    def _check_restore_target(self, target: Path, is_directory: bool) -> None:
+        workspace_path(self.data_root, target.relative_to(self.data_root),
+                       "恢复目标不能包含符号链接")
+        current = target
+        while current != self.data_root:
+            if current != target and current.exists() and not current.is_dir():
+                raise ValueError(f"恢复目标父路径不是目录: {current}")
+            current = current.parent
+        if target.exists() and target.is_dir() != is_directory:
+            raise ValueError(f"恢复目标文件类型冲突: {target}")
+
+    def _rebase_manifest(self, manifest: Dict) -> None:
+        """兼容旧绝对路径，保留可识别资源的相对后缀。"""
+        identity = manifest["paper_id"]
+        resources = self.build_manifest(identity)["resources"]
+        for key, base in (("code", "repos"), ("weights", "repos"),
+                          ("dataset", "datasets")):
+            old = manifest.get("resources", {}).get(key, "")
+            if not isinstance(old, str):
+                continue
+            parts = PurePosixPath(old.replace("\\", "/")).parts
+            for index in range(len(parts) - 1):
+                if parts[index:index + 2] == (base, identity):
+                    tail = parts[index + 2:]
+                    if ".." not in tail:
+                        candidate = self.data_root / base / identity
+                        candidate = candidate.joinpath(*tail)
+                        if candidate.exists() and candidate.resolve().is_relative_to(
+                                (self.data_root / base / identity).resolve()):
+                            resources[key] = str(candidate)
+                    break
+        manifest["resources"] = resources
+        manifest.pop("cleaned_at", None)
+        manifest["restored_at"] = _now_iso()
 
     # ---------------- L0 配额守护 ----------------
 
@@ -805,7 +1019,7 @@ class ResourceManager:
             if not root.is_dir():
                 continue
             for child in root.iterdir():
-                if not child.is_dir():
+                if not child.is_dir() or is_link(child):
                     continue
                 try:
                     mtime = child.stat().st_mtime
@@ -826,7 +1040,7 @@ class ResourceManager:
                 break
             freed += c["bytes"]
             c["reason"] = "L0 配额超限，按最近使用建议归档（dry_run）" \
-                if dry_run else "L0 配额超限，已清理"
+                if dry_run else "L0 配额超限，待归档后清理"
             c["dry_run"] = dry_run
             suggestions.append(c)
         return suggestions
