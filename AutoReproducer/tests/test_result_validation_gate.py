@@ -255,7 +255,7 @@ def test_web_pipeline_keeps_failure_report_and_skips_optimization(tmp_path, monk
     optimize = Mock(side_effect=AssertionError("失败执行不允许优化"))
     monkeypatch.setattr(OptimizerAgent, "run", optimize)
     result = run_pipeline_core(str(tmp_path / "progress.jsonl"), paper_title="Gate regression", mock_mode=True)
-    assert result["state"] == "COMPLETED"
+    assert result["state"] == "ERROR"
     assert result["data"]["validation"]["status"] == "execution_failed"
     assert "执行失败" in result["data"]["report"]
     optimize.assert_not_called()

@@ -1,9 +1,9 @@
 """CodeExecutorAgent - 代码执行 Agent，在沙箱中运行论文代码。
 
 对齐方案「Phase 4: 代码执行」：
-- 两阶段执行：smoke test（短时冒烟，快速暴露环境问题）-> full run（完整运行）；
+- 两阶段执行：smoke test（首次运行，暴露环境问题）-> full run（完整运行）；
 - 捕获标准输出、错误日志、退出码；
-- 支持本地子进程（隔离临时目录 + 超时）与 Docker 容器两种沙箱；
+- 支持本地子进程与 Docker 容器；代码执行不限时，支持手动取消；
 - 本地模式执行前按 env_config 依赖清单自动 pip 安装（幂等缓存 +
   独立超时 + 失败诊断），修复"EnvBuilder 给出依赖但本地执行器直接运行
   导致 ModuleNotFoundError"缺陷——复现环境与执行环境现在保持一致；
@@ -1645,7 +1645,7 @@ class CodeExecutorAgent(BaseAgent):
                     "deps_prepared": False, "disk_usage": usage}
 
         script = os.path.join(workdir, "run.py")
-        timeout = LOCAL_TIMEOUT_SMOKE if stage == "smoke" else LOCAL_TIMEOUT_FULL
+        timeout = None
         result = None
         try:
             with open(script, "w", encoding="utf-8") as f:
@@ -1734,16 +1734,16 @@ class CodeExecutorAgent(BaseAgent):
         return snapshot
 
     def _run_local_script(self, script: str, workdir: str,
-                          timeout: int) -> Dict:
+                          timeout: Optional[float]) -> Dict:
         """执行 run.py 一次（子进程，注入隔离依赖 PYTHONPATH）。"""
-        result = subprocess.run(
-            [sys.executable, script],
-            capture_output=True, text=True, timeout=timeout,
-            # 与 _exec_env 的 PYTHONIOENCODING=utf-8 配套：显式指定 UTF-8 解码，
-            # 不依赖系统 locale。缺了它，Windows 中文环境下捕获中文输出会抛
-            # UnicodeDecodeError，stdout 变成 None。
-            encoding="utf-8", errors="replace",
-            cwd=workdir, env=self._exec_env(workdir))
+        from src.runtime_preparation import RuntimePreparationTimeout, run_owned_process
+        try:
+            result = run_owned_process([sys.executable, script], timeout_s=timeout,
+                                       cwd=workdir, env=self._exec_env(workdir), clean_env=False,
+                                       max_output_bytes=None)
+        except RuntimePreparationTimeout as exc:
+            raise subprocess.TimeoutExpired([sys.executable, script], timeout,
+                                            output=exc.stdout, stderr=exc.stderr) from exc
         return {
             "success": result.returncode == 0,
             # `or ""` 兜底：解码失败等异常路径下 stdout/stderr 可能是 None，
@@ -2367,7 +2367,7 @@ class CodeExecutorAgent(BaseAgent):
 
     def _run_docker_cmd_with_sandbox(
             self, base_cmd: List[str], image: str, runner: List[str],
-            timeout: int) -> tuple:
+            timeout: Optional[float]) -> tuple:
         """带加固参数执行 docker run（含容器耗时计量，P1-⑫）。
 
         把实际执行委托给 _run_docker_cmd_with_sandbox_impl，
@@ -2384,7 +2384,7 @@ class CodeExecutorAgent(BaseAgent):
 
     def _run_docker_cmd_with_sandbox_impl(
             self, base_cmd: List[str], image: str, runner: List[str],
-            timeout: int) -> tuple:
+            timeout: Optional[float]) -> tuple:
         """带加固参数执行 docker run；加固参数与 Docker/环境不兼容时自动降级。
 
         实际执行体（含降级链）。
@@ -2496,14 +2496,15 @@ class CodeExecutorAgent(BaseAgent):
             # 同本地路径：相对 workdir 会被 docker 的 -v 以错误形式解析
             workdir = os.path.abspath(workdir)
         script = os.path.join(workdir, "run.py")
-        timeout = DOCKER_TIMEOUT_SMOKE if stage == "smoke" else DOCKER_TIMEOUT_FULL
+        timeout = None
+        container_name = "autorepro-" + uuid.uuid4().hex
         result = None
         try:
             plot_env = prepare_plot_runtime(workdir, docker=True)
             with open(script, "w", encoding="utf-8") as f:
                 f.write(code)
             mount = workdir.replace("\\", "/")
-            base_cmd = [docker_cmd, "run", "--rm",
+            base_cmd = [docker_cmd, "run", "--rm", "--name", container_name,
                         "-v", f"{mount}:/app", "-w", "/app"]
             for key, value in plot_env.items():
                 base_cmd.extend(["-e", f"{key}={value}"])
@@ -2562,10 +2563,9 @@ class CodeExecutorAgent(BaseAgent):
                 runner = (_make_runner(healed_pkgs := [h["package"]
                            for h in healed])
                           if installing else script_runner)
-                # Installation and program execution have separate deadlines
-                # inside the container. The host also caps Docker startup/hangs.
-                outer_timeout = (DOCKER_STARTUP_TIMEOUT + timeout
-                                 + (DOCKER_PIP_TIMEOUT if installing else 0))
+                # Installation retains its own bounded supervisor; code execution
+                # and the Docker client wait until the program actually exits.
+                outer_timeout = None
                 result, _sandbox_run = self._run_docker_cmd_with_sandbox(
                     base_cmd, image, runner, outer_timeout)
                 sandbox_meta = {"image_allowed": True, **_sandbox_run}
@@ -2614,6 +2614,16 @@ class CodeExecutorAgent(BaseAgent):
             result.update(collect_images(workdir, stage,
                                          getattr(self.logger, "session_id", "")))
             return result
+        except (KeyboardInterrupt, SystemExit) as cancellation:
+            # The daemon owns containers; stopping its client alone is insufficient.
+            try:
+                removed = subprocess.run([docker_cmd, "rm", "-f", container_name],
+                                         capture_output=True, timeout=10)
+                if removed.returncode:
+                    cancellation.add_note(f"Docker container cleanup failed: {container_name}")
+            except (OSError, subprocess.SubprocessError) as cleanup_error:
+                cancellation.add_note(f"Docker container cleanup failed: {container_name}: {cleanup_error}")
+            raise
         except subprocess.TimeoutExpired as exc:
             def decoded(value):
                 return value.decode("utf-8", errors="replace") if isinstance(value, bytes) else (value or "")

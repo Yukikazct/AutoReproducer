@@ -53,7 +53,7 @@ def safe_handoff(monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize("review", [True, False])
-def test_backend_pdf_is_identified_before_store_handoff_and_preserves_review_choice(tmp_path, safe_handoff, review):
+def test_backend_pdf_is_identified_before_store_handoff_and_disables_legacy_review(tmp_path, safe_handoff, review):
     requests, requirement, prepare, host_factory = safe_handoff
     source = write_pdf(tmp_path / "paper.pdf", [TITLE, "Authors", "Abstract"])
     progress = tmp_path / "progress.jsonl"
@@ -63,7 +63,7 @@ def test_backend_pdf_is_identified_before_store_handoff_and_preserves_review_cho
     assert request["experiment_profile"] == "neural_ode_spiral"
     assert request["pdf_resolution"]["title"] == TITLE
     assert request["pdf_resolution"]["sha256"] == hashlib.sha256(source.read_bytes()).hexdigest()
-    assert request["use_llm_review"] is review
+    assert request["use_llm_review"] is False
     assert request["allow_result_summary_review"] is False
     assert request["optimization_mode"] == "off"
     assert request["_managed_runtime"] is True
@@ -229,7 +229,7 @@ def test_pdf_provenance_survives_author_source_failure_in_both_reviewed_pipeline
     assert result["data"]["pdf_resolution"]["sha256"] == hashlib.sha256(source.read_bytes()).hexdigest()
 
 
-@pytest.mark.parametrize("review", [None, False])
+@pytest.mark.parametrize("review", [None, False, True])
 @pytest.mark.parametrize("stale_action", ["仅准备源码和命令", "准备实验环境"])
 def test_actual_upload_start_verifies_bytes_and_ignores_stale_preset_controls(monkeypatch, tmp_path, safe_handoff, review, stale_action):
     requests, requirement, prepare, host_factory = safe_handoff
@@ -263,6 +263,11 @@ def test_actual_upload_start_verifies_bytes_and_ignores_stale_preset_controls(mo
     app.session_state["input_mode"] = "上传PDF"
     app.session_state["mock_mode"] = False
     app.session_state["docker_probe"] = (False, "test uses local execution")
+    if review is not None:
+        app.session_state["pdf_llm_review"] = review
+    app.session_state["method_action"] = stale_action
+    app.session_state["method_optimization"] = "validate"
+    app.session_state["method_llm_review"] = True
     try:
         app.run()
         assert not app.exception

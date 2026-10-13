@@ -36,39 +36,42 @@ def test_real_study_persists_interrupted_execution_record(tmp_path,monkeypatch,p
     assert saved['execution']['final']['exit_code']==130
 
 
-@pytest.mark.parametrize('mode',['validate','suggest'])
-def test_method_interruption_preserves_verified_baseline_and_final_run_state(tmp_path,monkeypatch,mode):
-    baseline={'status':'method_experiment_completed','result_level':'method_experiment_completed','is_reproduced':None}
-    adapter=SimpleNamespace(prepare_dataset=Mock(return_value={}),materialize=Mock(return_value={}),
+@pytest.mark.parametrize('mode', ['validate', 'suggest', 'off'])
+def test_author_execution_interruption_preserves_logs_and_run_state(tmp_path, monkeypatch, mode):
+    adapter = SimpleNamespace(prepare_dataset=Mock(return_value={}), materialize=Mock(return_value={}),
         public_sources=Mock(return_value=[]),
-        steps=Mock(return_value=[{'id':'train','argv':['python','-c','print(1)']}]),
-        verify_environment=Mock(),
-        verify=Mock(return_value=baseline))
-    monkeypatch.setattr('src.method_reproduction.get_adapter',lambda p:adapter)
-    def export(root,profile,workspace,**kwargs):
+        steps=Mock(return_value=[{'id': 'train', 'kind': 'train', 'argv': ['python', '-c', 'print(1)']}]),
+        verify_environment=Mock(), verify=Mock())
+    monkeypatch.setattr('src.method_reproduction.get_adapter', lambda p: adapter)
+    def export(root, profile, workspace, **kwargs):
         workspace.mkdir()
-        return {'url':'https://example.org/repo','path':str(workspace)}
-    monkeypatch.setattr('src.repository_reproduction.export_repository',export)
-    monkeypatch.setattr('src.agents.report_generator.ReportGeneratorAgent.run',lambda *a,**k:{'report':'baseline report'})
-    def cancel(service,profile,data,*args):
-        write_json(Path(data['run_dir'])/'optimization.json',
-                   {'status':'interrupted','optimized':False,'confirmation':[{'seed':2021,'pass':True}]})
-        raise KeyboardInterrupt('cancelled')
-    monkeypatch.setattr('src.method_optimization.validate_candidates',cancel)
-    def cancel_advice(*args,**kwargs):
-        raise KeyboardInterrupt('cancelled advice')
-    monkeypatch.setattr('src.method_advice.suggest',cancel_advice)
-    runner=SimpleNamespace(run=Mock(return_value={'success':True,'artifacts':[],'final':{}}))
-    service=MethodReproduction(tmp_path,Mock(),runner=runner)
+        return {'url': 'https://example.org/repo', 'path': str(workspace)}
+    monkeypatch.setattr('src.repository_reproduction.export_repository', export)
+    advice = Mock(side_effect=AssertionError('Reserved advice must not run'))
+    optimize = Mock(side_effect=AssertionError('Reserved optimization must not run'))
+    monkeypatch.setattr('src.method_optimization.validate_candidates', optimize)
+    monkeypatch.setattr('src.method_advice.suggest', advice)
+    interrupted = KeyboardInterrupt('cancelled author command')
+    interrupted.execution = {'success': False, 'executed': True, 'cancelled': True,
+        'final': {'success': False, 'exit_code': 130, 'cancelled': True, 'stdout': 'retained author output'}}
+    prepared = {'success': True, 'executed': True, 'artifacts': [], 'final': {'success': True, 'exit_code': 0}}
+    runner = SimpleNamespace(run=Mock(side_effect=[prepared, interrupted]))
+    logger = Mock()
+    logger.get_stats.return_value = {}
+    service = MethodReproduction(tmp_path, logger, runner=runner)
     with pytest.raises(KeyboardInterrupt):
-        service.run({'experiment_profile':'siren_camera_quick','optimization_mode':mode,'offline':True})
-    result_path=next((tmp_path/'runs').glob('*/result.json'))
-    result=json.loads(result_path.read_text(encoding='utf-8'))
-    assert result['state']=='INTERRUPTED'
-    assert result['data']['validation']==baseline
-    if mode=='validate':
-        assert result['data']['optimization']['confirmation'][0]['pass']
-    assert result['data']['optimization']['status']=='interrupted'
-    report=(result_path.parent/'report.md').read_text(encoding='utf-8')
-    assert report.startswith('> **实验已中断（interrupted）**')
-    assert 'baseline report' in report
+        service.run({'experiment_profile': 'siren_camera_quick', 'optimization_mode': mode, 'offline': True})
+    result_path = next((tmp_path / 'runs').glob('*/result.json'))
+    result = json.loads(result_path.read_text(encoding='utf-8'))
+    assert result['state'] == 'INTERRUPTED'
+    assert result['data']['validation']['status'] == 'interrupted'
+    assert result['data']['validation']['is_reproduced'] is None
+    assert result['data']['execution'] == interrupted.execution
+    assert result['data']['optimization']['status'] == 'disabled'
+    assert runner.run.call_count == 2
+    assert runner.run.call_args.args[1][0]['id'] == 'train'
+    status = json.loads((result_path.parent / 'run_status.json').read_text(encoding='utf-8'))
+    assert status['status'] == 'interrupted'
+    advice.assert_not_called()
+    optimize.assert_not_called()
+    adapter.verify.assert_not_called()

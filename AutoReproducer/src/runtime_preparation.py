@@ -12,6 +12,7 @@ import hashlib
 import importlib
 import importlib.metadata
 import json
+import math
 import os
 import platform
 import re
@@ -132,7 +133,7 @@ def _application_dependency_issue(requirements, imports):
 def _check(cancel_check, deadline):
     if cancel_check and cancel_check():
         raise KeyboardInterrupt("运行环境准备已取消")
-    if time.monotonic() >= deadline:
+    if deadline is not None and time.monotonic() >= deadline:
         raise RuntimePreparationTimeout("运行环境自动准备超时；已停止本次准备进程，可重试复用已下载的缓存")
 
 
@@ -150,7 +151,8 @@ def _clean_environment(env=None):
 
 
 def run_owned_process(argv, *, cwd=None, env=None, input=None, timeout_s=900,
-                      cancel_check=None, on_poll=None, on_cleanup=None, max_output_bytes=2*1024*1024):
+                      cancel_check=None, on_poll=None, on_cleanup=None, max_output_bytes=2*1024*1024,
+                      clean_env=True):
     """Run an argv with bounded polling, stdin delivery and descendant cleanup.
 
     Returns subprocess.CompletedProcess with UTF-8 text stdout/stderr. Input is
@@ -159,10 +161,14 @@ def run_owned_process(argv, *, cwd=None, env=None, input=None, timeout_s=900,
     KeyboardInterrupt. Both cancellation and timeout close the entire job.
     ``on_cleanup()`` runs only after the job is closed and the owner is reaped,
     including exceptional exits. It never confirms a failed cleanup operation.
+    ``timeout_s=None`` waits without a deadline while still polling cancellation.
+    ``clean_env=False`` preserves an already prepared code-execution environment.
+    ``max_output_bytes=None`` retains the full output of an author program.
     """
-    if timeout_s <= 0:
-        raise ValueError("timeout_s must be positive")
-    deadline = time.monotonic() + timeout_s
+    if timeout_s is not None and (isinstance(timeout_s, bool) or not isinstance(timeout_s, (int, float))
+                                 or not math.isfinite(timeout_s) or timeout_s <= 0):
+        raise ValueError("timeout_s must be null or a positive number")
+    deadline = None if timeout_s is None else time.monotonic() + timeout_s
     _check(cancel_check, deadline)
     process, job, writer = None, None, None
     timeout_error = None
@@ -171,7 +177,8 @@ def run_owned_process(argv, *, cwd=None, env=None, input=None, timeout_s=900,
         try:
             job = ProcessJob()
             process = subprocess.Popen([os.fspath(arg) for arg in argv], cwd=cwd,
-                                       env=_clean_environment(env), stdin=subprocess.PIPE if payload is not None else subprocess.DEVNULL,
+                                       env=_clean_environment(env) if clean_env else env,
+                                       stdin=subprocess.PIPE if payload is not None else subprocess.DEVNULL,
                                        stdout=out, stderr=err, shell=False,
                                        start_new_session=(os.name == "posix"),
                                        creationflags=(CREATE_SUSPENDED | subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW) if os.name == "nt" else 0)
@@ -213,6 +220,9 @@ def run_owned_process(argv, *, cwd=None, env=None, input=None, timeout_s=900,
             if on_cleanup:
                 on_cleanup()
         def captured(stream):
+            if max_output_bytes is None:
+                stream.seek(0)
+                return stream.read().decode("utf-8", "replace")
             length = stream.tell()
             stream.seek(max(0, length - max_output_bytes))
             text = stream.read(max_output_bytes).decode("utf-8", "replace")

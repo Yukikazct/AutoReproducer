@@ -269,7 +269,8 @@ def test_store_alias_venv_is_rejected_before_environment_or_training(runner,tmp_
 
 
 @pytest.mark.parametrize('exception',[KeyboardInterrupt,SystemExit])
-def test_cancellation_stops_descendants_persists_logs_and_releases_cache(runner,tmp_path,exception):
+@pytest.mark.parametrize('timeout', [None, 30])
+def test_cancellation_stops_descendants_persists_logs_and_releases_cache(runner,tmp_path,exception,timeout):
     from src.dependency_cache import cache_guard
     descendant="import time;from pathlib import Path;time.sleep(1);Path('escaped_child').touch()"
     code=("import subprocess,sys,time;"
@@ -279,7 +280,7 @@ def test_cancellation_stops_descendants_persists_logs_and_releases_cache(runner,
         if event.get('type')=='repository_output' and 'CANCEL_READY' in event.get('text',''):
             raise exception('user cancellation')
     with pytest.raises(exception) as caught:
-        runner.run(tmp_path,[step('cancel','-c',code,timeout=30)],{},on_event=cancel)
+        runner.run(tmp_path,[step('cancel','-c',code,timeout=timeout)],{},on_event=cancel)
     execution=caught.value.execution
     assert execution['status']=='interrupted' and execution['cancelled']
     assert execution['final']['exit_code']==130

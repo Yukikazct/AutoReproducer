@@ -106,8 +106,22 @@ def invoke(workspace, action, environment):
                           timeout=90, capture_output=True, text=True, encoding="utf-8")
 
 
-def run_fixture(root, family="signals", mutate=None):
+def require_runtime_modules(environment, modules):
+    if not modules:
+        return
+    probe = subprocess.run([sys.executable, '-c',
+        "import importlib.util,json; print(json.dumps([n for n in " + repr(list(modules)) +
+        " if importlib.util.find_spec(n) is None]))"], env=environment,
+        timeout=20, capture_output=True, text=True, encoding='utf-8')
+    assert probe.returncode == 0, probe.stderr
+    missing = json.loads(probe.stdout)
+    if missing:
+        pytest.skip('Optional native fixture packages absent from selected cache: ' + ', '.join(missing))
+
+
+def run_fixture(root, family="signals", mutate=None, required_modules=()):
     environment = native_environment()
+    require_runtime_modules(environment, required_modules)
     fixture = make_experiment(root, family)
     if mutate:
         mutate(fixture)

@@ -18,7 +18,7 @@ from src.discovered_repository_runtime import materialize_capture, validate_capt
 from src.method_adapters import read_json, write_json
 from src.repository_reproduction import spec_digest
 from src.runtime_platform import runtime_fingerprint
-from test_discovered_repository_runtime import invoke, native_environment
+from test_discovered_repository_runtime import invoke, native_environment, require_runtime_modules
 
 
 def series_fixture(root, device="cpu"):
@@ -100,7 +100,7 @@ print('Test Accuracy:', np.mean(accuracies))
     return fixture
 
 
-def run_series(root, device="cpu", mutate=None):
+def run_series(root, device="cpu", mutate=None, required_modules=()):
     cache = cuda_dependency_cache() if device == "cuda" else None
     fixture = series_fixture(root, device)
     if mutate:
@@ -114,6 +114,7 @@ def run_series(root, device="cpu", mutate=None):
         extra = environment.get('AUTOREPRO_TEST_CUDA_DEPS', '')
         environment["PYTHONPATH"] = str(cache) + (os.pathsep + extra if extra else '')
         environment.pop("CUDA_VISIBLE_DEVICES", None)
+    require_runtime_modules(environment, required_modules)
     log_root = root / "owned_logs"
     log_root.mkdir()
     records = []
@@ -307,7 +308,7 @@ def test_npz_header_cannot_request_unbounded_allocation(tmp_path):
     assert "dataset_evidence" not in packet["file_inventory"][path.name]
 
 
-def test_complete_cuda_series_service_runs_native_preflight_and_owned_evaluation(tmp_path, monkeypatch):
+def test_cuda_service_runs_author_command_without_independent_evaluation(tmp_path, monkeypatch):
     from src import discovered_repository_reproduction as service
     from src.audit.audit_logger import AuditLogger
     from test_discovered_repository_service import use_preinstalled_cache
@@ -330,8 +331,10 @@ def test_complete_cuda_series_service_runs_native_preflight_and_owned_evaluation
     assert result["state"] == "COMPLETED", result.get("error")
     data = result["data"]
     assert data["native_preflight"]["device"] == "cuda"
-    assert data["native_preflight"]["native_probe_pass"] is True
-    assert len(data["validation"]["independent_metrics"]["runs"]) == 3
-    assert data["validation"]["protocol_pass"] is True
-    assert data["validation"]["is_reproduced"] is False
+    assert data["native_preflight"]["native_probe_pass"] is None
+    assert data["validation"]["status"] == "author_code_completed"
+    assert data["validation"]["paper_metrics_verified"] is False
+    assert data["validation"]["is_reproduced"] is None
+    assert [step["id"] for step in data["execution"]["steps"]] == ["train"]
+    assert data["execution"]["steps"][0]["exit_code"] == 0
     assert data["execution"]["success"] is True

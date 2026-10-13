@@ -58,6 +58,9 @@ def test_review_flags_cannot_invoke_preset_reviewers(tmp_path, monkeypatch, prof
     else:
         assert 'Actual author error' in result['error']
     assert calls and all(env['dependency_health_check'] is False for _, env in calls)
+    assert all(step['timeout_s'] is None for steps, _ in calls for step in steps
+               if step['kind'] != 'check')
+    assert all(env.get('deadline_monotonic') is None for _, env in calls)
     assert all(step['id'] not in ('import_check', 'evaluate') for steps, _ in calls for step in steps)
     stages = next(e['stages'] for e in events if e['type'] == 'pipeline_plan')
     assert not any(s['id'].startswith(('review_', 'verify_', 'validate_', 'analyze_')) for s in stages)

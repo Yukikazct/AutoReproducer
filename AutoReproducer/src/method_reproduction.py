@@ -150,8 +150,11 @@ class MethodReproduction:
             # bounds and does not consume the frozen training/optimization budget.
             offline = bool(request.get("offline"))
             event(phase, "running")
+            self.logger.log("ResourceFinder", phase, "RUNNING", "正在获取作者仓库的固定版本：" + profile["repository"]["url"])
             snapshot = export_repository(self.root, profile, workspace, offline=offline)
+            self.logger.log("ResourceFinder", phase, "RUNNING", "源码已就绪；正在准备数据集：" + profile["dataset"].get("name", ""))
             dataset = adapter.prepare_dataset(self.root, profile, workspace, offline=offline)
+            self.logger.log("ResourceFinder", phase, "RUNNING", "数据已就绪；正在整理运行入口与公开实验配置")
             manifest = adapter.materialize(workspace, profile, spec_hash)
             sources = adapter.public_sources(workspace, profile)
             data.update(repository=snapshot, dataset_provenance=dataset, adapter_manifest=manifest,
@@ -179,7 +182,7 @@ class MethodReproduction:
                 write_json(run_dir / f"{name}.json", value)
             event(phase, "success")
             phase = "prepare_environment"; event(phase, "running")
-            steps = [{**step, 'depends_on': []} for step in adapter.steps(profile, train=True)
+            steps = [{**step, 'depends_on': [], 'timeout_s': None} for step in adapter.steps(profile, train=True)
                      if step.get('kind') == 'train']
             env = {**profile["environment"], "cache_lock_timeout_s": AUTO_PREPARATION_LOCK_TIMEOUT,
                    "dependency_health_check": False, "auto_prepare": True, "offline": offline}
@@ -190,7 +193,7 @@ class MethodReproduction:
                                           "revision": snapshot.get("resolved_sha", "")},
                               dataset={"name": profile["dataset"].get("name", ""),
                                        "sha256": profile["dataset"].get("sha256", "")},
-                              limits=profile["budget"], steps=steps)
+                              limits={}, steps=steps)
             data["execution_plan"] = plan
             write_json(run_dir / "execution_plan.json", plan)
             # What lands on disk must describe exactly the steps about to run, so a
@@ -204,8 +207,8 @@ class MethodReproduction:
                                       "reason": "已准备源码、数据与命令；未安装依赖或训练"}
                 event(phase, "success")
             else:
-                # Check imports, native packages and the requested device before
-                # starting any baseline deadline. This retains genuine failure
+                # Prepare imports, native packages and the requested device first.
+                # This retains genuine failure
                 # evidence while preventing a failed setup from launching training.
                 preparation_steps = [{'id': 'prepare_dependencies', 'kind': 'check', 'depends_on': [],
                     'argv': ['python', '-c', "print('environment ready')"], 'timeout_s': 60}]
@@ -228,16 +231,12 @@ class MethodReproduction:
                 event(phase, "success")
                 if not prepare_env:
                     execution_started = time.monotonic()
-                    baseline_allowance = profile['budget']['baseline_s']
-                    baseline_deadline = execution_started + baseline_allowance
-                    env.update(require_prepared=True, deadline_monotonic=baseline_deadline,
-                               exclude_environment_preparation_from_deadline=True)
+                    env.update(require_prepared=True, deadline_monotonic=None)
                     phase = "execute_repository"; event(phase, "running")
                     execution = self.runner.run(workspace, steps, env,
                         on_event=lambda execution_event, phase_id=phase: emit({**execution_event, "phase_id": phase_id}))
                     preparation_elapsed = execution.get("environment", {}).get("preparation_elapsed_s", 0)
                     execution_started += preparation_elapsed
-                    baseline_deadline += preparation_elapsed
                 else:
                     execution = preparation
                 data["execution"] = execution

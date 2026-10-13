@@ -1,4 +1,4 @@
-"""Registration and orchestration of the strict ReZero paper experiment."""
+"""ReZero registration and isolated author execution without review stages."""
 from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
@@ -48,12 +48,15 @@ def test_registered_paper_protocol_has_complete_inputs_and_an_independent_refere
     {"optimization_mode": "suggest"}, {"optimization_mode": "validate"},
     {"enable_optimization": True}, {"prepare_only": True, "optimization_mode": "validate"},
 ])
-def test_rezero_rejects_protocol_search_before_creating_run(tmp_path, options):
-    service = method.MethodReproduction(tmp_path, Mock(), runner=Mock())
-    with pytest.raises(ValueError, match="冻结协议"):
-        service.run({"experiment_profile": REZERO_PROFILE_ID, **options})
-    assert not (tmp_path / "runs").exists()
-    service.runner.run.assert_not_called()
+def test_rezero_legacy_optimization_flags_are_disabled(pipeline, options):
+    result = pipeline.service.run({"experiment_profile": REZERO_PROFILE_ID, **options})
+    assert result["state"] == "COMPLETED", result["error"]
+    assert result["data"]["optimization"]["mode"] == "off"
+    if options.get("prepare_only"):
+        pipeline.runner.run.assert_not_called()
+    else:
+        assert pipeline.runner.run.call_count == 2
+    pipeline.adapter.verify.assert_not_called()
 
 
 @pytest.fixture
@@ -81,7 +84,7 @@ def pipeline(tmp_path, monkeypatch):
         calls.append({"at": now["value"], "steps": deepcopy(steps), "env": deepcopy(env)})
         now["value"] += 10 if len(calls) == 1 else 2000
         return {"mode": "repository", "success": True, "executed": True, "artifacts": [],
-                "environment": {}, "final": {"stderr": ""}}
+                "environment": {}, "final": {"success": True, "exit_code": 0, "stdout": "", "stderr": ""}}
     runner, logger = SimpleNamespace(run=Mock(side_effect=run)), Mock()
     logger.get_stats.return_value = {}
     service = RepositoryReproduction(tmp_path, logger, runner=runner)
@@ -90,7 +93,7 @@ def pipeline(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("review", [False, True])
 @pytest.mark.parametrize("quality", [False, True])
-def test_repository_dispatch_preserves_strict_verdict_and_long_training_budget(pipeline, review, quality):
+def test_repository_dispatch_runs_without_review_verdict_or_training_deadline(pipeline, review, quality):
     if not quality:
         pipeline.adapter.verify.return_value.update(status="reference_not_met", result_level="experiment_completed",
                                                     is_reproduced=False, quality_pass=False)
@@ -98,13 +101,16 @@ def test_repository_dispatch_preserves_strict_verdict_and_long_training_budget(p
     result = pipeline.service.run({"experiment_profile": REZERO_PROFILE_ID,
                                    "use_llm_review": review}, on_event=events.append)
     assert result["state"] == "COMPLETED" and result["error"] is None
-    assert [step["id"] for step in pipeline.calls[0]["steps"]] == ["import_check"]
+    assert [step["id"] for step in pipeline.calls[0]["steps"]] == ["prepare_dependencies"]
     assert "deadline_monotonic" not in pipeline.calls[0]["env"]
     training = pipeline.calls[1]
-    assert [step["id"] for step in training["steps"]] == ["import_check", "train", "evaluate"]
-    assert training["env"]["deadline_monotonic"] - training["at"] == 7800
-    assert result["data"]["validation"] == pipeline.adapter.verify.return_value
-    assert result["data"]["validation"]["is_reproduced"] is quality
+    assert [step["id"] for step in training["steps"]] == ["train"]
+    assert training["env"]["deadline_monotonic"] is None
+    assert all(step["timeout_s"] is None for step in training["steps"])
+    assert result["data"]["validation"]["status"] == "author_code_completed"
+    assert result["data"]["validation"]["is_reproduced"] is None
+    pipeline.adapter.verify.assert_not_called()
+    pipeline.adapter.verify_environment.assert_not_called()
     assert result["data"]["optimization"] == {
         "optimized": False, "status": "disabled", "available": False, "mode": "off"}
     assert not result["data"]["quick_target"]["validated_on_this_run"]

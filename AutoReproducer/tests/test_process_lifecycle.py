@@ -121,7 +121,7 @@ def test_windows_session_exit_and_force_kill_stop_tree_and_release_locks(tmp_pat
         "    write_json(run/'owner.json',{'pid':os.getpid()})\n"
         "    try:\n"
         "        with watch_parent_session():\n"
-        f"            runner.run(run/'repo',[{{'id':'train','argv':['python','-c',{child_code!r}],'timeout_s':60}}],{{}})\n"
+        f"            runner.run(run/'repo',[{{'id':'train','argv':['python','-c',{child_code!r}],'timeout_s':None}}],{{}})\n"
         "    except KeyboardInterrupt:\n"
         "        write_json(run/'optimization.json',{'status':'interrupted','optimized':False})\n"
         "        write_json(run/'cancelled.json',{'received':True})\n",

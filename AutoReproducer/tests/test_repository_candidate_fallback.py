@@ -48,7 +48,8 @@ def test_discovered_alternate_is_attempted_before_other_pdf_frameworks():
     assert [item['url'] for item in candidates] == [first['url'], implementation, other['url']]
     assert candidates[1]['source'] == 'model_discovered'
     assert candidates[1]['is_author_code'] is False
-    assert repository_candidates(doc, first, {'alternative_repos': [implementation]}) == [first, other]
+    assert [item['url'] for item in repository_candidates(doc, first, {'alternative_repos': [implementation]})] == [
+        first['url'], implementation, other['url']]
 
 
 def test_manual_repository_is_not_replaced_by_discovery():

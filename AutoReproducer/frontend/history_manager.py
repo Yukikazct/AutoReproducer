@@ -135,6 +135,46 @@ def list_sessions() -> List[Dict[str, Any]]:
     return sorted(sessions.values(), key=lambda s: s["session_id"], reverse=True)
 
 
+def get_session_report_result(session):
+    """Load saved inputs for viewing/regenerating a historical report, locally."""
+    from src.report_revisions import load_report_revision_source, resolve_report_revision
+
+    path = session.get("report_path")
+    result = None
+    if path:
+        candidates = [Path(path).with_suffix(".result.json"), Path(path).parent / "result.json"]
+        for candidate in candidates:
+            try:
+                saved = json.loads(candidate.read_text(encoding="utf-8"))
+                if isinstance(saved, dict) and isinstance(saved.get("data"), dict):
+                    result = saved
+                    break
+            except (OSError, ValueError):
+                continue
+    if result is None and session.get("progress_file"):
+        from frontend.progress_state import read_progress_snapshot
+        snapshot = read_progress_snapshot(session["progress_file"])
+        if snapshot.get("done"):
+            result = snapshot.get("result")
+    if result is None and path:
+        result = load_report_revision_source(path)
+    if isinstance(result, dict):
+        # History filenames are the permanent report anchor; the same run may
+        # also have an internal report under runs/<id>/.
+        if path:
+            result = {**result, "report_path": path}
+        if result.get("state") is None and session.get("state") in {"COMPLETED", "ERROR"}:
+            result = {**result, "state": session["state"]}
+        return resolve_report_revision(result, data_root=get_project_data_dir())
+    if path:
+        try:
+            return {"state": session.get("state"), "report_path": path,
+                    "data": {"report": Path(path).read_text(encoding="utf-8")}}
+        except OSError:
+            pass
+    return None
+
+
 def _count_lines(path: Path) -> int:
     try:
         with open(path, "r", encoding="utf-8") as fh:
@@ -146,19 +186,9 @@ def _count_lines(path: Path) -> int:
 def _extract_session_from_progress(path: Path) -> Optional[str]:
     """从进度文件内容提取 session_id（如果日志条目中有）。"""
     try:
-        with open(path, "r", encoding="utf-8") as fh:
-            for line in fh:
-                record = json.loads(line)
-                if record.get("type") == "log":
-                    log = record.get("log", {})
-                    ts = log.get("timestamp", "")
-                    # 尝试从 timestamp (YYYY-MM-DDTHH:MM:SS) 转 session_id
-                    if ts:
-                        try:
-                            dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                            return dt.strftime("%Y%m%d_%H%M%S")
-                        except ValueError:
-                            pass
+        sid = _session_id_from_progress(path)
+        if sid:
+            return sid
         # 没找到就回退到文件修改时间
         mtime = datetime.fromtimestamp(path.stat().st_mtime)
         return mtime.strftime("%Y%m%d_%H%M%S")
@@ -247,9 +277,9 @@ def _cached_progress_sid(path_str: str, _mtime_ns: int,
 
 
 def _session_id_from_progress(path: Path) -> Optional[str]:
-    """从 progress 文件内容的 log 时间戳提取 session_id（严格版，无 mtime 回退）。
+    """优先读取完成结果的 session_id，回退到 log 时间戳（无 mtime 回退）。
 
-    仅当文件中存在可解析的 log.timestamp 时才返回，避免把不同会话的
+    仅当文件中存在明确会话 ID 或可解析的 log.timestamp 时才返回，避免把不同会话的
     progress 误归到目标会话（删除操作宁可少删、不可误删）。
     """
     try:
@@ -261,6 +291,7 @@ def _session_id_from_progress(path: Path) -> Optional[str]:
 
 def _scan_progress_sid(path: Path) -> Optional[str]:
     """真正读取并解析 progress 文件（_session_id_from_progress 的缓存后端）。"""
+    fallback = None
     try:
         with open(path, "r", encoding="utf-8") as fh:
             for line in fh:
@@ -270,18 +301,21 @@ def _scan_progress_sid(path: Path) -> Optional[str]:
                     rec = json.loads(line)
                 except ValueError:
                     continue
+                sid = (rec.get("result") or {}).get("session_id")
+                if rec.get("type") == "done" and isinstance(sid, str) and re.fullmatch(r"\d{8}_\d{6}", sid):
+                    return sid
                 if rec.get("type") == "log":
                     ts = (rec.get("log") or {}).get("timestamp", "")
                     if ts:
                         try:
                             dt = datetime.fromisoformat(
                                 ts.replace("Z", "+00:00"))
-                            return dt.strftime("%Y%m%d_%H%M%S")
+                            fallback = fallback or dt.strftime("%Y%m%d_%H%M%S")
                         except ValueError:
                             continue
     except Exception:
         pass
-    return None
+    return fallback
 
 
 def _related_files(session_id: str) -> List[Path]:
@@ -305,6 +339,11 @@ def _related_files(session_id: str) -> List[Path]:
         for f in reports_dir.glob("*.md"):
             if f.stem.endswith(f"_{session_id}"):
                 files.append(f)
+                if f.with_suffix(".result.json").exists():
+                    files.append(f.with_suffix(".result.json"))
+                revisions = f.parent / (f.stem + ".report-revisions")
+                if revisions.is_dir() and not is_link(revisions):
+                    files.extend(p for p in revisions.rglob("*") if p.is_file() and not is_link(p))
         # Figures are kept alongside reports and owned by the same session.
         if re.fullmatch(r"[a-zA-Z0-9_-]+", session_id):
             for directory in (reports_dir / "artifacts").glob(f"figures_{session_id}_*"):

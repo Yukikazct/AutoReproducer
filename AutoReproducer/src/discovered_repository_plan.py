@@ -1016,10 +1016,12 @@ def _steps(items, citations, packet, workspace, *, device=None):
             _verify_author_arguments(argv[position + 1:], quotes, packet, script=argv[position], placements=placements)
         if item.get("env") or item.get("required", True) is not True:
             raise PlanEvidenceError("Planner cannot override the execution environment or optionalize training")
-        timeout = item.get("timeout_s")
-        if type(timeout) is not int or not 1 <= timeout <= 7200:
+        # Author execution follows the command until it exits or is cancelled.
+        # Ignore obsolete planner budgets on the execution-only route.
+        timeout = None if relaxed else item.get("timeout_s")
+        if not relaxed and (type(timeout) is not int or not 1 <= timeout <= 7200):
             raise PlanEvidenceError("Author steps need bounded integer timeouts")
-        total += timeout
+        total += timeout or 0
         dependencies = item.get("depends_on", [result[-1]["id"]] if result else [])
         if not isinstance(dependencies, list) or any(dep not in seen for dep in dependencies):
             raise PlanEvidenceError("Step dependencies must refer to preceding required steps")
@@ -1046,7 +1048,7 @@ def _steps(items, citations, packet, workspace, *, device=None):
                        "depends_on": list(dependencies), "citations": [key for key in item.get('citations', []) if key in citations],
                        "required": True, **({'output_directories': prepared} if prepared else {})})
         seen.add(identifier)
-    if total > 7200 or sum(step["kind"] == "train" for step in result) != 1:
+    if (not packet.get('author_execution_only') and total > 7200) or sum(step["kind"] == "train" for step in result) != 1:
         raise PlanEvidenceError("Initial discovery supports one complete training run within 7200 seconds")
     return result
 

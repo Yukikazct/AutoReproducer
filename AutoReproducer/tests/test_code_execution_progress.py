@@ -172,20 +172,19 @@ def test_preflight_rejection_does_not_claim_code_was_executed(executor):
     executor._execute_code_local.assert_not_called()
 
 
-def test_orchestrator_forwards_execution_identity_and_verifier_retry_starts_a_new_run(executor):
+def test_orchestrator_forwards_execution_identity_without_review_reruns(executor):
     orch = Orchestrator(llm_client=executor.llm, mock_mode=True,
                         logger=Mock(), resource_manager=Mock())
     agent = orch.agents["executor"]
     agent._execute_code_local = executor._execute_code_local
     outputs = {
         "reader": {"paper_info": {}}, "finder": {"resources": {}},
-        "builder": {"env_config": {}}, "validator": {"is_reproduced": True},
+        "builder": {"env_config": {}},
         "reporter": {"report": "Done"},
     }
     for name, output in outputs.items():
         orch.agents[name].run = Mock(return_value=output)
-    orch.agents["verifier"].run = Mock(side_effect=(
-        [{"pass": True}] * 3 + [{"pass": False}, {"pass": True}, {"pass": True}]))
+    assert "verifier" not in orch.agents and "validator" not in orch.agents
     orch._fetch_resources = Mock()
     orch._finalize_storage = Mock()
     events = []
@@ -195,14 +194,13 @@ def test_orchestrator_forwards_execution_identity_and_verifier_retry_starts_a_ne
     assert execution_events
     assert all(event["phase_id"] == "execute_code" for event in execution_events)
     steps = step_events(execution_events)
-    assert len({event["execution_id"] for event in steps}) == 2
-    assert [event["step_index"] for event in steps if event["status"] == "running"] == [1, 2, 1, 2]
+    assert len({event["execution_id"] for event in steps}) == 1
+    assert [event["step_index"] for event in steps if event["status"] == "running"] == [1, 2]
     agent.llm.chat.assert_not_called()
     # The existing callback binding reads the current observer on each run;
     # reuse must neither emit to the old observer nor reconstruct the agents.
     previous_count = len(events)
     next_events = []
-    orch.agents["verifier"].run.side_effect = [{"pass": True}] * 5
     orch.run({"code": "print('result')"}, on_event=next_events.append)
     assert len(events) == previous_count
     assert orch.agents["executor"] is agent

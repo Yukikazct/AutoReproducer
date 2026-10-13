@@ -29,6 +29,13 @@ def test_records_argv_cwd_timeout_and_kind():
     assert recorded["kind"] == "train"
 
 
+def test_missing_or_null_timeout_serializes_as_unlimited():
+    implicit = step("train")
+    implicit.pop("timeout_s")
+    for authored in (implicit, step("train", timeout_s=None)):
+        assert build([authored])["steps"][0]["timeout_s"] is None
+
+
 def test_dependency_and_evidence_fields_are_recorded():
     plan = build([
         step("import_check", kind="check", depends_on=[]),

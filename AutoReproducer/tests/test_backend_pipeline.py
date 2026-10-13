@@ -248,7 +248,7 @@ def test_backend_forwards_reserved_optimization_and_phase_plan(tmp_path, monkeyp
     path = tmp_path / "forwarding.jsonl"
     result = backend.run_pipeline_core(str(path), mock_mode=True, enable_optimization=requested)
     assert result["state"] == "COMPLETED"
-    assert captured["enable_optimization"] is requested
+    assert captured["enable_optimization"] is False
     rows = ProgressStore.read_snapshot(str(path))["pipeline_stages"]
     assert rows[0]["agent"] == "🛡️ Verifier" and rows[0]["status"] == "success"
 
@@ -277,18 +277,21 @@ def test_run_pipeline_core_writes_full_progress(tmp_path):
                                mock_mode=True, max_trials=2)
 
     assert result["state"] == "COMPLETED", result.get("error")
-    assert result["data"]["validation"]["is_reproduced"] is True
+    assert result["data"]["validation"]["is_reproduced"] is None
+    assert result["data"]["validation"]["status"] == "mock_demo"
 
     view = ProgressStore.read_snapshot(str(progress))
     assert view["done"] is True
     assert view["running"] is False
     assert view["result"]["state"] == "COMPLETED"
     # 每个展示 Agent 都有状态记录（running/success/error/waiting 至少一个）
-    names = [a[1] for a in AGENTS] + ["🛡️ Verifier", "🧪 Optimizer",
+    names = [a[1] for a in AGENTS] + ["🧪 Optimizer",
                                       "📝 ReportGenerator"]
     for n in names:
         assert n in view["agent_status"], f"缺少 {n} 的状态事件"
-    # 执行 Agent 最终应为 success（复现必成）
+    assert "🛡️ Verifier" not in view["agent_status"]
+    assert "✅ ResultValidator" not in view["agent_status"]
+    # 模拟执行 Agent 正常结束，不代表真实论文数值复现成功。
     assert view["agent_status"]["⚡ CodeExecutor"] in ("success",)
     # 审计日志已逐步写入进度
     assert view["logs"], "进度中缺少审计日志"

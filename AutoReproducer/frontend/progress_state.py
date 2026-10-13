@@ -3,6 +3,8 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List
 
+PROGRESS_VIEW_VERSION = 2
+
 
 COMPLETION_RULES = {
     "prepare_runtime": "兼容解释器与应用依赖检查通过，交接结果已返回",
@@ -42,6 +44,7 @@ def read_progress_snapshot(path: str) -> Dict[str, Any]:
         "completion_blockers": [],
         "title_resolution": {},
         "pdf_resolution": {},
+        "activities": [],
     }
     stages: Dict[str, Dict[str, Any]] = {}
     stage_order: List[str] = []
@@ -122,6 +125,11 @@ def read_progress_snapshot(path: str) -> Dict[str, Any]:
             # A bounded correction starts a fresh attempt on the same row.
             row.pop("reason", None)
             row.pop("outcome", None)
+            if row.get("status") != "running" or newer_attempt:
+                row["started_at"] = event.get("at", "")
+                row.pop("finished_at", None)
+        elif status in {"success", "error", "interrupted", "skipped", "blocked"}:
+            row["finished_at"] = event.get("at", "")
         row["status"] = status
         row["_end_sequence"] = (event_sequence if status in {
             "success", "error", "interrupted", "skipped", "blocked"} else None)
@@ -129,6 +137,21 @@ def read_progress_snapshot(path: str) -> Dict[str, Any]:
             if key in event:
                 row[key] = event[key]
         return True
+
+    def activity(event, *, phase_id="", agent="", message="", status=""):
+        if not message:
+            return
+        if not phase_id:
+            phase_id = next((identifier for identifier in reversed(stage_order)
+                             if stages[identifier].get("status") == "running"
+                             and (not agent or stages[identifier].get("agent", "").endswith(agent))), "")
+        if not phase_id:
+            phase_id = next((identifier for identifier in reversed(stage_order)
+                             if stages[identifier].get("status") == "running"), "")
+        view["activities"].append({"at": event.get("at", ""), "phase_id": phase_id,
+                                   "agent": agent, "status": status,
+                                   "message": str(message)[-4000:]})
+        del view["activities"][:-500]
 
     def record_scope(scopes, identifier, event, **fields):
         """A closed scope stays closed; failed outcomes cannot become success."""
@@ -284,12 +307,22 @@ def read_progress_snapshot(path: str) -> Dict[str, Any]:
             view["state"] = ev.get("state", view["state"])
             if agent:
                 view["agent_status"][agent] = ev.get("status", "waiting")
+            if identifier:
+                activity(ev, phase_id=identifier, agent=agent, status=ev.get("status", ""),
+                         message=ev.get("reason") or stages[identifier].get("title", identifier))
         elif etype == "log":
             lg = ev.get("log")
             if isinstance(lg, dict):
                 view["logs"].append(lg)
+                activity(ev, phase_id=lg.get("phase_id") or (lg.get("action") if lg.get("action") in stages else ev.get("phase_id", "")),
+                         agent=lg.get("agent", ""), status=lg.get("status", ""), message=lg.get("detail", ""))
+        elif etype == "runtime_preparation":
+            activity(ev, phase_id="prepare_runtime", agent="EnvBuilder",
+                     status=ev.get("status", "running"), message=ev.get("message") or ev.get("reason") or ev.get("step", ""))
         elif etype == "repository_environment":
             view["environment_preparation"] = ev.get("environment", {})
+            activity(ev, phase_id=ev.get("phase_id", ""), agent="EnvBuilder",
+                     status=ev.get("status", ""), message=ev.get("reason") or "准备运行依赖")
         elif etype == "title_resolution":
             view["title_resolution"] = {key: ev[key] for key in ("requested_title", "profile", "source", "scope") if key in ev}
         elif etype == "pdf_resolution":

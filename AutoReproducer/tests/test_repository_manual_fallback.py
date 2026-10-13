@@ -71,7 +71,7 @@ def test_user_url_is_candidate_provenance_and_does_not_claim_pdf_authorship(tmp_
         validate_identity_review(packet, review)
 
 
-def test_user_provided_repository_still_completes_native_execution_and_independent_metrics(
+def test_user_provided_repository_completes_native_execution_without_claiming_authorship(
         tmp_path, monkeypatch, cpu_dependency_cache):
     fixture, runner, request, _ = setup_service(tmp_path, monkeypatch)
     request["preferred_repo_url"] = fixture["snapshot"]["url"]
@@ -81,10 +81,11 @@ def test_user_provided_repository_still_completes_native_execution_and_independe
     data = result["data"]
     assert data["execution_source"] == "user_supplied_repository" and data["repository_executed"] is True
     identity = data["resources"]["repository_identity"]
-    assert identity["status"] == "user_supplied_verified" and identity["author_identity_confirmed"] is False
-    assert data["validation"]["is_reproduced"] and data["validation"]["independent_metrics_pass"]
-    assert "用户在自动确认失败后手动提供" in data["report"]
-    assert "未确认；仅确认论文与实现内容匹配" in data["report"]
+    assert identity["status"] == "unreviewed_execution" and identity["author_identity_confirmed"] is False
+    assert data["validation"]["status"] == "author_code_completed"
+    assert data["validation"]["is_reproduced"] is None
+    assert data["resources"]["selection_evidence"]["source"] == "user_supplied"
+    assert "原始作者命令" in data["report"] or "作者命令结束记录" in data["report"]
 
 
 def test_manual_url_survives_managed_runtime_handoff(tmp_path, safe_handoff):
