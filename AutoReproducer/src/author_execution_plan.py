@@ -256,8 +256,10 @@ def materialize_author_execution(workspace, plan, spec_sha256, snapshot):
     (runtime / 'observe_author.py').write_bytes((Path(__file__).parent / 'experiments/observe_author.py').read_bytes())
     (runtime / 'observe_datasets.py').write_bytes((Path(__file__).parent / 'experiments/observe_datasets.py').read_bytes())
     (runtime / 'author_numeric_compatibility.py').write_bytes((Path(__file__).parent / 'experiments/author_numeric_compatibility.py').read_bytes())
+    (runtime / 'author_path_compatibility.py').write_bytes((Path(__file__).parent / 'experiments/author_path_compatibility.py').read_bytes())
     generated = {f'{CAPTURE_DIR}/{name}': digest(runtime / name) for name in
-                 ('config.json', 'observe_author.py', 'observe_datasets.py', 'author_numeric_compatibility.py')}
+                 ('config.json', 'observe_author.py', 'observe_datasets.py', 'author_numeric_compatibility.py',
+                  'author_path_compatibility.py')}
     steps = []
     for original in plan['steps']:
         step = deepcopy(original)
@@ -293,11 +295,15 @@ def verify_author_execution(plan, workspace, execution, spec_sha256):
     compatibility = read_json(Path(workspace) / CAPTURE_DIR / 'config.json').get('numeric_compatibility', [])
     if any(record.get('numeric_compatibility', []) != compatibility for record in observed):
         raise ValueError('Author execution compatibility receipt does not match the recorded repairs')
+    path_compatibility = read_json(Path(workspace) / CAPTURE_DIR / 'config.json').get('path_compatibility', [])
+    if any(record.get('path_compatibility', []) != path_compatibility for record in observed):
+        raise ValueError('Author path compatibility receipt does not match the recorded repairs')
     training_observed = any(type(record.get('optimizer_steps')) is int and record['optimizer_steps'] > 0 for record in observed)
     return {'status': 'author_code_completed', 'is_reproduced': None, 'result_level': 'author_code_completed',
             'execution_status': 'author_code_completed', 'paper_metrics_verified': False,
             'protocol_pass': None, 'independent_metrics_pass': None, 'author_execution': observed,
             'numeric_compatibility': compatibility,
+            'path_compatibility': path_compatibility,
             'completion_checks': {'all_required_author_commands_returned': True,
                                   'observed_training_updates': training_observed, 'owned_processes_finished': True},
             'training_observed': training_observed,

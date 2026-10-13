@@ -26,6 +26,7 @@ record['candidate_acquisition_rule'] = 'User explicitly allowed preparing 10 can
 record['excluded_regression_papers'].append('How Powerful are Spectral Graph Neural Networks')
 record['excluded_regression_papers'].append('Towards Deeper Graph Neural Networks')
 record['excluded_regression_papers'].append('Diffusion Improves Graph Learning')
+record['excluded_regression_papers'].append('Graph Structure Learning for Robust Graph Neural Networks')
 record['excluded_regression_papers'].extend(['Convolutional Neural Networks on Graphs with Chebyshev Approximation, Revisited',
     'BernNet: Learning Arbitrary Graph Spectral Filters via Bernstein Approximation', 'Deep Graph Infomax',
     'PairNorm: Tackling Oversmoothing in GNNs', 'How Powerful Are Graph Neural Networks?',

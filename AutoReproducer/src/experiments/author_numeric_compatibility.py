@@ -94,7 +94,7 @@ def diagnose_reciprocal_error(exc, script, workspace, sources):
             'replacement': call.func.value.id + '.float_power', 'error': ERROR}
 
 
-def run_entrypoint(script, repairs, workspace, sources):
+def run_entrypoint(script, repairs, workspace, sources, path_repairs=()):
     for repair in repairs:
         if repair.get('kind') not in ('numpy_builtin_alias', 'numpy_float_reciprocal'):
             raise ValueError('Unknown numeric compatibility operation')
@@ -115,11 +115,19 @@ def run_entrypoint(script, repairs, workspace, sources):
             raise ValueError('NumPy alias repair does not match the original expression')
         setattr(np, alias, getattr(builtins, alias))
     relative = script.relative_to(workspace).as_posix()
+    path_repairs = [repair for repair in path_repairs if repair.get('path') == relative]
     repairs = [repair for repair in repairs if repair.get('kind') == 'numpy_float_reciprocal'
                and repair.get('path') == relative]
-    if not repairs:
+    if not repairs and not path_repairs:
         return runpy.run_path(str(script), run_name='__main__')
     tree = ast.parse(script.read_bytes(), filename=str(script))
+    if path_repairs:
+        # This module also runs from a copied observer beside the author code.
+        if __package__:
+            from .author_path_compatibility import apply_root_repairs
+        else:
+            from author_path_compatibility import apply_root_repairs
+        apply_root_repairs(tree, path_repairs, script, workspace, sources)
     for repair in repairs:
         if (repair.get('kind') != 'numpy_float_reciprocal' or repair.get('path') != relative
                 or repair.get('source_sha256') != sources.get(relative)

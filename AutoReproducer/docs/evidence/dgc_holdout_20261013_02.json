@@ -1,0 +1,304 @@
+{
+  "tag": "dgc_holdout_20261013_02",
+  "input": "web_backend_pdf_entrypoint",
+  "browser_verified": false,
+  "mock_mode": false,
+  "supplied_repository_url": false,
+  "supplied_author_command": false,
+  "finished_at": "2026-10-13T12:14:03.004953+00:00",
+  "product_source_sha256": "2600dae1acc0ac2d4b934e5f1eec716b068a4bee0fc21206433791267070e654",
+  "product_file_count": 125,
+  "frozen_at": "2026-10-13T12:07:18.642022+00:00",
+  "product_unchanged_during_trial_and_at_collection": true,
+  "pdf": {
+    "title": "Dissecting the Diffusion Process in Linear Graph Convolutional Networks",
+    "source_url": "https://arxiv.org/pdf/2102.10739",
+    "downloaded_at": "2026-10-13T12:08:22.749208+00:00",
+    "bytes": 980587,
+    "sha256": "295dae352e820b0db6817ca5b6ec5f338bb27c74c39960f4eb519aec2842307e",
+    "source_freeze": "dgc_holdout_20261013_02_source_freeze.json"
+  },
+  "repository": {
+    "url": "https://github.com/yifeiwang77/DGC",
+    "resolved_sha": "f91b35a0d4388660e250d575d4c1b8fef41d7039",
+    "archive_sha256": "5fb8c611b39f66adabc40bb7c9c283cc1bc9e6c24a393febc7b21bd58f78d655"
+  },
+  "state": "COMPLETED",
+  "validation": {
+    "status": "author_code_completed",
+    "is_reproduced": null,
+    "result_level": "author_code_completed",
+    "execution_status": "author_code_completed",
+    "paper_metrics_verified": false,
+    "protocol_pass": null,
+    "independent_metrics_pass": null,
+    "author_execution": [
+      {
+        "spec_sha256": "7bb3c933ac9a3a59fcbf7100450f64a44b1b632931a3d07c95571eddb58d9644",
+        "step": {
+          "id": "train",
+          "kind": "train",
+          "argv": [
+            "python",
+            "main.py",
+            "--dataset",
+            "cora",
+            "--T",
+            "5.27",
+            "--K",
+            "250",
+            "--lr",
+            "0.156",
+            "--weight_decay",
+            "3.544e-5",
+            "--no-cuda"
+          ],
+          "cwd": ".",
+          "timeout_s": null,
+          "depends_on": [],
+          "citations": [
+            "repo_89aa7df35185_0",
+            "repo_b10564ab7d2c_0",
+            "repo_b33563055168_0"
+          ],
+          "required": true
+        },
+        "natural_return": true,
+        "optimizer_steps": 1000,
+        "torch_version": "2.5.1+cpu",
+        "native_datasets": [],
+        "numeric_compatibility": [],
+        "path_compatibility": []
+      }
+    ],
+    "numeric_compatibility": [],
+    "path_compatibility": [],
+    "completion_checks": {
+      "all_required_author_commands_returned": true,
+      "observed_training_updates": true,
+      "owned_processes_finished": true
+    },
+    "training_observed": true,
+    "reason": "原作者命令已自然返回，实际训练更新和所属进程结束已核验；尚未判定论文数值复现。",
+    "reviews_removed": true,
+    "pre_execution_review": "disabled",
+    "dataset_provenance_verified": false,
+    "metric_records": [
+      {
+        "name": "accuracy",
+        "value": 0.833,
+        "unit": "",
+        "split": "test",
+        "stage": "final",
+        "source": "train:stdout:20",
+        "source_quote": "Test accuracy: 0.8330,  pre-compute time: 2.8513s, train time: 0.0555s, total: 2.9068s",
+        "id": "train:stdout:0",
+        "step_id": "train"
+      }
+    ]
+  },
+  "original_commands": [
+    [
+      "python",
+      "main.py",
+      "--dataset",
+      "cora",
+      "--T",
+      "5.27",
+      "--K",
+      "250",
+      "--lr",
+      "0.156",
+      "--weight_decay",
+      "3.544e-5",
+      "--no-cuda"
+    ]
+  ],
+  "execution": [
+    {
+      "id": "train",
+      "success": true,
+      "exit_code": 0,
+      "elapsed_s": 35.234,
+      "timeout_s": null
+    }
+  ],
+  "stdout_sha256": "9eb68b1807c726a815bcb5bcbc7b61756f773ad956c1499375640d77b51fd32f",
+  "stdout_final_lines": [
+    "Test accuracy: 0.8330,  pre-compute time: 2.8513s, train time: 0.0555s, total: 2.9068s",
+    "====================",
+    "Dataset: cora Test accuracy of 10 runs: mean 0.83280, std 0.00040",
+    "{\"author_command_finished\": \"train\", \"optimizer_steps\": 1000}"
+  ],
+  "stage_events": [
+    {
+      "at": "2026-10-13T20:11:00.101088",
+      "phase_id": "generate_reader",
+      "state": "READ_PAPER",
+      "status": "running",
+      "reason": null,
+      "completion_confirmed": null
+    },
+    {
+      "at": "2026-10-13T20:11:03.323097",
+      "phase_id": "generate_reader",
+      "state": "READ_PAPER",
+      "status": "success",
+      "reason": null,
+      "completion_confirmed": null
+    },
+    {
+      "at": "2026-10-13T20:11:03.324097",
+      "phase_id": "find_resources",
+      "state": "FIND_RESOURCES",
+      "status": "running",
+      "reason": null,
+      "completion_confirmed": null
+    },
+    {
+      "at": "2026-10-13T20:11:04.171117",
+      "phase_id": "find_resources",
+      "state": "FIND_RESOURCES",
+      "status": "success",
+      "reason": null,
+      "completion_confirmed": null
+    },
+    {
+      "at": "2026-10-13T20:11:04.203544",
+      "phase_id": "prepare_repository",
+      "state": "FIND_RESOURCES",
+      "status": "running",
+      "reason": "获取代码仓库",
+      "completion_confirmed": null
+    },
+    {
+      "at": "2026-10-13T20:11:12.942443",
+      "phase_id": "prepare_repository",
+      "state": "FIND_RESOURCES",
+      "status": "success",
+      "reason": "获取代码仓库",
+      "completion_confirmed": null
+    },
+    {
+      "at": "2026-10-13T20:11:12.943445",
+      "phase_id": "plan_repository",
+      "state": "READ_PAPER",
+      "status": "running",
+      "reason": "按 README 规划运行命令",
+      "completion_confirmed": null
+    },
+    {
+      "at": "2026-10-13T20:11:18.016890",
+      "phase_id": "plan_repository",
+      "state": "READ_PAPER",
+      "status": "success",
+      "reason": "按 README 规划运行命令",
+      "completion_confirmed": null
+    },
+    {
+      "at": "2026-10-13T20:11:18.017890",
+      "phase_id": "prepare_dataset",
+      "state": "FIND_RESOURCES",
+      "status": "running",
+      "reason": "准备运行数据",
+      "completion_confirmed": null
+    },
+    {
+      "at": "2026-10-13T20:11:18.033621",
+      "phase_id": "prepare_dataset",
+      "state": "FIND_RESOURCES",
+      "status": "success",
+      "reason": "准备运行数据",
+      "completion_confirmed": null
+    },
+    {
+      "at": "2026-10-13T20:11:18.035631",
+      "phase_id": "prepare_environment",
+      "state": "BUILD_ENV",
+      "status": "running",
+      "reason": "安装运行依赖",
+      "completion_confirmed": null
+    },
+    {
+      "at": "2026-10-13T20:13:27.398812",
+      "phase_id": "prepare_environment",
+      "state": "BUILD_ENV",
+      "status": "success",
+      "reason": "安装运行依赖",
+      "completion_confirmed": null
+    },
+    {
+      "at": "2026-10-13T20:13:27.399811",
+      "phase_id": "execute_repository",
+      "state": "EXECUTE_CODE",
+      "status": "running",
+      "reason": "运行作者命令",
+      "completion_confirmed": null
+    },
+    {
+      "at": "2026-10-13T20:14:02.830616",
+      "phase_id": "execute_repository",
+      "state": "EXECUTE_CODE",
+      "status": "success",
+      "reason": "运行作者命令",
+      "completion_confirmed": null
+    },
+    {
+      "at": "2026-10-13T20:14:02.831610",
+      "phase_id": "finish_execution",
+      "state": "EXECUTE_CODE",
+      "status": "running",
+      "reason": "记录命令退出与进程结束",
+      "completion_confirmed": null
+    },
+    {
+      "at": "2026-10-13T20:14:02.902307",
+      "phase_id": "finish_execution",
+      "state": "EXECUTE_CODE",
+      "status": "success",
+      "reason": "原作者命令已自然返回，实际训练更新和所属进程结束已核验；尚未判定论文数值复现。",
+      "completion_confirmed": null
+    },
+    {
+      "at": "2026-10-13T20:14:02.903309",
+      "phase_id": "generate_report",
+      "state": "GENERATE_REPORT",
+      "status": "running",
+      "reason": "生成运行报告",
+      "completion_confirmed": null
+    },
+    {
+      "at": "2026-10-13T20:14:02.909307",
+      "phase_id": "generate_report",
+      "state": "GENERATE_REPORT",
+      "status": "success",
+      "reason": "生成运行报告",
+      "completion_confirmed": null
+    },
+    {
+      "at": "2026-10-13T20:14:02.912307",
+      "phase_id": null,
+      "state": "COMPLETED",
+      "status": "success",
+      "reason": null,
+      "completion_confirmed": null
+    },
+    {
+      "at": "2026-10-13T20:14:02.933317",
+      "phase_id": null,
+      "state": "COMPLETED",
+      "status": "success",
+      "reason": null,
+      "completion_confirmed": null
+    }
+  ],
+  "completion": {
+    "done": true,
+    "active_workers": 0,
+    "active_runs": 0,
+    "active_executions": 0
+  },
+  "report_sha256": "b3431dbb049715e7404b87146fb01e54849b7da010d0354901e8b219ed3806b9",
+  "report_relative_path": "data/reports/Dissecting_the_Diffusion_Proce_20261013_201059.md",
+  "run_relative_path": "data/runs/repository_b563f2597f6948b2979d073538e57f88"
+}
