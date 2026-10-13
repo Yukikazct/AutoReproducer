@@ -212,11 +212,12 @@ class RepositoryRunner:
         exit_code, diagnostic, cleanup_errors = -2, "", []
         # Plot helpers live beside the logs, not inside the author repository.
         environment = self.executor._exec_env(str(run_dir))
+        prepared_pythonpath = environment.get('PYTHONPATH', '')
         environment.update(step["env"])
         # Entry points under examples/ or scripts/ still need the repository's
         # top-level packages, rather than an unrelated installed namesake.
         environment["PYTHONPATH"] = os.pathsep.join(
-            part for part in (str(root), environment.get("PYTHONPATH", "")) if part)
+            dict.fromkeys(part for part in (str(root), environment.get("PYTHONPATH", ""), prepared_pythonpath) if part))
         environment["PYTHONUNBUFFERED"] = "1"
         environment["AUTOREPRO_PARENT_PID"] = str(os.getpid())
         supervisor = Path(__file__).with_name("sandbox_timeout.py")

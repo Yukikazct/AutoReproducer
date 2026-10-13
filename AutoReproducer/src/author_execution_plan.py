@@ -66,9 +66,13 @@ def validate_author_execution_plan(payload, packet, workspace):
         'reason': proposed_requirements.get('reason') or 'Read author declarations and imports; repair actual missing dependencies.',
         'citations': [key for key in proposed_requirements.get('citations', []) if key in citations],
     }, citations, packet, device, train, datasets=datasets, workspace=workspace)
+    from src.author_environment import author_environment
+    environment, environment_warnings = author_environment(packet, workspace)
+    warnings.extend(environment_warnings)
     return {'version': 1, 'scope': SCOPE, 'repository': repository, 'citations': list(citations.values()),
             'claims': deepcopy(claims), 'steps': steps, 'datasets': datasets, 'requirements': requirements,
             'parameters': {}, 'metrics': [], 'capture': {'kind': 'author_process', 'device': device},
+            'author_environment': environment,
             'planning_warnings': warnings, 'pre_execution_review': 'disabled', 'reviews_removed': True,
             'pdf_sha256': packet['pdf']['sha256'],
             'evidence_sha256': hashlib.sha256(_canonical(packet).encode('utf-8')).hexdigest()}
@@ -206,9 +210,22 @@ def plan_from_author_commands(packet, workspace):
             source = _load_execution_source(packet, workspace, name)
         except (ValueError, OSError, UnicodeError):
             continue
-        cwd = '.'
+        cwd = Path(name).parent.as_posix() if name.endswith('.sh') else '.'
+        bindings = {}
         for line in source['text'].replace('\\\r\n', ' ').replace('\\\n', ' ').splitlines():
             stripped = line.strip().removeprefix('$ ').strip('`').strip()
+            loop = re.fullmatch(r'for\s+([A-Za-z_]\w*)\s+in\s+(.+?)(?:;\s*do)?', stripped)
+            if loop:
+                try:
+                    values = shlex.split(loop[2], comments=True)
+                except ValueError:
+                    values = []
+                if values and all(not re.search(r'[$`<>;|&()]', value) for value in values):
+                    bindings[loop[1]] = values[0]
+                continue
+            if stripped == 'done':
+                bindings.clear()
+                continue
             if re.fullmatch(r'cd\s+[\w./-]+', stripped):
                 cwd = stripped.split(maxsplit=1)[1]
                 continue
@@ -220,8 +237,16 @@ def plan_from_author_commands(packet, workspace):
                     if token in ('>', '>>', '2>', '2>>', '&', '&&', ';', '|'):
                         argv = argv[:index]
                         break
+                argv = [re.sub(r'\$(?:\{([A-Za-z_]\w*)\}|([A-Za-z_]\w*))',
+                               lambda match: bindings.get(match[1] or match[2], match[0]), arg)
+                        for arg in argv]
                 if any('$' in arg or '<' in arg or '>' in arg for arg in argv):
                     continue  # Unresolved shell templates need an actual planner.
+                # A launcher may be invoked from the repository root instead
+                # of its own directory. Use only a cwd with its real entrypoint.
+                if (len(argv) > 1 and not (Path(workspace) / cwd / argv[1]).is_file()
+                        and (Path(workspace) / argv[1]).is_file()):
+                    cwd = '.'
                 declarations = []
                 for dependency_source in packet['repository']['files'].values():
                     for declared_line in dependency_source['text'].splitlines():
@@ -233,7 +258,8 @@ def plan_from_author_commands(packet, workspace):
                     'device': 'cpu', 'datasets': [], 'requirements': {'author': list(dict.fromkeys(declarations))},
                     'steps': [{'id': 'train', 'kind': 'train', 'argv': argv, 'cwd': cwd, 'timeout_s': None}]}
                 plan = validate_author_execution_plan(proposal, packet, workspace)
-                plan['command_source'] = {'path': name, 'quote': line, 'sha256': source['sha256']}
+                plan['command_source'] = {'path': name, 'quote': line, 'sha256': source['sha256'],
+                                          'template_bindings': dict(bindings)}
                 return plan
             except (ValueError, TypeError, KeyError, OSError) as exc:
                 failures.append(str(exc))
@@ -266,7 +292,9 @@ def materialize_author_execution(workspace, plan, spec_sha256, snapshot):
         step['argv'] = ['python', '-u', f'{CAPTURE_DIR}/observe_author.py', original['id']]
         # The observer enters the original cwd before running the author command.
         step['cwd'] = '.'
-        step['env'] = {'CUDA_VISIBLE_DEVICES': ''} if plan['capture']['device'] == 'cpu' else {}
+        step['env'] = {key: record['value'] for key, record in plan.get('author_environment', {}).items()}
+        if plan['capture']['device'] == 'cpu':
+            step['env']['CUDA_VISIBLE_DEVICES'] = ''
         if any(pin.startswith('dgl==') for pin in plan['requirements']['compatibility']):
             step['env']['DGLBACKEND'] = 'pytorch'
         step['artifacts'] = [{'path': f'{CAPTURE_DIR}/author_{original["id"]}.json', 'required': True}]

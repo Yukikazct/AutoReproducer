@@ -52,4 +52,30 @@ python main.py --dataset cora --T 5.27 --K 250 --lr 0.156 --weight_decay 3.544e-
 
 脱敏证据：[dgc_holdout_20261013_02.json](evidence/dgc_holdout_20261013_02.json)；[源文件冻结记录](evidence/dgc_holdout_20261013_02_source_freeze.json)；[可供手工上传的测试 PDF](../test_papers/dgc_2102.10739_holdout_20261013.pdf)。本地报告：`data/reports/Dissecting_the_Diffusion_Proce_20261013_201059.md`。
 
-当前 Computer Use 工具返回空浏览器清单，因此本轮尚未验证真实浏览器上传；后端任务不能记作浏览器验收。#30 的 ChebNetII 历史问题尚未重新实跑，保留该 issue。
+上述 DGC 成功结果对应当时的冻结版本。浏览器工具随后恢复可用，真实网页测试发现以下新问题；DGC 因产品继续修改而退役，不作为最新版本的独立验收。
+
+## 浏览器上传与作者启动配置
+
+重启服务后，Streamlit 上传组件可能保留 `DeletedFile`，旧页面会对它调用 `getvalue()` 并崩溃。现在检测失效上传对象，显示重新上传提示，点击开始不会创建后台任务；真实 AppTest 回归通过。
+
+实际通过网页上传 *EvenNet: Ignoring Odd-Hop Neighbors Improves Robustness of Graph Neural Networks*（arXiv `2205.13892`），自动从 PDF 定位 `Leirunlin/EvenNet`。模型已给出作者 `src/main_common.py` 命令，但四次规划均因输出目录 `../logs` 被拒绝。这个目录从 `src/` 解析后仍在整个仓库内：现在按仓库边界判断，允许此类作者输出路径。备用启动脚本提取同时支持有限字面量 `for` 循环的首个作者值以及子目录入口，保留完整 Python 调用和作者训练参数，不执行 shell。EvenNet 未训练成功，已退役。
+
+随后冻结产品，实际通过网页上传 *Hyperbolic Graph Convolutional Neural Networks*（arXiv `1910.12933`），自动定位 `HazyResearch/hgcn` 并启动作者程序。程序在训练前因 `KeyError: 'DATAPATH'` 失败：README 要求加载 `set_env.sh`，原流程遗漏了它的环境声明。新实现读取已固定摘要的作者环境脚本，解析字面量、`$(pwd)` 和已声明变量引用，将数据及模块路径带入子进程，并保留来源文件、摘要和原文。作者 `PYTHONPATH` 与已准备的依赖目录合并。无法解析的声明会记录提示；不执行 shell、环境激活或未知命令，不将主机密钥用于变量展开。HGCN 未训练成功，已退役。
+
+这批定向回归为 **128 passed, 8 skipped**，包括真实服务加载作者环境配置、40 次优化器更新和自然退出。此前环境配置修复前的全量结果为 **2952 passed, 70 skipped**，不能代替最新代码的全量验证。
+
+#30 的 ChebNetII 历史问题尚未重新实跑，保留该 issue。运行后论文数值比较仍未实现。
+
+## 最新独立网页验收：DiGCN
+
+修复后换用未参与修复的 *Digraph Inception Convolutional Networks*，冻结 126 个产品 Python 文件，摘要 `253fbfdb7e06b32e98da96245c7b9a3992959266eefdf01cafc927c146e74d79`。从 NeurIPS 官方下载 PDF，SHA-256 为 `1fd2ec4b7b04b7735f53c5ddf5f438fb88ea6bbb7a5817d8da7605ecbb967eff`。通过真实浏览器选择“上传 PDF”并点击开始，使用真实 DeepSeek API，没有手工提供仓库或命令。
+
+系统从 PDF 第 2 页作者声明提取 `flyingtango/DiGCN`，固定源码 `0b87d1917493b32683f3f04c00fa9453eb884ec6`，使用仓库自带完整 Cora-ML 数据，从 `code/` 执行 `python digcn.py --gpu-no 0 --dataset cora_ml`。保留作者默认 20 次运行、1000 轮上限和原生提前停止规则。
+
+- 真实 CUDA 训练观察到 **10,049 次优化器更新**，作者命令自然退出，退出码 **0**，执行耗时 **60.094 秒**；流水线统计耗时 **298.05 秒**。
+- 原始输出：`Val Acc: 0.8055, Val Loss: 0.6815, Test Accuracy: 0.7719 ± 0.0044, Duration: 2.4038`。网页格式 2 报告的实测值表显示验证准确率 `0.8055`、验证损失 `0.6815`、测试准确率 `0.7719`。
+- 网页训练期间保持整体“运行中”，逐阶段显示事件；结束后 `done=true`，活动 worker / run / execution 均为 **0**。
+- 测试前后及证据采集时确认冻结源文件未变；这篇论文未应用 NumPy 或临时数据目录兼容修改。
+- 最新代码全量回归：**2961 passed, 70 skipped**，564.51 秒。跳过项不作为已验证环境；定向测试与全量有重叠，不能相加。
+
+证据：[独立测试记录](evidence/digcn_holdout_20261013_05.json)、[源文件冻结](evidence/digcn_holdout_20261013_05_source_freeze.json)、[完成页面](evidence/digcn_completed_20261013.jpg)、[实测值页面](evidence/digcn_metrics_20261013.jpg)、[可上传 PDF](../test_papers/digcn_holdout_20261013_05.pdf)。确认范围是作者代码实际完成，`paper_metrics_verified=false`、`is_reproduced=null`；论文数值比较尚未接入。

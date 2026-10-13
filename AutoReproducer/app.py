@@ -436,6 +436,11 @@ with st.sidebar:
     input_mode = st.session_state.input_mode
     uploaded_file = (st.session_state.get("pdf_uploader")
                      if input_mode == "上传PDF" else None)
+    # Reconnecting to a restarted server can leave a DeletedFile marker in
+    # widget state while file_uploader itself returns None. It is not a PDF.
+    if uploaded_file is not None and not callable(getattr(uploaded_file, "getvalue", None)):
+        uploaded_file = None
+        st.warning("上传的 PDF 已失效，请重新上传后再开始复现。")
     experiment_profile = (st.session_state.get("experiment_profile")
                           if input_mode == "官方仓库预设" else None)
     manual_repo_url, manual_repo_error = "", ""

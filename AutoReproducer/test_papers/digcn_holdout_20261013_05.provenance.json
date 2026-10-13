@@ -1,0 +1,8 @@
+{
+  "title": "Digraph Inception Convolutional Networks",
+  "source_url": "https://papers.nips.cc/paper/2020/file/cffb6e2288a630c2a787a64ccc67097c-Paper.pdf",
+  "downloaded_at": "2026-10-13T14:30:33.598015+00:00",
+  "bytes": 1893169,
+  "sha256": "1fd2ec4b7b04b7735f53c5ddf5f438fb88ea6bbb7a5817d8da7605ecbb967eff",
+  "source_freeze": "digcn_holdout_20261013_05_source_freeze.json"
+}

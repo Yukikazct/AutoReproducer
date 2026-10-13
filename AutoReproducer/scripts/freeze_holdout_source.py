@@ -27,6 +27,9 @@ record['excluded_regression_papers'].append('How Powerful are Spectral Graph Neu
 record['excluded_regression_papers'].append('Towards Deeper Graph Neural Networks')
 record['excluded_regression_papers'].append('Diffusion Improves Graph Learning')
 record['excluded_regression_papers'].append('Graph Structure Learning for Robust Graph Neural Networks')
+record['excluded_regression_papers'].append('Dissecting the Diffusion Process in Linear Graph Convolutional Networks')
+record['excluded_regression_papers'].append('EvenNet: Ignoring Odd-Hop Neighbors Improves Robustness of Graph Neural Networks')
+record['excluded_regression_papers'].append('Hyperbolic Graph Convolutional Neural Networks')
 record['excluded_regression_papers'].extend(['Convolutional Neural Networks on Graphs with Chebyshev Approximation, Revisited',
     'BernNet: Learning Arbitrary Graph Spectral Filters via Bernstein Approximation', 'Deep Graph Infomax',
     'PairNorm: Tackling Oversmoothing in GNNs', 'How Powerful Are Graph Neural Networks?',
