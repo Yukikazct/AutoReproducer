@@ -55,7 +55,7 @@ def repair_requirement(stderr, plan, packet):
 
 
 def run_with_dependency_repair(runner, workspace, steps, environment, plan, packet,
-                               run_dir, data, on_event, verify_inputs, repair_numeric=None):
+                               run_dir, data, on_event, verify_inputs, repair_numeric=None, repair_path=None):
     """Retry after cleanup, retaining every failed run and the unchanged argv."""
     effective = deepcopy(environment)
     # Retry allowance counts actual failures, never time spent running code.
@@ -63,6 +63,7 @@ def run_with_dependency_repair(runner, workspace, steps, environment, plan, pack
     data.setdefault('dependency_repair_attempts', [])
     repairs = data['dependency_repair_attempts']
     numeric_repairs = data.setdefault('numeric_repair_attempts', [])
+    path_repairs = data.setdefault('path_repair_attempts', [])
     seen = {repair['package'] for repair in repairs}
     for attempt in range(MAX_DEPENDENCY_REPAIRS + 1):
         verify_inputs()
@@ -75,15 +76,24 @@ def run_with_dependency_repair(runner, workspace, steps, environment, plan, pack
         if final.get('timed_out') or final.get('cancelled'):
             return result
         stderr = str(final.get('stderr') or result.get('reason') or '')
-        if len(repairs) + len(numeric_repairs) >= MAX_DEPENDENCY_REPAIRS:
+        if len(repairs) + len(numeric_repairs) + len(path_repairs) >= MAX_DEPENDENCY_REPAIRS:
             return result
         fix = repair_requirement(stderr, plan, packet)
         if not fix:
+            path_fix = repair_path(result) if repair_path else None
+            if path_fix is not None:
+                path_repairs.append({**path_fix, 'failed_execution_dir': result.get('run_dir'),
+                    'attempt': len(repairs) + len(numeric_repairs) + len(path_repairs) + 1})
+                write_json(run_dir / 'path_repairs.json', path_repairs)
+                on_event({'type': 'log', 'log': {'agent': 'CodeExecutor', 'action': 'repair_data_path',
+                    'status': 'RUNNING', 'detail': '作者临时数据目录不存在；改用任务内目录并重试原命令。',
+                    'data': path_repairs[-1]}})
+                continue
             numeric = repair_numeric(result) if repair_numeric else None
             if numeric is None:
                 return result
             numeric_repairs.append({**numeric, 'failed_execution_dir': result.get('run_dir'),
-                                    'attempt': len(repairs) + len(numeric_repairs) + 1})
+                                    'attempt': len(repairs) + len(numeric_repairs) + len(path_repairs) + 1})
             write_json(run_dir / 'numeric_repairs.json', numeric_repairs)
             on_event({'type': 'log', 'log': {'agent': 'CodeExecutor', 'action': 'repair_numeric_type',
                 'status': 'RUNNING', 'detail': '原命令发生 NumPy 兼容错误；记录兼容修复后重试同一命令。',
@@ -92,7 +102,8 @@ def run_with_dependency_repair(runner, workspace, steps, environment, plan, pack
         if fix['package'] in seen:
             return result
         seen.add(fix['package'])
-        repair = {**fix, 'attempt': len(repairs) + 1, 'failed_execution_dir': result.get('run_dir'),
+        repair = {**fix, 'attempt': len(repairs) + len(numeric_repairs) + len(path_repairs) + 1,
+                  'failed_execution_dir': result.get('run_dir'),
                   'diagnostic': _safe_install_diagnostic(stderr)[-4000:]}
         repairs.append(repair)
         write_json(run_dir / 'dependency_repairs.json', data['dependency_repair_attempts'])

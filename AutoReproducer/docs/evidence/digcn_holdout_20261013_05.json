@@ -1,0 +1,270 @@
+{
+  "tag": "digcn_holdout_20261013_05",
+  "input": "browser_pdf_upload",
+  "browser_verified": true,
+  "mock_mode": false,
+  "supplied_repository_url": false,
+  "supplied_author_command": false,
+  "pdf": {
+    "title": "Digraph Inception Convolutional Networks",
+    "source_url": "https://papers.nips.cc/paper/2020/file/cffb6e2288a630c2a787a64ccc67097c-Paper.pdf",
+    "downloaded_at": "2026-10-13T14:30:33.598015+00:00",
+    "bytes": 1893169,
+    "sha256": "1fd2ec4b7b04b7735f53c5ddf5f438fb88ea6bbb7a5817d8da7605ecbb967eff",
+    "source_freeze": "digcn_holdout_20261013_05_source_freeze.json"
+  },
+  "product_source_sha256": "253fbfdb7e06b32e98da96245c7b9a3992959266eefdf01cafc927c146e74d79",
+  "frozen_at": "2026-10-13T14:29:29.945541+00:00",
+  "product_file_count": 126,
+  "product_unchanged_during_trial_and_at_collection": true,
+  "finished_at": "2026-10-13T22:36:32.059809",
+  "state": "COMPLETED",
+  "repository": {
+    "url": "https://github.com/flyingtango/DiGCN",
+    "resolved_sha": "0b87d1917493b32683f3f04c00fa9453eb884ec6",
+    "archive_sha256": "29f8015b17a81bc91ca83c2680cf9932ceea6c6ce71f02d50a03d5ff45bac0c0"
+  },
+  "validation": {
+    "status": "author_code_completed",
+    "result_level": "author_code_completed",
+    "is_reproduced": null,
+    "paper_metrics_verified": false,
+    "training_observed": true,
+    "completion_checks": {
+      "all_required_author_commands_returned": true,
+      "observed_training_updates": true,
+      "owned_processes_finished": true
+    }
+  },
+  "original_commands": [
+    [
+      "python",
+      "digcn.py",
+      "--gpu-no",
+      "0",
+      "--dataset",
+      "cora_ml"
+    ]
+  ],
+  "author_receipts": [
+    {
+      "natural_return": true,
+      "optimizer_steps": 10049,
+      "numeric_compatibility": [],
+      "path_compatibility": []
+    }
+  ],
+  "execution": [
+    {
+      "id": "train",
+      "success": true,
+      "exit_code": 0,
+      "elapsed_s": 60.094,
+      "timeout_s": null
+    }
+  ],
+  "stdout": [
+    {
+      "step": "train",
+      "sha256": "df5e4c233b3477460b18f25e7beb6f6c5aad387ece9affc81417cd1e9d2d3059",
+      "final_lines": [
+        "0.6810253262519836 0.7745222929936306",
+        "0.6810253262519836 0.7745222929936306",
+        "0.6810253262519836 0.7745222929936306",
+        "0.6810253262519836 0.7745222929936306",
+        "0.6810253262519836 0.7745222929936306",
+        "0.6810253262519836 0.7745222929936306",
+        "Val Acc: 0.8055, Val Loss: 0.6815, Test Accuracy: 0.7719 ± 0.0044, Duration: 2.4038",
+        "{\"author_command_finished\": \"train\", \"optimizer_steps\": 10049}"
+      ]
+    }
+  ],
+  "stage_events": [
+    {
+      "at": "2026-10-13T22:31:29.863649",
+      "phase_id": "prepare_runtime",
+      "state": "BUILD_ENV",
+      "status": "running",
+      "reason": "正在核验运行环境，并在独立后台进程加载本次 PDF 作者仓库实验。",
+      "completion_confirmed": null
+    },
+    {
+      "at": "2026-10-13T22:31:31.474457",
+      "phase_id": "prepare_runtime",
+      "state": "BUILD_ENV",
+      "status": "success",
+      "reason": "兼容运行环境已就绪，继续本次复现",
+      "completion_confirmed": null
+    },
+    {
+      "at": "2026-10-13T22:31:35.352731",
+      "phase_id": "generate_reader",
+      "state": "READ_PAPER",
+      "status": "running",
+      "reason": null,
+      "completion_confirmed": null
+    },
+    {
+      "at": "2026-10-13T22:31:38.876452",
+      "phase_id": "generate_reader",
+      "state": "READ_PAPER",
+      "status": "success",
+      "reason": null,
+      "completion_confirmed": null
+    },
+    {
+      "at": "2026-10-13T22:31:38.877452",
+      "phase_id": "find_resources",
+      "state": "FIND_RESOURCES",
+      "status": "running",
+      "reason": null,
+      "completion_confirmed": null
+    },
+    {
+      "at": "2026-10-13T22:31:56.194283",
+      "phase_id": "find_resources",
+      "state": "FIND_RESOURCES",
+      "status": "success",
+      "reason": null,
+      "completion_confirmed": null
+    },
+    {
+      "at": "2026-10-13T22:31:56.238552",
+      "phase_id": "prepare_repository",
+      "state": "FIND_RESOURCES",
+      "status": "running",
+      "reason": "获取代码仓库",
+      "completion_confirmed": null
+    },
+    {
+      "at": "2026-10-13T22:32:09.013029",
+      "phase_id": "prepare_repository",
+      "state": "FIND_RESOURCES",
+      "status": "success",
+      "reason": "获取代码仓库",
+      "completion_confirmed": null
+    },
+    {
+      "at": "2026-10-13T22:32:09.013863",
+      "phase_id": "plan_repository",
+      "state": "READ_PAPER",
+      "status": "running",
+      "reason": "按 README 规划运行命令",
+      "completion_confirmed": null
+    },
+    {
+      "at": "2026-10-13T22:32:13.935156",
+      "phase_id": "plan_repository",
+      "state": "READ_PAPER",
+      "status": "success",
+      "reason": "按 README 规划运行命令",
+      "completion_confirmed": null
+    },
+    {
+      "at": "2026-10-13T22:32:13.937239",
+      "phase_id": "prepare_dataset",
+      "state": "FIND_RESOURCES",
+      "status": "running",
+      "reason": "准备运行数据",
+      "completion_confirmed": null
+    },
+    {
+      "at": "2026-10-13T22:32:14.004807",
+      "phase_id": "prepare_dataset",
+      "state": "FIND_RESOURCES",
+      "status": "success",
+      "reason": "准备运行数据",
+      "completion_confirmed": null
+    },
+    {
+      "at": "2026-10-13T22:32:14.007807",
+      "phase_id": "prepare_environment",
+      "state": "BUILD_ENV",
+      "status": "running",
+      "reason": "安装运行依赖",
+      "completion_confirmed": null
+    },
+    {
+      "at": "2026-10-13T22:35:29.127436",
+      "phase_id": "prepare_environment",
+      "state": "BUILD_ENV",
+      "status": "success",
+      "reason": "安装运行依赖",
+      "completion_confirmed": null
+    },
+    {
+      "at": "2026-10-13T22:35:29.128712",
+      "phase_id": "execute_repository",
+      "state": "EXECUTE_CODE",
+      "status": "running",
+      "reason": "运行作者命令",
+      "completion_confirmed": null
+    },
+    {
+      "at": "2026-10-13T22:36:31.764173",
+      "phase_id": "execute_repository",
+      "state": "EXECUTE_CODE",
+      "status": "success",
+      "reason": "运行作者命令",
+      "completion_confirmed": null
+    },
+    {
+      "at": "2026-10-13T22:36:31.765173",
+      "phase_id": "finish_execution",
+      "state": "EXECUTE_CODE",
+      "status": "running",
+      "reason": "记录命令退出与进程结束",
+      "completion_confirmed": null
+    },
+    {
+      "at": "2026-10-13T22:36:31.919904",
+      "phase_id": "finish_execution",
+      "state": "EXECUTE_CODE",
+      "status": "success",
+      "reason": "原作者命令已自然返回，实际训练更新和所属进程结束已核验；尚未判定论文数值复现。",
+      "completion_confirmed": null
+    },
+    {
+      "at": "2026-10-13T22:36:31.921210",
+      "phase_id": "generate_report",
+      "state": "GENERATE_REPORT",
+      "status": "running",
+      "reason": "生成运行报告",
+      "completion_confirmed": null
+    },
+    {
+      "at": "2026-10-13T22:36:31.959705",
+      "phase_id": "generate_report",
+      "state": "GENERATE_REPORT",
+      "status": "success",
+      "reason": "生成运行报告",
+      "completion_confirmed": null
+    },
+    {
+      "at": "2026-10-13T22:36:31.962695",
+      "phase_id": null,
+      "state": "COMPLETED",
+      "status": "success",
+      "reason": null,
+      "completion_confirmed": null
+    },
+    {
+      "at": "2026-10-13T22:36:32.059809",
+      "phase_id": null,
+      "state": "COMPLETED",
+      "status": "success",
+      "reason": null,
+      "completion_confirmed": null
+    }
+  ],
+  "completion": {
+    "done": true,
+    "active_workers": 0,
+    "active_runs": 0,
+    "active_executions": 0
+  },
+  "report_relative_path": "data/reports/Digraph_Inception_Convolutiona_20261013_223133.md",
+  "report_sha256": "f5b9ed6e9e95097a51eb05f89e56b0c607982f91ee1327cbfb624eb1c84621a5",
+  "run_relative_path": "data/runs/repository_f4846c5db817411881b74332b19933df",
+  "progress_relative_path": "data/runtime/progress_1791901888077.jsonl"
+}

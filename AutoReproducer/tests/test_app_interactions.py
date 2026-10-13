@@ -197,6 +197,27 @@ def test_pdf_mode_requires_file_even_if_title_was_entered(app, monkeypatch):
     assert any("请先上传PDF文件" in error.value for error in app.sidebar.error)
 
 
+def test_reconnected_deleted_upload_prompts_reupload_without_starting_worker(app, monkeypatch):
+    from streamlit.runtime.uploaded_file_manager import DeletedFile
+    start = Mock()
+    monkeypatch.setattr(pipeline, "run_pipeline_background", start)
+    app.sidebar.radio(key="input_mode").set_value("上传PDF").run()
+    # AppTest normally normalizes missing upload records before the full page
+    # runs. Mirror the reconnect race: renderer returns None, stale state remains.
+    def expired_uploader(*args, **kwargs):
+        import streamlit as st
+        st.session_state['pdf_uploader'] = DeletedFile(file_id='expired-server-upload')
+        return None
+    monkeypatch.setattr('streamlit.file_uploader', expired_uploader)
+    app.run()
+    assert not app.exception
+    assert any('PDF 已失效' in warning.value for warning in app.sidebar.warning)
+    next(b for b in app.sidebar.button if '开始复现' in b.label).click().run()
+    assert not app.exception
+    start.assert_not_called()
+    assert any('请先上传PDF文件' in error.value for error in app.sidebar.error)
+
+
 def test_repository_preset_requires_real_mode(app, monkeypatch):
     start = Mock()
     monkeypatch.setattr(pipeline, "run_pipeline_background", start)

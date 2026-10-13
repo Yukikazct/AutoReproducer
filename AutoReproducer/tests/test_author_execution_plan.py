@@ -202,6 +202,49 @@ def test_no_silent_downgrade_of_paper_reference_objective(tmp_path):
         author.validate_author_execution_plan(execution_proposal(fixture), packet, fixture['workspace'])
 
 
+@pytest.mark.parametrize('variable', ['$epochs', '${epochs}'])
+def test_subdirectory_launcher_expands_first_literal_loop_value_and_preserves_command(tmp_path, variable):
+    fixture, _ = fixture_packet(tmp_path)
+    workspace = fixture['workspace']
+    (workspace / 'src').mkdir()
+    (workspace / 'src/train.py').write_bytes((workspace / 'train.py').read_bytes())
+    launcher = workspace / 'src/demo.sh'
+    launcher.write_text('for epochs in 17 19; do\npython train.py --epochs ' + variable + '\ndone\n', encoding='utf-8')
+    for name in ('src/train.py', 'src/demo.sh'):
+        fixture['snapshot']['files'][name] = hashlib.sha256((workspace / name).read_bytes()).hexdigest()
+    packet = build_evidence_packet(fixture['pdf'], workspace, fixture['snapshot'])
+    packet['author_execution_only'] = True
+    packet['repository']['files']['README.md']['text'] = 'Run src/demo.sh.'
+    plan = author.plan_from_author_commands(packet, workspace)
+    assert plan['steps'][0]['cwd'] == 'src'
+    assert plan['steps'][0]['argv'] == ['python', 'train.py', '--epochs', '17']
+    assert plan['command_source']['template_bindings'] == {'epochs': '17'}
+    assert plan['command_source']['quote'].endswith(variable)
+
+
+@pytest.mark.parametrize('directory,allowed', [('../logs', True), ('../../outside', False)])
+def test_subdirectory_author_logs_are_resolved_against_repository_boundary(tmp_path, directory, allowed):
+    fixture, _ = fixture_packet(tmp_path)
+    workspace = fixture['workspace']
+    (workspace / 'src').mkdir()
+    source = (workspace / 'src/train.py')
+    source.write_text("with open('" + directory + "/result.txt', 'w') as stream:\n    stream.write('result')\n"
+                      + (workspace / 'train.py').read_text('utf-8'), encoding='utf-8')
+    fixture['snapshot']['files']['src/train.py'] = hashlib.sha256(source.read_bytes()).hexdigest()
+    packet = build_evidence_packet(fixture['pdf'], workspace, fixture['snapshot'])
+    packet['author_execution_only'] = True
+    proposal = execution_proposal(fixture)
+    proposal['citations'] = []
+    proposal['steps'][0].update(cwd='src', citations=[])
+    if not allowed:
+        with pytest.raises(ValueError, match='escaped the workspace'):
+            author.validate_author_execution_plan(proposal, packet, workspace)
+        return
+    plan = author.validate_author_execution_plan(proposal, packet, workspace)
+    assert plan['steps'][0]['output_directories'][0]['path'] == 'logs'
+    assert not (workspace / 'logs').exists()
+
+
 @pytest.mark.parametrize('change', [
     lambda p: p.update(code='print(1)'),
     lambda p: p['repository'].update(revision='b' * 40),

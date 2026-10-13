@@ -1,0 +1,10 @@
+{
+  "title": "Dissecting the Diffusion Process in Linear Graph Convolutional Networks",
+  "source_url": "https://arxiv.org/pdf/2102.10739",
+  "downloaded_at": "2026-10-13T12:08:22.749208+00:00",
+  "bytes": 980587,
+  "sha256": "295dae352e820b0db6817ca5b6ec5f338bb27c74c39960f4eb519aec2842307e",
+  "source_freeze": "../docs/evidence/dgc_holdout_20261013_02_source_freeze.json",
+  "result_evidence": "../docs/evidence/dgc_holdout_20261013_02.json",
+  "original_runtime_tag": "dgc_holdout_20261013_02"
+}

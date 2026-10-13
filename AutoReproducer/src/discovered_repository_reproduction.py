@@ -655,11 +655,47 @@ class DiscoveredRepositoryReproduction:
                     return fix
                 return None
 
+            def repair_path(result):
+                from src.experiments.author_path_compatibility import validate_root_repair
+                import ast
+                for failed in result.get('steps', []):
+                    if failed.get('executed') is not True or failed.get('exit_code') in (None, 0):
+                        continue
+                    identifier = failed.get('id')
+                    if not any(step['id'] == identifier for step in plan['steps']):
+                        continue
+                    candidate_path = runtime_dir / ('path_failure_' + identifier + '.json')
+                    if not candidate_path.exists():
+                        continue
+                    candidate = read_json(candidate_path)
+                    fix = candidate.get('repair') or {}
+                    if (candidate.get('spec_sha256') != data['spec_sha256']
+                            or candidate.get('step') != identifier or candidate.get('optimizer_steps') != 0
+                            or fix.get('source_sha256') != snapshot['files'].get(fix.get('path'))):
+                        return None
+                    source = workspace_path(workspace, fix['path'], 'author data root source', must_exist=True)
+                    try:
+                        validate_root_repair(ast.parse(source.read_bytes()), fix, source, workspace, snapshot['files'])
+                    except ValueError:
+                        return None
+                    capture_config = read_json(runtime_dir / 'config.json')
+                    configured = capture_config.setdefault('path_compatibility', [])
+                    if any(item['path'] == fix['path'] and item['line'] == fix['line']
+                           and item['column'] == fix['column'] for item in configured):
+                        return None
+                    verify_frozen_inputs()
+                    configured.append(fix)
+                    write_json(runtime_dir / 'config.json', capture_config)
+                    generated[f'{CAPTURE_DIR}/config.json'] = digest(runtime_dir / 'config.json')
+                    write_json(run_dir / 'adapter_manifest.json', {'files': generated,
+                        'note': '原仓库文件不变；记录实际失败后的任务内数据目录兼容修复。'})
+                    return fix
+                return None
+
             def run_steps(selected, runtime_environment):
                 from src.author_runtime_dependencies import run_with_dependency_repair
                 return run_with_dependency_repair(self.runner, workspace, selected, runtime_environment,
-                    plan, packet, run_dir, data, progress, verify_frozen_inputs, repair_numeric)
-                return self.runner.run(workspace, selected, runtime_environment, on_event=progress)
+                    plan, packet, run_dir, data, progress, verify_frozen_inputs, repair_numeric, repair_path)
 
             preflight = [{"id": "native_preflight", "kind": "check", "required": True,
                           "argv": ["python", "-u", f"{CAPTURE_DIR}/preflight.py"], "cwd": ".",
@@ -775,6 +811,8 @@ class DiscoveredRepositoryReproduction:
                 if 'numpy_builtin_alias' in kinds:
                     notes.append('旧 NumPy 类型别名兼容修复')
                 validation['warnings'] = ['执行包含实际报错后记录的' + '、'.join(notes) + '；原仓库文件未改写。']
+            if validation.get('path_compatibility'):
+                validation.setdefault('warnings', []).append('作者缺失的临时数据目录已在实际报错后映射到本任务内；原仓库文件未改写。')
             from src.author_claim_comparison import collect_author_metrics
             try:
                 validation['metric_records'], data['metric_parse_errors'] = collect_author_metrics(execution)

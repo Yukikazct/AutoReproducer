@@ -10,7 +10,7 @@ import difflib
 import hashlib
 import json
 import math
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import re
 import shlex
 import sys
@@ -1038,7 +1038,17 @@ def _steps(items, citations, packet, workspace, *, device=None):
         for source_path in sources:
             source = packet['repository']['files'][source_path]
             for output in output_directories(source['text']):
-                target = workspace_path(directory, output['directory'], 'author output directory', forbid_git=True)
+                output_path = output['directory']
+                if Path(output_path).is_absolute() or PureWindowsPath(output_path).drive:
+                    raise PlanEvidenceError('Author output directory must remain inside the workspace')
+                # ../logs from a src/ working directory is still a repository
+                # output. Check the resolved repository boundary, not cwd alone.
+                target = (directory / output_path).resolve()
+                try:
+                    relative_output = target.relative_to(Path(workspace).resolve()).as_posix()
+                except ValueError:
+                    raise PlanEvidenceError('Author output directory escaped the workspace') from None
+                target = workspace_path(workspace, relative_output, 'author output directory', forbid_git=True)
                 if target.exists() and not target.is_dir():
                     raise PlanEvidenceError('Author output parent is an existing file')
                 prepared.append({**output, 'path': target.relative_to(Path(workspace).resolve()).as_posix(),

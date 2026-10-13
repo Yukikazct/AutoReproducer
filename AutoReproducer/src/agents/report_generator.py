@@ -649,6 +649,12 @@ class ReportGeneratorAgent(BaseAgent):
                 lines.append('- 第 ' + str(repair['attempt']) + ' 轮：缺少 ' +
                     _markdown_text(repair['module']) + '，安装 ' + _markdown_text(repair['requirement']) +
                     ' 后重试；原失败日志保留在运行目录。')
+        if data.get('path_repair_attempts'):
+            lines += ['', '### 根据运行报错修复数据目录', '']
+            for repair in data['path_repair_attempts']:
+                lines.append('- 第 ' + str(repair['attempt']) + ' 轮：作者临时目录 ' +
+                    _markdown_text(repair['original_root']) + ' 不存在，改用任务内目录 ' +
+                    _markdown_text(repair['replacement_root']) + ' 后重试；原源码与失败日志保留。')
         if source_recoveries:
             lines += ["", "### 公开证据自动恢复", "",
                       f"- **恢复来源数**: {len(source_recoveries)}；从固定官方网页读取原文并校验身份、定位与哈希"]

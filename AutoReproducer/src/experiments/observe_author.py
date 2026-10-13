@@ -11,6 +11,7 @@ import torch
 from torch.optim.optimizer import register_optimizer_step_post_hook
 from observe_datasets import DatasetObserver
 from author_numeric_compatibility import diagnose_numpy_alias_error, diagnose_reciprocal_error, run_entrypoint
+from author_path_compatibility import diagnose_temporary_root_error
 
 
 runtime = Path(__file__).resolve().parent
@@ -20,6 +21,8 @@ identifier = sys.argv[1]
 step = next(item for item in config['steps'] if item['id'] == identifier)
 failure_path = runtime / ('numeric_failure_' + identifier + '.json')
 failure_path.unlink(missing_ok=True)
+path_failure = runtime / ('path_failure_' + identifier + '.json')
+path_failure.unlink(missing_ok=True)
 (runtime / ('author_' + identifier + '.json')).unlink(missing_ok=True)
 for relative, expected in config['source_files'].items():
     source = (workspace / relative).resolve(strict=True)
@@ -78,17 +81,22 @@ for namespace in config.get('repository_namespaces', []):
     sys.modules[name] = package
 try:
     try:
-        run_entrypoint(script, config.get('numeric_compatibility', []), workspace, config['source_files'])
+        run_entrypoint(script, config.get('numeric_compatibility', []), workspace, config['source_files'],
+                       config.get('path_compatibility', []))
     except SystemExit as exc:
         # absl.app.run and ordinary sys.exit(0) finish valid author programs
         # through SystemExit. A clean exit still needs real data and updates.
         if exc.code is not None and (type(exc.code) is not int or exc.code != 0):
             raise
-    except (ValueError, AttributeError) as exc:
+    except Exception as exc:
         candidate = (diagnose_reciprocal_error(exc, script, workspace, config['source_files'])
                      or diagnose_numpy_alias_error(exc, script, workspace, config['source_files']))
         if candidate:
             failure_path.write_text(json.dumps({'spec_sha256': config['spec_sha256'],
+                'step': identifier, 'optimizer_steps': updates, 'repair': candidate}), encoding='utf-8')
+        candidate = diagnose_temporary_root_error(exc, script, workspace, config['source_files'])
+        if candidate:
+            path_failure.write_text(json.dumps({'spec_sha256': config['spec_sha256'],
                 'step': identifier, 'optimizer_steps': updates, 'repair': candidate}), encoding='utf-8')
         raise
     native_data = datasets.finish()
@@ -99,6 +107,7 @@ finally:
 receipt = {'spec_sha256': config['spec_sha256'], 'step': step,
            'natural_return': True, 'optimizer_steps': updates,
            'torch_version': torch.__version__, 'native_datasets': native_data,
-           'numeric_compatibility': config.get('numeric_compatibility', [])}
+           'numeric_compatibility': config.get('numeric_compatibility', []),
+           'path_compatibility': config.get('path_compatibility', [])}
 (runtime / ('author_' + identifier + '.json')).write_text(json.dumps(receipt, indent=2), encoding='utf-8')
 print(json.dumps({'author_command_finished': identifier, 'optimizer_steps': updates}), flush=True)
