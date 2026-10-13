@@ -337,7 +337,9 @@ def test_manifest_failure_keeps_previous_complete_document(mgr, monkeypatch):
     with pytest.raises(OSError, match="disk full"):
         mgr.save_manifest({"paper_id": "paper", "paper_title": "next"})
     assert mgr.get_manifest("paper")["paper_title"] == "previous"
-    assert list(mgr.manifests_root.iterdir()) == [mgr._manifest_path("paper")]
+    remaining = {path.name for path in mgr.manifests_root.iterdir()}
+    assert "paper.json" in remaining
+    assert remaining <= {"paper.json", "paper.lock"}  # Windows releases remove lock files.
 
 
 def test_concurrent_manifest_readers_see_complete_documents(mgr):
@@ -356,6 +358,43 @@ def test_concurrent_manifest_readers_see_complete_documents(mgr):
             assert loaded and loaded["value"] in ("initial", "a" * 1000, "b" * 1000)
         for writer in writers:
             writer.result()
+
+
+def test_manifest_reader_waits_for_another_process_writer(mgr):
+    import subprocess
+    from concurrent.futures import ThreadPoolExecutor
+
+    mgr.save_manifest({"paper_id": "paper", "value": "initial"})
+    path = mgr._manifest_path("paper")
+    script = (
+        "import json,sys;from pathlib import Path;from filelock import FileLock;"
+        "p=Path(sys.argv[1]);lock=FileLock(str(p.with_suffix('.lock')));"
+        "lock.acquire();print('locked',flush=True);sys.stdin.readline();"
+        "p.write_text(json.dumps({'paper_id':'paper','value':'new'}),encoding='utf-8');"
+        "lock.release()"
+    )
+    process = subprocess.Popen([sys.executable, "-u", "-c", script, str(path)],
+                               stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               text=True)
+    try:
+        assert process.stdout.readline().strip() == "locked"
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            pending = pool.submit(mgr.get_manifest, "paper")
+            try:
+                from concurrent.futures import TimeoutError
+                with pytest.raises(TimeoutError):
+                    pending.result(timeout=0.1)
+            finally:
+                process.stdin.write("publish\n")
+                process.stdin.flush()
+            assert pending.result(timeout=5)["value"] == "new"
+        assert process.wait(timeout=5) == 0
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
+        for stream in (process.stdin, process.stdout, process.stderr):
+            stream.close()
 
 
 def test_archive_failure_preserves_previous_archive(mgr, monkeypatch):

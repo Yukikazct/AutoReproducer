@@ -276,7 +276,7 @@ python -m pytest tests/ -q -ra
 python -X utf8 -m pytest tests/ -q -ra
 ```
 
-[GitHub Actions](../.github/workflows/tests.yml) 配置为 Ubuntu / Windows × Python 3.11 / 3.12，Windows 另跑 UTF-8 模式。回归测试无需真实 LLM API；CI 配置和历史通过记录不能代替当前提交的测试结果，也不能证明真实论文训练完成。部分历史测试仍保留已移除的审核、优化和数值验收断言，迁移状态见 [运行与回归记录](docs/execution_without_reviews_20261012.md)。
+[GitHub Actions](../.github/workflows/tests.yml) 配置为 Ubuntu / Windows × Python 3.11 / 3.12，Windows 另跑 UTF-8 模式。回归测试无需真实 LLM API；CI 配置和历史通过记录不能代替当前提交的测试结果，也不能证明真实论文训练完成。当前测试已迁移到作者代码执行和报告流程；本地全量结果、Windows 并发修复及真实 PDF 验证状态见 [测试跟进记录](docs/test_followup_20261013.md)。
 
 ### Python 编程接口
 

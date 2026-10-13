@@ -32,6 +32,7 @@ import zipfile
 import zlib
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional
+from filelock import FileLock
 from src.project_paths import get_data_root
 from src.resource_events import ResourceEventLogger
 from src.safety.files import remove_tree
@@ -736,20 +737,23 @@ class ResourceManager:
 
     def save_manifest(self, manifest: Dict) -> str:
         path = self._manifest_path(manifest["paper_id"])
-        _atomic_json(path, manifest)
+        with FileLock(str(path.with_suffix(".lock")), timeout=10):
+            _atomic_json(path, manifest)
         return str(path)
 
     def get_manifest(self, paper_id: str) -> Optional[Dict]:
         path = self._manifest_path(paper_id)
-        if not path.is_file():
-            return None
-        try:
-            manifest = json.loads(path.read_text(encoding="utf-8"))
-            if isinstance(manifest, dict) and manifest.get("paper_id") == paper_id:
-                return manifest
-            return None
-        except (OSError, json.JSONDecodeError):
-            return None
+        # Windows can deny opening a file during an otherwise atomic replace.
+        # Readers and writers share a process-independent lock so a transient
+        # sharing conflict cannot turn an existing manifest into a missing one.
+        with FileLock(str(path.with_suffix(".lock")), timeout=10):
+            try:
+                manifest = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(manifest, dict) and manifest.get("paper_id") == paper_id:
+                    return manifest
+                return None
+            except (OSError, json.JSONDecodeError):
+                return None
 
     def list_manifests(self) -> List[Dict]:
         out: List[Dict] = []
@@ -757,15 +761,11 @@ class ResourceManager:
             return out
         for f in sorted(self.manifests_root.glob("*.json")):
             try:
-                data = json.loads(f.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
+                data = self.get_manifest(f.stem)
+            except (OSError, ValueError):
                 continue
-            if isinstance(data, dict) and data.get("paper_id"):
-                try:
-                    if self._manifest_path(data["paper_id"]) == f:
-                        out.append(data)
-                except ValueError:
-                    continue
+            if data is not None:
+                out.append(data)
         return out
 
     # ---------------- 清理 / 归档 ----------------
