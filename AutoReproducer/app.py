@@ -935,6 +935,36 @@ with tab1:
                 st.info("流水线已结束，请查看报告中的复现结论。")
         elif result.get("state") == "ERROR":
             st.error(f"流程出错: {result.get('error', '未知错误')}")
+            failure_data = result.get('data') or {}
+            attempts = ((failure_data.get('plan_rejection') or {}).get('candidate_attempts')
+                        or failure_data.get('planning_trace') or [])
+            attempts = [item for item in attempts if item.get('repository_url')]
+            analyses = failure_data.get('failure_analyses') or []
+            install = (((failure_data.get('environment_preparation') or {})
+                        .get('effective_env_config') or {}).get('dependency_install_attempts') or [])
+            if attempts or install or analyses:
+                with st.expander('查看自动规划与环境修复记录'):
+                    if attempts:
+                        st.caption('已检查的仓库及阻塞原因')
+                        st.dataframe([{'仓库': item.get('repository_url'),
+                                       '版本': item.get('revision', ''),
+                                       '结果': item.get('planning_status', '获取失败'),
+                                       '原因': str(item.get('error', ''))[:600]}
+                                      for item in attempts], hide_index=True)
+                    if install:
+                        st.caption('依赖下载来源及失败类别')
+                        st.dataframe([{'来源': item.get('index_url'),
+                                       '成功': item.get('success'),
+                                       '类别': item.get('failure_kind') or '',
+                                       '诊断': str(item.get('diagnostic', ''))[:600]}
+                                      for item in install], hide_index=True)
+                    if analyses:
+                        st.caption('LLM 失败分析与已验证的修复动作')
+                        st.dataframe([{'类别': item.get('failure_kind'),
+                                       '解释器': item.get('python_version') or '',
+                                       '动作': item.get('action'),
+                                       '原因': str(item.get('reason') or item.get('analysis_error') or '')[:600]}
+                                      for item in analyses], hide_index=True)
 
 # ===== Tab 2: 复现报告 =====
 with tab2:

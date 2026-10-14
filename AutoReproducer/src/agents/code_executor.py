@@ -83,6 +83,12 @@ _INSTALLED_DEPS: Dict[str, str] = {}
 _DEFAULT_PUBLIC_PIP_INDEX = "https://pypi.tuna.tsinghua.edu.cn/simple"
 _DEFAULT_PUBLIC_FIND_LINKS = "https://mirrors.aliyun.com/pytorch-wheels/cpu/"
 _OFFICIAL_PIP_INDEX = "https://pypi.org/simple"
+_PUBLIC_PIP_INDEXES = (
+    _DEFAULT_PUBLIC_PIP_INDEX,
+    "https://mirrors.aliyun.com/pypi/simple/",
+    "https://pypi.mirrors.ustc.edu.cn/simple/",
+    _OFFICIAL_PIP_INDEX,
+)
 
 
 def _safe_install_diagnostic(value) -> str:
@@ -111,13 +117,54 @@ def _safe_install_diagnostic(value) -> str:
     return text
 
 
-def _public_mirror_failure(detail: str, timed_out: bool = False) -> bool:
+def _requested_python_conflict(detail: str, requirements: str) -> dict | None:
+    """Only trust Requires-Python evidence for an actually requested exact pin."""
+    from packaging.requirements import InvalidRequirement, Requirement
+    from packaging.utils import canonicalize_name
+
+    requested = {}
+    for raw in (requirements or '').splitlines():
+        try:
+            item = Requirement(raw.strip())
+        except InvalidRequirement:
+            continue
+        exact = [spec.version for spec in item.specifier if spec.operator in {'==', '==='}
+                 and not spec.version.endswith('.*')]
+        if len(exact) == 1:
+            requested[canonicalize_name(item.name)] = exact[0]
+    for match in re.finditer(
+            r"(?i)Package\s+['\"]?([\w.-]+)['\"]?\s+(?:==\s*([\w.+!-]+)\s+)?"
+            r"requires a different Python[^\n]*", detail or ''):
+        name = canonicalize_name(match.group(1))
+        if name in requested and (not match.group(2) or match.group(2) == requested[name]):
+            bound = re.search(r"(?i)not in\s+['\"]([^'\"]+)['\"]", match.group(0))
+            return {'package': name, 'version': requested[name], 'evidence': match.group(0)[:500],
+                    'requires_python': bound.group(1) if bound else None}
+    # pip lists many skipped releases. A skipped version is relevant only when
+    # it is the exact version pinned by the author or compatibility resolver.
+    for name, version in requested.items():
+        escaped = re.escape(version)
+        missing = re.search(r'(?i)No matching distribution found for\s+'
+                            + re.escape(name).replace(r'\-', r'[-_.]') + r'\s*==\s*' + escaped
+                            + r'(?:\s|$)', detail or '')
+        bound = re.search(r'(?i)(?:^|[;\s,])' + escaped
+                          + r'\s+Requires-Python\s*([^;\n]+)', detail or '')
+        if missing and bound:
+            return {'package': name, 'version': version,
+                    'evidence': 'requested version ' + version + ' Requires-Python',
+                    'requires_python': bound.group(1).strip()}
+    return None
+
+
+def _public_mirror_failure(detail: str, timed_out: bool = False, requirements: str = '') -> bool:
     """Retry source availability failures; dependency/build failures stay failed."""
     lowered = detail.lower()
     semantic_errors = ("resolutionimpossible", "conflicting dependencies", "cannot install",
-                       "could not build wheels", "failed building wheel", "requires a different python",
+                       "could not build wheels", "failed building wheel",
                        "subprocess-exited-with-error")
     if any(hint in lowered for hint in semantic_errors):
+        return False
+    if _requested_python_conflict(detail, requirements):
         return False
     hints = ("from versions: none", "no matching distribution found", "could not fetch url",
              "connectionerror", "connection error", "connection refused", "connection reset",
@@ -128,14 +175,47 @@ def _public_mirror_failure(detail: str, timed_out: bool = False) -> bool:
     return timed_out or any(hint in lowered for hint in hints)
 
 
+def _install_failure_kind(detail: str, timed_out: bool = False, requirements: str = '') -> str:
+    lowered = (detail or '').lower()
+    if 'resolutionimpossible' in lowered or 'conflicting dependencies' in lowered:
+        return 'dependency_conflict'
+    if (_requested_python_conflict(detail, requirements) if requirements else
+            'requires a different python' in lowered or 'package requires python' in lowered):
+        return 'python_incompatible'
+    if 'could not build wheels' in lowered or 'failed building wheel' in lowered or 'subprocess-exited-with-error' in lowered:
+        return 'build_failed'
+    if timed_out or any(word in lowered for word in ('connectionerror', 'connection refused', 'could not fetch url',
+            'temporary failure in name resolution', 'network is unreachable', 'proxyerror', 'sslerror', 'timed out')):
+        return 'source_unavailable'
+    if 'no matching distribution found' in lowered or 'from versions: none' in lowered:
+        return 'wheel_unavailable'
+    return 'installation_failed'
+
+
 def _allow_official_pip_fallback(requirements: str) -> bool:
     # Explicit private indexes/links and primary requirements-file sources must
     # retain the user's routing policy. Only the application's public defaults
     # and the reviewed presets' unchanged supplemental torch indexes may fall back.
-    if (PIP_INDEX_URL.rstrip("/") != _DEFAULT_PUBLIC_PIP_INDEX
+    if (PIP_INDEX_URL.rstrip("/") not in {value.rstrip("/") for value in _PUBLIC_PIP_INDEXES}
             or PIP_FIND_LINKS not in {"", _DEFAULT_PUBLIC_FIND_LINKS}):
         return False
     return _reviewed_pip_requirement_sources(requirements)
+
+
+def _public_install_sources(requirements):
+    """Keep a caller's public starting mirror and try each remaining source once."""
+    initial = PIP_INDEX_URL.rstrip('/')
+    if initial == _OFFICIAL_PIP_INDEX or not _allow_official_pip_fallback(requirements):
+        return [(PIP_INDEX_URL, PIP_FIND_LINKS)]
+    ordered = [PIP_INDEX_URL, *_PUBLIC_PIP_INDEXES]
+    seen, sources = set(), []
+    for index in ordered:
+        key = index.rstrip('/')
+        if key in seen:
+            continue
+        seen.add(key)
+        sources.append((index, PIP_FIND_LINKS if key == initial else ''))
+    return sources
 
 
 def _reviewed_pip_requirement_sources(requirements: str) -> bool:
@@ -1879,7 +1959,9 @@ class CodeExecutorAgent(BaseAgent):
                                     "-i ", "-f ")) or line == "--no-index":
                     continue
                 requirement = Requirement(line)
-                if requirement.marker and not requirement.marker.evaluate():
+                target_version = env_config.get('python_version')
+                marker_env = {'python_version': target_version} if target_version else None
+                if requirement.marker and not requirement.marker.evaluate(environment=marker_env):
                     continue
                 name = canonicalize_name(requirement.name)
                 parsed.append({"name": name, "specifier": str(requirement.specifier),
@@ -1894,7 +1976,7 @@ class CodeExecutorAgent(BaseAgent):
                 paths = environment_paths(self._dependency_lock_root(), deps_dir)
                 expected_versions = read_deps_meta(deps_dir).get('resolved_versions', {})
                 result = self._run_dependency_command(
-                    [sys.executable, "-I", "-c", DEPENDENCY_HEALTH_PROBE, str(deps_dir), json.dumps(parsed),
+                    [self._python_executable(), "-I", "-c", DEPENDENCY_HEALTH_PROBE, str(deps_dir), json.dumps(parsed),
                      json.dumps([str(path) for path in paths]), json.dumps(expected_versions)],
                     timeout=LOCAL_DEPENDENCY_HEALTH_TIMEOUT, env=env)
             exit_code = result.returncode
@@ -1912,7 +1994,8 @@ class CodeExecutorAgent(BaseAgent):
         except Exception as exc:
             detail = f"依赖健康检查异常: {exc}"
         safe_detail = _safe_install_diagnostic(detail)[-1600:]
-        record = {"phase": phase, "path": str(deps_dir), "runtime": runtime_fingerprint(),
+        record = {"phase": phase, "path": str(deps_dir),
+                  "runtime": runtime_fingerprint(self._python_executable()),
                   "success": exit_code == 0, "exit_code": exit_code, "timed_out": timed_out,
                   "duration_s": round(time.monotonic() - started, 3), "diagnostic": safe_detail}
         env_config.setdefault("dependency_health_attempts", []).append(record)
@@ -2008,7 +2091,7 @@ class CodeExecutorAgent(BaseAgent):
                 [heal_dir, *self._protected_dependency_paths()], phase='before_install', installation=True)
             if space_error:
                 return space_error
-            cmd = [sys.executable, "-m", "pip", "install",
+            cmd = [self._python_executable(), "-m", "pip", "install",
                    "--disable-pip-version-check", "-q",
                    "--no-user",
                    "--target", str(heal_dir),
@@ -2037,6 +2120,9 @@ class CodeExecutorAgent(BaseAgent):
                 return self._ensure_local_deps_locked(workdir)
         except DependencyCacheBusy as exc:
             return str(exc)
+
+    def _python_executable(self):
+        return str((getattr(self, 'env_config', None) or {}).get('python_executable') or sys.executable)
 
     def _activate_dependency_environment(self, directory):
         paths = environment_paths(self._dependency_lock_root(), directory, require_ready=True)
@@ -2084,7 +2170,7 @@ class CodeExecutorAgent(BaseAgent):
         if not candidates and not any((path / '.ready').is_file() for path in root.iterdir() if path.is_dir()):
             return None
         report_path = Path(workdir) / 'wheel_resolution.json'
-        command = [sys.executable, '-m', 'pip', 'install', '--disable-pip-version-check', '-q',
+        command = [self._python_executable(), '-m', 'pip', 'install', '--disable-pip-version-check', '-q',
                    '--no-user', '--dry-run', '--ignore-installed', '--only-binary=:all:',
                    '--report', str(report_path), '-i', PIP_INDEX_URL]
         if PIP_FIND_LINKS:
@@ -2191,6 +2277,8 @@ class CodeExecutorAgent(BaseAgent):
                     return None
 
         if env_config.get("offline") and not self.mock_mode and not ready_mark.is_file():
+            env_config['dependency_failure_kind'] = 'offline_cache_missing'
+            env_config['dependency_install_attempts'] = []
             return "离线模式缺少完整的固定依赖缓存；本次未联网安装或训练"
 
         req_file = os.path.join(workdir, "requirements.txt")
@@ -2227,8 +2315,9 @@ class CodeExecutorAgent(BaseAgent):
 
         attempts = []
         env_config["dependency_install_attempts"] = attempts
-        index, links = PIP_INDEX_URL, PIP_FIND_LINKS
-        fallback_allowed = _allow_official_pip_fallback(reqs)
+        sources = _public_install_sources(reqs)
+        source_position = 0
+        index, links = sources[0]
         pinned_cuda = (bool(env_config.get("auto_prepare")) and _pinned_cuda_requirements(reqs)
                        and links in {"", _DEFAULT_PUBLIC_FIND_LINKS})
         pinned_cpu = (bool(env_config.get("auto_prepare")) and _pinned_cpu_requirements(reqs)
@@ -2249,13 +2338,11 @@ class CodeExecutorAgent(BaseAgent):
                 return space_error
             if managed_repository:
                 layer = self._resolve_dependency_layer(deps_root, reqs, req_file, workdir)
-            fallback_used = False
             health_rebuild_used = invalid_cache
-            # One public-source fallback and one clean native-package rebuild.
-            # Fixed pins and source policy are preserved on every invocation.
-            for attempt in range(1, 4):
+            # Each public source is tried once, with one extra health rebuild.
+            for attempt in range(1, len(sources) + 2):
                 reset_managed_environment(managed_root, deps_dir)
-                cmd = [sys.executable, "-m", "pip", "install",
+                cmd = [self._python_executable(), "-m", "pip", "install",
                        "--disable-pip-version-check", "-q", "--no-user",
                        "--target", str(deps_dir), "-i", index]
                 # Retain pip's replacement semantics across retries, while the
@@ -2266,7 +2353,7 @@ class CodeExecutorAgent(BaseAgent):
                     cmd += ["--find-links", links]
                 cmd += ["-r", req_file]
                 if layer:
-                    cmd = [sys.executable, '-m', 'pip', 'install', '--disable-pip-version-check', '-q',
+                    cmd = [self._python_executable(), '-m', 'pip', 'install', '--disable-pip-version-check', '-q',
                            '--no-user', '--no-deps', '--target', str(deps_dir),
                            '-r', layer['requirements_file']]
                 timed_out, exit_code = False, None
@@ -2308,7 +2395,9 @@ class CodeExecutorAgent(BaseAgent):
                 attempts.append({"attempt": attempt, "index_url": _safe_install_diagnostic(index),
                                  "success": exit_code == 0 and not health_error, "exit_code": exit_code,
                                  "timed_out": timed_out, "timeout_s": timeout_s, "diagnostic": safe_detail,
-                                 "health_diagnostic": health_error or ""})
+                                 "health_diagnostic": health_error or "",
+                                 "failure_kind": _install_failure_kind(health_error or detail, timed_out, reqs)
+                                     if exit_code != 0 or health_error else None})
                 if health_error:
                     if not health_rebuild_used:
                         self._record_dependency_repair(deps_dir, health_error)
@@ -2335,12 +2424,12 @@ class CodeExecutorAgent(BaseAgent):
                         "dependency", resource_id, "install", "succeeded",
                         path=str(deps_dir), bytes=self._path_bytes(deps_dir), attempts=attempt)
                     return None
-                if not fallback_used and fallback_allowed and _public_mirror_failure(detail, timed_out):
+                if source_position + 1 < len(sources) and _public_mirror_failure(detail, timed_out, reqs):
                     self.log("install_deps", "WARNING",
-                             "默认公共镜像不可用，保留固定依赖版本并回退官方 PyPI 一次",
+                             "当前公共镜像未能提供依赖，保留版本并尝试下一个来源",
                              {"attempt": attempt, "diagnostic": safe_detail})
-                    index, links = _OFFICIAL_PIP_INDEX, ""
-                    fallback_used = True
+                    source_position += 1
+                    index, links = sources[source_position]
                     continue
                 break
         except Exception as e:      # 连失败原因都拿不到（如 pip 自身异常）
@@ -2354,6 +2443,8 @@ class CodeExecutorAgent(BaseAgent):
         _INSTALLED_DEPS[key] = (
             f"依赖安装失败（已尝试 {len(attempts)} 轮），无法在本地环境执行:\n{diagnostics}"
             f"\n依赖清单: {_safe_install_diagnostic(reqs)[:200]}...")
+        if attempts:
+            env_config['dependency_failure_kind'] = attempts[-1].get('failure_kind')
         self.log("install_deps", "ERROR", _INSTALLED_DEPS[key][:200])
         self._finish_dependency_repair(deps_dir, False)
         self.resource_events.emit(

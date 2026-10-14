@@ -4,6 +4,7 @@ from importlib.machinery import ModuleSpec
 import json
 import os
 from pathlib import Path
+import runpy
 import sys
 import types
 
@@ -34,9 +35,10 @@ for relative, record in config.get('data_files', {}).items():
             or source.stat().st_size != record['bytes']):
         raise ValueError('Frozen original author data changed before execution: ' + relative)
 argv = step['argv']
-index = 2 if argv[1] == '-u' else 1
+entrypoint = step.get('entrypoint') or {'kind': 'script', 'source_path': argv[2 if argv[1] == '-u' else 1]}
+index = 2 if len(argv) > 1 and argv[1] == '-u' else 1
 directory = (workspace / step['cwd']).resolve(strict=True)
-script = (directory / argv[index]).resolve(strict=True)
+script = (workspace / entrypoint['source_path']).resolve(strict=True)
 if not directory.is_relative_to(workspace) or not script.is_relative_to(workspace):
     raise ValueError('Author command escaped its workspace')
 for item in step.get('output_directories', []):
@@ -65,8 +67,14 @@ def after_step(optimizer, args, kwargs):
 handle = register_optimizer_step_post_hook(after_step)
 datasets = DatasetObserver(config.get('runtime_datasets', []) if step['kind'] == 'train' else [], workspace, lambda: updates)
 os.chdir(directory)
-sys.argv = argv[index:]
-sys.path[0] = str(script.parent)
+if entrypoint['kind'] == 'module':
+    sys.argv = [entrypoint['target'], *argv[index + 2:]]
+    sys.path[0] = str(directory)
+elif entrypoint['kind'] == 'notebook':
+    sys.path[0] = str(directory)
+else:
+    sys.argv = argv[index:]
+    sys.path[0] = str(script.parent)
 for namespace in config.get('repository_namespaces', []):
     name = namespace['name']
     if (not name.isidentifier() or namespace['path'] != '.' or name in sys.modules
@@ -81,8 +89,16 @@ for namespace in config.get('repository_namespaces', []):
     sys.modules[name] = package
 try:
     try:
-        run_entrypoint(script, config.get('numeric_compatibility', []), workspace, config['source_files'],
-                       config.get('path_compatibility', []))
+        if entrypoint['kind'] == 'notebook':
+            from author_notebook import run_notebook
+            updates = run_notebook(script, runtime, identifier, directory)
+        elif entrypoint['kind'] == 'module':
+            if config.get('numeric_compatibility') or config.get('path_compatibility'):
+                raise ValueError('Module compatibility repair needs a separately reviewed entrypoint')
+            runpy.run_module(entrypoint['target'], run_name='__main__', alter_sys=True)
+        else:
+            run_entrypoint(script, config.get('numeric_compatibility', []), workspace, config['source_files'],
+                           config.get('path_compatibility', []))
     except SystemExit as exc:
         # absl.app.run and ordinary sys.exit(0) finish valid author programs
         # through SystemExit. A clean exit still needs real data and updates.

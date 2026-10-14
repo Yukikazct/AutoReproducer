@@ -52,7 +52,7 @@ _RUNTIME_DEPENDENCIES = {
                   'scikit-learn', 'matplotlib', 'tensorboardx', 'tqdm'),
     'ogb': ('torch', 'numpy', 'pandas', 'scikit-learn', 'tqdm'),
 }
-_TEXT_SUFFIXES = {".py", ".md", ".rst", ".txt", ".toml", ".yaml", ".yml", ".sh", ".cff", ".cfg"}
+_TEXT_SUFFIXES = {".py", ".ipynb", ".md", ".rst", ".txt", ".toml", ".yaml", ".yml", ".sh", ".cff", ".cfg"}
 _FORBIDDEN_FLAGS = {"--smoke", "--dry-run", "--fast-dev-run", "--limit-train-batches",
                     "--limit-test-batches", "--subset", "--max-samples"}
 
@@ -293,6 +293,8 @@ def _planning_excerpts(packet):
     for page in packet["pdf"]["pages"]:
         add(f"pdf_p{page['page']}", {"source": "pdf", "page": page["page"]}, page["text"])
     for path, source in sorted(packet["repository"]["files"].items()):
+        if path.endswith('.ipynb'):
+            continue  # Notebook cells are summarized separately as code, not raw JSON.
         # Path is a separate source field. Compact stable IDs avoid models
         # mixing a similarly named file's prefix with another file's hash.
         prefix = 'repo_' + _digest(path.encode())[:12]
@@ -309,6 +311,22 @@ def _planning_excerpts(packet):
 
 def _planning_view(packet):
     view = deepcopy(packet)
+    notebooks = []
+    for name, source in packet['repository']['files'].items():
+        if not name.endswith('.ipynb'):
+            continue
+        try:
+            parsed = json.loads(source['text'])
+            code = [(i, ''.join(cell.get('source', '')) if isinstance(cell.get('source'), list)
+                     else cell.get('source', '')) for i, cell in enumerate(parsed['cells'])
+                    if cell.get('cell_type') == 'code']
+            notebooks.append({'path': name, 'sha256': source['sha256'],
+                              'code_cells': len(code),
+                              'excerpts': [{'cell': index + 1, 'source': body[:1800]}
+                                           for index, body in code[:24] if isinstance(body, str)]})
+        except (ValueError, TypeError, KeyError):
+            pass
+    view['program_detected_notebooks'] = notebooks
     view['program_detected_bundled_planetoid'] = _bundled_planetoid_options(packet)
     view['source_catalog'] = {name: {'already_read': name in packet['repository']['files'],
                                    'bytes': entry['bytes']}
@@ -486,11 +504,19 @@ def _citations(payload, packet, workspace):
 
 def _author_imports(packet, step, *, include_sources=False, device=None, workspace=None):
     """Follow imports in pinned author files; no model-generated dependency list."""
+    entrypoint = step.get('entrypoint') or {}
+    if entrypoint.get('kind') == 'notebook':
+        from src.author_entrypoints import notebook_cells, notebook_imports
+        if workspace is None:
+            raise PlanEvidenceError('Pinned notebook imports need the author workspace')
+        result = notebook_imports(notebook_cells(packet, workspace, entrypoint['source_path']),
+                                  packet, workspace, entrypoint['source_path'])
+        return result if include_sources else result['imports']
     argv = step.get('argv') or []
     position = 2 if len(argv) > 1 and argv[1] == '-u' else 1
-    if len(argv) <= position:
+    if len(argv) <= position and not entrypoint.get('source_path'):
         raise PlanEvidenceError('Cannot determine imports without an author entrypoint')
-    entry = (Path(step.get('cwd', '.')) / argv[position]).as_posix()
+    entry = entrypoint.get('source_path') or (Path(step.get('cwd', '.')) / argv[position]).as_posix()
     queue, visited, imports, excluded, namespaces = [entry], set(), [], [], {}
     absolute_roots = list(dict.fromkeys([Path(entry).parent, Path('.')]))
     inventory = packet['file_inventory']
@@ -977,18 +1003,22 @@ def _steps(items, citations, packet, workspace, *, device=None):
         identifier = item["id"]
         if identifier in seen or item.get("kind") not in {"train", "eval"}:
             raise PlanEvidenceError("Duplicate step or unsupported author step kind")
-        argv = item.get("argv")
-        if (not isinstance(argv, list) or len(argv) < 2 or argv[0] not in ("python", "python3")
-                or any(not isinstance(arg, str) or not arg or any(c in arg for c in "\x00\r\n") for arg in argv)):
-            raise PlanEvidenceError("Only structured Python entrypoint argv is supported")
-        position = 2 if argv[1] == "-u" else 1
-        if len(argv) <= position or argv[position].startswith("-") or not argv[position].endswith(".py"):
-            raise PlanEvidenceError("Generated code, -c/-m and shell commands cannot replace an author entrypoint")
+        from src.author_entrypoints import resolve_entrypoint, notebook_cells
+        try:
+            entrypoint, argv, _ = resolve_entrypoint(item, packet, workspace)
+        except (ValueError, OSError, KeyError) as exc:
+            raise PlanEvidenceError(str(exc)) from exc
+        relaxed = packet.get('author_execution_only') is True
+        if not relaxed and entrypoint['kind'] != 'script':
+            raise PlanEvidenceError('Paper protocol plans require a cited Python script')
+        position = 2 if len(argv) > 1 and argv[1] == '-u' else 1
+        if entrypoint['kind'] == 'module' and argv[position] == '-m':
+            position += 1
         cwd = item.get("cwd", ".")
         directory = workspace_path(workspace, cwd, "author working directory", must_exist=True, forbid_git=True)
-        script = workspace_path(directory, argv[position], "author entrypoint", must_exist=True, forbid_git=True)
-        name = script.relative_to(Path(workspace).resolve()).as_posix()
-        relaxed = packet.get('author_execution_only') is True
+        name = entrypoint['source_path']
+        if entrypoint['kind'] == 'notebook':
+            notebook_cells(packet, workspace, name)
         if name not in packet['repository']['files'] and relaxed:
             _load_execution_source(packet, workspace, name)
         if name not in packet["repository"]["files"]:
@@ -1001,7 +1031,7 @@ def _steps(items, citations, packet, workspace, *, device=None):
         placements = {}
         host_indices = (packet.get('execution_host') or {}).get('cuda_device_indices', [])
         runtime_values = {str(value) for value in host_indices}
-        for arg in argv[position:]:
+        for arg in argv[position:] if argv else []:
             if arg.split("=", 1)[0] in _FORBIDDEN_FLAGS:
                 raise PlanEvidenceError("A shortened diagnostic run cannot replace the author experiment")
             if relaxed:
@@ -1027,7 +1057,7 @@ def _steps(items, citations, packet, workspace, *, device=None):
             raise PlanEvidenceError("Step dependencies must refer to preceding required steps")
         from src.author_outputs import output_directories
         try:
-            sources = (_author_imports(packet, item, include_sources=True, workspace=workspace if relaxed else None,
+            sources = (_author_imports(packet, {**item, 'entrypoint': entrypoint}, include_sources=True, workspace=workspace if relaxed else None,
                         device=device or (packet.get('experiment_protocol') or {}).get('execution', {}).get('device'))['sources']
                        if packet.get('experiment_protocol') or relaxed else [name])
         except PlanEvidenceError:
@@ -1054,6 +1084,7 @@ def _steps(items, citations, packet, workspace, *, device=None):
                 prepared.append({**output, 'path': target.relative_to(Path(workspace).resolve()).as_posix(),
                                  'source_path': source_path, 'source_sha256': source['sha256']})
         result.append({"id": identifier, "kind": item["kind"], "argv": list(argv),
+                       "entrypoint": entrypoint,
                        "cwd": Path(cwd).as_posix(), "timeout_s": timeout,
                        "depends_on": list(dependencies), "citations": [key for key in item.get('citations', []) if key in citations],
                        "required": True, **({'output_directories': prepared} if prepared else {})})

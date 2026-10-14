@@ -59,6 +59,29 @@ def repository_candidates(document, evidence, resources, *, execution_only=False
     return unique[:6]
 
 
+def linked_training_repositories(packet):
+    """Follow only README links explicitly describing the same method's code/training."""
+    candidates, seen = [], {packet['repository']['url'].casefold()}
+    for path, source in packet['repository']['files'].items():
+        if not Path(path).name.lower().startswith('readme'):
+            continue
+        for line in source['text'].splitlines():
+            lower = line.lower()
+            if (not any(word in lower for word in ('python version', 'training', 'train ', 'tutorial'))
+                    or any(word in lower for word in ('deformable', 'improved', 'faster alternative'))):
+                continue
+            for match in re.finditer(r'https://github\.com/[\w.-]+/[\w.-]+', line):
+                url = normalize_repository_url(match.group())
+                if not url or url.casefold() in seen:
+                    continue
+                seen.add(url.casefold())
+                candidates.append({'url': url, 'source': 'readme_linked_training',
+                    'evidence_type': 'linked_implementation', 'is_author_code': False,
+                    'context': '作者 README 明确链接的训练实现；需要单独检查方法与运行条件',
+                    'relationship': {'path': path, 'quote': line.strip(), 'sha256': source['sha256']}})
+    return candidates[:2]
+
+
 def author_repository_input(request, *, require_author=True):
     """Re-read the actual PDF; preview flags alone never authorize execution."""
     if request.get("mock_mode") or request.get("code") or request.get("corpus_paper"):
@@ -242,7 +265,7 @@ def environment_for_plan(plan):
             "author_requirements": deepcopy(requirements.get("author", [])),
             "compatibility_reason": requirements.get("reason", ""),
             "note": f"基于作者依赖与源码导入选择的项目 {device.upper()} 兼容环境；不是论文原始运行环境的等价声明。",
-            "auto_prepare": True, "dependency_health_check": False,
+            "auto_prepare": True, "dependency_health_check": True,
             "cache_lock_timeout_s": AUTO_PREPARATION_LOCK_TIMEOUT}
 
 
@@ -289,7 +312,7 @@ class DiscoveredRepositoryReproduction:
 
     def _run(self, request, on_event, run_dir):
         from src.agents.report_generator import ReportGeneratorAgent
-        from src.discovered_repository_plan import build_evidence_packet, bind_full_paper_notes
+        from src.discovered_repository_plan import PlanEvidenceError, build_evidence_packet, bind_full_paper_notes
         started = time.monotonic()
         emit = on_event or (lambda event: None)
         execution_only = True
@@ -342,16 +365,76 @@ class DiscoveredRepositoryReproduction:
             pin = (data["resources"].get("repo_discovery") or {}).get("pinned_revision", "")
             offline = bool(request.get("offline"))
             unique = repository_candidates(document, evidence, data['resources'], execution_only=execution_only)
-            attempts, packet, selected = [], None, False
-            for index, candidate in enumerate(unique):
+            attempts, packet, selected, plan, last_plan_error = [], None, False, None, None
+            data['repository_identity_attempts'] = attempts
+            data['planning_trace'] = []
+
+            def execute_candidate(candidate_url, candidate_evidence, candidate_plan, candidate_packet,
+                                  candidate_snapshot, candidate_revision, candidate_pin_evidence):
+                data["resources"].update(code_repo_url=candidate_url, selected_repo=candidate_url,
+                    selection_evidence=deepcopy(candidate_evidence),
+                    repository_identity={"status": "unreviewed_execution", "source": "pinned_git_direct_execution",
+                        "author_identity_confirmed": False,
+                        "reason": "直接获取并运行所选仓库；不进行论文匹配审核。",
+                        "evidence": deepcopy(candidate_evidence)})
+                data["resources"].setdefault("repo_discovery", {}).update(
+                    selected_repo=candidate_url, pinned_revision=candidate_revision,
+                    repository_identity=data["resources"]["repository_identity"])
+                data['resources']['implementation_selection'] = {
+                    'initial_repository': url, 'selected_repository': candidate_url,
+                    'selected_revision': candidate_revision,
+                    'selection_reason': candidate_evidence.get('context') or candidate_evidence.get('source'),
+                    'source_reference': deepcopy(candidate_evidence.get('relationship')),
+                    'implementation_difference': ('选择了独立仓库实现；方法与训练入口需以该仓库固定源码为准'
+                                                  if candidate_url.casefold() != url.casefold() else '原始候选仓库'),
+                    'entrypoints': [deepcopy(step.get('entrypoint')) for step in candidate_plan['steps']]}
+                data.update(repository=candidate_snapshot, revision_resolution=candidate_pin_evidence)
+                write_json(run_dir / "repository.json", candidate_snapshot)
+                event('plan_repository', "success")
+                if digest(Path(request["pdf_path"])) != document.sha256:
+                    changed = ValueError("原始 PDF 在仓库准备期间发生变化，不能使用不同论文继续规划")
+                    changed.reproduction_phase = 'prepare_environment'
+                    changed.category = 'source_changed'
+                    raise changed
+                write_json(run_dir / 'planning_trace.json', data['planning_trace'])
+                data["grounded_repository_plan"] = candidate_plan
+                data["spec_sha256"] = spec_digest(candidate_plan)
+                write_json(run_dir / "experiment_spec.json", {"spec": candidate_plan, "sha256": data["spec_sha256"]})
+                data["paper_info"]["metrics"] = {item["name"]: item["reference"] for item in candidate_plan["metrics"]}
+                data["paper_info"]["required_metrics"] = [item["name"] for item in candidate_plan["metrics"]]
+                candidate_environment = environment_for_plan(candidate_plan)
+                candidate_environment["offline"] = offline
+                data["env_config"] = deepcopy(candidate_environment)
+                data["experiment_spec"] = {"id": "discovered_author_experiment", "adapter_id": "discovered",
+                    "label": "依据本次 PDF 与用户提供的固定仓库生成的实验计划" if manual else "依据本次 PDF 与固定作者源码生成的实验计划",
+                    "repository": candidate_plan["repository"],
+                    "paper": deepcopy(data["paper_info"]), "parameters": candidate_plan.get("parameters", {}),
+                    "environment": deepcopy(candidate_environment), "validation": {"scope": "author_code_execution",
+                        "note": "核验原作者完整命令的实际运行和进程结束；尚未验收论文数值。"}}
+                event('prepare_dataset', "running")
+                datasets = prepare_plan_datasets(self.root, workspace, candidate_plan, candidate_snapshot, offline=offline)
+                data["dataset_provenance"] = datasets
+                write_json(run_dir / "dataset.json", datasets)
+                event('prepare_dataset', 'success' if datasets['verified'] else 'waiting',
+                      '' if datasets['verified'] else '等待固定依赖就绪后执行原始作者数据加载器')
+                if execution_only and not candidate_plan['datasets']:
+                    event('prepare_dataset', 'skipped', '输入数据由原作者程序加载；完整数据来源尚未核验，先验证代码可运行')
+                self._execute_frozen(request, data, candidate_plan, candidate_snapshot, workspace,
+                                     run_dir, candidate_environment, emit, event)
+
+            index = 0
+            while index < len(unique) and index < 3:
+                candidate = unique[index]
+                index += 1
                 candidate_url = candidate["url"]
                 attempt = {"repository_url": candidate_url, "accepted": False}
                 attempts.append(attempt)
+                data['planning_trace'].append(attempt)
                 try:
-                    self.logger.log("ResourceFinder", phase, "RUNNING", f"正在定位候选仓库版本（{index + 1}/{len(unique)}）：{candidate_url}")
+                    self.logger.log("ResourceFinder", phase, "RUNNING", f"正在定位候选仓库版本（{index}/{len(unique)}）：{candidate_url}")
                     revision, pin_evidence = resolve_repository_revision(
                         candidate_url, pin if candidate_url.casefold() == url.casefold() else "", offline=offline)
-                    workspace = run_dir / ("repo" if index == 0 else f"candidate_repos/{index + 1}")
+                    workspace = run_dir / ("repo" if index == 1 else f"candidate_repos/{index}")
                     self.logger.log("ResourceFinder", phase, "RUNNING", "正在获取源码：" + revision)
                     snapshot = export_repository(self.root, {"repository": {"url": candidate_url, "revision": revision}},
                                                  workspace, offline=offline, required_files=[], include_submodules=False)
@@ -373,7 +456,7 @@ class DiscoveredRepositoryReproduction:
                         packet['repository_input'] = {'source': 'model_discovered', 'url': candidate_url}
                     if packet["pdf"]["sha256"] != document.sha256:
                         raise ValueError("原始 PDF 在仓库准备期间发生变化，不能使用不同论文继续规划")
-                    write_json(run_dir / f"repository_identity_packet_{index + 1}.json", packet)
+                    write_json(run_dir / f"repository_identity_packet_{index}.json", packet)
                     if snapshot.get('submodules_pending'):
                         materialize_submodules(self.root, snapshot, offline=offline)
                         packet = build_evidence_packet(request['pdf_path'], workspace, snapshot, for_identity_review=True)
@@ -381,12 +464,64 @@ class DiscoveredRepositoryReproduction:
                         packet['limits']['training_timeout_s'] = None
                         bind_full_paper_notes(packet, request)
                         packet['repository_input'] = {'source': candidate['source'], 'url': candidate_url}
+                    packet['repository_identity_pending'] = False
+                    event('prepare_repository', 'success')
+                    phase = 'plan_repository'; event(phase, 'running')
+                    data['resources']['selected_repo'] = candidate_url
+                    write_json(run_dir / 'source_packet.json', packet)
+                    from src.author_execution_plan import propose_author_execution_plan
+                    try:
+                        plan = propose_author_execution_plan(self.llm, packet, workspace)
+                    except BaseException:
+                        try:
+                            write_json(run_dir / 'source_packet.json', packet)
+                        except OSError as storage_error:
+                            data['source_packet_persistence_error'] = str(storage_error)
+                        raise
+                    else:
+                        write_json(run_dir / 'source_packet.json', packet)
+                    execute_candidate(candidate_url, candidate, plan, packet, snapshot, revision, pin_evidence)
                     selected = True
-                    attempt.update(accepted=True, revision=revision)
+                    attempt.update(accepted=True, revision=revision, planning_status='accepted',
+                                   entrypoints=[deepcopy(step.get('entrypoint')) for step in plan['steps']],
+                                   selection_reason=candidate.get('context') or candidate.get('source'))
                     url, evidence = candidate_url, deepcopy(candidate)
-                    packet["repository_identity_pending"] = False
                     break
+                except PlanEvidenceError as exc:
+                    selected, last_plan_error = False, exc
+                    attempt.update(error=str(exc), planning_status='rejected',
+                                   failure_kind=getattr(exc, 'category', 'invalid_evidence'))
+                    if not manual and packet is not None:
+                        linked = [item for item in linked_training_repositories(packet)
+                                  if item['url'].casefold() not in {entry['url'].casefold() for entry in unique}]
+                        unique[index:index] = linked
+                    self.logger.log('PaperReader', phase, 'WARNING', '当前仓库规划受阻：' + str(exc))
+                    event('plan_repository', 'skipped', str(exc)[:500])
+                    phase = 'prepare_repository'; event(phase, 'running')
                 except Exception as exc:
+                    if getattr(exc, 'reproduction_phase', None) == 'prepare_environment':
+                        attempt.update(error=str(exc), planning_status='environment_blocked',
+                                       failure_kind=getattr(exc, 'category', 'environment_failure'))
+                        if (getattr(exc, 'category', None) != 'source_changed' and not manual
+                                and packet is not None and not data.get('repository_executed')):
+                            linked = [item for item in linked_training_repositories(packet)
+                                      if item['url'].casefold() not in {entry['url'].casefold() for entry in unique}]
+                            if linked and index < 3:
+                                unique[index:index] = linked
+                                self.logger.log('EnvBuilder', 'prepare_environment', 'WARNING',
+                                                '当前实现环境受阻，检查 README 明确关联的训练实现：' + str(exc))
+                                event('prepare_environment', 'skipped', str(exc)[:500])
+                                phase = 'prepare_repository'
+                                event(phase, 'running')
+                                continue
+                        raise
+                    if getattr(exc, 'reproduction_phase', None):
+                        attempt.update(error=str(exc), planning_status='execution_failed',
+                                       failure_kind=getattr(exc, 'category', 'execution_failure'))
+                        raise
+                    if phase == 'plan_repository':
+                        attempt.update(error=str(exc), planning_status='planner_error')
+                        raise
                     selected = False
                     attempt.update(error=str(exc))
                     self.logger.log("ResourceFinder", phase, "WARNING", "当前候选准备失败：" + str(exc))
@@ -394,65 +529,16 @@ class DiscoveredRepositoryReproduction:
                         raise ValueError("原始 PDF 在仓库准备期间发生变化，不能继续") from exc
                 finally:
                     write_json(run_dir / "repository_identity_attempts.json", attempts)
+                    write_json(run_dir / 'planning_trace.json', data['planning_trace'])
             data["repository_identity_attempts"] = attempts
             if not selected:
+                if last_plan_error is not None:
+                    phase = 'plan_repository'
+                    evidence = getattr(last_plan_error, 'planning_evidence', {})
+                    raise PlanEvidenceError(str(last_plan_error),
+                        category=getattr(last_plan_error, 'category', 'missing_information'),
+                        planning_evidence={**evidence, 'candidate_attempts': deepcopy(attempts)}) from last_plan_error
                 raise ValueError("无法获取候选仓库源码。" + "；".join(attempt.get("error", "") for attempt in attempts))
-            data["resources"].update(code_repo_url=url, selected_repo=url, selection_evidence=evidence,
-                repository_identity={"status": "unreviewed_execution", "source": "pinned_git_direct_execution",
-                                     "author_identity_confirmed": False,
-                                     "reason": "直接获取并运行所选仓库；不进行论文匹配审核。", "evidence": deepcopy(evidence)})
-            data["resources"].setdefault("repo_discovery", {}).update(
-                selected_repo=url, pinned_revision=revision, repository_identity=data["resources"]["repository_identity"])
-            data.update(repository=snapshot, revision_resolution=pin_evidence)
-            write_json(run_dir / "repository.json", snapshot)
-            event(phase, "success")
-            phase = "plan_repository"; event(phase, "running")
-            if digest(Path(request["pdf_path"])) != document.sha256:
-                raise ValueError("原始 PDF 在仓库准备期间发生变化，不能使用不同论文继续规划")
-            write_json(run_dir / "source_packet.json", packet)
-            planning_error = None
-            try:
-                from src.author_execution_plan import propose_author_execution_plan
-                plan = propose_author_execution_plan(self.llm, packet, workspace)
-            except BaseException as exc:
-                planning_error = exc
-                raise
-            finally:
-                # A rejected proposal may already have requested more source.
-                # Keep that exact packet for audit without replacing the
-                # original rejection if persisting diagnostic evidence fails.
-                try:
-                    write_json(run_dir / "source_packet.json", packet)
-                except Exception as persistence_error:
-                    if planning_error is None:
-                        raise
-                    data["source_packet_persistence_error"] = str(persistence_error)
-            data["grounded_repository_plan"] = plan
-            data["spec_sha256"] = spec_digest(plan)
-            write_json(run_dir / "experiment_spec.json", {"spec": plan, "sha256": data["spec_sha256"]})
-            data["paper_info"]["metrics"] = {item["name"]: item["reference"] for item in plan["metrics"]}
-            data["paper_info"]["required_metrics"] = [item["name"] for item in plan["metrics"]]
-            environment = environment_for_plan(plan)
-            environment["offline"] = offline
-            data["env_config"] = deepcopy(environment)
-            data["experiment_spec"] = {"id": "discovered_author_experiment", "adapter_id": "discovered",
-                "label": "依据本次 PDF 与用户提供的固定仓库生成的实验计划" if manual else "依据本次 PDF 与固定作者源码生成的实验计划",
-                "repository": plan["repository"],
-                "paper": deepcopy(data["paper_info"]), "parameters": plan.get("parameters", {}),
-                "environment": deepcopy(environment), "validation": {"scope": "selected_paper_experiment",
-                    "note": "本次论文与作者源码引文确定实验范围；独立指标与完整执行证据共同决定结果。"}}
-            data['experiment_spec']['validation'] = {'scope': 'author_code_execution',
-                'note': '核验原作者完整命令的实际运行和进程结束；尚未验收论文数值。'}
-            event(phase, "success")
-            phase = "prepare_dataset"; event(phase, "running")
-            datasets = prepare_plan_datasets(self.root, workspace, plan, snapshot, offline=offline)
-            data["dataset_provenance"] = datasets
-            write_json(run_dir / "dataset.json", datasets)
-            event(phase, 'success' if datasets['verified'] else 'waiting',
-                  '' if datasets['verified'] else '等待固定依赖就绪后执行原始作者数据加载器')
-            if execution_only and not plan['datasets']:
-                event(phase, 'skipped', '输入数据由原作者程序加载；完整数据来源尚未核验，先验证代码可运行')
-            self._execute_frozen(request, data, plan, snapshot, workspace, run_dir, environment, emit, event)
         except (KeyboardInterrupt, SystemExit) as exc:
             phase = getattr(exc, "reproduction_phase", phase)
             data["interrupted"] = True
@@ -543,6 +629,13 @@ class DiscoveredRepositoryReproduction:
             canonical = json.dumps(packet, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
             if hashlib.sha256(canonical.encode("utf-8")).hexdigest() != plan["evidence_sha256"]:
                 raise ValueError("落盘来源包与冻结的实验依据不一致")
+            from src.author_python import select_author_python
+            selected_python = select_author_python(packet, self.root / 'training_python',
+                                                   offline=bool(request.get('offline')))
+            environment.update(selected_python)
+            data.setdefault('training_python_attempts', []).append(deepcopy(selected_python))
+            data['env_config'] = deepcopy(environment)
+            write_json(run_dir / 'runtime_manifest.json', selected_python)
             from src.author_execution_plan import materialize_author_execution
             materialized = materialize_author_execution(workspace, plan, data['spec_sha256'], snapshot)
             generated = materialized["files"]
@@ -705,8 +798,23 @@ class DiscoveredRepositoryReproduction:
 
             def run_steps(selected, runtime_environment):
                 from src.author_runtime_dependencies import run_with_dependency_repair
+                from src.author_failure_analysis import analyze_author_failure
+                def analyze_failure(result, effective):
+                    before = len(data.get('failure_analyses') or [])
+                    suggestion = analyze_author_failure(self.llm, result, plan, packet, workspace,
+                                                        effective, run_dir, data)
+                    if len(data.get('failure_analyses') or []) > before:
+                        analysis = data['failure_analyses'][-1]
+                        progress({'type': 'log', 'log': {'agent': 'CodeExecutor',
+                            'action': 'analyze_author_failure', 'status': 'SUCCESS',
+                            'detail': analysis.get('reason') or analysis.get('analysis_error')
+                                      or '已分析当前失败并记录所需条件',
+                            'data': {'failure_kind': analysis['failure_kind'],
+                                     'action': analysis['action'], 'llm_calls': analysis['llm_calls']}}})
+                    return suggestion
                 return run_with_dependency_repair(self.runner, workspace, selected, runtime_environment,
-                    plan, packet, run_dir, data, progress, verify_frozen_inputs, repair_numeric, repair_path)
+                    plan, packet, run_dir, data, progress, verify_frozen_inputs, repair_numeric, repair_path,
+                    analyze_failure)
 
             preflight = [{"id": "native_preflight", "kind": "check", "required": True,
                           "argv": ["python", "-u", f"{CAPTURE_DIR}/preflight.py"], "cwd": ".",
@@ -714,6 +822,15 @@ class DiscoveredRepositoryReproduction:
                               if plan["capture"].get("device", "cpu") == "cpu" else {},
                           "artifacts": [f"{CAPTURE_DIR}/preflight.json"]}]
             preparation = run_steps(preflight, environment)
+            from src.author_python import retry_requested_python_conflict
+            def record_python_switch(replacement):
+                data['training_python_attempts'].append(deepcopy(replacement))
+                data['env_config'] = deepcopy(environment)
+                write_json(run_dir / 'runtime_manifest.json', replacement)
+            preparation = retry_requested_python_conflict(packet, self.root / 'training_python',
+                environment, selected_python, preparation,
+                lambda selected_environment: run_steps(preflight, selected_environment),
+                offline=bool(request.get('offline')), on_switch=record_python_switch)
             data["environment_preparation"] = preparation
             write_json(run_dir / "environment_preparation.json", preparation)
             if preparation.get("success") is not True:
@@ -858,5 +975,9 @@ class DiscoveredRepositoryReproduction:
                     validation.setdefault('warnings', []).append(f'论文指标对比记录保存失败（{name}）：{exc}')
             event(phase, 'success' if comparison['comparisons'] else 'skipped', comparison['reason'])
         except BaseException as exc:
+            if phase == 'prepare_environment':
+                effective = (data.get('environment_preparation') or {}).get('effective_env_config') or {}
+                if effective.get('dependency_failure_kind'):
+                    exc.category = effective['dependency_failure_kind']
             exc.reproduction_phase = phase
             raise

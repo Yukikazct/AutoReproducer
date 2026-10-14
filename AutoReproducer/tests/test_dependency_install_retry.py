@@ -11,6 +11,8 @@ from src.agents.code_executor import CodeExecutorAgent
 
 REQUIREMENTS = "numpy==1.26.4\npandas==2.2.3\ntorch==2.5.1"
 MIRROR = "https://pypi.tuna.tsinghua.edu.cn/simple"
+ALIYUN = "https://mirrors.aliyun.com/pypi/simple/"
+USTC = "https://pypi.mirrors.ustc.edu.cn/simple/"
 OFFICIAL = "https://pypi.org/simple"
 CUDA_REQUIREMENTS = ("--extra-index-url https://download.pytorch.org/whl/cu121\n"
                      "torch==2.5.1+cu121\ntorchvision==0.20.1+cu121\nnumpy==1.26.4")
@@ -60,11 +62,11 @@ def install_responses(monkeypatch, responses):
     return calls
 
 
-def test_missing_default_mirror_candidates_fall_back_once_with_identical_pins(monkeypatch, tmp_path):
+def test_missing_default_mirror_candidates_try_another_domestic_source_with_identical_pins(monkeypatch, tmp_path):
     calls = install_responses(monkeypatch, [(1, "", NO_CANDIDATES), (0, "installed", "")])
     instance = executor()
     assert prepare(instance, tmp_path) is None
-    assert [c["index"] for c in calls] == [MIRROR, OFFICIAL]
+    assert [c["index"] for c in calls] == [MIRROR, ALIYUN]
     assert [c["requirements"] for c in calls] == [REQUIREMENTS, REQUIREMENTS]
     assert "--find-links" in calls[0]["cmd"]
     assert "--find-links" not in calls[1]["cmd"]
@@ -83,22 +85,22 @@ def test_reviewed_pytorch_extra_index_is_preserved_when_primary_mirror_fails(mon
     instance.env_config["requirements_txt"] = requirements
     calls = install_responses(monkeypatch, [(1, "", NO_CANDIDATES), (0, "installed", "")])
     assert prepare(instance, tmp_path) is None
-    assert [call["index"] for call in calls] == [MIRROR, OFFICIAL]
+    assert [call["index"] for call in calls] == [MIRROR, ALIYUN]
     assert [call["requirements"] for call in calls] == [requirements, requirements]
 
 
-def test_auto_prepared_cuda_timeout_gets_long_official_retry_with_same_pins(monkeypatch, tmp_path):
+def test_auto_prepared_cuda_timeout_tries_domestic_mirror_with_same_pins(monkeypatch, tmp_path):
     first_timeout = subprocess.TimeoutExpired(["pip"], 300, output=b"extracting CUDA wheel",
                                              stderr=b"partial target copy")
     calls = install_responses(monkeypatch, [first_timeout, (0, "installed", "")])
     instance = executor()
     instance.env_config.update(requirements_txt=CUDA_REQUIREMENTS, auto_prepare=True)
     assert prepare(instance, tmp_path) is None
-    assert [call["index"] for call in calls] == [MIRROR, OFFICIAL]
-    assert [call["kwargs"]["timeout"] for call in calls] == [300, 1800]
+    assert [call["index"] for call in calls] == [MIRROR, ALIYUN]
+    assert [call["kwargs"]["timeout"] for call in calls] == [300, 300]
     assert [call["requirements"] for call in calls] == [CUDA_REQUIREMENTS] * 2
     records = instance.env_config["dependency_install_attempts"]
-    assert [record["timeout_s"] for record in records] == [300, 1800]
+    assert [record["timeout_s"] for record in records] == [300, 300]
     assert records[0]["timed_out"] and not records[1]["timed_out"]
     assert "extracting CUDA wheel" in records[0]["diagnostic"]
     assert "partial target copy" in records[0]["diagnostic"]
@@ -167,7 +169,7 @@ def test_auto_prepared_cpu_stack_gets_long_official_retry(monkeypatch, tmp_path)
     instance = executor()
     instance.env_config.update(requirements_txt=requirements, auto_prepare=True)
     assert prepare(instance, tmp_path) is None
-    assert [call["kwargs"]["timeout"] for call in calls] == [300, ce.LOCAL_CPU_PIP_TIMEOUT]
+    assert [call["kwargs"]["timeout"] for call in calls] == [300, 300]
     assert [call["requirements"] for call in calls] == [requirements] * 2
 
 
@@ -201,7 +203,7 @@ def test_pinned_cuda_retains_explicit_sources_and_budget(monkeypatch, tmp_path, 
     assert calls[0]["kwargs"]["timeout"] == 300
 
 
-def test_cuda_native_health_rebuild_retains_long_official_retry(monkeypatch, tmp_path):
+def test_cuda_native_health_rebuild_reuses_successful_domestic_source(monkeypatch, tmp_path):
     calls = install_responses(monkeypatch, [(1, "", NO_CANDIDATES), (0, "installed", ""),
                                            (0, "rebuilt", "")])
     instance = executor()
@@ -210,8 +212,8 @@ def test_cuda_native_health_rebuild_retains_long_official_retry(monkeypatch, tmp
     monkeypatch.setattr(instance, "_check_local_dependency_health",
                         Mock(side_effect=["broken native DLL", None]))
     assert prepare(instance, tmp_path) is None
-    assert [call["index"] for call in calls] == [MIRROR, OFFICIAL, OFFICIAL]
-    assert [call["kwargs"]["timeout"] for call in calls] == [300, 1800, 1800]
+    assert [call["index"] for call in calls] == [MIRROR, ALIYUN, ALIYUN]
+    assert [call["kwargs"]["timeout"] for call in calls] == [300, 300, 300]
     assert [call["requirements"] for call in calls] == [CUDA_REQUIREMENTS] * 3
 
 
@@ -227,28 +229,62 @@ def test_private_extra_index_retains_source_policy(monkeypatch, tmp_path):
     (1, "", "WARNING: Retrying after NewConnectionError: connection refused"),
     subprocess.TimeoutExpired(["pip"], 300, output=b"partial download", stderr=b"Read timed out"),
 ])
-def test_public_mirror_network_failure_has_one_official_fallback(monkeypatch, tmp_path, first_error):
+def test_public_mirror_network_failure_tries_next_domestic_source(monkeypatch, tmp_path, first_error):
     calls = install_responses(monkeypatch, [first_error, (0, "installed", "")])
     instance = executor()
     assert prepare(instance, tmp_path) is None
-    assert [c["index"] for c in calls] == [MIRROR, OFFICIAL]
+    assert [c["index"] for c in calls] == [MIRROR, ALIYUN]
     assert len(instance.env_config["dependency_install_attempts"]) == 2
 
 
-def test_double_failure_reports_both_attempts_and_writes_no_ready_marker(monkeypatch, tmp_path):
+def test_all_public_sources_fail_with_full_diagnostics_and_no_ready_marker(monkeypatch, tmp_path):
     calls = install_responses(monkeypatch, [(1, "", NO_CANDIDATES),
+                                           (2, "", "ALIYUN_NETWORK_FAILURE: ConnectionError"),
+                                           (1, "", NO_CANDIDATES),
                                            (2, "", "OFFICIAL_NETWORK_FAILURE: ConnectionError")])
     instance = executor()
     diagnostic = prepare(instance, tmp_path)
-    assert len(calls) == 2
-    assert "已尝试 2 轮" in diagnostic
-    assert "第 1 轮" in diagnostic and "第 2 轮" in diagnostic
+    assert [call['index'] for call in calls] == [MIRROR, ALIYUN, USTC, OFFICIAL]
+    assert "已尝试 4 轮" in diagnostic
+    assert "第 1 轮" in diagnostic and "第 4 轮" in diagnostic
     assert "from versions: none" in diagnostic
     assert "OFFICIAL_NETWORK_FAILURE" in diagnostic
     assert MIRROR in diagnostic and OFFICIAL in diagnostic
     assert ce._INSTALLED_DEPS[REQUIREMENTS] == diagnostic
     assert instance._deps_dir is None
     assert not (ce.DEPS_CACHE_ROOT / ce.reqs_digest(REQUIREMENTS) / ".ready").exists()
+
+
+def test_official_source_is_used_only_after_domestic_sources_fail(monkeypatch, tmp_path):
+    responses = [(1, '', NO_CANDIDATES)] * 3 + [(0, 'installed', '')]
+    calls = install_responses(monkeypatch, responses)
+    instance = executor()
+    assert prepare(instance, tmp_path) is None
+    assert [item['index'] for item in calls] == [MIRROR, ALIYUN, USTC, OFFICIAL]
+    assert all(item['requirements'] == REQUIREMENTS for item in calls)
+
+
+def test_python_conflict_and_wheel_absence_have_distinct_diagnostics():
+    assert ce._install_failure_kind('ERROR: package requires a different Python') == 'python_incompatible'
+    assert ce._install_failure_kind('ERROR: No matching distribution found for torch==2.5.1+cpu') == 'wheel_unavailable'
+    assert ce._install_failure_kind('ERROR: ResolutionImpossible') == 'dependency_conflict'
+    assert ce._install_failure_kind('ERROR: Could not build wheels for package') == 'build_failed'
+
+
+def test_ignored_unrequested_python_versions_do_not_trigger_interpreter_switch():
+    diagnostic = ("ERROR: Ignored the following versions that require a different python version: "
+                  "0.8.0 Requires-Python <3.11; 0.9.0 Requires-Python <3.12\n"
+                  "ERROR: No matching distribution found for example==1.2.0")
+    assert ce._requested_python_conflict(diagnostic, 'example==1.2.0') is None
+    assert ce._install_failure_kind(diagnostic, requirements='example==1.2.0') == 'wheel_unavailable'
+    assert ce._public_mirror_failure(diagnostic, requirements='example==1.2.0') is True
+    requested = diagnostic.replace('0.8.0 Requires-Python', '1.2.0 Requires-Python')
+    assert ce._requested_python_conflict(requested, 'example==1.2.0')['version'] == '1.2.0'
+    assert ce._install_failure_kind(requested, requirements='example==1.2.0') == 'python_incompatible'
+    assert ce._public_mirror_failure(requested, requirements='example==1.2.0') is False
+    explicit = "ERROR: Package 'example' requires a different Python: 3.12.0 not in '<3.10'"
+    assert ce._requested_python_conflict(explicit, 'example==1.2.0')['requires_python'] == '<3.10'
+    assert ce._requested_python_conflict(explicit, 'another==1.2.0') is None
 
 
 def test_failed_install_can_succeed_on_next_user_run_in_same_process(monkeypatch, tmp_path):
@@ -261,6 +297,15 @@ def test_failed_install_can_succeed_on_next_user_run_in_same_process(monkeypatch
     assert len(calls) == 2
     assert ce._INSTALLED_DEPS[REQUIREMENTS] == ""
     assert second._deps_dir == str(ce.DEPS_CACHE_ROOT / ce.reqs_digest(REQUIREMENTS))
+
+
+def test_offline_missing_cache_is_reported_without_pip_attempt(tmp_path):
+    instance = executor()
+    instance.env_config['offline'] = True
+    diagnostic = prepare(instance, tmp_path)
+    assert '离线模式缺少' in diagnostic
+    assert instance.env_config['dependency_failure_kind'] == 'offline_cache_missing'
+    assert instance.env_config['dependency_install_attempts'] == []
 
 
 def test_first_success_uses_one_request_and_success_cache_restores_dependency_path(monkeypatch, tmp_path):

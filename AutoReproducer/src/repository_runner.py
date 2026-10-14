@@ -70,9 +70,10 @@ class RepositoryRunner:
                     or any(not isinstance(arg, str) or not arg or "\x00" in arg for arg in argv)):
                 raise ValueError(f"invalid argv for step {identifier}")
             argv = list(argv)
-            python = argv[0] in {"python", "python3", sys.executable}
+            selected_python = str((getattr(self.executor, 'env_config', None) or {}).get('python_executable') or sys.executable)
+            python = argv[0] in {"python", "python3", sys.executable, selected_python}
             if python:
-                argv[0] = sys.executable
+                argv[0] = selected_python
             cwd = self._contained(root, step.get("cwd", "."), "cwd")
             if not cwd.is_dir():
                 raise ValueError(f"cwd is not a directory: {cwd}")
@@ -425,6 +426,7 @@ class RepositoryRunner:
             if not root.is_dir():
                 raise ValueError("workspace must be an existing directory")
             self._check_tree(root)
+            self.executor.env_config = dict(env_config or {})
             planned = self._plan(root, plan_steps(steps))
             records_root = root.parent / ".autorepro_repository_runs"
             if records_root.is_symlink():
@@ -436,9 +438,12 @@ class RepositoryRunner:
             invocation["execution_id"] = run_dir.name
             emit({"type": "execution_run", "execution_id": run_dir.name,
                   "status": "running"})
-            self.executor.env_config = dict(env_config or {})
             # Native wheels cannot be shared across Python ABIs or machines.
-            runtime = runtime_fingerprint()
+            selected_python = self.executor.env_config.get('python_executable') or sys.executable
+            runtime = runtime_fingerprint(selected_python)
+            if (self.executor.env_config.get('runtime_fingerprint')
+                    and self.executor.env_config['runtime_fingerprint'] != runtime):
+                raise ValueError('训练解释器与冻结的运行环境指纹不一致')
             deps_root = DEPS_CACHE_ROOT / "repository" / runtime
             self.executor.deps_cache_root = deps_root
             self.executor.deps_lock_root = DEPS_CACHE_ROOT
@@ -452,7 +457,8 @@ class RepositoryRunner:
                                         self.executor.env_config.get("dependency_health_check"))
             def save_environment(status, reason="", *, notify=True):
                 config = self.executor.env_config
-                environment = {"python": sys.version, "executable": sys.executable,
+                environment = {"python": self.executor.env_config.get('python_version', sys.version),
+                               "executable": selected_python,
                                "platform": sys.platform, "runtime": runtime,
                                "dependencies_path": self.executor._deps_dir,
                                "dependency_paths": ([self.executor._deps_dir, *self.executor._base_deps_dirs]

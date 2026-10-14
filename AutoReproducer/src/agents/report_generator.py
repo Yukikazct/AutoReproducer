@@ -637,6 +637,14 @@ class ReportGeneratorAgent(BaseAgent):
                   f"{len(_txt(env_config.get('requirements_txt')).splitlines())}"]
         if env_config.get("note"):
             lines.append(f"- **环境适配**: {env_config['note']}")
+        if data.get('training_python_attempts'):
+            lines += ['', '### 训练解释器尝试', '']
+            for chosen in data['training_python_attempts']:
+                conflict = chosen.get('selected_for') or {}
+                lines.append('- CPython ' + _markdown_text(str(chosen.get('python_version', '?')))
+                    + '：' + _markdown_text(str(chosen.get('source', '已选择')))
+                    + ('；根据实际请求包 ' + _markdown_text(str(conflict.get('package')))
+                       + ' 的 Requires-Python 约束切换' if conflict else ''))
         runtime_recovery = data.get("runtime_preparation") or {}
         prepared_env = execution.get("environment") or {}
         health_checks = prepared_env.get("dependency_health_attempts") or []
@@ -659,6 +667,19 @@ class ReportGeneratorAgent(BaseAgent):
                 lines.append('- 第 ' + str(repair['attempt']) + ' 轮：缺少 ' +
                     _markdown_text(repair['module']) + '，安装 ' + _markdown_text(repair['requirement']) +
                     ' 后重试；原失败日志保留在运行目录。')
+        if data.get('model_dependency_repairs'):
+            lines += ['', '### 模型建议并通过静态校验的依赖调整', '']
+            for repair in data['model_dependency_repairs']:
+                lines.append('- 第 ' + str(repair['attempt']) + ' 轮：'
+                    + _markdown_text(repair['previous']) + ' → '
+                    + _markdown_text(repair['requirement']) + '；仅调整项目推导版本，重新验证原命令。')
+        if data.get('failure_analyses'):
+            lines += ['', '### 执行失败分析', '']
+            for analysis in data['failure_analyses']:
+                lines.append('- ' + _markdown_text(str(analysis.get('failure_kind', 'execution_failure')))
+                    + '；动作：' + _markdown_text(str(analysis.get('action', 'blocked')))
+                    + '；' + _markdown_text(str(analysis.get('reason') or
+                        analysis.get('analysis_error') or '保留原始错误与所需条件')))
         if data.get('path_repair_attempts'):
             lines += ['', '### 根据运行报错修复数据目录', '']
             for repair in data['path_repair_attempts']:

@@ -86,8 +86,53 @@ def test_service_reads_discovered_alternate_after_download_failure_without_revie
     assert exported == [framework, implementation]
     review.assert_not_called()
     attempts = result['data']['repository_identity_attempts']
-    assert not attempts[0]['accepted'] and attempts[1]['accepted']
+    assert not attempts[0]['accepted'] and attempts[1]['revision'] == 'a' * 40
+    assert attempts[1]['planning_status'] == 'planner_error'
     assert attempts[0]['error'] == 'Primary candidate download failed'
     assert result['data']['resources']['selected_repo'] == implementation
     assert result['data']['validation']['failure_phase'] == 'plan_repository'
     stop.assert_called_once()
+
+
+def test_environment_block_before_training_checks_readme_linked_implementation(tmp_path, monkeypatch):
+    fixture = make_experiment(tmp_path)
+    original = fixture['snapshot']['url']
+    linked = 'https://github.com/author/linked-training'
+    document = service.extract_pdf_input(fixture['pdf'])
+    evidence = {'url': original, 'source': 'model_discovered', 'evidence_type': 'discovered_repository_candidate'}
+    monkeypatch.setattr(service, 'author_repository_input', lambda *a, **kw: (document, original, evidence))
+    monkeypatch.setattr(service, 'resolve_repository_revision', lambda *a, **kw: ('a' * 40, {}))
+    monkeypatch.setattr(service, 'linked_training_repositories', lambda packet: [
+        {'url': linked, 'source': 'readme_linked_training', 'relationship': {'path': 'README.md', 'quote': 'training'}}]
+        if packet['repository']['url'] == original else [])
+    def export(root, profile, workspace, **kwargs):
+        shutil.copytree(fixture['workspace'], workspace)
+        return {**deepcopy(fixture['snapshot']), 'url': profile['repository']['url'],
+                'resolved_sha': profile['repository']['revision']}
+    monkeypatch.setattr(service, 'export_repository', export)
+    monkeypatch.setattr(author_execution_plan, 'propose_author_execution_plan',
+        lambda llm, packet, workspace: {'repository': {'url': packet['repository']['url'],
+            'revision': packet['repository']['revision']}, 'metrics': [], 'datasets': [],
+            'requirements': {}, 'steps': [], 'scope': 'author_code_execution'})
+    monkeypatch.setattr(service, 'environment_for_plan', lambda plan: {'requirements_txt': 'numpy==1.24.4\n'})
+    monkeypatch.setattr(service, 'prepare_plan_datasets', lambda *a, **kw:
+        {'verified': False, 'sources': [], 'kind': 'author_managed_unverified'})
+    executed = []
+    def execute(self, request, data, plan, snapshot, workspace, run_dir, environment, emit, event):
+        executed.append(plan['repository']['url'])
+        if len(executed) == 1:
+            failure = RuntimeError('Python environment cannot provide this author stack')
+            failure.reproduction_phase = 'prepare_environment'
+            failure.category = 'wheel_unavailable'
+            raise failure
+        data['validation'] = {'status': 'environment_ready', 'is_reproduced': None, 'result_level': 'prepared'}
+    monkeypatch.setattr(service.DiscoveredRepositoryReproduction, '_execute_frozen', execute)
+    runner = service.DiscoveredRepositoryReproduction(tmp_path / 'service',
+        AuditLogger(log_dir=str(tmp_path / 'logs'), ledger_dir=str(tmp_path / 'ledger')), llm=Mock())
+    runner.llm.get_call_count.return_value = 0
+    result = runner.run({'pdf_path': str(fixture['pdf']), 'author_execution_only': True,
+                         'resources': {'code_repo_url': original}})
+    assert executed == [original, linked]
+    assert [item['planning_status'] for item in result['data']['repository_identity_attempts']] == [
+        'environment_blocked', 'accepted']
+    assert result['data']['resources']['selected_repo'] == linked
