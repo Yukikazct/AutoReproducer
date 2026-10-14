@@ -184,6 +184,8 @@ class PlannedLLM:
             return json.dumps(fixture_protocol(self.proposal, json.loads(prompt.split('Protocol evidence:\n', 1)[1])))
         if kwargs["task"] == "discovered_repository_plan_review":
             return json.dumps(self.review)
+        if kwargs['task'] == 'author_claim_comparison':
+            return json.dumps({'comparisons': [], 'reason': 'No paper claim selected by this fixture model.'})
         return json.dumps(self.prefixes.pop(0) if self.prefixes else self.proposal)
 
 

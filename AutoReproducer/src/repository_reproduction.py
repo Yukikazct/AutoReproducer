@@ -217,6 +217,47 @@ def materialize_submodules(data_root, snapshot, *, offline=False, _ancestors=())
     return snapshot
 
 
+def resolve_repository_revision(data_root, url, revision=""):
+    """Resolve a legacy SHA/ref request to a commit without falling back to HEAD."""
+    requested = revision.strip() or "HEAD"
+    if re.fullmatch(r"[a-fA-F0-9]{40}", requested):
+        return requested.lower()
+    if requested.startswith("-") or "\x00" in requested:
+        raise ValueError("固定仓库版本无效")
+    if re.fullmatch(r"[a-fA-F0-9]{7,39}", requested):
+        # A server need not accept abbreviated commits. Failure is explicit;
+        # FETCH_HEAD is used only after this exact request succeeds.
+        parent = workspace_path(data_root, "repository_cache/resolution", "revision resolution")
+        parent.mkdir(parents=True, exist_ok=True)
+        source = parent / f".fetch-{uuid.uuid4().hex}"
+        source.mkdir()
+        try:
+            _git(source, "init")
+            _git(source, "fetch", "--depth", "1", url, requested, timeout=120)
+            resolved = _git(source, "rev-parse", "--verify", "FETCH_HEAD^{commit}")
+        finally:
+            _discard_temporary_repository(source, parent)
+    else:
+        names = {requested, f"refs/heads/{requested}", f"refs/tags/{requested}"}
+        patterns = sorted(names | {name + "^{}" for name in names})
+        result = subprocess.run(["git", "ls-remote", "--exit-code", "--", url, *patterns],
+                                capture_output=True, timeout=120)
+        if result.returncode:
+            raise RuntimeError("无法解析请求的固定仓库版本，停止获取源码")
+        refs = {}
+        for line in result.stdout.decode("utf-8", "replace").splitlines():
+            sha, separator, name = line.partition("\t")
+            if separator:
+                refs[name] = sha
+        candidates = {refs.get(name + "^{}", refs[name]) for name in names if name in refs}
+        if len(candidates) != 1:
+            raise RuntimeError("请求的仓库版本不存在或存在歧义，停止获取源码")
+        resolved = candidates.pop()
+    if not re.fullmatch(r"[a-f0-9]{40}", resolved):
+        raise RuntimeError("无法确定完整仓库 commit，停止获取源码")
+    return resolved
+
+
 def export_repository(data_root, profile, destination, *, offline=False, required_files=None,
                       include_submodules=True):
     """Export the requested commit, not potentially modified cached working files."""
@@ -240,6 +281,7 @@ def export_repository(data_root, profile, destination, *, offline=False, require
             break
         except (OSError, subprocess.SubprocessError, RuntimeError):
             continue
+    acquisition = "cached" if source is not None else "cloned"
     if source is None:
         if offline:
             raise RuntimeError("离线模式中没有来源与固定版本均可核验的仓库缓存")
@@ -267,6 +309,7 @@ def export_repository(data_root, profile, destination, *, offline=False, require
                 target.write_bytes(payload)
                 files[member.name] = hashlib.sha256(payload).hexdigest()
     snapshot = {"url": url, "revision": revision, "resolved_sha": revision,
+            "acquisition": acquisition,
             "path": str(dest.resolve()), "cache_path": str(source.resolve()),
              "archive_sha256": hashlib.sha256(archive).hexdigest(), "files": files,
              "submodules_pending": (dest / '.gitmodules').is_file(), "submodules": []}

@@ -108,39 +108,39 @@ def test_fetch_code_placeholder_skipped(mgr):
     assert info["path"] == ""
 
 
-def test_fetch_code_idempotent(mgr, monkeypatch):
-    """已缓存时重复 fetch 不克隆。"""
-    pid = "abc123def456"
-    repo = mgr._repo_dir(pid)
-    repo.mkdir(parents=True, exist_ok=True)
-    (repo / "model.py").write_text("x=1\n", encoding="utf-8")
-    calls = []
+def test_fetch_code_reuses_source_cache_but_not_the_execution_workspace(mgr, monkeypatch):
+    from src import repository_reproduction as reproduction
 
-    def fake_clone(cmd, **kw):
-        calls.append(cmd)
-        return type("P", (), {"returncode": 0, "stderr": "", "stdout": ""})()
+    destinations = []
 
-    monkeypatch.setattr("src.resource_manager.subprocess.run", fake_clone)
-    info = mgr.fetch_code(pid, "https://github.com/real/repo")
-    assert info["state"] == "cached"
-    assert not calls, "缓存命中不应再次克隆"
+    def export(root, profile, destination, **kwargs):
+        destinations.append(destination)
+        destination.mkdir(parents=True)
+        return {"url": profile["repository"]["url"], "path": str(destination),
+                "resolved_sha": "a" * 40, "cache_path": str(root / "repository_cache" / "fixed"),
+                "acquisition": "cloned" if len(destinations) == 1 else "cached"}
+
+    monkeypatch.setattr(reproduction, "export_repository", export)
+    monkeypatch.setattr(reproduction, "resolve_repository_revision", lambda *args: "a" * 40)
+    first = mgr.fetch_code("paper", "https://github.com/real/repo")
+    second = mgr.fetch_code("paper", "https://github.com/real/repo")
+    assert first["state"] == "cloned"
+    assert second["state"] == "cached"
+    assert first["cache_path"] == second["cache_path"]
+    assert first["path"] != second["path"]
 
 
 def test_fetch_code_clone_failure_honest(mgr, monkeypatch):
-    """克隆失败时诚实标注 clone-failed，不伪造成功。"""
-    pid = "abc123def456"
+    from src import repository_reproduction as reproduction
 
-    def fake_clone(cmd, **kw):
-        return type("P", (), {
-            "returncode": 128,
-            "stderr": "fatal: repository not found",
-            "stdout": ""})()
+    def fail(*args):
+        raise RuntimeError("repository not found")
 
-    monkeypatch.setattr("src.resource_manager.subprocess.run", fake_clone)
-    info = mgr.fetch_code(pid, "https://github.com/real/repo")
+    monkeypatch.setattr(reproduction, "resolve_repository_revision", fail)
+    info = mgr.fetch_code("paper", "https://github.com/real/repo")
     assert info["state"] == "clone-failed"
     assert "repository not found" in info["detail"]
-    assert info["path"] == ""
+    assert info["path"] == info["commit"] == ""
 
 
 # ---------------- 3. fetch_dataset 冒烟降级 ----------------

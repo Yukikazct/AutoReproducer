@@ -2,7 +2,7 @@
 
 职责：
 - 懒加载：不预下载全部资源，fetch_code / fetch_dataset / fetch_weights
-  只拉当前任务最小集；重复 fetch 幂等复用已有缓存，绝不重复下载；
+  只拉当前任务最小集；代码复用固定 commit 缓存，每次导出独立工作区；
 - 统一缓存根：代码 data/repos/<paper_id>/、数据集 data/datasets/<paper_id>/、
   依赖 data/deps/<hash>/（CodeExecutor 写入）、清单 data/manifests/<paper_id>.json；
 - manifest：生成 / 查询 / 列出，字段与 2026-09-09 存量格式兼容
@@ -14,8 +14,8 @@
   enforce_quota 超限时按最近使用排序返回建议归档清单（不自动删除）；
 - 统计：stats() 输出按缓存根 / 按论文聚合的占用与条目数。
 
-所有真实网络下载（git clone / HuggingFace snapshot / ModelScope / 单文件
-URL）均为"尽力而为"：执行器或网络不可用时诚实降级为本地最小冒烟集
+指定代码版本获取失败不会回退 HEAD。其他资源下载（HuggingFace snapshot /
+ModelScope / 单文件 URL）为"尽力而为"：执行器或网络不可用时诚实降级为本地最小冒烟集
 （dataset_smoke），并在返回 info 的 state 字段标注实际状态，绝不静默伪造大文件。
 """
 import datetime
@@ -28,6 +28,7 @@ import subprocess
 import tempfile
 import time
 import unicodedata
+import uuid
 import zipfile
 import zlib
 from pathlib import Path, PurePosixPath
@@ -237,104 +238,61 @@ class ResourceManager:
     def fetch_code(self, paper_id: str, code_url: str,
                    target: Optional[str] = None,
                    revision: str = "") -> Dict:
-        """拉取论文代码仓库到 L0；已存在则幂等复用。
+        """复用 URL/commit 源码缓存，逐次导出独立的干净工作区。
 
-        revision 非空时，clone 后尝试浅拉取并 detach 到该 revision
-        （commit sha / tag）；失败仅降级为 HEAD 并标注，不阻断。
-        成功克隆/复用后写入源标记 .autorepro-repo-source.json
-        （repo_url / commit / acquisition），供证据链与报告溯源。
-
-        返回 {"path": 本地目录或"" , "state": 状态, "detail": 说明,
-              "commit": 当前 HEAD sha, "revision": 请求的 pin}。
-        state 取值：cached（已有缓存）/ cloned（新克隆）/ placeholder-skip
-        （占位 URL 不下载）/ clone-failed（下载失败）。
+        指定版本无法获取时返回 pin-failed 和空路径，绝不回退 HEAD。
+        未指定版本时先解析远端 HEAD，再固定其完整 commit。
+        显式 target 必须尚不存在；已有实验和旧缓存不被修改。
         """
-        repo_dir = Path(target) if target else self._repo_dir(paper_id)
+        self._repo_dir(paper_id)  # Validate the identity and managed root even for an explicit target.
         info: Dict = {"path": "", "state": "skipped", "detail": "",
                       "commit": "", "revision": revision or ""}
         url = (code_url or "").strip()
         if not url:
             info["detail"] = "无代码仓库 URL"
             return info
-        if repo_dir.exists() and any(repo_dir.iterdir()):
-            info.update(path=str(repo_dir), state="cached",
-                        detail="缓存命中，复用已有仓库")
-            self._record_repo_source(repo_dir, url, info, "cached")
-            return info
         if _is_placeholder_url(url):
-            info.update(state="placeholder-skip",
-                        detail=f"占位 URL 不下载: {url}")
+            info.update(state="placeholder-skip", detail=f"占位 URL 不下载: {url}")
             return info
         if not _git_available():
+            info["state"] = "pin-failed" if revision else "clone-failed"
             info["detail"] = "git 不可用，跳过代码下载"
             return info
         try:
-            repo_dir.mkdir(parents=True, exist_ok=True)
-            proc = subprocess.run(
-                ["git", "clone", "--depth", "1", "--single-branch",
-                 url, str(repo_dir)],
-                capture_output=True, text=True, timeout=600)
-            if proc.returncode == 0:
-                info.update(path=str(repo_dir), state="cloned",
-                            detail=f"克隆成功: {url}")
-                self._pin_and_record(repo_dir, url, info, revision)
-            else:
-                info.update(state="clone-failed",
-                            detail=(proc.stderr or proc.stdout).strip()[-300:])
-        except Exception as exc:       # 网络 / 超时 / git 异常
-            info.update(state="clone-failed", detail=str(exc)[-300:])
+            from src.repository_reproduction import export_repository, resolve_repository_revision
+
+            repo_dir = (Path(target).absolute() if target else workspace_path(
+                self.data_root, Path("repos") / paper_id /
+                "workspaces" / uuid.uuid4().hex / "repo", "repository workspace"))
+            if repo_dir.exists() or is_link(repo_dir):
+                raise ValueError("运行工作区已经存在，拒绝覆盖或复用旧实验")
+            resolved = resolve_repository_revision(self.data_root, url, revision)
+            snapshot = export_repository(self.data_root,
+                {"repository": {"url": url, "revision": resolved}}, repo_dir, required_files=[])
+            acquisition = snapshot["acquisition"]
+            prepared = {**info, **snapshot, "commit": resolved, "revision": revision or "",
+                        "state": acquisition, "detail": f"已导出独立工作区；固定 commit {resolved}"}
+            self._record_repo_source(repo_dir, url, prepared, acquisition)
+            info = prepared
+        except Exception as exc:
+            info.update(path="", commit="", state="pin-failed" if revision else "clone-failed",
+                        detail=f"固定源码获取失败，停止使用该仓库：{str(exc)[-300:]}")
         return info
-
-    @staticmethod
-    def _git_head_commit(repo_dir: Path) -> str:
-        """返回仓库当前 HEAD 的 commit sha；非 git 仓库返回空串。"""
-        try:
-            proc = subprocess.run(
-                ["git", "-C", str(repo_dir), "rev-parse", "HEAD"],
-                capture_output=True, text=True, timeout=15)
-            return proc.stdout.strip() if proc.returncode == 0 else ""
-        except (OSError, subprocess.SubprocessError):
-            return ""
-
-    def _pin_and_record(self, repo_dir: Path, url: str, info: Dict,
-                        revision: str) -> None:
-        """pin revision（尽力而为）+ 写入源标记 + 填充 commit。"""
-        info["commit"] = self._git_head_commit(repo_dir)
-        if revision:
-            try:
-                fetch = subprocess.run(
-                    ["git", "-C", str(repo_dir), "fetch", "--depth", "1",
-                     "origin", revision],
-                    capture_output=True, text=True, timeout=120)
-                checkout = subprocess.run(
-                    ["git", "-C", str(repo_dir), "checkout", "--detach",
-                     revision],
-                    capture_output=True, text=True, timeout=60)
-                if fetch.returncode == 0 and checkout.returncode == 0:
-                    info["commit"] = self._git_head_commit(repo_dir)
-                    info["detail"] += f"; pinned revision {revision}"
-                else:
-                    info["detail"] += (f"; pin 失败({revision})，"
-                                       "保留 HEAD")
-            except (OSError, subprocess.SubprocessError):
-                info["detail"] += f"; pin 失败({revision})，保留 HEAD"
-        self._record_repo_source(repo_dir, url, info, info.get("state", ""))
 
     def _record_repo_source(self, repo_dir: Path, url: str, info: Dict,
                             acquisition: str) -> None:
-        """写入仓库溯源标记（供证据链 / 报告引用，失败静默）。"""
-        try:
-            marker = {
-                "repo_url": url,
-                "commit": info.get("commit", ""),
-                "acquisition": acquisition,
-                "revision": info.get("revision", ""),
-            }
-            (repo_dir / ".autorepro-repo-source.json").write_text(
-                json.dumps(marker, ensure_ascii=False, indent=2),
-                encoding="utf-8")
-        except OSError:
-            pass
+        """原子保存实际来源；无法保存时不能报获取成功。"""
+        if ".autorepro-repo-source.json" in info.get("files", {}):
+            raise ValueError("固定源码占用来源记录路径，拒绝覆盖作者文件")
+        marker = {
+            "repo_url": url,
+            "commit": info.get("commit", ""),
+            "acquisition": acquisition,
+            "revision": info.get("revision", ""),
+            "archive_sha256": info.get("archive_sha256", ""),
+            "files": info.get("files", {}),
+        }
+        _atomic_json(repo_dir / ".autorepro-repo-source.json", marker)
 
     # ---------------- 懒加载：数据集 ----------------
 
@@ -709,12 +667,14 @@ class ResourceManager:
 
     def build_manifest(self, paper_id: str, paper_title: str = "",
                        code_url: str = "", dataset_name: str = "",
-                       weights_ref: str = "") -> Dict:
+                       weights_ref: str = "", code_snapshot: Optional[Dict] = None) -> Dict:
         """生成 manifest（磁盘状态为主，引用字段为辅）。"""
         repo_dir = self._repo_dir(paper_id)
         ds_dir = self._dataset_dir(paper_id)
         code_path = str(repo_dir) if (repo_dir.exists()
                                       and any(repo_dir.iterdir())) else ""
+        if code_snapshot is not None:
+            code_path = code_snapshot.get("path", "")
         ds_path = str(ds_dir / "dataset_smoke") if (
             (ds_dir / "dataset_smoke").exists()) else (
             str(ds_dir) if ds_dir.exists() and any(ds_dir.iterdir()) else "")
@@ -724,7 +684,7 @@ class ResourceManager:
             files = list(w_dir.iterdir())
             if files:
                 w_path = str(files[0])
-        return {
+        manifest = {
             "paper_id": paper_id,
             "created_at": _now_iso(),
             "resources": {"code": code_path,
@@ -734,6 +694,9 @@ class ResourceManager:
             "code_url": code_url or "",
             "dataset_name": dataset_name or "",
         }
+        if code_snapshot is not None:
+            manifest["repository"] = dict(code_snapshot)
+        return manifest
 
     def save_manifest(self, manifest: Dict) -> str:
         path = self._manifest_path(manifest["paper_id"])
@@ -976,6 +939,8 @@ class ResourceManager:
                             resources[key] = str(candidate)
                     break
         manifest["resources"] = resources
+        if isinstance(manifest.get("repository"), dict):
+            manifest["repository"]["path"] = resources["code"]
         manifest.pop("cleaned_at", None)
         manifest["restored_at"] = _now_iso()
 

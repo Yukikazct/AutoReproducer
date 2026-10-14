@@ -109,7 +109,7 @@ def test_two_actual_author_entrypoints_complete_service_and_report(tmp_path, mon
     assert read_json(run_dir / "run_status.json")["status"] == "completed"
     with FileLock(str(run_dir / ".run.lock"), timeout=0):
         pass
-    assert {options["task"] for _, options in llm.calls} == {"author_execution_plan"}
+    assert {options["task"] for _, options in llm.calls} == {"author_execution_plan", "author_claim_comparison"}
     assert read_json(run_dir / "experiment_spec.json")["spec"] == data["grounded_repository_plan"]
     report = (run_dir / "report.md").read_text(encoding="utf-8")
     assert report == data["report"] and "| accuracy |" in report

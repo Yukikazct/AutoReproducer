@@ -299,6 +299,7 @@ class DiscoveredRepositoryReproduction:
                   ("prepare_environment", "BUILD_ENV", "EnvBuilder", "安装运行依赖"),
                   ("execute_repository", "EXECUTE_CODE", "CodeExecutor", "运行作者命令"),
                   ("finish_execution", "EXECUTE_CODE", "CodeExecutor", "记录命令退出与进程结束"),
+                  ("compare_author_claims", "VALIDATE", "ResultValidator", "对比作者输出与论文指标"),
                   ("generate_report", "GENERATE_REPORT", "ReportGenerator", "生成运行报告")]
         emit({"type": "pipeline_plan", "pipeline": "repository", "stages": [
             {"id": identifier, "agent": agent, "title": title, "status": "waiting"}
@@ -457,9 +458,19 @@ class DiscoveredRepositoryReproduction:
             data["interrupted"] = True
             if getattr(exc, "execution", None) is not None:
                 data["environment_preparation" if phase == "prepare_environment" else "execution"] = exc.execution
-            data["validation"] = {"status": "interrupted", "is_reproduced": None, "result_level": "failed",
-                                  "reason": "实验已中断，未完成的训练和指标不能当作成功"}
-            event(phase, "interrupted", data["validation"]["reason"])
+            if phase == 'compare_author_claims' and data.get('validation', {}).get('status') == 'author_code_completed':
+                # Cancellation stops optional analysis without undoing the
+                # already persisted command/process completion evidence.
+                comparison = data['validation'].setdefault('author_claim_comparison', {
+                    'basis': 'author_output', 'metric_records': data['validation'].get('metric_records', []),
+                    'comparisons': [], 'citations': []})
+                comparison.update(status='interrupted', reason='作者代码已完成；论文指标对比已中断。')
+                reason = comparison['reason']
+            else:
+                data["validation"] = {"status": "interrupted", "is_reproduced": None, "result_level": "failed",
+                                      "reason": "实验已中断，未完成的训练和指标不能当作成功"}
+                reason = data['validation']['reason']
+            event(phase, "interrupted", reason)
             write_json(run_dir / "result.json", {"state": "ERROR", "data": data, "error": "interrupted"})
             raise
         except Exception as exc:
@@ -598,7 +609,7 @@ class DiscoveredRepositoryReproduction:
                 event(phase, "success", "执行计划已准备，未安装或训练")
                 if loaders or runtime_loaders:
                     event('prepare_dataset', 'skipped', '仅准备计划；作者加载器尚未下载真实数据')
-                for identifier in ("execute_repository", "finish_execution"):
+                for identifier in ("execute_repository", "finish_execution", "compare_author_claims"):
                     event(identifier, "skipped", "仅准备模式")
                 return
 
@@ -774,7 +785,7 @@ class DiscoveredRepositoryReproduction:
                                       if native_pending or execution_only else '真实数据、协议和原生环境已准备，尚未执行训练')}
                 if runtime_loaders:
                     event('prepare_dataset', 'skipped', '仅准备环境；实际数据构造和训练尚未执行')
-                for identifier in ("execute_repository", "finish_execution"):
+                for identifier in ("execute_repository", "finish_execution", "compare_author_claims"):
                     event(identifier, "skipped", "仅准备实验环境")
                 return
             phase = "execute_repository"; event(phase, "running")
@@ -824,6 +835,28 @@ class DiscoveredRepositoryReproduction:
             write_json(run_dir / 'author_execution_verification.json', validation)
             write_json(run_dir / 'execution.json', execution)
             event(phase, 'success', validation['reason'])
+            # Author completion is established and saved before asking the
+            # model for an informational, citation-checked paper comparison.
+            phase = 'compare_author_claims'
+            from src.author_claim_comparison import compare_author_claims, TOLERANCE
+            comparison = {'status': 'unavailable', 'basis': 'author_output', 'relative_tolerance': TOLERANCE,
+                          'metric_records': validation['metric_records'], 'parse_errors': data['metric_parse_errors'],
+                          'comparisons': [], 'citations': [],
+                          'reason': '论文指标对比暂未完成；保留实际指标，代码运行已完成。'}
+            validation['author_claim_comparison'] = comparison
+            event(phase, 'running')
+            try:
+                comparison.update(compare_author_claims(self.llm, packet, plan, workspace, execution))
+            except Exception as exc:
+                comparison['diagnostic'] = str(exc) or type(exc).__name__
+            for name, value in (('author_claim_comparison.json', comparison),
+                                ('author_execution_verification.json', validation), ('execution.json', execution)):
+                try:
+                    write_json(run_dir / name, value)
+                except OSError as exc:
+                    comparison['persistence_error'] = str(exc)
+                    validation.setdefault('warnings', []).append(f'论文指标对比记录保存失败（{name}）：{exc}')
+            event(phase, 'success' if comparison['comparisons'] else 'skipped', comparison['reason'])
         except BaseException as exc:
             exc.reproduction_phase = phase
             raise
