@@ -17,37 +17,147 @@
 - DLinear、Neural ODE 使用 CPU；SIREN、ReZero 的现有预设需要 NVIDIA GPU 和可用的 CUDA 环境，不能在普通 CPU 或 Apple GPU 上直接运行。
 - PDF 作者仓库和固定预设使用本地受控进程，启动时保持 Docker 关闭。
 
-下列命令都在**包含 `app.py` 和 `requirements.txt` 的目录**执行。若当前位于 Git 仓库根目录，先进入内层项目：
-
-```text
-cd AutoReproducer
-```
-
-### Windows PowerShell
-
-```powershell
-py -3.12 -m venv .venv
-if ($LASTEXITCODE -ne 0) { throw "创建虚拟环境失败，请检查 Python 3.12 是否已安装。" }
-
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-if ($LASTEXITCODE -ne 0) { throw "依赖安装失败，请检查 pip 输出。" }
-
-.\.venv\Scripts\python.exe -m streamlit run app.py --server.port 8501
-```
-
-只有 Python 3.11 时，把 `py -3.12` 改为 `py -3.11`。可用 `py -0p` 查看已安装版本；没有 Python Launcher 时，用已安装的 Python 3.11/3.12 解释器路径替代。命令无需激活虚拟环境，不受 PowerShell 激活脚本执行策略影响。
-
 ### macOS / Linux
 
+选符合你情况的一段，完整复制执行。应用目录是包含 `app.py` 的 `AutoReproducer/`；外层目录是它的上一层。
+
+**情况 1：已经安装过，当前在 `AutoReproducer` 目录（也适用于这里再次 `cd AutoReproducer` 报错后）。**
+
 ```bash
-python3.12 -m venv .venv
-.venv/bin/python -m pip install -r requirements.txt
 .venv/bin/python -m streamlit run app.py --server.port 8501
 ```
 
-只有 Python 3.11 时，将首行改为 `python3.11 -m venv .venv`。
+**情况 2：已经安装过，当前在外层目录。**
 
-浏览器打开 <http://localhost:8501>，保持终端运行。按 `Ctrl+C` 停止服务；端口占用时，可改用 `--server.port 8502` 并访问对应地址。
+```bash
+cd AutoReproducer &&
+.venv/bin/python -m streamlit run app.py --server.port 8501
+```
+
+**情况 3：第一次安装，当前在 `AutoReproducer` 目录。缺少 `.venv/bin/python` 或 `streamlit` 时也用这段。**
+
+```bash
+python3.12 -m venv .venv &&
+.venv/bin/python -m pip install -r requirements.txt &&
+.venv/bin/python -m streamlit run app.py --server.port 8501
+```
+
+**情况 4：第一次安装，当前在外层目录。**
+
+```bash
+cd AutoReproducer &&
+python3.12 -m venv .venv &&
+.venv/bin/python -m pip install -r requirements.txt &&
+.venv/bin/python -m streamlit run app.py --server.port 8501
+```
+
+**情况 5：没有 Python 3.12，已安装 Python 3.11。**
+
+当前在 `AutoReproducer` 目录：
+
+```bash
+python3.11 -m venv .venv &&
+.venv/bin/python -m pip install -r requirements.txt &&
+.venv/bin/python -m streamlit run app.py --server.port 8501
+```
+
+当前在外层目录：
+
+```bash
+cd AutoReproducer &&
+python3.11 -m venv .venv &&
+.venv/bin/python -m pip install -r requirements.txt &&
+.venv/bin/python -m streamlit run app.py --server.port 8501
+```
+
+**情况 6：8501 端口被占用，改用 8502。** 如果 <http://localhost:8501> 已经是本应用，直接使用该页面即可。需要另开服务时执行下面对应的一段。
+
+当前在 `AutoReproducer` 目录：
+
+```bash
+.venv/bin/python -m streamlit run app.py --server.port 8502
+```
+
+当前在外层目录：
+
+```bash
+cd AutoReproducer &&
+.venv/bin/python -m streamlit run app.py --server.port 8502
+```
+
+改用 8502 后打开 <http://localhost:8502>。Python 3.11 和 3.12 都没有安装时，先安装 [Python 3.12](https://www.python.org/downloads/release/python-31210/)，再执行情况 3 或 4。
+
+### Windows PowerShell
+
+**情况 1：已经安装过，当前在 `AutoReproducer` 目录。**
+
+```powershell
+.\.venv\Scripts\python.exe -m streamlit run app.py --server.port 8501
+```
+
+**情况 2：已经安装过，当前在外层目录。**
+
+```powershell
+Set-Location AutoReproducer -ErrorAction Stop
+.\.venv\Scripts\python.exe -m streamlit run app.py --server.port 8501
+```
+
+**情况 3：第一次安装，当前在 `AutoReproducer` 目录。缺少虚拟环境或 `streamlit` 时也用这段。**
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m streamlit run app.py --server.port 8501
+```
+
+**情况 4：第一次安装，当前在外层目录。**
+
+```powershell
+Set-Location AutoReproducer -ErrorAction Stop
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m streamlit run app.py --server.port 8501
+```
+
+**情况 5：没有 Python 3.12，已安装 Python 3.11。**
+
+当前在 `AutoReproducer` 目录：
+
+```powershell
+py -3.11 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m streamlit run app.py --server.port 8501
+```
+
+当前在外层目录：
+
+```powershell
+Set-Location AutoReproducer -ErrorAction Stop
+py -3.11 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m streamlit run app.py --server.port 8501
+```
+
+**情况 6：8501 端口被占用，改用 8502。** 如果 <http://localhost:8501> 已经是本应用，直接使用该页面即可。
+
+当前在 `AutoReproducer` 目录：
+
+```powershell
+.\.venv\Scripts\python.exe -m streamlit run app.py --server.port 8502
+```
+
+当前在外层目录：
+
+```powershell
+Set-Location AutoReproducer -ErrorAction Stop
+.\.venv\Scripts\python.exe -m streamlit run app.py --server.port 8502
+```
+
+PowerShell 安装步骤逐行执行，上一行成功后再执行下一行。改用 8502 后打开 <http://localhost:8502>。
+
+### 打开页面与停止服务
+
+默认打开 <http://localhost:8501>。保持终端打开，按 `Ctrl+C` 停止服务。上面的命令都无需激活虚拟环境。
 
 **第一次体验**：有模型 API 时，先完成下方配置，再上传 PDF；只看界面和流程时，展开侧栏“运行环境”，开启 Mock 演示模式。没有 API 也可以在真实模式下运行固定预设。
 
