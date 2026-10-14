@@ -55,8 +55,9 @@ from src.dependency_cache import (
 from src.runtime_platform import runtime_fingerprint
 from src.dependency_management import (
     compatible_candidates, environment_paths, requirement_signature, wheel_resolution,
-    choose_base, prune_cache,
+    choose_base, prune_cache, cache_policy, write_maintenance, directory_bytes,
 )
+from src.dependency_temporary import pip_temporary, reap_pip_temporary
 from src.safety.paths import workspace_path
 
 LOCAL_TIMEOUT_SMOKE = 10
@@ -532,6 +533,7 @@ class CodeExecutorAgent(BaseAgent):
         # 运行时自愈补装的隔离目录集合（data/deps/heal-<module>/），
         # 全部注入 PYTHONPATH，与依赖清单目录不互相污染。
         self._heal_dirs: set = set()
+        self._dependency_install_targets = set()
         self.resource_events = ResourceEventLogger()
 
     def _dependency_lock_root(self):
@@ -545,7 +547,11 @@ class CodeExecutorAgent(BaseAgent):
             from src.dependency_cache import AUTO_PREPARATION_LOCK_TIMEOUT
             timeout = AUTO_PREPARATION_LOCK_TIMEOUT
         with cache_guard(self._dependency_lock_root(), timeout=timeout):
+            outermost = not getattr(self, '_dependency_scope_depth', 0)
+            self._dependency_scope_depth = getattr(self, '_dependency_scope_depth', 0) + 1
             try:
+                if outermost and not self.mock_mode:
+                    self._dependency_housekeeping(self._protected_dependency_paths(), phase='scope_started')
                 yield
             finally:
                 paths = set(self._heal_dirs)
@@ -555,6 +561,44 @@ class CodeExecutorAgent(BaseAgent):
                 for path in paths:
                     if (Path(path) / _DEPS_READY_MARK).is_file():
                         touch_deps_meta(Path(path))
+                try:
+                    if outermost and not self.mock_mode:
+                        self._discard_failed_dependency_installs()
+                        self._dependency_housekeeping(self._protected_dependency_paths(), phase='scope_finished')
+                finally:
+                    self._dependency_scope_depth -= 1
+
+    def _protected_dependency_paths(self):
+        paths = {Path(path) for path in [*self._heal_dirs, *self._base_deps_dirs]}
+        if self._deps_dir:
+            paths.add(Path(self._deps_dir))
+        config = getattr(self, 'env_config', None) or {}
+        requirements = config.get('requirements_txt') or '\n'.join(config.get('required_packages') or [])
+        if requirements:
+            root = Path(getattr(self, 'deps_cache_root', DEPS_CACHE_ROOT))
+            requested = root / reqs_digest(requirements)
+            paths.add(requested)
+            # Protect the candidate about to be reused as well as its base.
+            if config.get('dependency_health_check') and not (requested / _DEPS_READY_MARK).is_file():
+                candidates = compatible_candidates(root, requirements)
+                if candidates:
+                    paths.add(candidates[0])
+        return paths
+
+    def _discard_failed_dependency_installs(self):
+        """Discard only targets installed in this scope that never became ready."""
+        for directory in self._dependency_install_targets:
+            path = Path(directory)
+            if not path.exists() or (path / _DEPS_READY_MARK).is_file():
+                continue
+            try:
+                size = directory_bytes(path)
+                reset_managed_environment(self._dependency_lock_root(), path).rmdir()
+                self.resource_events.emit('dependency', path.name, 'discard_incomplete', 'removed',
+                                          path=str(path), freed_bytes=size)
+            except (OSError, ValueError) as error:
+                self.log('discard_deps', 'WARNING', f'未完成的依赖目录暂无法释放：{error}')
+        self._dependency_install_targets.clear()
 
     @staticmethod
     def _diagnose_execution_error(result: Dict) -> Dict:
@@ -1777,7 +1821,20 @@ class CodeExecutorAgent(BaseAgent):
 
     def _run_dependency_command(self, command, *, timeout, env):
         """Own preset installers/probes so timeout stops their descendants."""
-        if (getattr(self, "env_config", None) or {}).get("auto_prepare"):
+        if command[1:3] == ['-m', 'pip']:
+            with pip_temporary(self._dependency_lock_root(), on_cleanup=self._record_pip_cleanup) as work:
+                env = {**env, 'TMPDIR': str(work), 'TEMP': str(work), 'TMP': str(work),
+                       'PIP_CACHE_DIR': str(work / 'download-cache')}
+                return self._invoke_dependency_command(command, timeout=timeout, env=env)
+        return self._invoke_dependency_command(command, timeout=timeout, env=env)
+
+    def _record_pip_cleanup(self, receipt):
+        self.env_config = getattr(self, 'env_config', None) or {}
+        self.env_config.setdefault('dependency_temporary_files', []).append(receipt)
+        self.resource_events.emit('dependency', 'pip-temporary', 'cleanup', receipt['status'], **receipt)
+
+    def _invoke_dependency_command(self, command, *, timeout, env):
+        if command[1:3] == ['-m', 'pip'] or (getattr(self, "env_config", None) or {}).get("auto_prepare"):
             from src.process_lifecycle import validate_windows_venv
             from src.runtime_preparation import RuntimePreparationTimeout, run_owned_process
             validate_windows_venv()
@@ -1945,7 +2002,12 @@ class CodeExecutorAgent(BaseAgent):
                      f"复用自愈目录 {heal_dir.name}（{package}）")
             return None
         try:
+            self._dependency_install_targets.add(str(heal_dir))
             heal_dir.mkdir(parents=True, exist_ok=True)
+            space_error = self._dependency_housekeeping(
+                [heal_dir, *self._protected_dependency_paths()], phase='before_install', installation=True)
+            if space_error:
+                return space_error
             cmd = [sys.executable, "-m", "pip", "install",
                    "--disable-pip-version-check", "-q",
                    "--no-user",
@@ -1983,18 +2045,31 @@ class CodeExecutorAgent(BaseAgent):
         for path in paths:
             touch_deps_meta(path)
 
-    def _dependency_housekeeping(self, protected):
+    def _dependency_housekeeping(self, protected, *, phase='before_install', installation=False):
         try:
-            quota = float(os.environ.get('AUTOREPRO_DEPS_QUOTA_GB', '20'))
-            reserve = float(os.environ.get('AUTOREPRO_DEPS_MIN_FREE_GB', '2'))
-            if not (0 < quota < 100000 and 0 <= reserve < 100000):
-                raise ValueError('invalid dependency cache limits')
-            receipt = prune_cache(self._dependency_lock_root(), protected=protected,
-                                  quota_bytes=int(quota * 1024**3), min_free_bytes=int(reserve * 1024**3))
+            policy = cache_policy()
+            root = self._dependency_lock_root()
+            temporary = reap_pip_temporary(root)
+            reserve = policy.pop('install_reserve_bytes')
+            if installation:
+                policy['min_free_bytes'] += reserve
+            receipt = prune_cache(root, protected=protected, **policy)
+            receipt.update(phase=phase, temporary_files=temporary, install_reserve_bytes=reserve if installation else 0,
+                           timestamp=datetime.now().isoformat(timespec='seconds'))
+            self.env_config = getattr(self, 'env_config', None) or {}
             self.env_config.setdefault('dependency_cache_maintenance', []).append(receipt)
+            try:
+                write_maintenance(root, receipt)
+                self.resource_events.emit('dependency', 'cache', 'maintenance',
+                    'succeeded' if receipt['quota_satisfied'] and receipt['space_satisfied'] else 'partial', **receipt)
+            except OSError as error:
+                receipt['persistence_error'] = str(error)
+                self.log('prune_deps', 'WARNING', f'依赖维护记录保存失败：{error}')
             if receipt['removed']:
                 self.log('prune_deps', 'SUCCESS', f"回收 {len(receipt['removed'])} 个闲置依赖环境", receipt)
-            if receipt['free_bytes'] < receipt['min_free_bytes']:
+            if not receipt['quota_satisfied'] or not receipt['space_satisfied']:
+                self.log('prune_deps', 'WARNING', receipt['reason'], receipt)
+            if installation and not receipt['space_satisfied']:
                 return '依赖缓存所在磁盘空间不足；请清理闲置缓存或设置 AUTOREPRO_DEPS_ROOT 到空间充足的磁盘'
         except (OSError, ValueError) as error:
             return f'依赖缓存空间检查失败: {error}'
@@ -2159,18 +2234,20 @@ class CodeExecutorAgent(BaseAgent):
         pinned_cpu = (bool(env_config.get("auto_prepare")) and _pinned_cpu_requirements(reqs)
                       and links in {"", _DEFAULT_PUBLIC_FIND_LINKS})
         try:
+            self._dependency_install_targets.add(str(deps_dir))
             deps_dir.mkdir(parents=True, exist_ok=True)
             incomplete_target = any(deps_dir.iterdir())
             if incomplete_target and not invalid_cache:
                 self._record_dependency_repair(deps_dir, "上次安装未完成，清理残留目录后重装相同依赖")
             layer = None
+            # Space maintenance also applies when execution mode deliberately
+            # disables health probes. Clear failed copies before measuring.
+            reset_managed_environment(managed_root, deps_dir)
+            space_error = self._dependency_housekeeping(
+                [deps_dir, *self._protected_dependency_paths()], phase='before_install', installation=True)
+            if space_error:
+                return space_error
             if managed_repository:
-                # Release failed copies before measuring space or resolving wheels.
-                reset_managed_environment(managed_root, deps_dir)
-                protected = [deps_dir, *self._heal_dirs]
-                space_error = self._dependency_housekeeping(protected)
-                if space_error:
-                    return space_error
                 layer = self._resolve_dependency_layer(deps_root, reqs, req_file, workdir)
             fallback_used = False
             health_rebuild_used = invalid_cache

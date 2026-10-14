@@ -462,7 +462,7 @@ class RepositoryRunner:
                                "preparation_elapsed_s": time.monotonic() - preparation_started,
                                **{name: config.get(name, []) for name in (
                                    "dependency_install_attempts", "dependency_health_attempts", "dependency_cache_repairs",
-                                   "dependency_cache_maintenance")},
+                                   "dependency_cache_maintenance", "dependency_temporary_files")},
                                "dependency_reuse": config.get('dependency_reuse')}
                 if reason:
                     environment["reason"] = reason
@@ -608,3 +608,20 @@ class RepositoryRunner:
             if result.get("environment", {}).get("status") == "running":
                 save_environment("error", str(exc))
             return reject(str(exc))
+        finally:
+            # Scope-exit collection runs after preparation was persisted.
+            # Refresh diagnostics without counting training as preparation.
+            environment = result.get("environment")
+            if environment is not None and "run_dir" in result:
+                config = self.executor.env_config
+                for name in ("dependency_cache_maintenance", "dependency_temporary_files"):
+                    environment[name] = config.get(name, [])
+                try:
+                    (Path(result["run_dir"]) / "environment.json").write_text(
+                        json.dumps(environment, ensure_ascii=False, indent=2), encoding="utf-8")
+                    execution_path = Path(result["run_dir"]) / "execution.json"
+                    if execution_path.is_file():
+                        execution_path.write_text(
+                            json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+                except (OSError, ValueError, TypeError) as exc:
+                    warnings.append(f"environment maintenance record could not be saved: {exc}")

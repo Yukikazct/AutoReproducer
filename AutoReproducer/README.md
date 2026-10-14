@@ -232,7 +232,19 @@ python scripts/resource_cli.py deps-prune          # 仅预览依赖回收计划
 python scripts/resource_cli.py deps-prune --yes    # 执行依赖回收
 ```
 
-`deps-prune` 默认按 20 GiB 容量目标、2 GiB 磁盘余量及 30 天未使用时间生成计划；活动任务持有的缓存和仍被引用的基础环境受到保护。资源 CLI 的 `--data-root` 应放在子命令前，例如：
+依赖缓存在执行进程取得缓存锁时、安装前，以及安装／执行正常结束、失败或取消后自动维护；缓存命中也会触发，且不依赖健康检查开关。统计覆盖各 Python／平台目录和增量环境，保留在用环境及完整基础环境引用链。回收只处理依赖与所属安装临时文件，论文、作者源码、数据、模型、报告和训练日志沿用各自的保留策略。
+
+| 配置 | 默认值 | 含义 |
+| --- | --- | --- |
+| `AUTOREPRO_DEPS_QUOTA_GB` | 20 | 持久依赖缓存容量目标，GiB |
+| `AUTOREPRO_DEPS_MIN_FREE_GB` | 2 | 缓存所在磁盘最低余量，GiB |
+| `AUTOREPRO_DEPS_INSTALL_RESERVE_GB` | 2 | 新安装下载、解压和复制的额外空间预留，GiB；这是可配置策略，不是包体积预测 |
+| `AUTOREPRO_DEPS_KEEP_DAYS` | 30 | 闲置保留天数 |
+| `AUTOREPRO_DEPS_KEEP_RECENT` | 2 | 保护最近使用的就绪环境数；设为 0 可取消这项保护 |
+
+pip 下载、解压和下载缓存统一放在依赖根的 `.pip-temporary/` 所属目录，安装子进程返回并完成清理后释放。进程异常终止的遗留目录在后续缓存维护时检查归属和锁，满 24 小时后安全回收；不删除其他应用的系统临时文件。安装前要求磁盘余量达到最低余量与额外安装预留之和，大型 CUDA 环境可调高预留。
+
+`deps-prune` 使用同一保留策略，默认仅预览，加 `--yes` 才删除；可用 `--keep-recent 0` 取消最近环境保护。维护记录列出删除／保留原因、文件字节数和维护前后磁盘余量；在用、被引用或最近保留的环境使容量仍超限时会明确记录原因，CLI 返回 2。历史记录页显示容量目标、当前磁盘余量和最近维护结果。资源 CLI 的 `--data-root` 应放在子命令前，例如：
 
 ```bash
 python scripts/resource_cli.py --data-root E:/AutoReproducer-data status

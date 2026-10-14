@@ -7,6 +7,7 @@ import functools
 import json
 import logging
 import os
+import shutil
 import re
 import stat
 import time
@@ -617,6 +618,15 @@ def delete_deps_cache(names: List[str], *, on_skip=None) -> Tuple[int, int]:
     an environment returned by list_deps_cache(), never a namespace or root.
     """
     return _delete_deps_cache(names, on_skip=on_skip)
+
+
+def dependency_maintenance_status():
+    """Read policy and the latest atomic receipt without starting collection."""
+    from src.dependency_management import cache_policy, read_maintenance
+    root = _deps_root()
+    policy = cache_policy()
+    return {'policy': policy, 'latest': read_maintenance(root),
+            'free_bytes': shutil.disk_usage(root).free if root.is_dir() else None}
 
 
 def cleanup_deps_cache(keep_days: int = 30, *, on_skip=None) -> Tuple[int, int]:

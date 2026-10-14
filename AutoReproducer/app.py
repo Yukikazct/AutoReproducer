@@ -71,6 +71,7 @@ from frontend.history_manager import (
     cleanup_runtime,
     delete_deps_cache,
     cleanup_deps_cache,
+    dependency_maintenance_status,
     list_resource_events,
     format_size,
     get_session_detail,
@@ -1162,7 +1163,19 @@ def render_history():
                 use_container_width=True, hide_index=True)
             st.caption(f"{len(deps_items)} 个目录 · 合计 {format_size(total_deps)}")
             st.caption('增量环境只保存缺少的包，基础环境按 Python 和 CPU／CUDA 类型隔离。'
-                       '仍被引用或正在运行的环境会保留；新安装前自动检查缓存容量与可用空间。')
+                       '仍被引用或正在运行的环境会保留；缓存使用前后和新安装前均自动维护。')
+            try:
+                maintenance = dependency_maintenance_status()
+                policy, latest = maintenance['policy'], maintenance['latest']
+                free = format_size(maintenance['free_bytes']) if maintenance['free_bytes'] is not None else '未测量'
+                st.caption(f"容量目标 {format_size(policy['quota_bytes'])} · 磁盘余量 {free} · "
+                           f"保留最近 {policy['keep_recent']} 个环境 · 闲置 {policy['keep_days']} 天后回收")
+                if latest:
+                    st.caption('最近维护：' + latest.get('reason', '已完成') +
+                               f" 回收环境文件 {format_size(latest.get('freed_bytes', 0))}，" +
+                               f"安装临时文件 {format_size(latest.get('temporary_files', {}).get('freed_bytes', 0))}。")
+            except (OSError, ValueError) as error:
+                st.error(f'读取依赖维护状态失败: {error}')
 
             deps_keep = st.slider("清理多少天未使用的依赖缓存", 1, 180, 30,
                                   key="deps_keep_days")

@@ -31,9 +31,12 @@ from src.llm.llm_client import LLMClient  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
-def _clear_deps_cache():
+def _clear_deps_cache(monkeypatch):
     """每个用例独立：清理进程内依赖缓存，避免用例间互相污染。"""
     ce_mod._INSTALLED_DEPS.clear()
+    # Mock only the installer boundary; scripts still run as actual processes.
+    monkeypatch.setattr(CodeExecutorAgent, '_invoke_dependency_command',
+                        lambda instance, command, **kwargs: ce_mod.subprocess.run(command, **kwargs))
     yield
     ce_mod._INSTALLED_DEPS.clear()
 
@@ -359,7 +362,8 @@ def test_equivalent_manifests_share_one_dir_and_refresh_last_used(
         assert result["success"] is True, result.get("stderr")
 
     assert len(pip_calls) == 1, f"等价清单被重复安装 {len(pip_calls)} 次"
-    dirs = [p for p in (tmp_path / "deps").iterdir() if p.is_dir()]
+    dirs = [p for p in (tmp_path / "deps").iterdir()
+            if p.is_dir() and not p.name.startswith('.')]
     assert len(dirs) == 1, f"等价清单落了 {len(dirs)} 份目录"
 
     deps_dir = dirs[0]
