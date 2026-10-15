@@ -37,7 +37,7 @@ class RepositoryRunner:
 
     @staticmethod
     def cached_environment(env_config):
-        runtime = runtime_fingerprint()
+        runtime = runtime_fingerprint(env_config.get('python_executable'))
         return DEPS_CACHE_ROOT / "repository" / runtime / reqs_digest(env_config["requirements_txt"])
 
     @staticmethod

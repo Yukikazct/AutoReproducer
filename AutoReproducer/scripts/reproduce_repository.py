@@ -58,7 +58,10 @@ def main(argv=None):
     if needs_llm:
         token = os.environ.get("LLM_API_KEY") or (getpass.getpass("API Key (hidden): ") if sys.stdin.isatty() else "")
 
-    from src.runtime_preparation import runtime_requirement, prepare_runtime, run_owned_process, safe_runtime_diagnostic
+    from src.runtime_preparation import (
+        runtime_requirement, prepare_runtime, run_owned_process, safe_runtime_diagnostic,
+        release_worker_environment,
+    )
     reason = runtime_requirement()
     if reason:
         print(reason, flush=True)
@@ -69,12 +72,28 @@ def main(argv=None):
         if token:
             worker_env["LLM_API_KEY"] = token
         print("安全运行环境已就绪，正在执行预设；结束后输出完整结果。", flush=True)
-        completed = run_owned_process(
-            [prepared.executable, "-X", "utf8", str(Path(__file__).resolve()), *forwarded],
-            cwd=Path(__file__).resolve().parents[1],
-            timeout_s=None,
-            env=worker_env,
-        )
+        worker_cleaned, failure, cleanup = False, None, None
+        def confirmed_cleanup():
+            nonlocal worker_cleaned
+            worker_cleaned = True
+        try:
+            completed = run_owned_process(
+                [prepared.executable, "-X", "utf8", str(Path(__file__).resolve()), *forwarded],
+                cwd=Path(__file__).resolve().parents[1], timeout_s=None, env=worker_env,
+                on_cleanup=confirmed_cleanup,
+            )
+            worker_cleaned = True
+        except BaseException as exc:
+            failure = exc
+            raise
+        finally:
+            if worker_cleaned:
+                try:
+                    cleanup = release_worker_environment(prepared)
+                except Exception as exc:
+                    cleanup = {"status": "error", "errors": [{"reason": safe_runtime_diagnostic(exc)}]}
+                if cleanup.get("errors") and failure is not None:
+                    failure.add_note("工作进程环境自动释放失败：" + str(cleanup["errors"]))
         def private_output(value):
             for name in ("LLM_API_KEY", "GITHUB_TOKEN", "GH_TOKEN", "AUTOREPRO_GITHUB_TOKEN"):
                 if worker_env.get(name):
@@ -84,6 +103,9 @@ def main(argv=None):
             print(private_output(completed.stdout), end="", flush=True)
         if completed.stderr:
             print(safe_runtime_diagnostic(private_output(completed.stderr)), end="", file=sys.stderr, flush=True)
+        if cleanup and cleanup.get("errors"):
+            print("工作进程环境自动释放失败：" + str(cleanup["errors"]), file=sys.stderr, flush=True)
+            return 1
         return completed.returncode
 
     def progress(event):

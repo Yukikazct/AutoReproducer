@@ -59,6 +59,24 @@ def test_different_commits_and_reruns_have_independent_clean_workspaces(tmp_path
     assert replay["files"]["model.py"] == hashlib.sha256(b"VERSION = 1\n").hexdigest()
 
 
+def test_source_export_bytes_are_independent_of_host_git_line_endings(tmp_path, source, monkeypatch):
+    repo, first, _ = source
+    manager = ResourceManager(data_root=tmp_path / "data")
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "2")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "core.autocrlf")
+    monkeypatch.setenv("GIT_CONFIG_KEY_1", "core.eol")
+    exported = []
+    for autocrlf, eol in (("false", "lf"), ("true", "crlf")):
+        monkeypatch.setenv("GIT_CONFIG_VALUE_0", autocrlf)
+        monkeypatch.setenv("GIT_CONFIG_VALUE_1", eol)
+        snapshot = manager.fetch_code("paper", str(repo), revision=first)
+        assert snapshot["commit"] == first
+        assert (Path(snapshot["path"]) / "model.py").read_bytes() == b"VERSION = 1\n"
+        exported.append(snapshot)
+    assert exported[0]["archive_sha256"] == exported[1]["archive_sha256"]
+    assert exported[0]["files"] == exported[1]["files"]
+
+
 def test_unavailable_revision_never_returns_head_or_overwrites_prior_source(tmp_path, source):
     repo, first, _ = source
     manager = ResourceManager(data_root=tmp_path / "data")

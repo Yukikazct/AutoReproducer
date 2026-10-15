@@ -89,7 +89,8 @@ def _uv_command(root, *, offline):
         for index, _ in _public_install_sources('uv==0.11.19'):
             command = [sys.executable, '-m', 'pip', 'install', '--disable-pip-version-check',
                        '--no-user', '--upgrade', '--target', str(target), '-i', index, 'uv==0.11.19']
-            result = run_owned_process(command, timeout_s=300)
+            from src.training_environment import training_process_environment
+            result = run_owned_process(command, timeout_s=300, env=training_process_environment(root))
             if result.returncode == 0:
                 (target / '.ready').write_text('uv==0.11.19\n', encoding='utf-8')
                 break
@@ -103,17 +104,21 @@ def _uv_command(root, *, offline):
     raise TrainingPythonUnavailable('uv 缓存缺少可执行文件')
 
 
-def _ensure_pip(executable):
-    check = run_owned_process([str(executable), '-m', 'pip', '--version'], timeout_s=15)
+def _ensure_pip(executable, root):
+    from src.training_environment import training_process_environment
+    environment = training_process_environment(root)
+    check = run_owned_process([str(executable), '-m', 'pip', '--version'], timeout_s=15, env=environment)
     if check.returncode == 0:
         return
-    installed = run_owned_process([str(executable), '-m', 'ensurepip', '--upgrade'], timeout_s=120)
-    if installed.returncode or run_owned_process([str(executable), '-m', 'pip', '--version'], timeout_s=15).returncode:
+    installed = run_owned_process([str(executable), '-m', 'ensurepip', '--upgrade'], timeout_s=120, env=environment)
+    if installed.returncode or run_owned_process([str(executable), '-m', 'pip', '--version'],
+                                                timeout_s=15, env=environment).returncode:
         raise TrainingPythonUnavailable('隔离训练解释器缺少 pip，自动准备失败')
 
 
 def _managed_venv(root, base, version):
     from filelock import FileLock
+    from src.training_environment import training_process_environment
     directory = root / 'envs' / ('cpython-' + '.'.join(map(str, version)))
     executable = directory / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
     root.mkdir(parents=True, exist_ok=True)
@@ -121,11 +126,13 @@ def _managed_venv(root, base, version):
         if _probe(executable) != version:
             if directory.exists():
                 raise TrainingPythonUnavailable('已有隔离训练 Python 缓存不完整：' + str(directory))
-            result = run_owned_process([str(base), '-m', 'venv', str(directory)], timeout_s=180)
+            result = run_owned_process([str(base), '-m', 'venv', str(directory)], timeout_s=180,
+                                       env=training_process_environment(root))
             if result.returncode or _probe(executable) != version:
                 raise TrainingPythonUnavailable('创建隔离训练 Python 失败：' + (result.stderr or result.stdout)[-800:])
-        _ensure_pip(executable)
-    return executable.resolve()
+        _ensure_pip(executable, root)
+    # Resolving a POSIX venv executable symlink would select the host Python.
+    return executable.absolute()
 
 
 def select_author_python(packet, managed_root, *, offline=False, mirror=None,
@@ -143,7 +150,8 @@ def select_author_python(packet, managed_root, *, offline=False, mirror=None,
     if not admissible:
         raise TrainingPythonUnavailable('作者 Python 声明与支持的 CPython 3.9–3.12 均不兼容：' +
                                         ', '.join(f'{name}: {value}' for name, value, _ in bounds))
-    root = Path(managed_root).resolve()
+    from src.training_environment import prepare_training_environment, training_process_environment
+    root = prepare_training_environment(managed_root)
     choices = [Path(sys.executable)]
     choices.extend(Path(path) for version in admissible
                    if (path := shutil.which('python' + '.'.join(map(str, version)))))
@@ -171,15 +179,15 @@ def select_author_python(packet, managed_root, *, offline=False, mirror=None,
     mirror = mirror or os.environ.get('AUTOREPRO_PYTHON_MIRROR', '').strip()
     if mirror:
         command += ['--mirror', mirror]
-    result = run_owned_process(command, timeout_s=1800)
+    result = run_owned_process(command, timeout_s=1800, env=training_process_environment(root))
     if result.returncode:
         raise TrainingPythonUnavailable('自动准备训练用 Python 失败：' + (result.stderr or result.stdout)[-1200:])
     from src.runtime_preparation import safe_runtime_diagnostic
     candidates = list(install_dir.glob('cpython-*/bin/python3')) + list(install_dir.glob('cpython-*/python.exe'))
     for candidate in candidates:
         if _probe(candidate) == version:
-            _ensure_pip(candidate)
-            return {'python_executable': str(candidate.resolve()), 'python_version': '.'.join(map(str, version)),
+            _ensure_pip(candidate, root)
+            return {'python_executable': str(candidate.absolute()), 'python_version': '.'.join(map(str, version)),
                     'runtime_fingerprint': runtime_fingerprint(candidate), 'source': 'uv_managed',
                     'requirements': [{'path': name, 'specifier': value} for name, value, _ in bounds]}
     raise TrainingPythonUnavailable(safe_runtime_diagnostic('uv did not provide the selected CPython version'))

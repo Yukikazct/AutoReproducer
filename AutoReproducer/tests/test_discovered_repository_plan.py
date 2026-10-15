@@ -88,8 +88,10 @@ def test_two_unregistered_papers_keep_all_pages_and_independent_verifier(tmp_pat
     (lambda p: p["requirements"].update(compatibility=["torch==" + compatibility_pins()["torch"]]), "torch and numpy"),
     (lambda p: p["requirements"]["compatibility"].append("scipy==1.14.1"), "lacks source/import"),
     (lambda p: p["steps"][0].update(argv=["python", "-c", "print(1)"]), "Generated code"),
-    (lambda p: p["steps"][0].update(argv=["python", "-m", "train"]), "Generated code"),
-    (lambda p: p["steps"][0].update(argv=["bash", "train.py"]), "structured Python"),
+    # Modules can be original author entrypoints, but this protocol route
+    # still requires a cited script; inline -c above remains generated code.
+    (lambda p: p["steps"][0].update(argv=["python", "-m", "train"]), "cited Python script"),
+    (lambda p: p["steps"][0].update(argv=["bash", "train.py"]), "structured original Python argv"),
     (lambda p: p["steps"][0].update(env={"EPOCHS": "1"}), "environment"),
     (lambda p: p["steps"][0].update(required=False), "optionalize"),
     (lambda p: p["steps"][0].update(timeout_s=7201), "timeouts"),

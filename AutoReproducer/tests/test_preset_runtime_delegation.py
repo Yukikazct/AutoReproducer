@@ -178,6 +178,23 @@ def test_worker_failed_exit_rejects_early_success_result(recover, tmp_path, monk
     assert ProgressStore.read_snapshot(str(path))['state'] == 'ERROR'
 
 
+def test_supervisor_cleanup_failure_preserves_the_workers_report(recover, tmp_path, monkeypatch):
+    path = tmp_path / 'cleanup-failure.jsonl'
+    def execute(argv, **kwargs):
+        child = ProgressStore(json.loads(kwargs['input'])['progress_path'], reset=False)
+        child.emit({'type': 'done', 'result': {'state': 'COMPLETED', 'error': None,
+                    'data': {'report': 'saved experiment report'}}})
+        return subprocess.CompletedProcess(argv, 0, '', '')
+    monkeypatch.setattr(runtime, 'run_owned_process', execute)
+    monkeypatch.setattr(runtime, 'release_worker_environment', lambda prepared: {
+        'status': 'error', 'errors': [{'path': 'dependencies', 'reason': 'still open'}]})
+    result = run_pipeline_core(str(path), experiment_profile='neural_ode_spiral')
+    assert result['state'] == 'ERROR' and result['error']
+    assert result['data']['report'] == 'saved experiment report'
+    assert result['data']['environment_cleanup']['status'] == 'error'
+    assert ProgressStore.read_snapshot(str(path))['done']
+
+
 def test_unknown_title_also_recovers_store_host_before_generic_agents(recover, tmp_path, monkeypatch):
     import frontend.backend_pipeline as pipeline
     factory = Mock(side_effect=AssertionError('unsafe generic host must not execute'))

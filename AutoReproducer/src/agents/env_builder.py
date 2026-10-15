@@ -15,6 +15,7 @@ from typing import Dict, List
 from src.base_agent import BaseAgent
 from src.llm.llm_client import LLMClient
 from src.storage_usage import unmeasured_disk_usage
+from src.docker_environment import disposable_docker
 from src.agents.dependency_resolver import (
     dependency_root, resolve_dependencies,
 )
@@ -328,7 +329,7 @@ class EnvBuilderAgent(BaseAgent):
                              "（请启动 Docker Desktop 后重试）"}
 
         degraded = None
-        if use_base_image:
+        if use_base_image and disposable_docker(None, docker_cmd) is None:
             base = self.ensure_base_image(docker_cmd)
             if base.get("success"):
                 dockerfile = self._swap_to_base_image(
@@ -408,10 +409,15 @@ class EnvBuilderAgent(BaseAgent):
             # 抛 TypeError 被下面的 except 兜住 —— 用户看到的构建失败原因
             # 是 "TypeError: 'NoneType' object is not subscriptable"，
             # 而不是 docker 真正报的错。
-            result = subprocess.run(
-                [docker_cmd, "build", "-t", tag, build_dir],
-                capture_output=True, text=True, timeout=1800,
-                encoding="utf-8", errors="replace")
+            owned = disposable_docker(None, docker_cmd)
+            if owned is not None:
+                result = owned.build(build_dir)
+                tag = owned.image
+            else:
+                result = subprocess.run(
+                    [docker_cmd, "build", "-t", tag, build_dir],
+                    capture_output=True, text=True, timeout=1800,
+                    encoding="utf-8", errors="replace")
             ok = result.returncode == 0
             out_tail = (result.stdout or "")[-300:]
             err_tail = (result.stderr or "")[-300:]

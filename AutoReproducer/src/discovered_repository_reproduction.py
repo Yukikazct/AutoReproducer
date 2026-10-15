@@ -25,6 +25,7 @@ from src.repository_reproduction import export_repository, materialize_submodule
 from src.repository_runner import RepositoryRunner
 from src.runtime_preparation import run_owned_process
 from src.safety.paths import workspace_path
+from src.environment_lifecycle import bind_environment_run, release_run_environment
 
 
 _MAX_DATA_BYTES = 512 * 1024 * 1024
@@ -289,10 +290,12 @@ class DiscoveredRepositoryReproduction:
         self.runner = RepositoryRunner(logger=logger)
 
     @termination_signals()
+    @release_run_environment
     def run(self, request, on_event=None):
         from src.run_lifecycle import cancellation_signals
         run_dir = self.root / "runs" / f"repository_{uuid.uuid4().hex}"
         run_dir.mkdir(parents=True)
+        bind_environment_run(run_dir)
         status = {"status": "running", "pid": os.getpid(), "started_at": time.time()}
         with FileLock(str(run_dir / ".run.lock")), cancellation_signals():
             write_json(run_dir / "run_status.json", status)
@@ -369,8 +372,7 @@ class DiscoveredRepositoryReproduction:
             data['repository_identity_attempts'] = attempts
             data['planning_trace'] = []
 
-            def execute_candidate(candidate_url, candidate_evidence, candidate_plan, candidate_packet,
-                                  candidate_snapshot, candidate_revision, candidate_pin_evidence):
+            def record_candidate_identity(candidate_url, candidate_evidence, candidate_revision):
                 data["resources"].update(code_repo_url=candidate_url, selected_repo=candidate_url,
                     selection_evidence=deepcopy(candidate_evidence),
                     repository_identity={"status": "unreviewed_execution", "source": "pinned_git_direct_execution",
@@ -380,6 +382,10 @@ class DiscoveredRepositoryReproduction:
                 data["resources"].setdefault("repo_discovery", {}).update(
                     selected_repo=candidate_url, pinned_revision=candidate_revision,
                     repository_identity=data["resources"]["repository_identity"])
+
+            def execute_candidate(candidate_url, candidate_evidence, candidate_plan, candidate_packet,
+                                  candidate_snapshot, candidate_revision, candidate_pin_evidence):
+                record_candidate_identity(candidate_url, candidate_evidence, candidate_revision)
                 data['resources']['implementation_selection'] = {
                     'initial_repository': url, 'selected_repository': candidate_url,
                     'selected_revision': candidate_revision,
@@ -442,6 +448,10 @@ class DiscoveredRepositoryReproduction:
                         raise ValueError("导出的仓库与所选作者来源或固定版本不一致")
                     attempt.update(revision=revision, archive_sha256=snapshot.get("archive_sha256"),
                                    workspace=str(workspace.resolve()))
+                    if not manual:
+                        # Planning can fail before execute_candidate. Never let
+                        # caller-supplied verification survive that error path.
+                        record_candidate_identity(candidate_url, candidate, revision)
                     # Allow discovered/user-provided URLs without a literal
                     # author-code statement in the PDF. This flag only controls
                     # evidence acquisition; execution mode skips the reviewer.

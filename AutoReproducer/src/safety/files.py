@@ -7,6 +7,23 @@ from pathlib import Path
 from src.safety.paths import is_link
 
 
+def directory_bytes(directory):
+    """Measure an owned tree without following symlinks or Windows junctions."""
+    total, pending = 0, [Path(directory)]
+    while pending:
+        with os.scandir(pending.pop()) as entries:
+            for entry in entries:
+                info = entry.stat(follow_symlinks=False)
+                if (stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0)
+                        & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)):
+                    raise ValueError("dependency environment contains a symlink or junction")
+                if stat.S_ISDIR(info.st_mode):
+                    pending.append(Path(entry.path))
+                elif stat.S_ISREG(info.st_mode):
+                    total += info.st_size
+    return total
+
+
 def _remove_readonly_file(function, path, exc_info):
     """Windows rmtree callback; leave locks, links and other failures intact."""
     error = exc_info[1]

@@ -28,6 +28,7 @@ from src.repository_adapters import get_adapter
 from src.execution_plan import build_plan, plan_step_ids
 from src.safety.paths import workspace_path
 from src.preset_downloads import atomic_cache_bytes, download_bytes
+from src.environment_lifecycle import bind_environment_run, release_run_environment
 
 
 def write_json(path, value):
@@ -52,8 +53,12 @@ def spec_digest(profile):
 
 
 def _git(repo, *args, timeout=30, binary=False):
-    result = subprocess.run(["git", "-C", str(repo), *args], capture_output=True,
-                            timeout=timeout)
+    command = ["git", "-C", str(repo)]
+    if args and args[0] == "archive":
+        # Export the same committed source bytes on every host. User checkout
+        # defaults must not alter the immutable archive or its evidence hashes.
+        command += ["-c", "core.autocrlf=false", "-c", "core.eol=lf"]
+    result = subprocess.run([*command, *args], capture_output=True, timeout=timeout)
     if result.returncode:
         raise RuntimeError(result.stderr.decode("utf-8", "replace").strip()[-1000:])
     return result.stdout if binary else result.stdout.decode("utf-8", "replace").strip()
@@ -502,6 +507,7 @@ class RepositoryReproduction:
         self.runner = runner
         self.llm = llm
 
+    @release_run_environment
     def run(self, input_data, on_event=None):
         if get_profile(input_data["experiment_profile"]).get("adapter_id") in {"siren", "neural_ode", "rezero"}:
             from src.method_reproduction import MethodReproduction
@@ -519,6 +525,7 @@ class RepositoryReproduction:
         public_packet = None
         run_dir = self.root / "runs" / f"repository_{uuid.uuid4().hex}"
         run_dir.mkdir(parents=True)
+        bind_environment_run(run_dir)
         data["run_dir"] = str(run_dir.resolve())
         data["report_path"] = str((run_dir / "report.md").resolve())
         if input_data.get("title_resolution"):

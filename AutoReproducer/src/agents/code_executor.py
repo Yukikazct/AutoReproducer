@@ -47,6 +47,7 @@ from src.agents.dependency_resolver import (
 )
 from src.resource_events import ResourceEventLogger
 from src.project_paths import get_deps_root
+from src.environment_lifecycle import active_environment, select_dependency_environment
 from src.execution_artifacts import prepare_plot_runtime, collect_images, FONT_PATH
 from src.storage_usage import directory_usage, docker_image_usage, disk_usage_snapshot, unmeasured_disk_usage
 from src.dependency_cache import (
@@ -1896,6 +1897,8 @@ class CodeExecutorAgent(BaseAgent):
         for name in ("LLM_API_KEY", "GITHUB_TOKEN", "GH_TOKEN", "AUTOREPRO_GITHUB_TOKEN"):
             env.pop(name, None)
         env["PIP_USER"] = "0"
+        if active_environment(self._dependency_lock_root()) is not None:
+            env["PIP_NO_CACHE_DIR"] = "1"
         env["PYTHONIOENCODING"] = "utf-8"
         return env
 
@@ -2223,6 +2226,14 @@ class CodeExecutorAgent(BaseAgent):
 
         deps_root = Path(getattr(self, "deps_cache_root", DEPS_CACHE_ROOT))
         deps_dir = Path(deps_directory) if deps_directory is not None else deps_root / reqs_digest(reqs)
+        disposable = active_environment(self._dependency_lock_root()) is not None
+        if disposable and install_kind == "reqs" and not self.mock_mode:
+            try:
+                changed = select_dependency_environment(self._dependency_lock_root(), deps_dir)
+            except (OSError, ValueError, RuntimeError) as exc:
+                return f"旧运行环境释放失败: {exc}"
+            if changed:
+                self._heal_dirs.clear()
         key = (reqs if deps_root == DEPS_CACHE_ROOT and deps_directory is None else
                f"{deps_dir.resolve()}\n{reqs}")
         ready_mark = deps_dir / _DEPS_READY_MARK
@@ -2264,7 +2275,7 @@ class CodeExecutorAgent(BaseAgent):
         if _INSTALLED_DEPS.get(key):
             self.log("install_deps", "RUNNING", "上次依赖安装失败，允许本次运行重新尝试")
 
-        managed_repository = (health_enabled and deps_root.parent.name == 'repository'
+        managed_repository = (health_enabled and not disposable and deps_root.parent.name == 'repository'
                               and deps_root.name == runtime_fingerprint() and install_kind == 'reqs')
         if managed_repository and _allow_official_pip_fallback(reqs):
             for cached in compatible_candidates(deps_root, reqs):
@@ -2668,12 +2679,21 @@ class CodeExecutorAgent(BaseAgent):
         container_name = "autorepro-" + uuid.uuid4().hex
         result = None
         try:
+            install_base_requirements = image == "python:3.11-slim"
+            from src.docker_environment import disposable_docker
+            owned = disposable_docker(self._dependency_lock_root(), docker_cmd)
+            if owned is not None:
+                image = owned.ensure_image(image)
+                owned.register_workspace(workdir)
+                owned.register_container(container_name)
             plot_env = prepare_plot_runtime(workdir, docker=True)
             with open(script, "w", encoding="utf-8") as f:
                 f.write(code)
             mount = workdir.replace("\\", "/")
             base_cmd = [docker_cmd, "run", "--rm", "--name", container_name,
                         "-v", f"{mount}:/app", "-w", "/app"]
+            if owned is not None:
+                base_cmd += ["--label", owned.container_label]
             for key, value in plot_env.items():
                 base_cmd.extend(["-e", f"{key}={value}"])
             Path(workdir, ".autorepro_tmp").mkdir(exist_ok=True)
@@ -2695,7 +2715,7 @@ class CodeExecutorAgent(BaseAgent):
                             Path(workdir) / ".autorepro_plot" / "timeout_runner.py")
             script_runner = ["python", "-S", supervisor, "execution", str(timeout),
                              "python", "-u", "run.py"]
-            install_requirements = bool(image == "python:3.11-slim" and reqs)
+            install_requirements = bool(install_base_requirements and reqs)
 
             def _make_runner(heal_pkgs: list) -> list:
                 install = ["python", "-S", supervisor, "dependencies",

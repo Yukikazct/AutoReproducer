@@ -11,7 +11,8 @@ permissions:
 jobs:
   tests:
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    # Windows runs the complete suite in both locale and UTF-8 modes.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -33,6 +34,15 @@ jobs:
           cache-dependency-path: |
             AutoReproducer/requirements.txt
             AutoReproducer/requirements-test.txt
+      - name: Create isolated CI environment
+        shell: pwsh
+        run: |
+          $ciEnvironment = Join-Path $env:RUNNER_TEMP 'autoreproducer-ci'
+          python -m venv $ciEnvironment
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $scriptsDirectory = if ($IsWindows) { 'Scripts' } else { 'bin' }
+          "VIRTUAL_ENV=$ciEnvironment" >> $env:GITHUB_ENV
+          (Join-Path $ciEnvironment $scriptsDirectory) >> $env:GITHUB_PATH
       - name: Install production dependencies
         run: python -m pip install --no-user --report app-dependencies.json -r requirements.txt
       - name: Validate production dependency metadata

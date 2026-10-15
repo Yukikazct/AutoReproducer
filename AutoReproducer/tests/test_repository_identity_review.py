@@ -1,6 +1,7 @@
 """Evidence mechanics for LLM review of fetched paper/author repositories."""
 from copy import deepcopy
 import json
+from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
@@ -306,10 +307,16 @@ def test_service_uses_selected_candidate_without_identity_review(tmp_path, monke
         "code_repo_url": other["snapshot"]["url"],
         "repository_identity": {"status": "author_verified", "review": {"accepted": True}}}})
     data = result["data"]
+    assert result["state"] == "ERROR"
+    assert "Stop at original command planning" in result["error"]
+    assert data["repository_executed"] is False
     assert data["resources"]["code_repo_url"] == other["snapshot"]["url"]
     assert data["resources"]["repository_identity"]["status"] == "unreviewed_execution"
     assert data["resources"]["repository_identity"]["author_identity_confirmed"] is False
-    assert [attempt["accepted"] for attempt in data["repository_identity_attempts"]] == [True]
+    assert [attempt["accepted"] for attempt in data["repository_identity_attempts"]] == [False]
+    assert data["repository_identity_attempts"][0]["planning_status"] == "planner_error"
+    saved = json.loads((Path(data["run_dir"]) / "result.json").read_text(encoding="utf-8"))
+    assert saved["data"]["resources"]["repository_identity"] == data["resources"]["repository_identity"]
     propose.assert_called_once()
     reviewer.assert_not_called()
     runner.runner.run.assert_not_called()

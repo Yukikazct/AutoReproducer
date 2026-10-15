@@ -17,6 +17,7 @@ from src.agents.code_executor import CodeExecutorAgent
 from src.agents.report_generator import ReportGeneratorAgent
 from src.agents.optimizer import OptimizerAgent
 from src.resource_manager import ResourceManager
+from src.environment_lifecycle import release_run_environment
 
 # EnvBuilder 真实构建时使用的镜像名；成功构建后通过 env_config.image_tag
 # 透传给 CodeExecutor，让复现代码在本镜像内运行（含论文依赖）
@@ -80,6 +81,7 @@ class Orchestrator:
         self.data: Dict[str, Any] = {}
         self.error: Optional[str] = None
 
+    @release_run_environment
     def run(self, input_data: dict, on_event=None) -> dict:
         """执行复现、验证与报告；智能优化接口当前尚未开放。
 

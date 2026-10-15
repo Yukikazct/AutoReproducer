@@ -289,19 +289,19 @@ python scripts/reproduce_repository.py --profile dlinear_etth1_reference --prepa
 # SIREN / Neural ODE 可单独准备环境，不训练
 python scripts/reproduce_repository.py --profile siren_camera_quick --prepare-environment
 
-# 使用已有代码、数据及依赖缓存；缺失时失败
+# 使用已有代码、数据及可用安装资源；缺失时失败，不能依赖上次运行的实验环境
 python scripts/reproduce_repository.py --profile neural_ode_spiral --offline
 ```
 
-首次准备环境会下载依赖，环境就绪不代表训练完成。各实验有独立预算，例如 DLinear 完整训练命令为 1800 秒、快速诊断为 600 秒；更完整的来源与参数见 [预设定义](src/repository_profiles.py)、[方法实验定义](src/method_profiles.py)和 [ReZero 定义](src/rezero_profiles.py)。
+首次准备环境会下载依赖，环境就绪不代表训练完成。`--prepare-environment` 保存准备结果后也会释放本次环境，下一次运行需要重新安装依赖。作者命令和固定预设不设执行时间上限；更完整的来源与参数见 [预设定义](src/repository_profiles.py)、[方法实验定义](src/method_profiles.py)和 [ReZero 定义](src/rezero_profiles.py)。
 
 ## 依赖与文件管理
 
 ### 应用依赖与实验依赖
 
 - [requirements.txt](requirements.txt) 统一维护网页和主进程依赖；[requirements-test.txt](requirements-test.txt) 引用它并增加 pytest、matplotlib。
-- PyTorch 等论文依赖按实验安装到托管目录。作者仓库缓存按 Python ABI、系统、架构和依赖清单区分，已就绪的相同环境可以复用。
-- 作者仓库入口在安装后及复用缓存前检查依赖版本和导入；固定预设仍按各自配置决定是否启用健康检查。增量包共享与回收条件见 [依赖环境管理](docs/dependency_management.md)；需要释放空间时可在历史页或 CLI 手动回收。
+- PyTorch 等论文依赖按实验安装到托管目录，同一依赖根最多使用一套实验环境及补装包。报告和结构化结果保存后自动释放；切换依赖清单或训练 Python 前先清理上一套环境。
+- 作者仓库入口在安装后检查依赖版本和导入；固定预设仍按各自配置决定是否启用健康检查。自动释放不依赖健康检查开关、容量或缓存年龄。历史缓存及单独调用底层执行器的维护策略见 [依赖环境管理](docs/dependency_management.md)。
 
 ### 数据目录
 
@@ -315,7 +315,7 @@ python scripts/reproduce_repository.py --profile neural_ode_spiral --offline
 | `reports/`、`logs/`、`experiment_ledger/` | 报告、审计日志与实验账本 |
 | `runtime/` | 网页后台进度及运行临时文件 |
 | `repos/`、`datasets/`、`manifests/` | 缓存代码、数据和资源清单 |
-| `deps/` | 隔离依赖缓存 |
+| `deps/` | 本次实验的隔离依赖与安装临时文件，报告保存后释放 |
 | `archive/` | 通过资源 CLI 创建的归档 |
 
 可在启动前设置目录和清理参数：
@@ -337,6 +337,8 @@ $env:AUTOREPRO_DEPS_ROOT = "E:\AutoReproducer-deps"
 
 macOS/Linux 使用 `export AUTOREPRO_DATA_ROOT="/绝对路径"`。修改配置只改变后续读写位置，不会迁移已有文件；需要完整迁移时，先停止任务，再复制数据目录及独立配置的依赖目录。
 
+论文运行环境默认自动释放：同一依赖根的任务串行使用一套实验依赖，报告和结构化结果保存后删除论文包、补装包、托管训练 Python 及其下载缓存；异常和中断也执行清理。启动下一次任务前先清除遗留环境，清理失败则停止创建新环境。应用自身的 Python 与生产依赖保留，报告、图表和日志保留。详见 [依赖环境管理](docs/dependency_management.md)。
+
 ### 查看与清理
 
 ```bash
@@ -346,7 +348,7 @@ python scripts/resource_cli.py deps-prune          # 仅预览依赖回收计划
 python scripts/resource_cli.py deps-prune --yes    # 执行依赖回收
 ```
 
-依赖缓存在执行进程取得缓存锁时、安装前，以及安装／执行正常结束、失败或取消后自动维护；缓存命中也会触发，且不依赖健康检查开关。统计覆盖各 Python／平台目录和增量环境，保留在用环境及完整基础环境引用链。回收只处理依赖与所属安装临时文件，论文、作者源码、数据、模型、报告和训练日志沿用各自的保留策略。
+完整复现任务按上述规则在报告保存后释放环境，不保留最近使用的实验依赖。下面的容量与保留策略用于历史缓存、手动 `deps-prune` 和单独调用底层依赖执行器时的维护。底层执行器取得缓存锁、安装前及安装／执行结束时均会维护，缓存命中也会触发，且不依赖健康检查开关。统计覆盖各 Python／平台目录和增量环境，保护在用环境及完整基础环境引用链。
 
 | 配置 | 默认值 | 含义 |
 | --- | --- | --- |
@@ -356,7 +358,7 @@ python scripts/resource_cli.py deps-prune --yes    # 执行依赖回收
 | `AUTOREPRO_DEPS_KEEP_DAYS` | 30 | 闲置保留天数 |
 | `AUTOREPRO_DEPS_KEEP_RECENT` | 2 | 保护最近使用的就绪环境数；设为 0 可取消这项保护 |
 
-pip 下载、解压和下载缓存统一放在依赖根的 `.pip-temporary/` 所属目录，安装子进程返回并完成清理后释放。进程异常终止的遗留目录在后续缓存维护时检查归属和锁，满 24 小时后安全回收；不删除其他应用的系统临时文件。安装前要求磁盘余量达到最低余量与额外安装预留之和，大型 CUDA 环境可调高预留。
+pip 下载、解压和下载缓存统一放在依赖根的 `.pip-temporary/` 所属目录，安装子进程返回并完成清理后释放。单独调用底层执行器时，异常终止的安装临时目录在后续维护中检查归属和锁，满 24 小时后回收；完整复现入口还会在取得独占锁后清理遗留实验环境。不会删除其他应用的系统临时文件。安装前要求磁盘余量达到最低余量与额外安装预留之和，大型 CUDA 环境可调高预留。论文、作者源码、数据、模型、报告和训练日志沿用各自的保留策略。
 
 `deps-prune` 使用同一保留策略，默认仅预览，加 `--yes` 才删除；可用 `--keep-recent 0` 取消最近环境保护。维护记录列出删除／保留原因、文件字节数和维护前后磁盘余量；在用、被引用或最近保留的环境使容量仍超限时会明确记录原因，CLI 返回 2。历史记录页显示容量目标、当前磁盘余量和最近维护结果。资源 CLI 的 `--data-root` 应放在子命令前，例如：
 
