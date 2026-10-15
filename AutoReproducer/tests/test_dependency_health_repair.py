@@ -179,7 +179,8 @@ def test_public_source_fallback_cleans_partial_target_before_native_repair(monke
     calls = fake_installer(monkeypatch, install)
     instance = executor()
     assert prepare(instance, tmp_path) is None
-    assert [call["command"][call["command"].index("-i") + 1] for call in calls] == [MIRROR, ce._OFFICIAL_PIP_INDEX, ce._OFFICIAL_PIP_INDEX]
+    assert [call["command"][call["command"].index("-i") + 1] for call in calls] == [
+        MIRROR, ce._PUBLIC_PIP_INDEXES[1], ce._PUBLIC_PIP_INDEXES[1]]
     assert all(call["manifest"] == REQUIREMENTS for call in calls)
 
 

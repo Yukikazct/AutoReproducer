@@ -4,7 +4,7 @@
 
 当前主要入口是**上传论文 PDF 运行作者代码**，也提供固定实验预设和无需 API 的 Mock 演示。
 
-> **当前能力范围**：真实运行显示“代码运行完成”时，表示所选代码正常结束、所属进程完成清理；仅准备源码或环境不代表训练完成。运行后的论文指标对齐与数值验收尚未接入，自动优化尚未开放。
+> **当前能力范围**：真实运行显示“代码运行完成”时，表示所选代码正常结束、所属进程完成清理；仅准备源码或环境不代表训练完成。PDF 作者仓库流程会在运行后尝试对比作者输出与论文指标，独立数值验收与自动优化尚未开放。
 
 [快速开始](#快速开始) · [模型配置](#模型配置) · [使用流程](#使用流程) · [固定实验预设](#固定实验预设) · [依赖与文件管理](#依赖与文件管理) · [开发与测试](#开发与测试) · [更多文档](#更多文档)
 
@@ -17,37 +17,147 @@
 - DLinear、Neural ODE 使用 CPU；SIREN、ReZero 的现有预设需要 NVIDIA GPU 和可用的 CUDA 环境，不能在普通 CPU 或 Apple GPU 上直接运行。
 - PDF 作者仓库和固定预设使用本地受控进程，启动时保持 Docker 关闭。
 
-下列命令都在**包含 `app.py` 和 `requirements.txt` 的目录**执行。若当前位于 Git 仓库根目录，先进入内层项目：
-
-```text
-cd AutoReproducer
-```
-
-### Windows PowerShell
-
-```powershell
-py -3.12 -m venv .venv
-if ($LASTEXITCODE -ne 0) { throw "创建虚拟环境失败，请检查 Python 3.12 是否已安装。" }
-
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-if ($LASTEXITCODE -ne 0) { throw "依赖安装失败，请检查 pip 输出。" }
-
-.\.venv\Scripts\python.exe -m streamlit run app.py --server.port 8501
-```
-
-只有 Python 3.11 时，把 `py -3.12` 改为 `py -3.11`。可用 `py -0p` 查看已安装版本；没有 Python Launcher 时，用已安装的 Python 3.11/3.12 解释器路径替代。命令无需激活虚拟环境，不受 PowerShell 激活脚本执行策略影响。
-
 ### macOS / Linux
 
+选符合你情况的一段，完整复制执行。应用目录是包含 `app.py` 的 `AutoReproducer/`；外层目录是它的上一层。
+
+**情况 1：已经安装过，当前在 `AutoReproducer` 目录（也适用于这里再次 `cd AutoReproducer` 报错后）。**
+
 ```bash
-python3.12 -m venv .venv
-.venv/bin/python -m pip install -r requirements.txt
 .venv/bin/python -m streamlit run app.py --server.port 8501
 ```
 
-只有 Python 3.11 时，将首行改为 `python3.11 -m venv .venv`。
+**情况 2：已经安装过，当前在外层目录。**
 
-浏览器打开 <http://localhost:8501>，保持终端运行。按 `Ctrl+C` 停止服务；端口占用时，可改用 `--server.port 8502` 并访问对应地址。
+```bash
+cd AutoReproducer &&
+.venv/bin/python -m streamlit run app.py --server.port 8501
+```
+
+**情况 3：第一次安装，当前在 `AutoReproducer` 目录。缺少 `.venv/bin/python` 或 `streamlit` 时也用这段。**
+
+```bash
+python3.12 -m venv .venv &&
+.venv/bin/python -m pip install -r requirements.txt &&
+.venv/bin/python -m streamlit run app.py --server.port 8501
+```
+
+**情况 4：第一次安装，当前在外层目录。**
+
+```bash
+cd AutoReproducer &&
+python3.12 -m venv .venv &&
+.venv/bin/python -m pip install -r requirements.txt &&
+.venv/bin/python -m streamlit run app.py --server.port 8501
+```
+
+**情况 5：没有 Python 3.12，已安装 Python 3.11。**
+
+当前在 `AutoReproducer` 目录：
+
+```bash
+python3.11 -m venv .venv &&
+.venv/bin/python -m pip install -r requirements.txt &&
+.venv/bin/python -m streamlit run app.py --server.port 8501
+```
+
+当前在外层目录：
+
+```bash
+cd AutoReproducer &&
+python3.11 -m venv .venv &&
+.venv/bin/python -m pip install -r requirements.txt &&
+.venv/bin/python -m streamlit run app.py --server.port 8501
+```
+
+**情况 6：8501 端口被占用，改用 8502。** 如果 <http://localhost:8501> 已经是本应用，直接使用该页面即可。需要另开服务时执行下面对应的一段。
+
+当前在 `AutoReproducer` 目录：
+
+```bash
+.venv/bin/python -m streamlit run app.py --server.port 8502
+```
+
+当前在外层目录：
+
+```bash
+cd AutoReproducer &&
+.venv/bin/python -m streamlit run app.py --server.port 8502
+```
+
+改用 8502 后打开 <http://localhost:8502>。Python 3.11 和 3.12 都没有安装时，先安装 [Python 3.12](https://www.python.org/downloads/release/python-31210/)，再执行情况 3 或 4。
+
+### Windows PowerShell
+
+**情况 1：已经安装过，当前在 `AutoReproducer` 目录。**
+
+```powershell
+.\.venv\Scripts\python.exe -m streamlit run app.py --server.port 8501
+```
+
+**情况 2：已经安装过，当前在外层目录。**
+
+```powershell
+Set-Location AutoReproducer -ErrorAction Stop
+.\.venv\Scripts\python.exe -m streamlit run app.py --server.port 8501
+```
+
+**情况 3：第一次安装，当前在 `AutoReproducer` 目录。缺少虚拟环境或 `streamlit` 时也用这段。**
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m streamlit run app.py --server.port 8501
+```
+
+**情况 4：第一次安装，当前在外层目录。**
+
+```powershell
+Set-Location AutoReproducer -ErrorAction Stop
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m streamlit run app.py --server.port 8501
+```
+
+**情况 5：没有 Python 3.12，已安装 Python 3.11。**
+
+当前在 `AutoReproducer` 目录：
+
+```powershell
+py -3.11 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m streamlit run app.py --server.port 8501
+```
+
+当前在外层目录：
+
+```powershell
+Set-Location AutoReproducer -ErrorAction Stop
+py -3.11 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m streamlit run app.py --server.port 8501
+```
+
+**情况 6：8501 端口被占用，改用 8502。** 如果 <http://localhost:8501> 已经是本应用，直接使用该页面即可。
+
+当前在 `AutoReproducer` 目录：
+
+```powershell
+.\.venv\Scripts\python.exe -m streamlit run app.py --server.port 8502
+```
+
+当前在外层目录：
+
+```powershell
+Set-Location AutoReproducer -ErrorAction Stop
+.\.venv\Scripts\python.exe -m streamlit run app.py --server.port 8502
+```
+
+PowerShell 安装步骤逐行执行，上一行成功后再执行下一行。改用 8502 后打开 <http://localhost:8502>。
+
+### 打开页面与停止服务
+
+默认打开 <http://localhost:8501>。保持终端打开，按 `Ctrl+C` 停止服务。上面的命令都无需激活虚拟环境。
 
 **第一次体验**：有模型 API 时，先完成下方配置，再上传 PDF；只看界面和流程时，展开侧栏“运行环境”，开启 Mock 演示模式。没有 API 也可以在真实模式下运行固定预设。
 
@@ -127,7 +237,11 @@ export LLM_MODEL="deepseek-flash"
 
 上传 PDF 后，确认解析提示，点击“开始复现”。如果自动定位仓库失败，页面出现“补充 GitHub 仓库”入口时，可填入地址并重试。手动指定仓库会被记录为用户提供，不代表系统已经确认作者归属。
 
-普通 PDF 流程中，模型用于阅读、仓库发现和命令规划；规划不可用时会尝试 README 或启动脚本中的 Python 命令。作者程序负责加载数据，实际缺包、已支持的 NumPy 兼容错误，以及作者临时数据目录 `/tmp/` 不存在的错误，共享最多 **8 次修复机会**。缺失的临时数据目录会在实际报错后映射到本次任务内，再重试；原作者源码与失败日志保留。取消及无法修复的错误会保留在日志中。作者命令、固定预设和外层后台任务不设运行时间上限，等待程序实际退出并完成进程清理；下载、依赖安装和模型请求仍有各自的超时。
+普通 PDF 流程中，模型用于论文阅读、仓库发现和原作者命令规划。仓库取得后再检查脚本、`python -m` 模块或 README 指明的 Notebook；同一仓库最多四次规划提案、两轮源码补读。当前实现不可运行时，最多检查三个仓库，只跟随论文或作者 README 明确关联的训练实现；手动指定的仓库与版本保持锁定。Notebook 使用选定训练 Python 的 kernel 顺序执行全部代码单元，保存输出副本和失败单元，不跳过失败单元。
+
+作者训练使用与应用分离的隔离 Python。作者 Python 声明或实际请求包的精确 `Requires-Python` 冲突会触发兼容解释器选择；公共 PyPI 下载源依次尝试当前镜像、清华、阿里云、中科大，最后尝试官方源，保留原版本约束。私有源限制和 PyTorch／PyG 的设备专用 wheel 来源保持不变。实际缺包、已支持的 NumPy 兼容错误、作者临时数据目录缺失，以及模型提出并经日志验证的项目推导依赖版本，共享最多 **8 次修复动作**。每种新的执行失败还会触发有限的模型分析：每个仓库最多四轮失败分析，每轮最多两次固定源码补读；相同失败与环境不重复调用。模型只可建议受支持的动作，程序会校验原始 pip 日志、作者版本和固定源码后才重试原命令。失败分析、解释器、下载源和修复结果保存在运行记录中。作者命令、固定预设和外层后台任务不设运行时间上限，等待程序实际退出并完成进程清理；下载、依赖安装和模型请求仍有各自的超时。
+
+这些 Agent 由编排器按阶段顺序执行，使用同一个 LLM 客户端，并非同时运行的独立模型进程。论文阅读、资源发现、入口规划、运行失败分析和完成后的指标比较会按各自证据调用模型；下载、pip、kernel、进程清理和报告落盘由程序执行。这样模型负责判断，实际执行与是否成功由可核验的日志和固定约束决定。
 
 ### 查看进度和结果
 
@@ -146,7 +260,7 @@ export LLM_MODEL="deepseek-flash"
 
 当前 PDF 作者仓库和固定预设使用**本地受控子进程**。依赖目录隔离用于管理 Python 包，不等于容器沙箱。Docker 仅用于其他已支持的通用代码执行路线；开启侧栏 Docker 开关不能让上述作者仓库路线自动容器化。
 
-当前流程已移除论文身份、Agent 输出和实验协议等审核关卡，也不执行独立数值验收与参数优化。旧的审核／优化参数仅作调用兼容，`author_execution_only=False` 不会重新启用数值验收，`--budget-seconds` 不限制代码执行时间。**运行后与论文／作者宣称的数据比较尚未接入当前流程**；代码运行完成不代表论文数值复现成功。
+当前流程已移除论文身份、Agent 输出和实验协议等审核关卡，也不执行独立数值验收与参数优化。旧的审核／优化参数仅作调用兼容，`author_execution_only=False` 不会重新启用数值验收，`--budget-seconds` 不限制代码执行时间。PDF 作者仓库流程在作者命令完成后，使用已配置的模型从原 PDF 中定位对应指标，经引文和实测来源校验后展示数值差值、实验设置与比较限制，并保存 `author_claim_comparison.json`。该比较使用作者输出，尚未独立复算；参考值缺失、设置不一致或模型调用失败均不改变代码完成状态。固定实验预设仍无需 LLM API。**代码运行完成或达到比较参考值，均不代表论文数值复现成功。**
 
 ## 固定实验预设
 
@@ -175,23 +289,25 @@ python scripts/reproduce_repository.py --profile dlinear_etth1_reference --prepa
 # SIREN / Neural ODE 可单独准备环境，不训练
 python scripts/reproduce_repository.py --profile siren_camera_quick --prepare-environment
 
-# 使用已有代码、数据及依赖缓存；缺失时失败
+# 使用已有代码、数据及可用安装资源；缺失时失败，不能依赖上次运行的实验环境
 python scripts/reproduce_repository.py --profile neural_ode_spiral --offline
 ```
 
-首次准备环境会下载依赖，环境就绪不代表训练完成。各实验有独立预算，例如 DLinear 完整训练命令为 1800 秒、快速诊断为 600 秒；更完整的来源与参数见 [预设定义](src/repository_profiles.py)、[方法实验定义](src/method_profiles.py)和 [ReZero 定义](src/rezero_profiles.py)。
+首次准备环境会下载依赖，环境就绪不代表训练完成。`--prepare-environment` 保存准备结果后也会释放本次环境，下一次运行需要重新安装依赖。作者命令和固定预设不设执行时间上限；更完整的来源与参数见 [预设定义](src/repository_profiles.py)、[方法实验定义](src/method_profiles.py)和 [ReZero 定义](src/rezero_profiles.py)。
 
 ## 依赖与文件管理
 
 ### 应用依赖与实验依赖
 
 - [requirements.txt](requirements.txt) 统一维护网页和主进程依赖；[requirements-test.txt](requirements-test.txt) 引用它并增加 pytest、matplotlib。
-- PyTorch 等论文依赖按实验安装到托管目录。作者仓库缓存按 Python ABI、系统、架构和依赖清单区分，已就绪的相同环境可以复用。
-- 当前作者仓库／预设入口关闭了缓存健康检查，**尚未默认启用原生健康检查、增量包共享与安装前自动回收**。这些保留实现的适用条件见 [依赖环境管理](docs/dependency_management.md)；需要释放空间时可在历史页或 CLI 手动回收。
+- PyTorch 等论文依赖按实验安装到托管目录，同一依赖根最多使用一套实验环境及补装包。报告和结构化结果保存后自动释放；切换依赖清单或训练 Python 前先清理上一套环境。
+- 作者仓库入口在安装后检查依赖版本和导入；固定预设仍按各自配置决定是否启用健康检查。自动释放不依赖健康检查开关、容量或缓存年龄。历史缓存及单独调用底层执行器的维护策略见 [依赖环境管理](docs/dependency_management.md)。
 
 ### 数据目录
 
 默认数据根是项目目录下的 `data/`，不随启动时的工作目录改变。常用目录如下：
+
+代码获取共用按仓库 URL 与完整 commit 区分的 `repository_cache/` 源码缓存。通用资源获取每次导出到独立的 `repos/<paper_id>/workspaces/<运行ID>/repo/`；预设和 PDF 作者执行使用各自的独立运行目录。指定版本无法获取时停止使用该仓库，显式固定版本的通用任务也会停止后续执行；未指定版本时先将远端 HEAD 解析为完整 commit。报告和资源清单记录实际版本、源码归档及逐文件哈希，旧实验的修改和产物不会带入下一次运行。
 
 | 目录 | 内容 |
 | --- | --- |
@@ -199,7 +315,7 @@ python scripts/reproduce_repository.py --profile neural_ode_spiral --offline
 | `reports/`、`logs/`、`experiment_ledger/` | 报告、审计日志与实验账本 |
 | `runtime/` | 网页后台进度及运行临时文件 |
 | `repos/`、`datasets/`、`manifests/` | 缓存代码、数据和资源清单 |
-| `deps/` | 隔离依赖缓存 |
+| `deps/` | 本次实验的隔离依赖与安装临时文件，报告保存后释放 |
 | `archive/` | 通过资源 CLI 创建的归档 |
 
 可在启动前设置目录和清理参数：
@@ -221,7 +337,7 @@ $env:AUTOREPRO_DEPS_ROOT = "E:\AutoReproducer-deps"
 
 macOS/Linux 使用 `export AUTOREPRO_DATA_ROOT="/绝对路径"`。修改配置只改变后续读写位置，不会迁移已有文件；需要完整迁移时，先停止任务，再复制数据目录及独立配置的依赖目录。
 
-论文运行环境默认自动释放：同一依赖根的任务串行使用一套实验依赖，报告和结构化结果保存后删除论文包、补装包及托管下载缓存；异常和中断也执行清理。启动下一次任务前先清除遗留环境，清理失败则停止创建新环境。应用自身的 Python 与生产依赖保留，报告、图表和日志保留。详见 [依赖环境管理](docs/dependency_management.md)。
+论文运行环境默认自动释放：同一依赖根的任务串行使用一套实验依赖，报告和结构化结果保存后删除论文包、补装包、托管训练 Python 及其下载缓存；异常和中断也执行清理。启动下一次任务前先清除遗留环境，清理失败则停止创建新环境。应用自身的 Python 与生产依赖保留，报告、图表和日志保留。详见 [依赖环境管理](docs/dependency_management.md)。
 
 ### 查看与清理
 
@@ -232,7 +348,19 @@ python scripts/resource_cli.py deps-prune          # 仅预览依赖回收计划
 python scripts/resource_cli.py deps-prune --yes    # 执行依赖回收
 ```
 
-`deps-prune` 用于手动处理历史缓存，默认按 20 GiB 容量目标、2 GiB 磁盘余量及 30 天未使用时间生成计划；活动任务持有的缓存和仍被引用的基础环境受到保护。资源 CLI 的 `--data-root` 应放在子命令前，例如：
+完整复现任务按上述规则在报告保存后释放环境，不保留最近使用的实验依赖。下面的容量与保留策略用于历史缓存、手动 `deps-prune` 和单独调用底层依赖执行器时的维护。底层执行器取得缓存锁、安装前及安装／执行结束时均会维护，缓存命中也会触发，且不依赖健康检查开关。统计覆盖各 Python／平台目录和增量环境，保护在用环境及完整基础环境引用链。
+
+| 配置 | 默认值 | 含义 |
+| --- | --- | --- |
+| `AUTOREPRO_DEPS_QUOTA_GB` | 20 | 持久依赖缓存容量目标，GiB |
+| `AUTOREPRO_DEPS_MIN_FREE_GB` | 2 | 缓存所在磁盘最低余量，GiB |
+| `AUTOREPRO_DEPS_INSTALL_RESERVE_GB` | 2 | 新安装下载、解压和复制的额外空间预留，GiB；这是可配置策略，不是包体积预测 |
+| `AUTOREPRO_DEPS_KEEP_DAYS` | 30 | 闲置保留天数 |
+| `AUTOREPRO_DEPS_KEEP_RECENT` | 2 | 保护最近使用的就绪环境数；设为 0 可取消这项保护 |
+
+pip 下载、解压和下载缓存统一放在依赖根的 `.pip-temporary/` 所属目录，安装子进程返回并完成清理后释放。单独调用底层执行器时，异常终止的安装临时目录在后续维护中检查归属和锁，满 24 小时后回收；完整复现入口还会在取得独占锁后清理遗留实验环境。不会删除其他应用的系统临时文件。安装前要求磁盘余量达到最低余量与额外安装预留之和，大型 CUDA 环境可调高预留。论文、作者源码、数据、模型、报告和训练日志沿用各自的保留策略。
+
+`deps-prune` 使用同一保留策略，默认仅预览，加 `--yes` 才删除；可用 `--keep-recent 0` 取消最近环境保护。维护记录列出删除／保留原因、文件字节数和维护前后磁盘余量；在用、被引用或最近保留的环境使容量仍超限时会明确记录原因，CLI 返回 2。历史记录页显示容量目标、当前磁盘余量和最近维护结果。资源 CLI 的 `--data-root` 应放在子命令前，例如：
 
 ```bash
 python scripts/resource_cli.py --data-root E:/AutoReproducer-data status

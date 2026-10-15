@@ -100,7 +100,7 @@ def test_requirements_switch_removes_old_environment_and_its_heal_packages(root)
         payload(root / "heal-current")
         lifecycle.select_dependency_environment(root, second)
         assert (root / "heal-current").exists()
-        assert [p.name for p in root.iterdir() if p.is_dir()] == ["heal-current", "second"]
+        assert {p.name for p in root.iterdir() if p.is_dir()} == {"heal-current", "second"}
 
 
 def test_release_failure_is_visible_and_blocks_the_next_run(root, monkeypatch):

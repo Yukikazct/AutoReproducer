@@ -1,5 +1,6 @@
 """Real timeout ownership at the preset dependency boundary; no pip/network."""
 import subprocess
+from pathlib import Path
 import sys
 import time
 from unittest.mock import Mock
@@ -91,13 +92,64 @@ def test_owned_timeout_output_retains_only_bounded_stream_tails():
         assert len(output) <= 128 + len("[earlier output omitted]\n")
 
 
-def test_generic_dependency_command_preserves_existing_runner(monkeypatch, tmp_path):
+def test_non_pip_dependency_command_preserves_existing_runner(monkeypatch, tmp_path):
     instance = executor(tmp_path)
     instance.env_config["auto_prepare"] = False
-    command = ["python", "-m", "pip"]
+    command = ["python", "-I", "probe.py"]
     result = subprocess.CompletedProcess(command, 0, "done", "")
     runner = Mock(return_value=result)
     monkeypatch.setattr(ce.subprocess, "run", runner)
     assert instance._run_dependency_command(command, timeout=300, env={"PIP_USER": "0"}) is result
     runner.assert_called_once_with(command, capture_output=True, text=True, encoding="utf-8",
                                    errors="replace", timeout=300, env={"PIP_USER": "0"})
+
+
+def test_pip_owns_processes_and_temporaries_without_auto_prepare(monkeypatch, tmp_path):
+    instance = executor(tmp_path)
+    instance.env_config['auto_prepare'] = False
+    command = ['python', '-m', 'pip']
+    result = subprocess.CompletedProcess(command, 0, 'done', '')
+    run = Mock(return_value=result)
+    monkeypatch.setattr(runtime, 'run_owned_process', run)
+    monkeypatch.setattr(lifecycle, 'validate_windows_venv', lambda: None)
+    assert instance._run_dependency_command(command, timeout=300, env={'PIP_USER': '0'}) is result
+    env = run.call_args.kwargs['env']
+    assert env['PIP_USER'] == '0' and env['TMPDIR'] == env['TEMP'] == env['TMP']
+    assert not Path(env['TMPDIR']).exists()
+    run.assert_called_once_with(command, timeout_s=300, env=env)
+
+
+def test_real_pip_timeout_reaps_descendants_before_scratch_cleanup(monkeypatch, tmp_path):
+    instance = executor(tmp_path)
+    instance.env_config['auto_prepare'] = False
+    scratch_file = tmp_path / 'scratch-path.txt'
+    started_file = tmp_path / 'child-started.txt'
+    survivor = tmp_path / 'surviving-child.txt'
+    child = (
+        'import os,time;from pathlib import Path;'
+        f'Path({str(started_file)!r}).write_text("started");'
+        'time.sleep(1.6);'
+        'work=Path(os.environ["TMPDIR"]);work.mkdir(parents=True,exist_ok=True);'
+        '(work/"late-copy").write_text("orphan");'
+        f'Path({str(survivor)!r}).write_text("orphan")')
+    program = (
+        'import os,subprocess,sys,time;from pathlib import Path;'
+        'work=Path(os.environ["TMPDIR"]);'
+        f'Path({str(scratch_file)!r}).write_text(str(work));'
+        '(work/"unpacked-wheel").write_bytes(b"x"*3000);'
+        f'subprocess.Popen([sys.executable,"-I","-c",{child!r}]);'
+        'print("unpacking",flush=True);time.sleep(10)')
+    real_owned = runtime.run_owned_process
+    monkeypatch.setattr(runtime, 'run_owned_process', lambda argv, **kwargs:
+                        real_owned([sys.executable, '-I', '-c', program], **kwargs))
+    with pytest.raises(subprocess.TimeoutExpired) as captured:
+        instance._run_dependency_command([sys.executable, '-m', 'pip', 'install', 'fixture'],
+                                         timeout=.8, env=instance._pip_env())
+    assert 'unpacking' in captured.value.stdout
+    assert started_file.exists()
+    scratch = Path(scratch_file.read_text('utf-8'))
+    assert not scratch.exists()
+    receipt, = instance.env_config['dependency_temporary_files']
+    assert receipt['status'] == 'removed' and receipt['freed_bytes'] >= 3000
+    time.sleep(1.9)
+    assert not scratch.exists() and not survivor.exists()

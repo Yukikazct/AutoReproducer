@@ -39,8 +39,11 @@ def _write_json(path, value):
             temporary.unlink(missing_ok=True)
 
 
-def active_environment(root):
-    return getattr(_local, "runs", {}).get(_key(root))
+def active_environment(root=None):
+    runs = getattr(_local, "runs", {})
+    if root is None:
+        return next(reversed(runs.values()), None)
+    return runs.get(_key(root))
 
 
 def release_dependencies(root, *, keep=()):
@@ -61,7 +64,8 @@ def release_dependencies(root, *, keep=()):
 
     def visit(parent):
         for path in sorted(parent.iterdir()):
-            if path.name in {".autorepro-cache.lock", ".autorepro-docker.json"} and parent == root:
+            if path.name in {".autorepro-cache.lock", ".autorepro-docker.json",
+                             ".autorepro-training.json"} and parent == root:
                 continue  # Keep the lock inode stable for queued processes.
             name = path.relative_to(root).as_posix()
             try:
@@ -108,8 +112,16 @@ def select_dependency_environment(root, directory):
 def _release_environment(root):
     from src.runtime_preparation import release_runtime_downloads
     from src.docker_environment import release_owned_docker
+    from src.training_environment import release_training_environments
 
     receipt = release_dependencies(root)
+    training = release_training_environments(root)
+    receipt["training_python"] = training
+    receipt["freed_bytes"] += training["freed_bytes"]
+    if training["errors"]:
+        receipt["status"] = "error"
+        receipt["errors"].extend(training["errors"])
+        receipt["remaining"].append(".autorepro-training.json")
     docker = release_owned_docker(root)
     receipt["docker"] = docker
     if docker["errors"]:
@@ -150,6 +162,7 @@ class _EnvironmentRun:
         self.root, self.result, self.selected = root, None, None
         self.run_dir = None
         self.replacements = []
+        self.training_locks = {}
 
     def record(self, receipt):
         result = self.result if isinstance(self.result, dict) else None
@@ -171,6 +184,10 @@ class _EnvironmentRun:
                 saved["data"]["environment_cleanup"] = receipt
                 if result is not None:
                     saved["error"] = result.get("error")
+                    if receipt["status"] == "error":
+                        saved["state"] = "ERROR"
+                elif receipt["status"] == "error":
+                    saved["state"] = "ERROR"
                 _write_json(path, saved)
             status_path = workspace_path(directory, "run_status.json", "run status")
             if status_path.is_file():
@@ -243,7 +260,11 @@ def managed_environment(root=None):
                 failure.add_note("运行环境自动释放失败：" + str(exc))
             finally:
                 _INSTALLED_DEPS.clear()
-                runs.pop(_key(root), None)
+                try:
+                    for lock in lease.training_locks.values():
+                        lock.release()
+                finally:
+                    runs.pop(_key(root), None)
 
 
 def release_run_environment(function):

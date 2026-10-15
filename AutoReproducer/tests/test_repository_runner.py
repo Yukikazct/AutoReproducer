@@ -31,6 +31,27 @@ def step(identifier, *argv, cwd=".", timeout=3, env=None, **declared):
             "timeout_s": timeout, "env": env or {}, **declared}
 
 
+def test_prepared_environment_lookup_uses_the_selected_training_interpreter(runner, tmp_path, monkeypatch):
+    root = tmp_path / "deps"
+    monkeypatch.setattr(runner_module, "DEPS_CACHE_ROOT", root)
+    monkeypatch.setattr(runner_module, "runtime_fingerprint",
+                        lambda executable=None: "author-runtime" if executable else "app-runtime")
+    requirements = "author-package==1"
+    cached = root / "repository" / "author-runtime" / runner_module.reqs_digest(requirements)
+    cached.mkdir(parents=True)
+    (cached / ".ready").write_text("ready", encoding="utf-8")
+    runner.executor._check_local_dependency_health = Mock(return_value=None)
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+    result = runner.run(workspace, [step("train", "-c", "print('AUTHOR_READY')")], {
+        "requirements_txt": requirements, "require_prepared": True,
+        "python_executable": sys.executable, "runtime_fingerprint": "author-runtime"})
+    assert result["success"], result["final"]["stderr"]
+    assert result["environment"]["dependencies_path"] == str(cached)
+    assert "AUTHOR_READY" in result["final"]["stdout"]
+    runner.executor._ensure_local_deps.assert_not_called()
+
+
 def test_multiple_files_import_and_nested_cwd_are_preserved(runner, tmp_path):
     repo = tmp_path / "repo"
     nested = repo / "experiment"

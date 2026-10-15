@@ -146,7 +146,8 @@ def test_reconnect_button_recovers_older_tasks_without_a_bookmark(live_app):
     app.button(key="resume_progress").click().run()
     assert not app.exception
     assert app.session_state["progress_file"] == str(path)
-    assert app.query_params["run"] == path.name
+    # AppTest may normalize values written through st.query_params to lists.
+    assert app.query_params["run"] in (path.name, [path.name])
     assert app.session_state["running"] is True
     start.assert_not_called()
 

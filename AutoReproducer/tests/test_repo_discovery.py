@@ -373,91 +373,76 @@ class TestResourceFinderFusion:
 # ---------------- fetch_code revision pin + 溯源标记 ----------------
 
 class TestFetchCodePin:
-    def _fake_run_recorder(self):
-        calls = []
+    def _fake_snapshot(self, tmp_path, monkeypatch):
+        from src import repository_reproduction as reproduction
 
-        def fake_run(cmd, capture_output=None, text=None, timeout=None,
-                     **kwargs):
-            calls.append(list(cmd))
-            if "clone" in cmd:
-                return _FakeProc(0)
-            if "checkout" in cmd:
-                return _FakeProc(0)
-            if "fetch" in cmd:
-                return _FakeProc(0, "", "fetched")
-            if "rev-parse" in cmd:
-                # 第一次 HEAD=deadbeef（pin 前），第二次 cafebabe（pin 后）
-                head = "cafebabe" if len(calls) > 2 else "deadbeef"
-                return _FakeProc(0, head + "\n")
-            return _FakeProc(0)
-        return calls, fake_run
+        resolved = "a" * 40
+        requests = []
 
-    def test_clone_pins_revision_and_writes_marker(self, tmp_path,
-                                                   monkeypatch):
-        calls, fake_run = self._fake_run_recorder()
-        monkeypatch.setattr(subprocess, "run", fake_run)
-        rm = ResourceManager(data_root=str(tmp_path / "data"))
-        info = rm.fetch_code(
-            "p1", "https://github.com/owner/repo",
-            target=str(tmp_path / "repo"), revision="abcd1234")
+        def resolve(root, url, revision=""):
+            requests.append((url, revision))
+            return resolved
 
+        def export(root, profile, destination, **kwargs):
+            destination.mkdir(parents=True)
+            (destination / "run.py").write_text("print(1)", encoding="utf-8")
+            assert profile["repository"]["revision"] == resolved
+            return {"url": profile["repository"]["url"], "path": str(destination),
+                    "resolved_sha": resolved, "acquisition": "cloned",
+                    "cache_path": str(tmp_path / "source-cache"), "archive_sha256": "b" * 64,
+                    "files": {"run.py": "c" * 64}}
+
+        monkeypatch.setattr(reproduction, "resolve_repository_revision", resolve)
+        monkeypatch.setattr(reproduction, "export_repository", export)
+        return requests, resolved
+
+    def test_clone_pins_revision_and_writes_marker(self, tmp_path, monkeypatch):
+        requests, resolved = self._fake_snapshot(tmp_path, monkeypatch)
+        manager = ResourceManager(data_root=str(tmp_path / "data"))
+        info = manager.fetch_code("p1", "https://github.com/owner/repo",
+                                  target=str(tmp_path / "repo"), revision="abcd1234")
+        assert requests == [("https://github.com/owner/repo", "abcd1234")]
         assert info["state"] == "cloned"
-        assert info["commit"] == "cafebabe"       # pin 后 HEAD
-        assert info["revision"] == "abcd1234"
-        assert "pinned revision abcd1234" in info["detail"]
-
-        cmds = [c for c in calls if "clone" in c]
-        assert cmds[0][:5] == ["git", "clone", "--depth", "1",
-                               "--single-branch"]
-
-        marker = tmp_path / "repo" / ".autorepro-repo-source.json"
-        assert marker.exists()
-        payload = json.loads(marker.read_text(encoding="utf-8"))
+        assert info["commit"] == resolved
+        payload = json.loads((tmp_path / "repo" / ".autorepro-repo-source.json").read_text(encoding="utf-8"))
         assert payload["repo_url"] == "https://github.com/owner/repo"
-        assert payload["commit"] == "cafebabe"
         assert payload["revision"] == "abcd1234"
-        assert payload["acquisition"] == "cloned"
+        assert payload["commit"] == resolved
+        assert payload["archive_sha256"] == "b" * 64
 
-    def test_pin_failure_degrades_to_head(self, tmp_path, monkeypatch):
-        calls, fake_run = self._fake_run_recorder()
-        real_fetch = fake_run
+    def test_pin_failure_returns_no_usable_source(self, tmp_path, monkeypatch):
+        from src import repository_reproduction as reproduction
+        self._fake_snapshot(tmp_path, monkeypatch)
 
-        def fake_run_fail(cmd, **kwargs):
-            if "fetch" in cmd:
-                return _FakeProc(1, "", "unknown revision abcd1234")
-            return real_fetch(cmd, **kwargs)
+        def fail(*args, **kwargs):
+            raise RuntimeError("unknown requested revision")
 
-        monkeypatch.setattr(subprocess, "run", fake_run_fail)
-        rm = ResourceManager(data_root=str(tmp_path / "data"))
-        info = rm.fetch_code(
-            "p2", "https://github.com/owner/repo",
-            target=str(tmp_path / "repo2"), revision="abcd1234")
+        monkeypatch.setattr(reproduction, "export_repository", fail)
+        manager = ResourceManager(data_root=str(tmp_path / "data"))
+        info = manager.fetch_code("p2", "https://github.com/owner/repo", revision="abcd1234")
+        assert info["state"] == "pin-failed"
+        assert info["path"] == info["commit"] == ""
+        assert "unknown requested revision" in info["detail"]
+
+    def test_existing_explicit_target_is_preserved(self, tmp_path, monkeypatch):
+        requests, _ = self._fake_snapshot(tmp_path, monkeypatch)
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / "run.py").write_text("original", encoding="utf-8")
+        manager = ResourceManager(data_root=str(tmp_path / "data"))
+        info = manager.fetch_code("p3", "https://github.com/owner/repo",
+                                  target=str(repo), revision="beef1234")
+        assert info["state"] == "pin-failed"
+        assert info["path"] == ""
+        assert not requests
+        assert (repo / "run.py").read_text(encoding="utf-8") == "original"
+        assert not (repo / ".autorepro-repo-source.json").exists()
+
+    def test_no_revision_is_resolved_before_export(self, tmp_path, monkeypatch):
+        requests, resolved = self._fake_snapshot(tmp_path, monkeypatch)
+        manager = ResourceManager(data_root=str(tmp_path / "data"))
+        info = manager.fetch_code("p4", "https://github.com/owner/repo")
+        assert requests == [("https://github.com/owner/repo", "")]
         assert info["state"] == "cloned"
-        assert info["commit"] == "deadbeef"       # 保留 HEAD
-        assert "pin 失败" in info["detail"]
-
-    def test_cached_reuse_writes_marker(self, tmp_path, monkeypatch):
-        _, fake_run = self._fake_run_recorder()
-        monkeypatch.setattr(subprocess, "run", fake_run)
-        repo = tmp_path / "repo3"
-        repo.mkdir(parents=True)
-        (repo / "run.py").write_text("print(1)", encoding="utf-8")
-        rm = ResourceManager(data_root=str(tmp_path / "data"))
-        info = rm.fetch_code("p3", "https://github.com/owner/repo",
-                             target=str(repo), revision="beef1234")
-        assert info["state"] == "cached"
-        marker = repo / ".autorepro-repo-source.json"
-        assert marker.exists()
-        assert json.loads(marker.read_text(encoding="utf-8"))[
-            "acquisition"] == "cached"
-
-    def test_no_revision_skips_pin(self, tmp_path, monkeypatch):
-        calls, fake_run = self._fake_run_recorder()
-        monkeypatch.setattr(subprocess, "run", fake_run)
-        rm = ResourceManager(data_root=str(tmp_path / "data"))
-        info = rm.fetch_code("p4", "https://github.com/owner/repo",
-                             target=str(tmp_path / "repo4"))
-        assert info["state"] == "cloned"
-        assert info["commit"] == "deadbeef"
-        fetch_calls = [c for c in calls if "fetch" in c]
-        assert fetch_calls == []   # 未请求 pin 时不发 fetch
+        assert info["commit"] == resolved
+        assert info["revision"] == ""

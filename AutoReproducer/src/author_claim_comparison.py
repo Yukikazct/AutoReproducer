@@ -171,7 +171,11 @@ def compare_author_claims(llm, packet, plan, workspace, execution):
     result = {'status': 'unavailable', 'basis': 'author_output', 'relative_tolerance': TOLERANCE,
               'metric_records': records, 'parse_errors': errors, 'comparisons': [], 'citations': [],
               'reason': '未找到可与论文宣称配对的作者输出；代码运行结果不受影响。'}
-    if not records or llm is None or getattr(llm, 'mock_mode', False):
+    if not records:
+        result['reason'] = '作者输出中未识别到可比较的数值指标；代码运行结果不受影响。'
+        return result
+    if llm is None or getattr(llm, 'mock_mode', False):
+        result['reason'] = '未配置可用于论文指标对比的真实模型；保留实际指标，代码运行结果不受影响。'
         return result
     schema = """{citations:[{id,evidence_id}],comparisons:[{actual_id,
 reference:{name,value,unit:'percent|fraction|scalar',dataset,method,split:'test|validation|train',

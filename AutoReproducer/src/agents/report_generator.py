@@ -48,7 +48,9 @@ def _author_claim_comparison_lines(comparison):
              '本表使用作者程序输出，尚未独立复算。数值对比不影响代码完成状态。']
     rows = comparison.get('comparisons') or []
     if not rows:
-        return lines + ['实际输出中的指标保留在下方证据表；未将其他数据集或基线指标作为参考。', '']
+        note = ('实际输出中的指标保留在下方证据表；未将其他数据集或基线指标作为参考。'
+                if comparison.get('metric_records') else '作者输出中未识别到可比较的数值指标。')
+        return lines + [note, '']
     lines += ['', '| 指标 / 数据集 / 方法 | 论文宣称 | 作者运行输出 | 差值（实际 − 论文） | 结论 |',
               '| --- | --- | --- | --- | --- |']
     def value_cell(node):
@@ -617,6 +619,14 @@ class ReportGeneratorAgent(BaseAgent):
             lines += [f"- **协议说明**: {(spec.get('validation') or {}).get('note', '')}", ""]
             lines += [f"- **作者协议来源**: {(spec.get('validation') or {}).get('aggregation_source', '')}",
                       f"- **实现版本说明**: {(spec.get('validation') or {}).get('implementation_note', '')}", ""]
+        elif repository.get("resolved_sha"):
+            lines += ["### 固定源码获取记录",
+                      f"- **获取仓库**: {repository.get('url', '')}",
+                      f"- **请求版本**: `{repository.get('revision') or '远端 HEAD（获取时解析）'}`",
+                      f"- **固定源码版本**: `{repository['resolved_sha']}`",
+                      f"- **源码归档SHA-256**: `{repository.get('archive_sha256', '')}`",
+                      f"- **独立源码副本**: `{repository.get('path', '')}`",
+                      "- 此记录证明源码已获取；实际执行来源以执行记录为准。", ""]
         lines += _repository_analysis_lines(data)
         lines += _discovered_plan_lines(data)
 
@@ -627,6 +637,14 @@ class ReportGeneratorAgent(BaseAgent):
                   f"{len(_txt(env_config.get('requirements_txt')).splitlines())}"]
         if env_config.get("note"):
             lines.append(f"- **环境适配**: {env_config['note']}")
+        if data.get('training_python_attempts'):
+            lines += ['', '### 训练解释器尝试', '']
+            for chosen in data['training_python_attempts']:
+                conflict = chosen.get('selected_for') or {}
+                lines.append('- CPython ' + _markdown_text(str(chosen.get('python_version', '?')))
+                    + '：' + _markdown_text(str(chosen.get('source', '已选择')))
+                    + ('；根据实际请求包 ' + _markdown_text(str(conflict.get('package')))
+                       + ' 的 Requires-Python 约束切换' if conflict else ''))
         runtime_recovery = data.get("runtime_preparation") or {}
         prepared_env = execution.get("environment") or {}
         health_checks = prepared_env.get("dependency_health_attempts") or []
@@ -649,6 +667,19 @@ class ReportGeneratorAgent(BaseAgent):
                 lines.append('- 第 ' + str(repair['attempt']) + ' 轮：缺少 ' +
                     _markdown_text(repair['module']) + '，安装 ' + _markdown_text(repair['requirement']) +
                     ' 后重试；原失败日志保留在运行目录。')
+        if data.get('model_dependency_repairs'):
+            lines += ['', '### 模型建议并通过静态校验的依赖调整', '']
+            for repair in data['model_dependency_repairs']:
+                lines.append('- 第 ' + str(repair['attempt']) + ' 轮：'
+                    + _markdown_text(repair['previous']) + ' → '
+                    + _markdown_text(repair['requirement']) + '；仅调整项目推导版本，重新验证原命令。')
+        if data.get('failure_analyses'):
+            lines += ['', '### 执行失败分析', '']
+            for analysis in data['failure_analyses']:
+                lines.append('- ' + _markdown_text(str(analysis.get('failure_kind', 'execution_failure')))
+                    + '；动作：' + _markdown_text(str(analysis.get('action', 'blocked')))
+                    + '；' + _markdown_text(str(analysis.get('reason') or
+                        analysis.get('analysis_error') or '保留原始错误与所需条件')))
         if data.get('path_repair_attempts'):
             lines += ['', '### 根据运行报错修复数据目录', '']
             for repair in data['path_repair_attempts']:

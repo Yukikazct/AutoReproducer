@@ -236,20 +236,28 @@ def cmd_deps_prune(args) -> int:
     import json
     import math
     from src.dependency_cache import cache_guard, DependencyCacheBusy
-    from src.dependency_management import prune_cache
+    from src.dependency_management import prune_cache, write_maintenance
+    from src.dependency_temporary import reap_pip_temporary
     if (not math.isfinite(args.cache_gb) or args.cache_gb <= 0
-            or not math.isfinite(args.min_free_gb) or args.min_free_gb < 0 or args.keep_days < 0):
+            or not math.isfinite(args.min_free_gb) or args.min_free_gb < 0
+            or args.keep_days < 0 or args.keep_recent < 0):
         print('依赖缓存容量必须为正数，可用空间与保留天数不能为负数', file=sys.stderr)
         return 1
     root = Path(os.environ.get('AUTOREPRO_DEPS_ROOT') or
                 str(Path(args.data_root or os.environ.get('AUTOREPRO_DATA_ROOT') or _PROJECT_ROOT / 'data') / 'deps'))
     try:
         with cache_guard(root, cleanup=True):
+            temporary = reap_pip_temporary(root, dry_run=not args.yes)
             receipt = prune_cache(root, quota_bytes=int(args.cache_gb * 1024**3),
                                   min_free_bytes=int(args.min_free_gb * 1024**3),
-                                  keep_days=args.keep_days, dry_run=not args.yes)
+                                  keep_days=args.keep_days, keep_recent=args.keep_recent, dry_run=not args.yes)
+            receipt.update(phase='manual', temporary_files=temporary)
+            if args.yes:
+                write_maintenance(root, receipt)
         print(json.dumps(receipt, ensure_ascii=False, indent=2))
-        return 0 if not receipt['errors'] else 1
+        if receipt['errors'] or temporary['errors']:
+            return 1
+        return 0 if receipt['quota_satisfied'] and receipt['space_satisfied'] else 2
     except DependencyCacheBusy as error:
         print(str(error), file=sys.stderr)
         return 2
@@ -272,7 +280,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_deps = sub.add_parser('deps-prune', help='查看或执行依赖缓存配额和空间回收')
     p_deps.add_argument('--cache-gb', type=float, default=float(os.environ.get('AUTOREPRO_DEPS_QUOTA_GB', '20')))
     p_deps.add_argument('--min-free-gb', type=float, default=float(os.environ.get('AUTOREPRO_DEPS_MIN_FREE_GB', '2')))
-    p_deps.add_argument('--keep-days', type=int, default=30)
+    p_deps.add_argument('--keep-days', type=int, default=int(os.environ.get('AUTOREPRO_DEPS_KEEP_DAYS', '30')))
+    p_deps.add_argument('--keep-recent', type=int, default=int(os.environ.get('AUTOREPRO_DEPS_KEEP_RECENT', '2')))
     p_deps.add_argument('--yes', action='store_true', help='执行回收；默认仅显示计划')
     p_resources = sub.add_parser("resources", help="查看本地资源清单")
     p_resources.add_argument("--json", action="store_true")

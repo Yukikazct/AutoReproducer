@@ -71,6 +71,7 @@ from frontend.history_manager import (
     cleanup_runtime,
     delete_deps_cache,
     cleanup_deps_cache,
+    dependency_maintenance_status,
     list_resource_events,
     format_size,
     get_session_detail,
@@ -934,6 +935,36 @@ with tab1:
                 st.info("流水线已结束，请查看报告中的复现结论。")
         elif result.get("state") == "ERROR":
             st.error(f"流程出错: {result.get('error', '未知错误')}")
+            failure_data = result.get('data') or {}
+            attempts = ((failure_data.get('plan_rejection') or {}).get('candidate_attempts')
+                        or failure_data.get('planning_trace') or [])
+            attempts = [item for item in attempts if item.get('repository_url')]
+            analyses = failure_data.get('failure_analyses') or []
+            install = (((failure_data.get('environment_preparation') or {})
+                        .get('effective_env_config') or {}).get('dependency_install_attempts') or [])
+            if attempts or install or analyses:
+                with st.expander('查看自动规划与环境修复记录'):
+                    if attempts:
+                        st.caption('已检查的仓库及阻塞原因')
+                        st.dataframe([{'仓库': item.get('repository_url'),
+                                       '版本': item.get('revision', ''),
+                                       '结果': item.get('planning_status', '获取失败'),
+                                       '原因': str(item.get('error', ''))[:600]}
+                                      for item in attempts], hide_index=True)
+                    if install:
+                        st.caption('依赖下载来源及失败类别')
+                        st.dataframe([{'来源': item.get('index_url'),
+                                       '成功': item.get('success'),
+                                       '类别': item.get('failure_kind') or '',
+                                       '诊断': str(item.get('diagnostic', ''))[:600]}
+                                      for item in install], hide_index=True)
+                    if analyses:
+                        st.caption('LLM 失败分析与已验证的修复动作')
+                        st.dataframe([{'类别': item.get('failure_kind'),
+                                       '解释器': item.get('python_version') or '',
+                                       '动作': item.get('action'),
+                                       '原因': str(item.get('reason') or item.get('analysis_error') or '')[:600]}
+                                      for item in analyses], hide_index=True)
 
 # ===== Tab 2: 复现报告 =====
 with tab2:
@@ -1162,7 +1193,19 @@ def render_history():
                 use_container_width=True, hide_index=True)
             st.caption(f"{len(deps_items)} 个目录 · 合计 {format_size(total_deps)}")
             st.caption('增量环境只保存缺少的包，基础环境按 Python 和 CPU／CUDA 类型隔离。'
-                       '仍被引用或正在运行的环境会保留；新安装前自动检查缓存容量与可用空间。')
+                       '仍被引用或正在运行的环境会保留；缓存使用前后和新安装前均自动维护。')
+            try:
+                maintenance = dependency_maintenance_status()
+                policy, latest = maintenance['policy'], maintenance['latest']
+                free = format_size(maintenance['free_bytes']) if maintenance['free_bytes'] is not None else '未测量'
+                st.caption(f"容量目标 {format_size(policy['quota_bytes'])} · 磁盘余量 {free} · "
+                           f"保留最近 {policy['keep_recent']} 个环境 · 闲置 {policy['keep_days']} 天后回收")
+                if latest:
+                    st.caption('最近维护：' + latest.get('reason', '已完成') +
+                               f" 回收环境文件 {format_size(latest.get('freed_bytes', 0))}，" +
+                               f"安装临时文件 {format_size(latest.get('temporary_files', {}).get('freed_bytes', 0))}。")
+            except (OSError, ValueError) as error:
+                st.error(f'读取依赖维护状态失败: {error}')
 
             deps_keep = st.slider("清理多少天未使用的依赖缓存", 1, 180, 30,
                                   key="deps_keep_days")

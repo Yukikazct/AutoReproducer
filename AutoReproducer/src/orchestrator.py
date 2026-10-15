@@ -393,8 +393,8 @@ class Orchestrator:
     def _fetch_resources(self) -> None:
         """FIND_RESOURCES 后按需懒加载代码/数据集/权重到 L0。
 
-        只拉当前任务最小集（代码仓库 + smoke 级数据集子集）；'未找到'
-        等占位引用归一化为空。任何 fetch 异常仅记录 WARNING，不阻断流水线。
+        只拉当前任务最小集；占位引用归一化为空。显式固定版本获取失败
+        必须停止后续执行，其余可选资源的下载失败只记录 WARNING。
         """
         rm = self.resource_manager
         resources = self.data.get("resources", {}) or {}
@@ -418,16 +418,26 @@ class Orchestrator:
                  or (self.data.get("storage") or {}).get(
                      "repro_level", "smoke")) or "smoke"
         try:
+            code = rm.fetch_code(paper_id, code_url, revision=pinned_revision)
+        except Exception as exc:
+            if code_url and pinned_revision:
+                raise RuntimeError(f"固定仓库版本获取失败，停止执行：{str(exc)[-200:]}") from exc
+            self.logger.log("Orchestrator", "fetch_resources", "WARNING",
+                            f"资源拉取失败，不阻断流水线: {str(exc)[-200:]}")
+            return
+        self.data.setdefault("storage", {})["fetched"] = {"code": code}
+        if code_url and pinned_revision and (not code.get("path") or not code.get("resolved_sha")):
+            raise RuntimeError("固定仓库版本获取失败，停止执行：" + code.get("detail", code.get("state", "")))
+        if code.get("resolved_sha") and code.get("path"):
+            self.data["repository"] = dict(code)
+        try:
             fetched = {
-                "code": rm.fetch_code(paper_id, code_url,
-                                      revision=pinned_revision),
+                "code": code,
                 "dataset": rm.fetch_dataset(paper_id, dataset_name,
                                             level=level),
                 "weights": rm.fetch_weights(paper_id, weights_ref),
             }
-            self.data.setdefault("storage", {})["fetched"] = {
-                k: {"path": v.get("path", ""), "state": v.get("state", "")}
-                for k, v in fetched.items()}
+            self.data["storage"]["fetched"] = fetched
         except Exception as exc:
             self.logger.log("Orchestrator", "fetch_resources", "WARNING",
                             f"资源拉取失败，不阻断流水线: {str(exc)[-200:]}")
@@ -452,7 +462,8 @@ class Orchestrator:
                     resources.get("dataset_url", "")),
                 weights_ref=self._clean_ref(
                     resources.get("weights_url") or
-                    resources.get("weights_ref", "")))
+                    resources.get("weights_ref", "")),
+                code_snapshot=(self.data.get("storage", {}).get("fetched") or {}).get("code"))
             path = rm.save_manifest(manifest)
             stats = rm.stats()
             storage = self.data.setdefault("storage", {})

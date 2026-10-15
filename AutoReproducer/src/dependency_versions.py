@@ -19,6 +19,7 @@ CPU_COMPATIBILITY_PINS = {
     "aiohttp": "3.10.10", "fsspec": "2024.10.0", "jinja2": "3.1.6",
     "psutil": "6.1.0", "pyparsing": "3.2.0",
     "optuna": "3.6.1", "deeprobust": "0.2.11", "ogb": "1.3.6",
+    "nbclient": "0.10.2", "nbformat": "5.10.4", "ipykernel": "6.29.5",
 }
 CUDA_COMPATIBILITY_PINS = {
     **{name: version for name, version in CPU_COMPATIBILITY_PINS.items() if name != "dgl"},

@@ -212,6 +212,8 @@ def test_concurrent_installers_wait_for_ready_and_install_once(root, tmp_path, m
 
     monkeypatch.setattr(ce, "cache_guard", observed_guard)
     monkeypatch.setattr(ce.subprocess, "run", pip)
+    monkeypatch.setattr(ce.CodeExecutorAgent, '_invoke_dependency_command',
+                        lambda instance, command, **kwargs: pip(command, **kwargs))
     first, second = [ce.CodeExecutorAgent(None, logger=Mock()) for _ in range(2)]
     for index, executor in enumerate((first, second)):
         executor.env_config = {"requirements_txt": "test-package==1"}
@@ -239,6 +241,7 @@ def test_self_heal_install_is_protected_and_cleanup_rechecks_current_recency(roo
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
     monkeypatch.setattr(ce.subprocess, "run", pip)
+    monkeypatch.setattr(executor, '_invoke_dependency_command', pip)
     assert executor._heal_install_local("requests") is None
     assert notices and "正在使用" in notices[0]
     stale = environment(root, "was-cold")

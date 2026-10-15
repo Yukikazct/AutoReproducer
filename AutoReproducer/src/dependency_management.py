@@ -5,6 +5,7 @@ import math
 import os
 import re
 import shutil
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -14,6 +15,47 @@ from packaging.utils import canonicalize_name
 
 from src.safety.paths import is_link, workspace_path
 from src.safety.files import directory_bytes, remove_tree
+
+
+def cache_policy():
+    """One policy for automatic maintenance, the history view and the CLI."""
+    values = {}
+    for name, variable, default in (
+            ('quota_bytes', 'AUTOREPRO_DEPS_QUOTA_GB', '20'),
+            ('min_free_bytes', 'AUTOREPRO_DEPS_MIN_FREE_GB', '2'),
+            ('install_reserve_bytes', 'AUTOREPRO_DEPS_INSTALL_RESERVE_GB', '2')):
+        value = float(os.environ.get(variable, default))
+        if not math.isfinite(value) or value < 0 or (name == 'quota_bytes' and value == 0):
+            raise ValueError(f'{variable} must be finite and non-negative (quota must be positive)')
+        values[name] = int(value * 1024**3)
+    for name, variable, default in (
+            ('keep_days', 'AUTOREPRO_DEPS_KEEP_DAYS', '30'),
+            ('keep_recent', 'AUTOREPRO_DEPS_KEEP_RECENT', '2')):
+        value = int(os.environ.get(variable, default))
+        if value < 0:
+            raise ValueError(f'{variable} must be non-negative')
+        values[name] = value
+    return values
+
+
+def read_maintenance(root):
+    try:
+        path = workspace_path(root, '.maintenance.json', 'dependency maintenance receipt', must_exist=True)
+        value = json.loads(path.read_text('utf-8'))
+        return value if isinstance(value, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def write_maintenance(root, receipt):
+    """Publish a complete receipt atomically while holding the cache lock."""
+    target = workspace_path(root, '.maintenance.json', 'dependency maintenance receipt')
+    staging = workspace_path(root, f'.maintenance-{uuid.uuid4().hex}.tmp', 'maintenance staging')
+    try:
+        staging.write_text(json.dumps(receipt, ensure_ascii=False, indent=2), encoding='utf-8')
+        staging.replace(target)
+    finally:
+        staging.unlink(missing_ok=True)
 
 
 def read_metadata(directory):
@@ -176,13 +218,17 @@ def choose_base(runtime_root, requirements, wheels):
 
 
 def prune_cache(root, *, protected=(), quota_bytes=20 * 1024**3,
-                min_free_bytes=2 * 1024**3, keep_days=30, dry_run=False):
+                min_free_bytes=2 * 1024**3, keep_days=30, keep_recent=0, dry_run=False):
     """Caller holds the root lock; referenced bases and active paths stay intact."""
     for name, value in (('quota_bytes', quota_bytes), ('min_free_bytes', min_free_bytes),
                         ('keep_days', keep_days)):
         if not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
             raise ValueError(f'{name} must be a finite non-negative number')
-    root = Path(root).absolute()
+    if type(keep_recent) is not int or keep_recent < 0:
+        raise ValueError('keep_recent must be a non-negative integer')
+    # Canonicalize parent aliases (e.g. macOS /var -> /private/var) only
+    # after rejecting a linked cache root itself.
+    root = workspace_path(root, '.', 'dependency cache root')
     root.mkdir(parents=True, exist_ok=True)
     protected = {Path(path).resolve() for path in protected}
     rows, errors, unmeasured = [], [], []
@@ -223,6 +269,9 @@ def prune_cache(root, *, protected=(), quota_bytes=20 * 1024**3,
                      'ready': (checked / '.ready').is_file(), 'base': base})
     remaining = {row['path']: row for row in rows}
     total, free = sum(row['bytes'] for row in rows), shutil.disk_usage(root).free
+    initial_bytes, initial_free = total, free
+    recent = {row['path'] for row in sorted(
+        (row for row in rows if row['ready']), key=lambda row: row['used'], reverse=True)[:keep_recent]}
     now = datetime.now(timezone.utc).timestamp()
     removed = []
     # Re-evaluate references after each child eviction, allowing its base to follow.
@@ -230,7 +279,7 @@ def prune_cache(root, *, protected=(), quota_bytes=20 * 1024**3,
         referenced = {row['base'] for row in remaining.values() if row['base']}
         eligible = []
         for row in remaining.values():
-            if row['path'] in protected or row['path'] in referenced:
+            if row['path'] in protected or row['path'] in referenced or row['path'] in recent:
                 continue
             age = now - row['used']
             cold = age > keep_days * 86400
@@ -250,11 +299,40 @@ def prune_cache(root, *, protected=(), quota_bytes=20 * 1024**3,
                 errors.append({'environment': row['path'].relative_to(root).as_posix(), 'reason': str(error)})
                 protected.add(row['path'])
                 continue
-        removed.append({'environment': row['path'].relative_to(root).as_posix(), 'bytes': row['bytes']})
+        reasons = []
+        if not row['ready']:
+            reasons.append('incomplete')
+        if now - row['used'] > keep_days * 86400:
+            reasons.append('idle_age')
+        if total > quota_bytes:
+            reasons.append('quota_pressure')
+        if free < min_free_bytes:
+            reasons.append('disk_pressure')
+        removed.append({'environment': row['path'].relative_to(root).as_posix(),
+                        'bytes': row['bytes'], 'reasons': reasons})
         remaining.pop(row['path'])
         total -= row['bytes']
         free = free + row['bytes'] if dry_run else shutil.disk_usage(root).free
-    return {'removed': removed, 'errors': errors, 'freed_bytes': sum(row['bytes'] for row in removed),
+    referenced = {row['base'] for row in remaining.values() if row['base']}
+    retained = []
+    for row in remaining.values():
+        reasons = []
+        if row['path'] in protected:
+            reasons.append('protected')
+        if row['path'] in referenced:
+            reasons.append('referenced_base')
+        if row['path'] in recent:
+            reasons.append('recent')
+        retained.append({'environment': row['path'].relative_to(root).as_posix(),
+                         'bytes': row['bytes'], 'reasons': reasons or ['within_policy']})
+    satisfied = not unmeasured and total <= quota_bytes and free >= min_free_bytes
+    return {'removed': removed, 'retained': retained, 'errors': errors,
+            'reason': '依赖缓存容量与磁盘余量符合策略。' if satisfied else
+                      '维护后仍未满足容量或磁盘余量目标；在用、最近保留、被引用或无法安全测量的环境未删除。',
+            'initial_bytes': initial_bytes, 'initial_free_bytes': initial_free,
+            'disk_free_change_bytes': free - initial_free if not dry_run else None,
+            'keep_days': keep_days, 'keep_recent': keep_recent,
+            'freed_bytes': sum(row['bytes'] for row in removed),
             'remaining_bytes': total, 'free_bytes': free, 'quota_bytes': quota_bytes,
             'min_free_bytes': min_free_bytes, 'dry_run': dry_run,
             'unmeasured_environments': unmeasured,
