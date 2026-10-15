@@ -28,6 +28,7 @@ from src.repository_adapters import get_adapter
 from src.execution_plan import build_plan, plan_step_ids
 from src.safety.paths import workspace_path
 from src.preset_downloads import atomic_cache_bytes, download_bytes
+from src.environment_lifecycle import bind_environment_run, release_run_environment
 
 
 def write_json(path, value):
@@ -459,6 +460,7 @@ class RepositoryReproduction:
         self.runner = runner
         self.llm = llm
 
+    @release_run_environment
     def run(self, input_data, on_event=None):
         if get_profile(input_data["experiment_profile"]).get("adapter_id") in {"siren", "neural_ode", "rezero"}:
             from src.method_reproduction import MethodReproduction
@@ -476,6 +478,7 @@ class RepositoryReproduction:
         public_packet = None
         run_dir = self.root / "runs" / f"repository_{uuid.uuid4().hex}"
         run_dir.mkdir(parents=True)
+        bind_environment_run(run_dir)
         data["run_dir"] = str(run_dir.resolve())
         data["report_path"] = str((run_dir / "report.md").resolve())
         if input_data.get("title_resolution"):

@@ -25,6 +25,7 @@ from src.repository_reproduction import export_repository, materialize_submodule
 from src.repository_runner import RepositoryRunner
 from src.runtime_preparation import run_owned_process
 from src.safety.paths import workspace_path
+from src.environment_lifecycle import bind_environment_run, release_run_environment
 
 
 _MAX_DATA_BYTES = 512 * 1024 * 1024
@@ -266,10 +267,12 @@ class DiscoveredRepositoryReproduction:
         self.runner = RepositoryRunner(logger=logger)
 
     @termination_signals()
+    @release_run_environment
     def run(self, request, on_event=None):
         from src.run_lifecycle import cancellation_signals
         run_dir = self.root / "runs" / f"repository_{uuid.uuid4().hex}"
         run_dir.mkdir(parents=True)
+        bind_environment_run(run_dir)
         status = {"status": "running", "pid": os.getpid(), "started_at": time.time()}
         with FileLock(str(run_dir / ".run.lock")), cancellation_signals():
             write_json(run_dir / "run_status.json", status)

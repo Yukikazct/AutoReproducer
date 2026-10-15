@@ -5,7 +5,6 @@ import math
 import os
 import re
 import shutil
-import stat
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -14,7 +13,7 @@ from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name
 
 from src.safety.paths import is_link, workspace_path
-from src.safety.files import remove_tree
+from src.safety.files import directory_bytes, remove_tree
 
 
 def read_metadata(directory):
@@ -174,22 +173,6 @@ def choose_base(runtime_root, requirements, wheels):
         return None
     chosen = max(choices)
     return chosen[3], {name: wheel for name, wheel in wheels.items() if name not in chosen[4]}, chosen[4]
-
-
-def directory_bytes(directory):
-    total, pending = 0, [Path(directory)]
-    while pending:
-        with os.scandir(pending.pop()) as entries:
-            for entry in entries:
-                info = entry.stat(follow_symlinks=False)
-                if (stat.S_ISLNK(info.st_mode) or getattr(info, 'st_file_attributes', 0)
-                        & getattr(stat, 'FILE_ATTRIBUTE_REPARSE_POINT', 0)):
-                    raise ValueError('dependency environment contains a symlink or junction')
-                if stat.S_ISDIR(info.st_mode):
-                    pending.append(Path(entry.path))
-                elif stat.S_ISREG(info.st_mode):
-                    total += info.st_size
-    return total
 
 
 def prune_cache(root, *, protected=(), quota_bytes=20 * 1024**3,

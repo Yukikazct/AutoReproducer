@@ -563,7 +563,7 @@ def prepare_runtime(project_root=None, *, cancel_check=None, progress_callback=N
     _emit(progress_callback, "discover", reason)
     root = workspace_path(project_root, f"data/runtime/{_machine_key(project_root)}", "runtime cache")
     root.mkdir(parents=True, exist_ok=True)
-    with _runtime_lock(root, cancel_check=cancel_check, deadline=deadline):
+    with _runtime_lock(root, cancel_check=cancel_check, deadline=deadline), _cleanup_failed_preparation(root):
         # Probe our cache before system paths so future runs are independent of
         # changes to the launching environment or the original Python install.
         environment = workspace_path(root, "app-venv", "managed app venv")
@@ -623,3 +623,82 @@ def prepare_runtime(project_root=None, *, cancel_check=None, progress_callback=N
 
 def _fingerprint(info):
     return f"cpython-{info['version'][0]}{info['version'][1]}-{info['platform']}-{info['bits']}"
+
+
+def release_runtime_downloads(project_root=None):
+    """Release bootstrap downloads after a run; retain the application runtime.
+
+    The preparation lock protects a concurrent runtime repair. Only the known
+    download paths in this machine's managed cache are eligible for removal.
+    """
+    project_root = Path(project_root or Path(__file__).resolve().parents[1]).resolve(strict=True)
+    root = workspace_path(project_root, f"data/runtime/{_machine_key(project_root)}", "runtime cache")
+    if not root.is_dir():
+        return {"status": "released", "removed": [], "freed_bytes": 0, "errors": []}
+    with _runtime_lock(root, cancel_check=None, deadline=time.monotonic() + 60):
+        return _release_runtime_downloads_locked(root)
+
+
+def _release_runtime_downloads_locked(root):
+    from src.safety.files import directory_bytes, remove_tree
+
+    removed, errors = [], []
+    for name in ("wheels", "pip-cache", f"python-{PYTHON_RELEASE}-amd64.exe",
+                 f"python-{PYTHON_RELEASE}-amd64.exe.part"):
+        try:
+            path = workspace_path(root, name, "runtime download release")
+            if path.is_dir():
+                size = directory_bytes(path)
+                remove_tree(path)
+            elif path.is_file():
+                size = path.stat().st_size
+                path.unlink()
+            else:
+                continue
+            removed.append({"path": name, "bytes": size})
+        except (OSError, ValueError) as exc:
+            errors.append({"path": name, "reason": str(exc)})
+    return {"status": "error" if errors else "released", "removed": removed,
+            "freed_bytes": sum(item["bytes"] for item in removed), "errors": errors}
+
+
+@contextmanager
+def _cleanup_failed_preparation(root):
+    try:
+        yield
+    except BaseException as failure:
+        try:
+            receipt = _release_runtime_downloads_locked(root)
+            if receipt["errors"]:
+                failure.add_note("运行环境准备失败后的下载清理失败：" + str(receipt["errors"]))
+        except Exception as exc:
+            failure.add_note("运行环境准备失败后的下载清理失败：" + str(exc))
+        raise
+
+
+def release_worker_environment(prepared):
+    """Reclaim dependencies only after the worker's process job has exited.
+
+    The recovery coordinator may lack filelock or other app dependencies.
+    In that case the verified interpreter performs the same locked cleanup.
+    """
+    try:
+        from src.environment_lifecycle import release_abandoned_environment
+        return release_abandoned_environment()
+    except ModuleNotFoundError:
+        project_root = Path(__file__).resolve().parents[1]
+        program = ("import sys,json;sys.path.insert(0,sys.argv[1]);"
+                   "from src.environment_lifecycle import release_abandoned_environment;"
+                   "print(json.dumps(release_abandoned_environment()))")
+        environment = _clean_environment()
+        for name in ("LLM_API_KEY", "GITHUB_TOKEN", "GH_TOKEN", "AUTOREPRO_GITHUB_TOKEN"):
+            environment.pop(name, None)
+        completed = run_owned_process([prepared.executable, "-I", "-c", program, str(project_root)],
+                                      env=environment, timeout_s=120)
+        if completed.returncode:
+            raise RuntimePreparationError("工作进程环境释放失败：" + safe_runtime_diagnostic(
+                completed.stderr or completed.stdout)[-1600:])
+        receipt = json.loads(completed.stdout)
+        if not isinstance(receipt, dict) or receipt.get("status") not in {"released", "in_use", "error"}:
+            raise RuntimePreparationError("工作进程环境释放未返回有效回执")
+        return receipt

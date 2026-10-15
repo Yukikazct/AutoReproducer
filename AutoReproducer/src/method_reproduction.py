@@ -16,6 +16,7 @@ from src.repository_runner import RepositoryRunner
 from src.dependency_cache import AUTO_PREPARATION_LOCK_TIMEOUT
 from src.process_lifecycle import termination_signals
 from src.optimization_recovery import recover_interrupted_optimizations, persist_interrupted_run
+from src.environment_lifecycle import bind_environment_run, release_run_environment
 
 
 def method_review_project_sources(workspace, manifest, *, environment_verified=False):
@@ -55,6 +56,7 @@ class MethodReproduction:
         self.runner, self.llm = runner or RepositoryRunner(logger=logger), llm
 
     @termination_signals()
+    @release_run_environment
     def run(self, request, on_event=None):
         from src.run_lifecycle import cancellation_signals
         request = {**request, "use_llm_review": False, "optimization_mode": "off", "enable_optimization": False}
@@ -79,6 +81,7 @@ class MethodReproduction:
         recover_interrupted_optimizations(self.root / "runs")
         run_dir = self.root / "runs" / f"repository_{uuid.uuid4().hex}"
         run_dir.mkdir(parents=True)
+        bind_environment_run(run_dir)
         status = {"status": "running", "pid": os.getpid(), "started_at": time.time()}
         with FileLock(str(run_dir / ".run.lock")), cancellation_signals():
             write_json(run_dir / "run_status.json", status)

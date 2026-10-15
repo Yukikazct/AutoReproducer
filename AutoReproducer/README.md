@@ -221,6 +221,8 @@ $env:AUTOREPRO_DEPS_ROOT = "E:\AutoReproducer-deps"
 
 macOS/Linux 使用 `export AUTOREPRO_DATA_ROOT="/绝对路径"`。修改配置只改变后续读写位置，不会迁移已有文件；需要完整迁移时，先停止任务，再复制数据目录及独立配置的依赖目录。
 
+论文运行环境默认自动释放：同一依赖根的任务串行使用一套实验依赖，报告和结构化结果保存后删除论文包、补装包及托管下载缓存；异常和中断也执行清理。启动下一次任务前先清除遗留环境，清理失败则停止创建新环境。应用自身的 Python 与生产依赖保留，报告、图表和日志保留。详见 [依赖环境管理](docs/dependency_management.md)。
+
 ### 查看与清理
 
 ```bash
@@ -230,7 +232,7 @@ python scripts/resource_cli.py deps-prune          # 仅预览依赖回收计划
 python scripts/resource_cli.py deps-prune --yes    # 执行依赖回收
 ```
 
-`deps-prune` 默认按 20 GiB 容量目标、2 GiB 磁盘余量及 30 天未使用时间生成计划；活动任务持有的缓存和仍被引用的基础环境受到保护。资源 CLI 的 `--data-root` 应放在子命令前，例如：
+`deps-prune` 用于手动处理历史缓存，默认按 20 GiB 容量目标、2 GiB 磁盘余量及 30 天未使用时间生成计划；活动任务持有的缓存和仍被引用的基础环境受到保护。资源 CLI 的 `--data-root` 应放在子命令前，例如：
 
 ```bash
 python scripts/resource_cli.py --data-root E:/AutoReproducer-data status
