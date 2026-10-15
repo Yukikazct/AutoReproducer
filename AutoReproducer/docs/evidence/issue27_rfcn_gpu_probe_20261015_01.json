@@ -1,0 +1,86 @@
+{
+  "state": "COMPLETED",
+  "data": {
+    "started_at": "2026-10-15T09:22:49.677742+00:00",
+    "kind": "gpu_runtime_probe",
+    "training_executed": false,
+    "used_existing_image": "python:3.11-slim",
+    "new_image_pulled": false,
+    "argv": [
+      "docker",
+      "run",
+      "--rm",
+      "--name",
+      "autorepro-rfcn-gpu-probe-724e43b45996",
+      "--label",
+      "autorepro.probe.owner=issue27-rfcn-gpu-preflight",
+      "--pull=never",
+      "--network=none",
+      "--read-only",
+      "--cap-drop=ALL",
+      "--security-opt=no-new-privileges",
+      "--gpus=all",
+      "-e",
+      "NVIDIA_DRIVER_CAPABILITIES=compute,utility",
+      "-e",
+      "NVIDIA_VISIBLE_DEVICES=all",
+      "python:3.11-slim",
+      "nvidia-smi",
+      "--query-gpu=name,memory.total,driver_version",
+      "--format=csv,noheader"
+    ],
+    "exit_code": 0,
+    "stdout": "NVIDIA GeForce RTX 4060 Laptop GPU, 8188 MiB, 595.97\n",
+    "stderr": "",
+    "owned_containers_released": true,
+    "environment_cleanup": {
+      "status": "released",
+      "removed": [],
+      "freed_bytes": 0,
+      "remaining": [],
+      "errors": [],
+      "training_python": {
+        "status": "released",
+        "removed": [],
+        "errors": [],
+        "freed_bytes": 0
+      },
+      "docker": {
+        "status": "released",
+        "removed": [],
+        "errors": []
+      },
+      "runtime_downloads": {
+        "status": "released",
+        "removed": [],
+        "freed_bytes": 0,
+        "errors": []
+      },
+      "before_run": {
+        "status": "released",
+        "removed": [],
+        "freed_bytes": 0,
+        "remaining": [],
+        "errors": [],
+        "training_python": {
+          "status": "released",
+          "removed": [],
+          "errors": [],
+          "freed_bytes": 0
+        },
+        "docker": {
+          "status": "released",
+          "removed": [],
+          "errors": []
+        },
+        "runtime_downloads": {
+          "status": "released",
+          "removed": [],
+          "freed_bytes": 0,
+          "errors": []
+        }
+      },
+      "replacements": []
+    }
+  }
+}

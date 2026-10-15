@@ -1,0 +1,8 @@
+{
+  "url": "https://cdimage.ubuntu.com/ubuntu-base/releases/22.04/release/ubuntu-base-22.04.5-base-amd64.tar.gz",
+  "checksums_url": "https://cdimage.ubuntu.com/ubuntu-base/releases/22.04/release/SHA256SUMS",
+  "sha256": "242cd8898b33ea806ef5f13b1076ed7c76f9f989d18384452f7166692438ff1a",
+  "checksum_matches_official_https_list": true,
+  "bytes": 29832285,
+  "ca_bundle_source": "preexisting python:3.11-slim /etc/ssl/certs/ca-certificates.crt"
+}

@@ -1,0 +1,21 @@
+{
+  "state": "ERROR",
+  "data": {
+    "scope": "native_caffe_build_preflight",
+    "training_executed": false,
+    "caffe_revision": "1a2be8ecf9ba318d516d79187845e90ac6e73197",
+    "build_exit_code": 100,
+    "failure_phase": "NVIDIA CUDA repository signature validation",
+    "reason": "Debian 13 sqv rejects the NVIDIA signing-key SHA1 binding; signature checking was not disabled.",
+    "gpu_compute_tested": false,
+    "log_path": "data/runtime/issue27_rfcn_native_build_20261015_01.log",
+    "harness_cleanup_error": "v1 image metadata iteration raced Docker parent pruning; followed by a separate label-restricted cleanup audit.",
+    "native_cleanup": {
+      "manual_audit_removed": [],
+      "errors": [],
+      "remaining_images": [],
+      "preexisting_images_retained": true
+    },
+    "audited_at": "2026-10-15T10:02:29.691142+00:00"
+  }
+}

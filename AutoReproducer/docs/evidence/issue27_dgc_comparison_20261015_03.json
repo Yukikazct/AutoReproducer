@@ -1,0 +1,412 @@
+{
+  "role": "DGC browser regression; source generation before later planning fixes",
+  "tag": "issue27_dgc_20261015_03",
+  "pdf_sha256": "295dae352e820b0db6817ca5b6ec5f338bb27c74c39960f4eb519aec2842307e",
+  "submitted_at": "2026-10-15T08:38:06.059944+00:00",
+  "product_sha256": "b69f13f93eff5c4b99461d8c029bf444a14fe1296fafa7fc8e2d5d306eeca865",
+  "product_files": 136,
+  "state": "COMPLETED",
+  "run_dir": "D:\\code\\AutoReproducer\\AutoReproducer\\data\\runs\\repository_ee6e27644bf54e02b8a3b2ae182db796",
+  "repository": {
+    "url": "https://github.com/yifeiwang77/DGC",
+    "revision": "f91b35a0d4388660e250d575d4c1b8fef41d7039"
+  },
+  "author_steps": [
+    {
+      "id": "train-cora",
+      "kind": "train",
+      "argv": [
+        "python",
+        "main.py",
+        "--dataset",
+        "cora",
+        "--T",
+        "5.27",
+        "--K",
+        "250",
+        "--lr",
+        "0.156",
+        "--weight_decay",
+        "3.544e-5"
+      ],
+      "entrypoint": {
+        "kind": "script",
+        "target": "main.py",
+        "source_path": "main.py"
+      },
+      "cwd": ".",
+      "timeout_s": null,
+      "depends_on": [],
+      "citations": [
+        "repo_89aa7df35185_0",
+        "repo_b10564ab7d2c_0",
+        "repo_b33563055168_0"
+      ],
+      "required": true
+    }
+  ],
+  "completion": {
+    "status": "author_code_completed",
+    "is_reproduced": null,
+    "paper_metrics_verified": false,
+    "author_execution": [
+      {
+        "spec_sha256": "04dad96f164e10e64a59ee9a772a5e80068c4ae5500a0f461e54fc0a31cc11f2",
+        "step": {
+          "id": "train-cora",
+          "kind": "train",
+          "argv": [
+            "python",
+            "main.py",
+            "--dataset",
+            "cora",
+            "--T",
+            "5.27",
+            "--K",
+            "250",
+            "--lr",
+            "0.156",
+            "--weight_decay",
+            "3.544e-5"
+          ],
+          "entrypoint": {
+            "kind": "script",
+            "target": "main.py",
+            "source_path": "main.py"
+          },
+          "cwd": ".",
+          "timeout_s": null,
+          "depends_on": [],
+          "citations": [
+            "repo_89aa7df35185_0",
+            "repo_b10564ab7d2c_0",
+            "repo_b33563055168_0"
+          ],
+          "required": true
+        },
+        "natural_return": true,
+        "optimizer_steps": 1000,
+        "torch_version": "2.5.1+cpu",
+        "native_datasets": [],
+        "numeric_compatibility": [],
+        "path_compatibility": []
+      }
+    ],
+    "completion_checks": {
+      "all_required_author_commands_returned": true,
+      "observed_training_updates": true,
+      "owned_processes_finished": true
+    },
+    "training_observed": true
+  },
+  "comparison": {
+    "status": "compared",
+    "basis": "author_output",
+    "relative_tolerance": 0.05,
+    "metric_records": [
+      {
+        "name": "accuracy",
+        "value": 0.8329,
+        "unit": "",
+        "split": "test",
+        "stage": "final",
+        "source": "train-cora:stdout:22",
+        "source_quote": "Dataset: cora Test accuracy of 10 runs: mean 0.83290, std 0.00030",
+        "aggregation": "mean",
+        "runs": 10,
+        "std": 0.0003,
+        "id": "train-cora:stdout:0",
+        "step_id": "train-cora"
+      }
+    ],
+    "parse_errors": [],
+    "comparisons": [
+      {
+        "metric": "accuracy",
+        "reference": {
+          "name": "accuracy",
+          "value": 83.3,
+          "std": 0.0,
+          "unit": "percent",
+          "dataset": "Cora",
+          "method": "DGC (ours)",
+          "split": "test",
+          "aggregation": "mean",
+          "runs": 10,
+          "value_quote": "DGC (ours) 83.3\u00060.0 73.3\u00060.1 80.3\u00060.1",
+          "column_quote": "Type Method Cora Citeseer Pubmed",
+          "citations": [
+            "pdf_p7_0",
+            "pdf_p12_0"
+          ],
+          "proposed_metric_name": "DGC (ours)",
+          "name_correction": "Method row label normalized to the cited runtime metric",
+          "column_verified": true
+        },
+        "actual": {
+          "unit": "fraction",
+          "dataset": "cora",
+          "method": "DGC",
+          "split": "test",
+          "aggregation": "mean",
+          "runs": 10,
+          "std": 0.0003,
+          "citations": [
+            "repo_b10564ab7d2c_0",
+            "repo_89aa7df35185_0",
+            "repo_f8f2b3b4f9b7_0",
+            "repo_b33563055168_0"
+          ],
+          "value": 0.8329,
+          "source": "train-cora:stdout:22",
+          "id": "train-cora:stdout:0",
+          "source_quote": "Dataset: cora Test accuracy of 10 runs: mean 0.83290, std 0.00030"
+        },
+        "settings": {
+          "status": "matched",
+          "reason": "论文 Table 2 报告 DGC (ours) 在 Cora 半监督节点分类上的测试准确率为 83.3±0.0（%），并说明结果是对 10 次随机运行取平均（pdf_p7_0）。仓库 README 给出 Cora 的配置 T=5.27、K=250、Acc 83.3±0.0（repo_b33563055168_0），run_citation.sh 使用 --dataset cora --T 5.27 --K 250 --lr 0.156 --weight_decay 3.544e-5（repo_89aa7df35185_0），main.py 默认 trials=10、epochs=100、Adam 优化器，并输出 10 次运行的 mean/std（repo_b10564ab7d2c_0）。dgc.py 默认使用前向 Euler 积分（repo_f8f2b3b4f9b7_0），与论文默认的 DGC-Euler 一致。因此数据集、方法（DGC-Euler）、划分（标准半监督 Cora 测试集）与重复次数（10 次取均值）均匹配。",
+          "citations": [
+            "pdf_p7_0",
+            "pdf_p12_0",
+            "repo_b10564ab7d2c_0",
+            "repo_89aa7df35185_0",
+            "repo_f8f2b3b4f9b7_0",
+            "repo_b33563055168_0"
+          ]
+        },
+        "direction": "higher",
+        "status": "comparable",
+        "limitations": [],
+        "difference": -0.009999999999998899,
+        "relative_difference": -0.00012004801920766985,
+        "difference_unit": "percentage_points",
+        "within_tolerance": true,
+        "meets_reference": true
+      }
+    ],
+    "citations": [
+      {
+        "id": "pdf_p7_0",
+        "source": "pdf",
+        "page": 7,
+        "pdf_sha256": "295dae352e820b0db6817ca5b6ec5f338bb27c74c39960f4eb519aec2842307e",
+        "sha256": "3f47ad04f161b73865f68861b0efe3714beb10d39f44a641a73e2f69a8470d3f",
+        "quote": "Table 2: Test accuracy (%) of semi-supervised node classiﬁcation on citation networks.\nType Method Cora Citeseer Pubmed\nNon-linearGCN [9] 81.5 70.3 79.0\nGAT [22] 83.0 \u00060.7 72.5\u00060.7 79.0\u00060.3\nGraphSAGE [6] 82.2 71.4 75.8\nJKNet [28] 81.1 69.8 78.1\nAPPNP [10] 83.3 71.8 80.1\nGWWN [27] 82.8 71.7 79.1\nGraphHeat [26] 83.7 72.5 80.5\nCGNN [25] 84.2 \u00060.6 71.8\u00060.7 76.8\u00060.6\nGCDE [18] 83.8 \u00060.5 72.5\u00060.5 79.9\u00060.3\nLinearLabel Propagation [31] 45.3 68.0 63.0\nDeepWalk [17] 70.7 \u00060.6 51.4\u00060.5 76.8\u00060.6\nSGC [24] 81.0 \u00060.0 71.9\u00060.1 78.9\u00060.0\nSGC-PairNorm [30] 81.1 70.6 78.2\nSIGN-linear [20] 81.7 72.4 78.6\nDGC (ours) 83.3\u00060.0 73.3\u00060.1 80.3\u00060.1\n5 Experiments\nIn this section, we conduct a comprehensive analysis on DGC and compare it against both linear\nand non-linear GCN variants on a collection of benchmark datasets.\n5.1 Performance on Semi-supervised Node Classiﬁcation\nSetup. For semi-supervised node classiﬁcation, we use three standard citation networks, Cora,\nCiteseer, and Pubmed [21] and adopt the standard data split as in [9, 22, 27, 26, 18]. Here we\ncompare our DGC against several representative non-linear and linear methods that also adopts the\nstandard data split. For non-linear GCNs, we include 1) classical baselines like GCN [9], GAT [23],\nGraphSAGE [6], APPNP [10] and JKNet [28]; 2) spectral methods using graph heat kernel [27, 26];\nand 3) continuous GCNs [18, 25]. For linear methods, we present the results of Label Propagation\n[31], DeepWalk [17], SGC (linear GCN) [24] as well as its regularized version SGC-PairNorm [30].\nWe also consider a linear version of SIGN [20], SIGN-linear, which extends SGC by aggregating\nfeatures from multiple propagation stages ( K= 1;2;:::). For DGC, we adopt the Euler scheme,\ni.e.,DGC-Euler (Eq. (12)) by default for simplicity. We report results averaged over 10 random\nruns. Data statistics and training details are in Appendix A.\nWe compare DGC against both linear and non-linear baselines for the semi-supervised node classi-\nﬁcation task, and the results are shown in Table 2.\nDGC v.s. linear methods. We can see that DGC shows signiﬁcant improvement over previous\nlinear methods across three datasets. In particular, compared to SGC (previous SOTA methods),\nDGC obtains 83.3 v.s.81.0 on Cora, 73.3 v.s.71.9 on Citeseer and 80.3 v.s.78.9 on Pubmed. This\nshows that in real-world datasets, a ﬂexible and ﬁne-grained integration by decoupling TandK\nindeed helps improve the classiﬁcation accuracy of SGC by a large margin. Besides, DGC also\noutperforms the multi-scale SGC, SIGN-linear, suggesting that multi-scale techniques cannot fully\nsolve the limitations of SGC, while DGC can overcome these limitations by decoupling TandK.\nAs discussed in Appendix C, DGC still shows clear advantages over SIGN when controlling the\nterminal time Twhile being more computationally efﬁcient, which indicates that the advantage of\nDGC is not only a real-valued T, but also the improved numerical precision by adopting a large K.\nDGC v.s. non-linear models. Table 2 further shows that DGC, as a linear model, even outperforms\nmany non-linear GCNs on semi-supervised tasks. First, DGC improves over classical GCNs like\nGCN [9], GAT [22] and GraphSAGE [6] by a large margin. Also, DGC is comparable to, and some-\ntimes outperforms, many modern non-linear GCNs. For example, DGC shows a clear advantage\nover multi-scale methods like JKNet [28] and APPNP [10]. DGC is also comparable to spectral\nmethods based on graph heat kernel, e.g., GWWN [27], GraphHeat [26], while being much more\n7"
+      },
+      {
+        "id": "pdf_p12_0",
+        "source": "pdf",
+        "page": 12,
+        "pdf_sha256": "295dae352e820b0db6817ca5b6ec5f338bb27c74c39960f4eb519aec2842307e",
+        "sha256": "c5568fe1fee1cf3dd6ecc6591a6bd71974ed9f5d2c34904de4f61f36caf28402",
+        "quote": "[24] Felix Wu, Tianyi Zhang, Amauri Holanda de Souza Jr, Christopher Fifty, Tao Yu, and Kilian Q\nWeinberger. Simplifying graph convolutional networks. ICML , 2019. 1, 2, 5, 6, 7, 8, 9, 12\n[25] Louis-Pascal Xhonneux, Meng Qu, and Jian Tang. Continuous graph neural networks. ICML ,\n2020. 2, 6, 7, 8\n[26] Bingbing Xu, Huawei Shen, Qi Cao, Keting Cen, and Xueqi Cheng. Graph convolutional\nnetworks using heat kernel for semi-supervised learning. arXiv preprint arXiv:2007.16002 ,\n2020. 7\n[27] Bingbing Xu, Huawei Shen, Qi Cao, Yunqi Qiu, and Xueqi Cheng. Graph wavelet neural\nnetwork. ICLR , 2019. 7\n[28] Keyulu Xu, Chengtao Li, Yonglong Tian, Tomohiro Sonobe, Ken-ichi Kawarabayashi, and\nStefanie Jegelka. Representation learning on graphs with jumping knowledge networks. ICML ,\n2018. 2, 7, 8\n[29] Zhilin Yang, William Cohen, and Ruslan Salakhudinov. Revisiting semi-supervised learning\nwith graph embeddings. ICML , 2016. 2\n[30] Lingxiao Zhao and Leman Akoglu. PairNorm: Tackling oversmoothing in gnns. ICLR , 2020.\n2, 7\n[31] Xiaojin Zhu, Zoubin Ghahramani, and John D Lafferty. Semi-supervised learning using gaus-\nsian ﬁelds and harmonic functions. ICML , 2003. 7\nA Training Conﬁgurations\nData statistics. We summarize the data statistics in our experiments in Table 7.\nTable 7: Dataset statistics of the three learning tasks in our experiments.\nLearning Task Dataset Nodes Edges Train/Dev/Test Nodes Split Ratio (%)\nSemi-supervisedCora 2,708 5,429 140/500/1,000 5.2/18.5/36.9\nCiteseer 3,327 4,732 120/500/1,000 3.6/15.0/30.1\nPubmed 19,717 44,338 60/500/1,000 0.3/2.5/5.1\nFully-supervisedCora 2,708 5,429 1624/541/543 60.0/20.0/20.0\nCiteseer 3,327 4,732 1996/665/666 60.0/20.0/20.0\nPubmed 19,717 44,338 11830/3943/3944 60.0/20.0/20.0\nInductive (large-scale) Reddit 233K 11.6M 152K/24K/55K 65.2/10.3/23.6\nTraining hyper-parameters. For both fully and semi-supervised node classiﬁcation tasks on the\ncitation networks, Cora, Citeseer and Pubmed, we train our DGC following the hyper-parameters in\nSGC [24]. Speciﬁcally, we train DGC for 100 epochs using Adam [8] with learning rate 0.2. For\nweight decay, as in SGC, we tune this hyperparameter on each dataset using hyperopt [1] for 10,000\ntrails. For the large-scale inductive learning task on the Reddit network, we also follow the protocols\nof SGC [24], where we use L-BFGS [13] optimizer for 2 epochs with no weight decay.\nB Omitted Proofs\nB.1 Proof of Theorem 1\nTheorem 4. The heat kernel Ht=e\u0000tLadmits the following eigen-decomposition,\nHt=U0\nBBB@e\u0000\u00151t0\u0001\u0001\u0001 0\n0e\u0000\u00152t\u0001\u0001\u0001 0\n............\n0 0\u0001\u0001\u0001e\u0000\u0015nt1\nCCCAU>:\nAs a result, with \u0015i\u00150, we have\nlim\nt!1e\u0000\u0015it=\u001a0;if\u0015i>0\n1;if\u0015i= 0; i= 1;:::;n: (15)\n12"
+      },
+      {
+        "id": "repo_b10564ab7d2c_0",
+        "source": "repository",
+        "path": "main.py",
+        "sha256": "dbd49fdb7b25fb0c7705be4537dfc3071c7aa851ed2a5c6e1cc9d3629a0bf9bd",
+        "revision": "f91b35a0d4388660e250d575d4c1b8fef41d7039",
+        "quote": "import argparse\nimport numpy as np\nimport torch\nimport torch.nn.functional as F\nimport torch.optim as optim\nfrom time import perf_counter\nfrom utils import load_citation, set_seed\n\nfrom dgc import dgc_precompute, DGC\n\nparser = argparse.ArgumentParser()\nparser.add_argument('--dataset', type=str, default=\"cora\",\n                    help='Dataset to use.')\nparser.add_argument('--lr', type=float, default=0.156,\n                    help='Initial learning rate.')\nparser.add_argument('--weight_decay', type=float, default=3.544e-5,\n                    help='Weight decay (L2 loss on parameters).')\nparser.add_argument('--epochs', type=int, default=100,\n                    help='Number of epochs to train.')\nparser.add_argument('--normalization', type=str, default='AugNormAdj',\n                    choices=['AugNormAdj, NormAdj'],\n                    help='Normalization method for the adjacency matrix.')\nparser.add_argument('--no-cuda', action='store_true', default=False,\n                    help='Disables CUDA training.')                    \nparser.add_argument('--seed', type=int, default=42, help='Random seed.')\nparser.add_argument('--trials', type=int, default=10, help='Run multiple trails for fair evaluation')\n# DGC parameters\nparser.add_argument('--T', type=float, default=5.27,\n                    help='real-valued diffusion terminal time.')\nparser.add_argument('--K', type=int, default=250,\n                    help='number of propagation steps (larger K implies better numerical precision).')\n\nargs = parser.parse_args()\nargs.cuda = not args.no_cuda and torch.cuda.is_available()\n\ndef main(args):\n    # load data\n    adj, features, labels, idx_train, idx_val, idx_test = load_citation(args.dataset, args.normalization, args.cuda)\n\n    # preprocessing with all DGC propagation steps\n    features, precompute_time = dgc_precompute(features, adj, args.T, args.K)\n    print(\"{:.4f}s\".format(precompute_time))\n\n    # initialize model (a linear head)\n    model = DGC(features.size(1), labels.max().item()+1)\n    model = model.cuda() if args.cuda else model\n\n    # train logistic regression and collect test accuracy\n    model, train_time = train(model, features[idx_train], labels[idx_train], args.epochs, args.weight_decay, args.lr)\n    acc_test = test(model, features[idx_test], labels[idx_test])\n\n    print(\"Test accuracy: {:.4f},  pre-compute time: {:.4f}s, train time: {:.4f}s, total: {:.4f}s\".format(acc_test, precompute_time, train_time, precompute_time+train_time))\n\n    return acc_test\n\n\ndef train(model,\n        train_features, train_labels,\n        epochs=100, weight_decay=5e-6, lr=0.2):\n    optimizer = optim.Adam(model.parameters(), lr=lr,\n                           weight_decay=weight_decay)\n    t = perf_counter()\n\n    for epoch in range(epochs):\n        model.train()\n        optimizer.zero_grad()\n        output = model(train_features)\n        loss_train = F.cross_entropy(output, train_labels)\n        loss_train.backward()\n        optimizer.step()\n    train_time = perf_counter()-t\n    return model, train_time\n\n\ndef test(model, test_features, test_labels):\n    model.eval()\n    return accuracy(model(test_features), test_labels)\n\n\ndef accuracy(output, labels):\n    preds = output.argmax(dim=1).type_as(labels)\n    correct = preds.eq(labels).double()\n    correct = correct.sum().item()\n    return correct / len(labels)\n\n# perform n trials for a fair evaluation\naccu_acc = []\nfor _ in range(args.trials):\n    acc_test = main(args)\n    accu_acc.append(acc_test)\n\naccu_acc = np.array(accu_acc)\nacc_mean, acc_std = accu_acc.mean(), accu_acc.std()\n\nprint('='*20)\nprint(f'Dataset: {args.dataset} Test accuracy of {args.trials} runs: mean {acc_mean:.5f}, std {acc_std:.5f}')"
+      },
+      {
+        "id": "repo_89aa7df35185_0",
+        "source": "repository",
+        "path": "run_citation.sh",
+        "sha256": "2d146ff83aab9868ecdc7e3e73b101bc852fe22cab36d0932381e1c608767a8f",
+        "revision": "f91b35a0d4388660e250d575d4c1b8fef41d7039",
+        "quote": "python main.py --dataset cora --T 5.27 --K 250 --lr 0.156 --weight_decay 3.544e-5\npython main.py --dataset citeseer --T 3.78 --K 300 --lr 1.39 --weight_decay 2e-4\npython main.py --dataset pubmed --T 6.0498 --K 900 --lr 0.627 --weight_decay 9.38e-6"
+      },
+      {
+        "id": "repo_f8f2b3b4f9b7_0",
+        "source": "repository",
+        "path": "dgc.py",
+        "sha256": "10980e73105ad9a3339cff12dad50a8c02489adbee6d6b8d94dbb322dd422490",
+        "revision": "f91b35a0d4388660e250d575d4c1b8fef41d7039",
+        "quote": "import torch\nimport torch.nn as nn\nimport scipy.sparse as sp\nfrom time import perf_counter\nfrom utils import sparse_eye\n\n# preprocessing stage\ndef dgc_precompute(features, adj, T, K):\n    # integration with the forward Euler scheme by default\n    if K == 0 or T == 0.:\n        return features, 0.\n    delta = T / K\n    t = perf_counter()\n    eye = sparse_eye(adj.shape[0]).to(adj.device)\n    op = (1 - delta) * eye + delta * adj\n    for i in range(K):\n        features = torch.spmm(op, features)\n    precompute_time = perf_counter()-t\n    return features, precompute_time\n\n\n# classification stage\nclass DGC(nn.Module):\n    \"\"\"\n    A Simple PyTorch Implementation of Logistic Regression.\n    Assuming the features have been preprocessed with k-step graph propagation.\n    Same as SGC's classification head\n    \"\"\"\n    def __init__(self, nfeat, nclass):\n        super(DGC, self).__init__()\n\n        self.W = nn.Linear(nfeat, nclass)\n\n    def forward(self, x):\n        return self.W(x)"
+      },
+      {
+        "id": "repo_b33563055168_0",
+        "source": "repository",
+        "path": "README.md",
+        "sha256": "a1f5e147649753fda3851e4c688d40926832d978744e658e6c5c3adb78ac2362",
+        "revision": "f91b35a0d4388660e250d575d4c1b8fef41d7039",
+        "quote": "# Decoupled Graph Convolution (DGC)\n\n[![made-with-python](https://img.shields.io/badge/Made%20with-Python-red.svg)](#python)\n[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) \n\nAuthors: [Yifei Wang](https://yifeiwang77.github.io/), [Yisen Wang](https://yisenwang.github.io/), [Jiansheng Yang](http://english.math.pku.edu.cn/peoplefaculty/64.html), [Zhouchen Lin](https://zhouchenlin.github.io/)\n\n## Overview\nThis repo contains an example implementation of the **Decoupled Graph Convolution (DGC)** model, described in the NeurIPS 2021 paper [Dissecting the Diffusion Process in Linear Graph Convolutional Networks](https://arxiv.org/abs/2102.10739).\n\nDGC, similar to [SGC](https://github.com/Tiiiger/SGC), removes the nonlinearities and collapes the weight matrices in Graph Convolutional Networks (GCNs) and is essentially a **linear GCN**. \n\nMotivated by the dissection of SGC's limitations from a continuous perspective, DGC further ***decouples*** the  terminal time **T** and propagation steps **K** as two free hyperparameters. \nIn this way, DGC overcomes SGC's limitations and **improves SGC by a large margin**, making it even comparable to state-of-the-art nonlinear GCNs. Meanwhile, as a linear GCN, DGC is very memory-efficient and saves much training time. \n\nThis repo contains the implementation of DGC for citation networks (Cora, Citeseer, and Pubmed) and the performance is shown below. All experiments are conducted with a single NVIDIA GTX 1080ti GPU.\n\nDataset | Acc (%) | **T** (diffusion time) | **K** (steps) | Training Time\n:------:|:-----------:|:-------:|:-----------:|:-----------:|\nCora    |83.3 ± 0.0 | 5.27  | 250 | 0.37s \nCiteseer|73.3 ± 0.1| 3.78 | 300 | 0.86s \nPubmed  |80.3 ± 0.1| 6.05 | 900 | 2.35s\n\nIn particular, DGC could complete Cora/Citeseer training with <1s, and training on a large graph (Pubmed) with 900 steps only takes 2.35s.\n\n## Dependencies\nOur implementation works with PyTorch>=1.0.0 and you can install other dependencies with\n\n``$ pip install -r requirement.txt``\n\n## Usage\nWe provide the citation network datasets under `data/`, which corresponds to [the public data splits](https://github.com/tkipf/gcn/tree/master/gcn/data).\n\nTo train DGC on the citation networks, simply run ``main.py`` with the following commands,\n```\npython main.py --dataset <cora, citeseer, or pubmed> --T <T value> --K <K value>\n```\nTo reproduce the results above, run ```sh run_citation.sh```. It will automatically run 10 trials for each experiment and report the mean and standard deviation. \n\n---\nIf you find this repo useful, please cite: \n```\n@InProceedings{wang2021dgc,\n  title = \t {Dissecting the Diffusion Process in Linear Graph Convolutional Networks},\n  author = \t {Wang, Yifei and Wang, Yisen and Yang, Jiansheng and Lin, Zhouchen},\n  booktitle = {Proceedings of the 35th Conference on Neural Information Processing Systems (NeurIPS 2021)},\n  year = \t {2021}\n}\n```\n\n## Acknowledgement\nThis repo borrows a lot from [SGC](https://github.com/Tiiiger/SGC), which is modified from [pygcn](https://github.com/tkipf/pygcn), and [FastGCN](https://github.com/matenure/FastGCN).\n"
+      }
+    ],
+    "reason": "已按作者输出与论文原文对比；这不替代独立复算或整篇论文验收。",
+    "validation_errors": []
+  },
+  "cleanup": {
+    "passed": true,
+    "checks": {
+      "cleanup_released": true,
+      "cleanup_has_no_errors": true,
+      "cleanup_has_no_remaining": true,
+      "training_python_released": true,
+      "docker_released": true,
+      "runtime_downloads_released": true,
+      "dependency_files_removed": true,
+      "training_environments_removed": true,
+      "final_report_retained": true,
+      "report_result_archive_retained": true,
+      "run_report_retained": true,
+      "run_result_retained": true,
+      "cleanup_receipt_retained": true,
+      "source_workspace_retained": true,
+      "application_python_retained": true,
+      "cleanup_receipt_matches": true,
+      "run_result_cleanup_matches": true,
+      "report_result_archive_cleanup_matches": true
+    },
+    "receipt": {
+      "status": "released",
+      "removed": [
+        {
+          "path": ".maintenance.json",
+          "bytes": 979
+        },
+        {
+          "path": ".pip-temporary",
+          "bytes": 0
+        },
+        {
+          "path": "repository",
+          "bytes": 1511393806
+        }
+      ],
+      "freed_bytes": 1523415699,
+      "remaining": [],
+      "errors": [],
+      "training_python": {
+        "status": "released",
+        "removed": [
+          {
+            "path": "D:\\code\\AutoReproducer\\AutoReproducer\\data\\training_python",
+            "bytes": 12020914
+          }
+        ],
+        "errors": [],
+        "freed_bytes": 12020914
+      },
+      "docker": {
+        "status": "released",
+        "removed": [],
+        "errors": []
+      },
+      "runtime_downloads": {
+        "status": "released",
+        "removed": [],
+        "freed_bytes": 0,
+        "errors": []
+      },
+      "before_run": {
+        "status": "released",
+        "removed": [
+          {
+            "path": ".maintenance.json",
+            "bytes": 769
+          }
+        ],
+        "freed_bytes": 769,
+        "remaining": [],
+        "errors": [],
+        "training_python": {
+          "status": "released",
+          "removed": [],
+          "errors": [],
+          "freed_bytes": 0
+        },
+        "docker": {
+          "status": "released",
+          "removed": [],
+          "errors": []
+        },
+        "runtime_downloads": {
+          "status": "released",
+          "removed": [],
+          "freed_bytes": 0,
+          "errors": []
+        }
+      },
+      "replacements": [
+        {
+          "status": "released",
+          "errors": [],
+          "dependencies": {
+            "status": "released",
+            "removed": [],
+            "freed_bytes": 0,
+            "remaining": [],
+            "errors": []
+          },
+          "training_python": {
+            "status": "released",
+            "removed": [],
+            "errors": [],
+            "freed_bytes": 0
+          }
+        },
+        {
+          "status": "released",
+          "removed": [
+            {
+              "path": ".maintenance.json",
+              "bytes": 768
+            }
+          ],
+          "freed_bytes": 768,
+          "remaining": [],
+          "errors": []
+        }
+      ],
+      "supervisor_cleanup": {
+        "status": "released",
+        "removed": [],
+        "freed_bytes": 0,
+        "remaining": [],
+        "errors": [],
+        "training_python": {
+          "status": "released",
+          "removed": [],
+          "errors": [],
+          "freed_bytes": 0
+        },
+        "docker": {
+          "status": "released",
+          "removed": [],
+          "errors": []
+        },
+        "runtime_downloads": {
+          "status": "released",
+          "removed": [],
+          "freed_bytes": 0,
+          "errors": []
+        }
+      }
+    },
+    "data_root": "D:\\code\\AutoReproducer\\AutoReproducer\\data",
+    "deps_root": "D:\\code\\AutoReproducer\\AutoReproducer\\data\\deps",
+    "remaining_dependencies": [],
+    "remaining_training_roots": [],
+    "retained": {
+      "final_report": "D:\\code\\AutoReproducer\\AutoReproducer\\data\\reports\\Dissecting_the_Diffusion_Proce_20261015_163808.md",
+      "report_result_archive": "D:\\code\\AutoReproducer\\AutoReproducer\\data\\reports\\Dissecting_the_Diffusion_Proce_20261015_163808.result.json",
+      "run_report": "D:\\code\\AutoReproducer\\AutoReproducer\\data\\runs\\repository_ee6e27644bf54e02b8a3b2ae182db796\\report.md",
+      "run_result": "D:\\code\\AutoReproducer\\AutoReproducer\\data\\runs\\repository_ee6e27644bf54e02b8a3b2ae182db796\\result.json",
+      "cleanup_receipt": "D:\\code\\AutoReproducer\\AutoReproducer\\data\\runs\\repository_ee6e27644bf54e02b8a3b2ae182db796\\environment_cleanup.json",
+      "source_workspace": "D:\\code\\AutoReproducer\\AutoReproducer\\data\\runs\\repository_ee6e27644bf54e02b8a3b2ae182db796\\repo",
+      "application_python": "D:\\code\\AutoReproducer\\AutoReproducer\\.venv-py312\\Scripts\\python.exe"
+    }
+  },
+  "download_first_attempt": {
+    "error": "Download.save_as: canceled",
+    "type": "Error"
+  },
+  "history_browser_audit": {
+    "comparison_table": "指标 / 数据集 / 方法\t论文宣称\t作者运行输出\t差值（实际 − 论文）\t结论\naccuracy / Cora / DGC (ours)\t83.3 ± 0.0%；均值，10 次\t0.8329 ± 0.0003（比例）；均值，10 次\t-0.01 个百分点；相对差异 -0.01%\t达到参考",
+    "markdown_zip_identical": true,
+    "report_sha256": "129e3e026d2af12e21fba2a7959da963b224eca13db5439d4b33dd399cd35200",
+    "reconnect_preserved_comparison": true
+  }
+}

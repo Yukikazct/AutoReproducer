@@ -1,0 +1,92 @@
+{
+  "state": "ERROR",
+  "data": {
+    "started_at": "2026-10-15T10:24:22.357258+00:00",
+    "scope": "native_caffe_build_preflight",
+    "training_executed": false,
+    "caffe_revision": "1a2be8ecf9ba318d516d79187845e90ac6e73197",
+    "builder": "autorepro-rfcn-native-20261015-03",
+    "dockerfile_sha256": "c9bfce850e49fa612d1528de29fdb0d8cade3bde45077ca2b3b0ad635bf9263d",
+    "buildkit_image": {
+      "id": "sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea",
+      "reference": "moby/buildkit@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea",
+      "introduced_by_this_task": true
+    },
+    "build_argv": [
+      "docker",
+      "buildx",
+      "build",
+      "--builder",
+      "autorepro-rfcn-native-20261015-03",
+      "--progress=plain",
+      "--output",
+      "type=docker,compression=uncompressed",
+      "-t",
+      "autoreproducer/rfcn-native-preflight:20261015-03",
+      "D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\rfcn_native_runtime"
+    ],
+    "log_path": "D:\\code\\AutoReproducer\\AutoReproducer\\data\\runtime\\issue27_rfcn_native_build_20261015_03.log",
+    "build_exit_code": 1,
+    "native_cleanup": {
+      "errors": [],
+      "removed_images": [
+        "sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea"
+      ],
+      "removed_volumes": [],
+      "remaining_images": [],
+      "remaining_builder_volumes": [],
+      "preexisting_images_retained": true
+    },
+    "elapsed_s": 574.42,
+    "finished_at": "2026-10-15T10:33:57.674839+00:00",
+    "environment_cleanup": {
+      "status": "released",
+      "removed": [],
+      "freed_bytes": 0,
+      "remaining": [],
+      "errors": [],
+      "training_python": {
+        "status": "released",
+        "removed": [],
+        "errors": [],
+        "freed_bytes": 0
+      },
+      "docker": {
+        "status": "released",
+        "removed": [],
+        "errors": []
+      },
+      "runtime_downloads": {
+        "status": "released",
+        "removed": [],
+        "freed_bytes": 0,
+        "errors": []
+      },
+      "before_run": {
+        "status": "released",
+        "removed": [],
+        "freed_bytes": 0,
+        "remaining": [],
+        "errors": [],
+        "training_python": {
+          "status": "released",
+          "removed": [],
+          "errors": [],
+          "freed_bytes": 0
+        },
+        "docker": {
+          "status": "released",
+          "removed": [],
+          "errors": []
+        },
+        "runtime_downloads": {
+          "status": "released",
+          "removed": [],
+          "freed_bytes": 0,
+          "errors": []
+        }
+      },
+      "replacements": []
+    }
+  }
+}

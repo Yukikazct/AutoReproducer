@@ -1,0 +1,20 @@
+{
+  "command": "python -X utf8 -m pytest tests/ -q --tb=short",
+  "passed": 3219,
+  "skipped": 87,
+  "failed": 0,
+  "skip_reasons": {
+    "Native fixture requires a dedicated torch 2.5.1+cpu / NumPy 1.26.4 cache; set AUTOREPRO_TEST_CPU_DEPS outside application data/": 14,
+    "Native runtime test needs CPU torch; set AUTOREPRO_TEST_CPU_DEPS to an existing verified cache": 47,
+    "No installed training Python with nbclient/ipykernel": 1,
+    "POSIX signal and process probe": 1,
+    "Native CUDA test requires a dedicated reviewed cache; set AUTOREPRO_TEST_CUDA_DEPS outside application data/": 8,
+    "could not import 'matplotlib': No module named 'matplotlib'": 4,
+    "could not import 'torch': No module named 'torch'": 11,
+    "POSIX catchable SIGTERM semantics": 1
+  },
+  "junit_sha256": "86c033f5addd053973b1cf12e347f52f11729442d21b1b68e488eae11dac83ea",
+  "duration_s": 565.087,
+  "wall_duration_s": 566.57,
+  "earlier_collection_attempt": "A root-wide pytest invocation collected cached upstream Caffe tests. The full application suite is explicitly tests/."
+}

@@ -1,0 +1,81 @@
+{
+  "state": "COMPLETED",
+  "data": {
+    "tested_at": "2026-10-15T09:28:17.289013+00:00",
+    "kind": "native_dependency_network_probe",
+    "exit_code": 0,
+    "checks": [
+      {
+        "url": "https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/Packages.gz",
+        "status": 200,
+        "first_bytes": 1
+      },
+      {
+        "url": "https://deb.debian.org/debian/dists/bookworm/Release",
+        "error": "<urlopen error [Errno -3] Temporary failure in name resolution>"
+      },
+      {
+        "url": "https://www.python.org/ftp/python/2.7.18/Python-2.7.18.tgz",
+        "status": 200,
+        "first_bytes": 1
+      },
+      {
+        "url": "https://codeload.github.com/microsoft/caffe/zip/1a2be8ecf9ba318d516d79187845e90ac6e73197",
+        "status": 200,
+        "first_bytes": 1
+      }
+    ],
+    "stderr": "",
+    "training_executed": false,
+    "new_image_pulled": false,
+    "environment_cleanup": {
+      "status": "released",
+      "removed": [],
+      "freed_bytes": 0,
+      "remaining": [],
+      "errors": [],
+      "training_python": {
+        "status": "released",
+        "removed": [],
+        "errors": [],
+        "freed_bytes": 0
+      },
+      "docker": {
+        "status": "released",
+        "removed": [],
+        "errors": []
+      },
+      "runtime_downloads": {
+        "status": "released",
+        "removed": [],
+        "freed_bytes": 0,
+        "errors": []
+      },
+      "before_run": {
+        "status": "released",
+        "removed": [],
+        "freed_bytes": 0,
+        "remaining": [],
+        "errors": [],
+        "training_python": {
+          "status": "released",
+          "removed": [],
+          "errors": [],
+          "freed_bytes": 0
+        },
+        "docker": {
+          "status": "released",
+          "removed": [],
+          "errors": []
+        },
+        "runtime_downloads": {
+          "status": "released",
+          "removed": [],
+          "freed_bytes": 0,
+          "errors": []
+        }
+      },
+      "replacements": []
+    }
+  }
+}

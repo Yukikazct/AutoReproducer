@@ -1,0 +1,334 @@
+{
+  "kind": "user_selected_rfcn_browser_failure",
+  "paper_training_passed": false,
+  "pdf_sha256": "374eb111e85610c20646b165aa6ed37ba7fa8bfcc6df0f068c086ba58ef11d2a",
+  "product_sha256": "2d348800d06678ab67c19b920b04ef407b9ae634c81a551c7c43c92385b4ccce",
+  "progress_file": "progress_1792055576660.jsonl",
+  "run_dir": "D:\\code\\AutoReproducer\\AutoReproducer\\data\\runs\\repository_ab914d89154249499f900418a29f5a3f",
+  "state": "ERROR",
+  "planning_trace": [
+    {
+      "repository_url": "https://github.com/daijifeng001/r-fcn",
+      "revision": "94797e0e8d15998a9ab0a76cbac3281ad907f04a",
+      "planning_status": "rejected",
+      "failure_kind": "invalid_evidence",
+      "error": "No runnable original author command: README/launchers contain no supported literal Python entrypoint. ",
+      "failures": [
+        "Only structured original Python argv is supported",
+        "Plan needs a bounded list of author Python steps",
+        "Only structured original Python argv is supported",
+        "Only structured original Python argv is supported"
+      ],
+      "proposed_steps": [
+        {
+          "id": "train_rfcn_resnet50_ohem_rpn",
+          "kind": "train",
+          "entrypoint": {
+            "kind": "script",
+            "target": "experiments/script_rfcn_VOC0712_ResNet50_OHEM_rpn.m"
+          },
+          "cwd": ".",
+          "timeout_s": null,
+          "citations": [
+            "readme",
+            "script50ohemrpn",
+            "trainfn",
+            "cfg_ohem",
+            "ds_ss",
+            "ds_sp",
+            "ds_test_ss",
+            "ds_test_sp",
+            "imdb_voc",
+            "roidb_voc",
+            "model50ohem",
+            "solver50ohem",
+            "trainval50ohem",
+            "startup",
+            "build",
+            "fetch50",
+            "fetchprops",
+            "fetchmex"
+          ]
+        }
+      ]
+    },
+    {
+      "repository_url": "https://github.com/Orpine/py-R-FCN",
+      "revision": "290dba7fad47f1ec74e2d1675e72cca6efb6cc14",
+      "planning_status": "rejected",
+      "failure_kind": "runtime_unsupported",
+      "error": "当前 Python 3 分析器无法解析作者源码 tools/train_net.py:63: Missing parentheses in call to 'print'. Did you mean print(...)?。需要与原源码兼容的运行支持；尚未执行训练。",
+      "failures": [
+        "当前 Python 3 分析器无法解析作者源码 tools/train_net.py:63: Missing parentheses in call to 'print'. Did you mean print(...)?。需要与原源码兼容的运行支持；尚未执行训练。",
+        "当前 Python 3 分析器无法解析作者源码 tools/train_net.py:63: Missing parentheses in call to 'print'. Did you mean print(...)?。需要与原源码兼容的运行支持；尚未执行训练。"
+      ],
+      "proposed_steps": [
+        {
+          "id": "train_rfcn_end2end_resnet50_voc",
+          "kind": "train",
+          "argv": [
+            "python",
+            "tools/train_net.py",
+            "--gpu",
+            "0",
+            "--solver",
+            "models/pascal_voc/ResNet-50/rfcn_end2end/solver.prototxt",
+            "--weights",
+            "data/imagenet_models/ResNet-50-model.caffemodel",
+            "--imdb",
+            "voc_0712_trainval",
+            "--iters",
+            "110000",
+            "--cfg",
+            "experiments/cfgs/rfcn_end2end.yml"
+          ],
+          "cwd": ".",
+          "timeout_s": null,
+          "citations": [
+            "script_rfcn_end2end",
+            "cfg_rfcn_end2end",
+            "train_net",
+            "readme_usage",
+            "inv_train_net",
+            "inv_script",
+            "inv_cfg",
+            "inv_solver"
+          ]
+        }
+      ]
+    },
+    {
+      "repository_url": "https://github.com/iahmedmaher/r-fcn",
+      "revision": "623fb51416b2b5b94533d8a6c03fc4de9ff8a191",
+      "planning_status": "execution_failed",
+      "failure_kind": "execution_failure",
+      "error": "作者训练或独立评估未完整结束：Traceback (most recent call last):\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\data\\runs\\repository_ab914d89154249499f900418a29f5a3f\\candidate_repos\\3\\_autorepro_capture\\observe_author.py\", line 100, in <module>\n    run_entrypoint(script, config.get('numeric_compatibility', []), workspace, config['source_files'],\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\data\\runs\\repository_ab914d89154249499f900418a29f5a3f\\candidate_repos\\3\\_autorepro_capture\\author_numeric_compatibility.py\", line 122, in run_entrypoint\n    return runpy.run_path(str(script), run_name='__main__')\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"<frozen runpy>\", line 287, in run_path\n  File \"<frozen runpy>\", line 98, in _run_module_code\n  File \"<frozen runpy>\", line 88, in _run_code\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\data\\runs\\repository_ab914d89154249499f900418a29f5a3f\\candidate_repos\\3\\model.py\", line 1, in <module>\n    from torchvision.models.resnet import resnet101, ResNet, Bottleneck, model_urls\nImportError: cannot import name 'model_urls' from 'torchvision.models.resnet' (D:\\code\\AutoReproducer\\AutoReproducer\\data\\deps\\repository\\cpython-312-win32-AMD64\\e9c351c0bd46199e\\torchvision\\models\\resnet.py)\n",
+      "failures": [],
+      "proposed_steps": []
+    },
+    {
+      "repository_url": null,
+      "revision": null,
+      "planning_status": null,
+      "failure_kind": "execution_failure",
+      "error": null,
+      "failures": [],
+      "proposed_steps": []
+    }
+  ],
+  "selected_repository": {
+    "url": "https://github.com/iahmedmaher/r-fcn",
+    "revision": "623fb51416b2b5b94533d8a6c03fc4de9ff8a191"
+  },
+  "selected_steps": [
+    {
+      "id": "train",
+      "kind": "train",
+      "argv": [
+        "python",
+        "model.py"
+      ],
+      "entrypoint": {
+        "kind": "script",
+        "target": "model.py",
+        "source_path": "model.py"
+      },
+      "cwd": ".",
+      "timeout_s": null,
+      "depends_on": [],
+      "citations": [
+        "model_py",
+        "model_body",
+        "dataset_utils_body",
+        "config_body"
+      ],
+      "required": true
+    }
+  ],
+  "validation": {
+    "status": "execution_failed",
+    "failure_phase": "execute_repository",
+    "is_reproduced": null,
+    "failure_kind": "execution_failure",
+    "result_level": "failed",
+    "reason": "作者训练或独立评估未完整结束：Traceback (most recent call last):\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\data\\runs\\repository_ab914d89154249499f900418a29f5a3f\\candidate_repos\\3\\_autorepro_capture\\observe_author.py\", line 100, in <module>\n    run_entrypoint(script, config.get('numeric_compatibility', []), workspace, config['source_files'],\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\data\\runs\\repository_ab914d89154249499f900418a29f5a3f\\candidate_repos\\3\\_autorepro_capture\\author_numeric_compatibility.py\", line 122, in run_entrypoint\n    return runpy.run_path(str(script), run_name='__main__')\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"<frozen runpy>\", line 287, in run_path\n  File \"<frozen runpy>\", line 98, in _run_module_code\n  File \"<frozen runpy>\", line 88, in _run_code\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\data\\runs\\repository_ab914d89154249499f900418a29f5a3f\\candidate_repos\\3\\model.py\", line 1, in <module>\n    from torchvision.models.resnet import resnet101, ResNet, Bottleneck, model_urls\nImportError: cannot import name 'model_urls' from 'torchvision.models.resnet' (D:\\code\\AutoReproducer\\AutoReproducer\\data\\deps\\repository\\cpython-312-win32-AMD64\\e9c351c0bd46199e\\torchvision\\models\\resnet.py)\n"
+  },
+  "execution": [
+    {
+      "id": "train",
+      "exit_code": 1,
+      "success": false,
+      "stdout": "",
+      "stderr": "Traceback (most recent call last):\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\data\\runs\\repository_ab914d89154249499f900418a29f5a3f\\candidate_repos\\3\\_autorepro_capture\\observe_author.py\", line 100, in <module>\n    run_entrypoint(script, config.get('numeric_compatibility', []), workspace, config['source_files'],\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\data\\runs\\repository_ab914d89154249499f900418a29f5a3f\\candidate_repos\\3\\_autorepro_capture\\author_numeric_compatibility.py\", line 122, in run_entrypoint\n    return runpy.run_path(str(script), run_name='__main__')\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"<frozen runpy>\", line 287, in run_path\n  File \"<frozen runpy>\", line 98, in _run_module_code\n  File \"<frozen runpy>\", line 88, in _run_code\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\data\\runs\\repository_ab914d89154249499f900418a29f5a3f\\candidate_repos\\3\\model.py\", line 1, in <module>\n    from torchvision.models.resnet import resnet101, ResNet, Bottleneck, model_urls\nImportError: cannot import name 'model_urls' from 'torchvision.models.resnet' (D:\\code\\AutoReproducer\\AutoReproducer\\data\\deps\\repository\\cpython-312-win32-AMD64\\e9c351c0bd46199e\\torchvision\\models\\resnet.py)\n"
+    }
+  ],
+  "failure_analyses": [
+    {
+      "failure_kind": "execution_failure",
+      "action": "blocked",
+      "proposal": {
+        "action": "replace_compatibility_pin",
+        "requirement": "torchvision==0.12.0"
+      },
+      "reason": "model.py imports model_urls from torchvision.models.resnet, which was removed in torchvision 0.13+; the pinned torchvision==0.20.1+cpu no longer exposes it. This is a project-derived compatibility pin (torchvision==0.20.1+cpu) that is incompatible with the author's source code.",
+      "rejected_action": "replace_compatibility_pin"
+    }
+  ],
+  "scope_review": {
+    "original_author_implementation_completed": false,
+    "third_party_wip_selected": true,
+    "readme_quote": "[WIP] An implementation of the paper R-FCN: Object Detection via Region-based Fully Convolutional Networks",
+    "entrypoint_observation": "model.py performs a forward pass on one image and exits; it contains no optimizer update loop. This cannot qualify as full R-FCN training."
+  },
+  "cleanup": {
+    "passed": true,
+    "checks": {
+      "cleanup_released": true,
+      "cleanup_has_no_errors": true,
+      "cleanup_has_no_remaining": true,
+      "training_python_released": true,
+      "docker_released": true,
+      "runtime_downloads_released": true,
+      "dependency_files_removed": true,
+      "training_environments_removed": true,
+      "final_report_retained": true,
+      "report_result_archive_retained": true,
+      "run_report_retained": true,
+      "run_result_retained": true,
+      "cleanup_receipt_retained": true,
+      "source_workspace_retained": true,
+      "application_python_retained": true,
+      "cleanup_receipt_matches": true,
+      "run_result_cleanup_matches": true,
+      "report_result_archive_cleanup_matches": true
+    },
+    "receipt": {
+      "status": "released",
+      "removed": [
+        {
+          "path": ".maintenance.json",
+          "bytes": 979
+        },
+        {
+          "path": ".pip-temporary",
+          "bytes": 0
+        },
+        {
+          "path": "repository",
+          "bytes": 1422022226
+        }
+      ],
+      "freed_bytes": 1434044119,
+      "remaining": [],
+      "errors": [],
+      "training_python": {
+        "status": "released",
+        "removed": [
+          {
+            "path": "D:\\code\\AutoReproducer\\AutoReproducer\\data\\training_python",
+            "bytes": 12020914
+          }
+        ],
+        "errors": [],
+        "freed_bytes": 12020914
+      },
+      "docker": {
+        "status": "released",
+        "removed": [],
+        "errors": []
+      },
+      "runtime_downloads": {
+        "status": "released",
+        "removed": [],
+        "freed_bytes": 0,
+        "errors": []
+      },
+      "before_run": {
+        "status": "released",
+        "removed": [],
+        "freed_bytes": 0,
+        "remaining": [],
+        "errors": [],
+        "training_python": {
+          "status": "released",
+          "removed": [],
+          "errors": [],
+          "freed_bytes": 0
+        },
+        "docker": {
+          "status": "released",
+          "removed": [],
+          "errors": []
+        },
+        "runtime_downloads": {
+          "status": "released",
+          "removed": [],
+          "freed_bytes": 0,
+          "errors": []
+        }
+      },
+      "replacements": [
+        {
+          "status": "released",
+          "errors": [],
+          "dependencies": {
+            "status": "released",
+            "removed": [],
+            "freed_bytes": 0,
+            "remaining": [],
+            "errors": []
+          },
+          "training_python": {
+            "status": "released",
+            "removed": [],
+            "errors": [],
+            "freed_bytes": 0
+          }
+        },
+        {
+          "status": "released",
+          "removed": [
+            {
+              "path": ".maintenance.json",
+              "bytes": 768
+            }
+          ],
+          "freed_bytes": 768,
+          "remaining": [],
+          "errors": []
+        }
+      ],
+      "supervisor_cleanup": {
+        "status": "in_use",
+        "removed": [],
+        "freed_bytes": 0,
+        "remaining": [],
+        "errors": []
+      }
+    },
+    "data_root": "D:\\code\\AutoReproducer\\AutoReproducer\\data",
+    "deps_root": "D:\\code\\AutoReproducer\\AutoReproducer\\data\\deps",
+    "remaining_dependencies": [],
+    "remaining_training_roots": [],
+    "retained": {
+      "final_report": "D:\\code\\AutoReproducer\\AutoReproducer\\data\\reports\\R-FCN_Object_Detection_via_Re_20261015_171301.md",
+      "report_result_archive": "D:\\code\\AutoReproducer\\AutoReproducer\\data\\reports\\R-FCN_Object_Detection_via_Re_20261015_171301.result.json",
+      "run_report": "D:\\code\\AutoReproducer\\AutoReproducer\\data\\runs\\repository_ab914d89154249499f900418a29f5a3f\\report.md",
+      "run_result": "D:\\code\\AutoReproducer\\AutoReproducer\\data\\runs\\repository_ab914d89154249499f900418a29f5a3f\\result.json",
+      "cleanup_receipt": "D:\\code\\AutoReproducer\\AutoReproducer\\data\\runs\\repository_ab914d89154249499f900418a29f5a3f\\environment_cleanup.json",
+      "source_workspace": "D:\\code\\AutoReproducer\\AutoReproducer\\data\\runs\\repository_ab914d89154249499f900418a29f5a3f\\candidate_repos\\3",
+      "application_python": "D:\\code\\AutoReproducer\\AutoReproducer\\.venv-py312\\Scripts\\python.exe"
+    }
+  },
+  "history_browser_audit": {
+    "kind": "failure_report_history_audit",
+    "paper_training_passed": false,
+    "markdown_zip_archive_identical": true,
+    "report_sha256": "8be78d3edb955bcad5fdf725086bbe8a979e6c441324bbd34b4df98eb6430e8e",
+    "archive_text_identical": true,
+    "reload_retained_failure": true,
+    "new_task_created": false
+  },
+  "llm_calls": 11,
+  "run_elapsed_s": 689.7189999999973
+}

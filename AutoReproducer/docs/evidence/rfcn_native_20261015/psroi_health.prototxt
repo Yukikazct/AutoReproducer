@@ -1,0 +1,24 @@
+name: "NativePSROIHealthOnly"
+layer {
+  name: "feature_fixture" type: "DummyData" top: "features"
+  dummy_data_param {
+    data_filler { type: "constant" value: 0.5 }
+    shape { dim: 1 dim: 98 dim: 7 dim: 7 }
+  }
+}
+layer {
+  name: "roi_fixture" type: "DummyData" top: "rois"
+  dummy_data_param {
+    data_filler { type: "constant" value: 0 }
+    shape { dim: 1 dim: 5 dim: 1 dim: 1 }
+  }
+}
+layer {
+  name: "position_sensitive_pool" type: "PSROIPooling"
+  bottom: "features" bottom: "rois" top: "pooled"
+  psroi_pooling_param { spatial_scale: 1 output_dim: 2 group_size: 7 }
+}
+layer {
+  name: "checksum" type: "Reduction" bottom: "pooled" top: "checksum"
+  reduction_param { operation: SUM }
+}

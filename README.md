@@ -442,6 +442,7 @@ print(result["data"].get("validation"))
 
 | 文档 | 内容 |
 | --- | --- |
+| [指标比较与 R-FCN 实测](AutoReproducer/docs/issue27_progress_20261015.md) | 最终统计、真实 API/浏览器回归、GPU 环境检查及未完成的验收范围 |
 | [PDF 样本归档](AutoReproducer/examples/papers/README.md) | 论文来源、版本与 SHA-256；收录不代表运行通过 |
 | [依赖环境管理](AutoReproducer/docs/dependency_management.md) | 应用清单、缓存复用条件及回收机制 |
 | [文件与存储管理](AutoReproducer/docs/file_management.md) | 数据路径、迁移、归档恢复及 Windows 文件规则 |

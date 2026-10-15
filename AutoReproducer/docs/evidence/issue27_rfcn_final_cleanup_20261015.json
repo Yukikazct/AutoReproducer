@@ -1,0 +1,52 @@
+{
+  "scope": "final cleanup audit of owned training and native test resources",
+  "runs": [
+    {
+      "progress_file": "progress_1792053484762.jsonl",
+      "done": true,
+      "state": "COMPLETED",
+      "active": {
+        "active_workers": 0,
+        "active_runs": 0,
+        "active_executions": 0
+      }
+    },
+    {
+      "progress_file": "progress_1792055576660.jsonl",
+      "done": true,
+      "state": "ERROR",
+      "active": {
+        "active_workers": 0,
+        "active_runs": 0,
+        "active_executions": 0
+      }
+    }
+  ],
+  "remaining_dependencies": [],
+  "training_python_exists": false,
+  "owned_native_images": [],
+  "containers": [],
+  "volumes": [],
+  "retained_preexisting_images": [
+    "python:3.11-slim",
+    "python:3.12-slim",
+    "hello-world:latest"
+  ],
+  "host_test_downloads_removed": [
+    {
+      "name": "ubuntu-base.tar.gz",
+      "bytes": 29832285
+    },
+    {
+      "name": "ca-certificates.crt",
+      "bytes": 224449
+    }
+  ],
+  "retained_inputs": {
+    "user_pdf": true,
+    "mirrored_model": true
+  },
+  "application_python_retained": true,
+  "browser_test_tools_retained": true,
+  "browser_tools_note": "Earlier deletion was rejected by automatic approval with blocked by policy; no repeated removal attempted."
+}

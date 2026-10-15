@@ -1,0 +1,168 @@
+import hashlib
+import json
+import os
+import queue
+import subprocess
+import sys
+import threading
+import time
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from src.environment_lifecycle import managed_environment
+
+tag = 'issue27_rfcn_native_build_20261015_05'
+owner = 'issue27-rfcn-native-20261015-05'
+builder = 'autorepro-rfcn-native-20261015-05'
+context = ROOT / '.tmp/rfcn_native_runtime'
+runtime = ROOT / 'data/runtime'
+target = runtime / (tag + '.json')
+assert not target.exists()
+buildkit_ref = 'moby/buildkit@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea'
+
+def docker(*args, timeout=60):
+    return subprocess.run(['docker', *args], capture_output=True, text=True, timeout=timeout)
+
+def persist(record):
+    target.write_text(json.dumps(record, ensure_ascii=False, indent=2), 'utf-8')
+
+record = {'state': 'RUNNING', 'data': {'started_at': datetime.now(timezone.utc).isoformat(),
+    'scope': 'native_caffe_build_preflight', 'training_executed': False,
+    'caffe_revision': '1a2be8ecf9ba318d516d79187845e90ac6e73197', 'builder': builder,
+    'dockerfile_sha256': hashlib.sha256((context / 'Dockerfile').read_bytes()).hexdigest()}}
+data = record['data']
+with managed_environment() as lease:
+    buildkit_meta = json.loads(docker('image', 'inspect', buildkit_ref).stdout)[0]
+    buildkit_id = buildkit_meta['Id']
+    data['buildkit_image'] = {'id': buildkit_id, 'reference': buildkit_ref, 'introduced_by_this_task': True}
+    baseline = set(docker('image', 'ls', '-aq', '--no-trunc').stdout.split()) - {buildkit_id}
+    old_volumes = set(docker('volume', 'ls', '-q').stdout.split())
+    builder_volumes = set()
+    image = 'autoreproducer/rfcn-native-preflight:20261015-05'
+    start = time.monotonic()
+    p = None
+    created = False
+    try:
+        prior = docker('buildx', 'inspect', builder)
+        assert prior.returncode != 0, 'Preserve an existing builder with this name'
+        creation = docker('buildx', 'create', '--name', builder, '--driver', 'docker-container',
+            '--driver-opt', 'image=' + buildkit_ref, '--buildkitd-config', str(context / 'buildkitd.toml'))
+        assert creation.returncode == 0, creation.stderr
+        created = True
+        bootstrap = docker('buildx', 'inspect', builder, '--bootstrap', timeout=120)
+        assert bootstrap.returncode == 0, bootstrap.stderr
+        for cid in docker('ps', '-aq', '--filter', 'name=buildx_buildkit_' + builder).stdout.split():
+            meta = json.loads(docker('inspect', cid).stdout)[0]
+            assert meta['Name'].startswith('/buildx_buildkit_' + builder)
+            builder_volumes.update(m['Name'] for m in meta['Mounts'] if m['Type'] == 'volume')
+        assert not builder_volumes & old_volumes
+        argv = ['docker', 'buildx', 'build', '--builder', builder, '--progress=plain',
+            '--output', 'type=docker,compression=uncompressed', '-t', image, str(context)]
+        data['build_argv'] = argv
+        log_path = runtime / (tag + '.log')
+        data['log_path'] = str(log_path)
+        q = queue.Queue()
+        env = dict(os.environ, DOCKER_BUILDKIT='1', BUILDX_NO_DEFAULT_ATTESTATIONS='1')
+        p = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                             text=True, encoding='utf-8', errors='replace', env=env, bufsize=1)
+        def read_lines():
+            for line in p.stdout:
+                q.put(line)
+            q.put(None)
+        threading.Thread(target=read_lines, daemon=True).start()
+        last_emit = 0
+        with log_path.open('w', encoding='utf-8') as log:
+            while True:
+                if time.monotonic() - start > 1800:
+                    raise TimeoutError('Native build exceeded its 1800-second preflight limit')
+                try:
+                    line = q.get(timeout=1)
+                except queue.Empty:
+                    line = ''
+                if line is None:
+                    break
+                if line:
+                    log.write(line)
+                    log.flush()
+                    if (' RUN ' in line or 'ERROR' in line or 'error:' in line):
+                        print(line.rstrip()[-800:], flush=True)
+                if time.monotonic() - last_emit > 20:
+                    print(json.dumps({'native_build_running': p.poll() is None,
+                        'elapsed_s': round(time.monotonic() - start, 1), 'log_bytes': log_path.stat().st_size}), flush=True)
+                    last_emit = time.monotonic()
+        data['build_exit_code'] = p.wait(timeout=10)
+        if p.returncode == 0:
+            probe = docker('run', '--rm', '--name', 'autorepro-rfcn-gpu-' + uuid.uuid4().hex[:12],
+                '--pull=never', '--gpus=all', '--label', 'autorepro.native.owner=' + owner,
+                '--network=none', '-e', 'NVIDIA_DRIVER_CAPABILITIES=compute,utility', image)
+            data['gpu_probe'] = {'exit_code': probe.returncode, 'stdout': probe.stdout, 'stderr': probe.stderr}
+            if probe.returncode == 0:
+                import re
+                operator = docker('run', '--rm', '--pull=never', '--gpus=all',
+                    '--label', 'autorepro.native.owner=' + owner, '--network=none',
+                    '-e', 'NVIDIA_DRIVER_CAPABILITIES=compute,utility',
+                    '--mount', 'type=bind,source=' + str(context / 'psroi_health.prototxt') + ',target=/tmp/psroi_health.prototxt,readonly',
+                    '--mount', 'type=bind,source=' + str(ROOT / 'data/datasets/rfcn/imagenet_models/ResNet-50-model.caffemodel') + ',target=/tmp/health_weights.caffemodel,readonly', image, '/opt/caffe/build/tools/caffe', 'test', '--model=/tmp/psroi_health.prototxt', '--weights=/tmp/health_weights.caffemodel', '--gpu=0', '--iterations=1')
+                data['operator_probe'] = {'scope': 'synthetic GPU operator health check, not paper training',
+                    'exit_code': operator.returncode, 'stdout': operator.stdout, 'stderr': operator.stderr,
+                    'expected_checksum': 49.0, 'passed': operator.returncode == 0 and bool(re.search(r'Test score #0:\s*49(?:\.0*)?\b', operator.stdout + operator.stderr))}
+
+        record['state'] = 'COMPLETED' if data.get('gpu_probe', {}).get('exit_code') == 0 and data.get('operator_probe', {}).get('passed') is True else 'ERROR'
+    except Exception as exc:
+        data['error'] = str(exc)
+        record['state'] = 'ERROR'
+    finally:
+        persist(record)  # Preserve original failure/probe output before reclaiming anything.
+        if p is not None and p.poll() is None:
+            p.terminate()
+            try:
+                p.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                p.kill()
+                p.wait(timeout=10)
+        cleanup = {'errors': [], 'removed_images': [], 'removed_volumes': []}
+        for cid in docker('ps', '-aq', '--filter', 'label=autorepro.native.owner=' + owner).stdout.split():
+            meta = json.loads(docker('inspect', cid).stdout)[0]
+            assert meta['Config']['Labels'].get('autorepro.native.owner') == owner
+            removal = docker('rm', '-f', cid)
+            if removal.returncode:
+                cleanup['errors'].append(removal.stderr)
+        if created:
+            removal = docker('buildx', 'rm', '--force', builder)
+            if removal.returncode:
+                cleanup['errors'].append(removal.stderr)
+        for volume in builder_volumes:
+            if docker('volume', 'inspect', volume).returncode == 0:
+                assert volume not in old_volumes and volume.startswith('buildx_buildkit_' + builder)
+                removal = docker('volume', 'rm', volume)
+                if removal.returncode:
+                    cleanup['errors'].append(removal.stderr)
+                else:
+                    cleanup['removed_volumes'].append(volume)
+        ids = list(dict.fromkeys(docker('image', 'ls', '-aq', '--no-trunc', '--filter',
+                                      'label=autorepro.native.owner=' + owner).stdout.split()))
+        for identifier in ids + [buildkit_id]:
+            assert identifier not in baseline
+            inspection = docker('image', 'inspect', identifier)
+            if inspection.returncode:
+                continue
+            if identifier != buildkit_id:
+                assert json.loads(inspection.stdout)[0]['Config']['Labels'].get('autorepro.native.owner') == owner
+            assert not docker('ps', '-aq', '--filter', 'ancestor=' + identifier).stdout.strip()
+            removal = docker('image', 'rm', '--no-prune', '-f', identifier)
+            if removal.returncode:
+                cleanup['errors'].append(removal.stderr)
+            else:
+                cleanup['removed_images'].append(identifier)
+        cleanup['remaining_images'] = docker('image', 'ls', '-aq', '--filter', 'label=autorepro.native.owner=' + owner).stdout.split()
+        cleanup['remaining_builder_volumes'] = [v for v in builder_volumes if docker('volume', 'inspect', v).returncode == 0]
+        cleanup['preexisting_images_retained'] = baseline <= set(docker('image', 'ls', '-aq', '--no-trunc').stdout.split())
+        data['native_cleanup'] = cleanup
+        data['elapsed_s'] = round(time.monotonic() - start, 2)
+        data['finished_at'] = datetime.now(timezone.utc).isoformat()
+        lease.result = record
+persist(lease.result)
+print(json.dumps(lease.result, ensure_ascii=False), flush=True)

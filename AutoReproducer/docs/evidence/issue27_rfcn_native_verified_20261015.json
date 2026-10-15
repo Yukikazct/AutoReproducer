@@ -1,0 +1,43 @@
+{
+  "scope": "independent audit of synthetic native GPU operator preflight; not paper training",
+  "paper_training_executed": false,
+  "caffe_revision": "1a2be8ecf9ba318d516d79187845e90ac6e73197",
+  "raw_result_sha256": "cc5df08011c65f24ed689fa853a14e89df9b7f19ac16604ddb77f9445a8cc567",
+  "build_exit_code": 0,
+  "gpu_query_exit_code": 0,
+  "operator_exit_code": 0,
+  "expected_checksum": 49.0,
+  "actual_checksums": [
+    49.0,
+    49.0
+  ],
+  "gpu_output_lines": [
+    "I1015 11:17:53.887163     1 caffe.cpp:271] Use GPU with device ID 0",
+    "I1015 11:17:53.980700     1 caffe.cpp:275] GPU device name: NVIDIA GeForce RTX 4060 Laptop GPU",
+    "  name: \"checksum\"",
+    "  top: \"checksum\"",
+    "I1015 11:17:54.184175     1 layer_factory.hpp:77] Creating layer checksum",
+    "I1015 11:17:54.184238     1 net.cpp:100] Creating Layer checksum",
+    "I1015 11:17:54.184240     1 net.cpp:444] checksum <- pooled",
+    "I1015 11:17:54.184242     1 net.cpp:418] checksum -> checksum",
+    "I1015 11:17:54.184259     1 net.cpp:150] Setting up checksum",
+    "I1015 11:17:54.184266     1 net.cpp:228] checksum does not need backward computation.",
+    "I1015 11:17:54.184273     1 net.cpp:270] This network produces output checksum",
+    "I1015 11:17:58.950120     1 caffe.cpp:309] Batch 0, checksum = 49",
+    "I1015 11:17:58.950150     1 caffe.cpp:326] checksum = 49"
+  ],
+  "verified": true,
+  "raw_harness_state": "ERROR",
+  "raw_verifier_note": "The initial checker expected the log label Test score #0; this pinned Caffe prints checksum = value. Raw output/result is preserved. This independent audit checks the emitted checksum and exit codes.",
+  "cleanup": {
+    "errors": [],
+    "removed_images": [
+      "sha256:265ad7f2d1a73837f81a5e49d47bdd7d023135148e65437453a28b3963463300",
+      "sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea"
+    ],
+    "removed_volumes": [],
+    "remaining_images": [],
+    "remaining_builder_volumes": [],
+    "preexisting_images_retained": true
+  }
+}

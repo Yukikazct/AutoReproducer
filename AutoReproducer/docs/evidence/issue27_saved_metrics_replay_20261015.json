@@ -1,0 +1,60 @@
+{
+  "dgc": {
+    "input": "regression_dgc_browser_20261015_03_full_result.json",
+    "run_dir": "D:\\code\\AutoReproducer\\AutoReproducer\\data\\runs\\repository_1b1c4bdb2f284c2aade1e5fb30e8646b",
+    "records": [
+      {
+        "name": "accuracy",
+        "value": 0.8328,
+        "unit": "",
+        "split": "test",
+        "stage": "final",
+        "source": "train_cora:stdout:22",
+        "source_quote": "Dataset: cora Test accuracy of 10 runs: mean 0.83280, std 0.00040",
+        "aggregation": "mean",
+        "runs": 10,
+        "std": 0.0004,
+        "id": "train_cora:stdout:0",
+        "step_id": "train_cora"
+      }
+    ],
+    "parse_errors": []
+  },
+  "digcn": {
+    "input": "data/runs/repository_f4846c5db817411881b74332b19933df/.autorepro_repository_runs/21f2d96e1c6e4240ae8854a50351f5b3/train.stdout.log",
+    "sha256": "df5e4c233b3477460b18f25e7beb6f6c5aad387ece9affc81417cd1e9d2d3059",
+    "records": [
+      {
+        "name": "accuracy",
+        "value": 0.8055,
+        "unit": "",
+        "split": "validation",
+        "stage": "validation",
+        "source": "stdout:10055",
+        "source_quote": "Val Acc: 0.8055, Val Loss: 0.6815, Test Accuracy: 0.7719 ± 0.0044, Duration: 2.4038"
+      },
+      {
+        "name": "loss",
+        "value": 0.6815,
+        "unit": "",
+        "split": "validation",
+        "stage": "validation",
+        "source": "stdout:10055",
+        "source_quote": "Val Acc: 0.8055, Val Loss: 0.6815, Test Accuracy: 0.7719 ± 0.0044, Duration: 2.4038"
+      },
+      {
+        "name": "accuracy",
+        "value": 0.7719,
+        "unit": "",
+        "split": "test",
+        "stage": "final",
+        "source": "stdout:10055",
+        "source_quote": "Val Acc: 0.8055, Val Loss: 0.6815, Test Accuracy: 0.7719 ± 0.0044, Duration: 2.4038",
+        "std": 0.0044,
+        "aggregation": "mean"
+      }
+    ],
+    "parse_errors": [],
+    "repetitions_note": "This printed line does not state repetitions; parser keeps runs unknown."
+  }
+}

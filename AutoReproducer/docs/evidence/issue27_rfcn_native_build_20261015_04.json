@@ -1,0 +1,106 @@
+{
+  "state": "ERROR",
+  "data": {
+    "started_at": "2026-10-15T10:45:34.345109+00:00",
+    "scope": "native_caffe_build_preflight",
+    "training_executed": false,
+    "caffe_revision": "1a2be8ecf9ba318d516d79187845e90ac6e73197",
+    "builder": "autorepro-rfcn-native-20261015-04",
+    "dockerfile_sha256": "7e9d5a2d994aad5800285893dacdedf7916764d97cebb98029bc118bd90be24b",
+    "buildkit_image": {
+      "id": "sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea",
+      "reference": "moby/buildkit@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea",
+      "introduced_by_this_task": true
+    },
+    "build_argv": [
+      "docker",
+      "buildx",
+      "build",
+      "--builder",
+      "autorepro-rfcn-native-20261015-04",
+      "--progress=plain",
+      "--output",
+      "type=docker,compression=uncompressed",
+      "-t",
+      "autoreproducer/rfcn-native-preflight:20261015-04",
+      "D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\rfcn_native_runtime"
+    ],
+    "log_path": "D:\\code\\AutoReproducer\\AutoReproducer\\data\\runtime\\issue27_rfcn_native_build_20261015_04.log",
+    "build_exit_code": 0,
+    "gpu_probe": {
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": "I1015 10:57:23.219420     1 caffe.cpp:138] Querying GPUs 0\nI1015 10:57:23.416546     1 common.cpp:186] Device id:                     0\nI1015 10:57:23.416576     1 common.cpp:187] Major revision number:         8\nI1015 10:57:23.416579     1 common.cpp:188] Minor revision number:         9\nI1015 10:57:23.416579     1 common.cpp:189] Name:                          NVIDIA GeForce RTX 4060 Laptop GPU\nI1015 10:57:23.416580     1 common.cpp:190] Total global memory:           8585216000\nI1015 10:57:23.416582     1 common.cpp:191] Total shared memory per block: 49152\nI1015 10:57:23.416582     1 common.cpp:192] Total registers per block:     65536\nI1015 10:57:23.416584     1 common.cpp:193] Warp size:                     32\nI1015 10:57:23.416584     1 common.cpp:194] Maximum memory pitch:          2147483647\nI1015 10:57:23.416585     1 common.cpp:195] Maximum threads per block:     1024\nI1015 10:57:23.416585     1 common.cpp:196] Maximum dimension of block:    1024, 1024, 64\nI1015 10:57:23.416586     1 common.cpp:199] Maximum dimension of grid:     2147483647, 65535, 65535\nI1015 10:57:23.416589     1 common.cpp:202] Clock rate:                    1890000\nI1015 10:57:23.416589     1 common.cpp:203] Total constant memory:         65536\nI1015 10:57:23.416589     1 common.cpp:204] Texture alignment:             512\nI1015 10:57:23.416590     1 common.cpp:205] Concurrent copy and execution: Yes\nI1015 10:57:23.416591     1 common.cpp:207] Number of multiprocessors:     24\nI1015 10:57:23.416592     1 common.cpp:208] Kernel execution timeout:      Yes\n"
+    },
+    "operator_probe": {
+      "scope": "synthetic GPU operator health check, not paper training",
+      "exit_code": 139,
+      "stdout": "",
+      "stderr": "F1015 10:57:24.492261     1 caffe.cpp:264] Check failed: FLAGS_weights.size() > 0 (0 vs. 0) Need model weights to score.\n*** Check failure stack trace: ***\n    @     0x782cc121bb03  google::LogMessage::Fail()\n    @     0x782cc12239d1  google::LogMessage::SendToLog()\n    @     0x782cc121b7c2  google::LogMessage::Flush()\n    @     0x782cc121d78f  google::LogMessageFatal::~LogMessageFatal()\n    @     0x5b8ff9890922  test()\n    @     0x5b8ff988c37a  main\n    @     0x782cc07d4d90  (unknown)\n    @     0x782cc07d4e40  __libc_start_main\n    @     0x5b8ff988ce95  _start\n    @              (nil)  (unknown)\n*** Aborted at 1792061844 (unix time) try \"date -d @1792061844\" if you are using GNU date ***\nPC: @                0x0 (unknown)\n*** SIGSEGV (@0x0) received by PID 1 (TID 0x782c7abd2000) from PID 0; stack trace: ***\n    @     0x782cc1228046 (unknown)\n    @     0x782cc07ed520 (unknown)\n    @     0x782cc07d3898 abort\n    @     0x782cc1215cf4 (unknown)\n    @     0x782cc121bb03 google::LogMessage::Fail()\n    @     0x782cc12239d1 google::LogMessage::SendToLog()\n    @     0x782cc121b7c2 google::LogMessage::Flush()\n    @     0x782cc121d78f google::LogMessageFatal::~LogMessageFatal()\n    @     0x5b8ff9890922 test()\n    @     0x5b8ff988c37a main\n    @     0x782cc07d4d90 (unknown)\n    @     0x782cc07d4e40 __libc_start_main\n    @     0x5b8ff988ce95 _start\n    @                0x0 (unknown)\n",
+      "expected_checksum": 49.0,
+      "passed": false
+    },
+    "native_cleanup": {
+      "errors": [],
+      "removed_images": [
+        "sha256:a4d333ab1f2dbd65f41cbbc55f1b56373093b51a9fc32a9d76be49588cc70ec1",
+        "sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea"
+      ],
+      "removed_volumes": [],
+      "remaining_images": [],
+      "remaining_builder_volumes": [],
+      "preexisting_images_retained": true
+    },
+    "elapsed_s": 715.58,
+    "finished_at": "2026-10-15T10:57:30.733719+00:00",
+    "environment_cleanup": {
+      "status": "released",
+      "removed": [],
+      "freed_bytes": 0,
+      "remaining": [],
+      "errors": [],
+      "training_python": {
+        "status": "released",
+        "removed": [],
+        "errors": [],
+        "freed_bytes": 0
+      },
+      "docker": {
+        "status": "released",
+        "removed": [],
+        "errors": []
+      },
+      "runtime_downloads": {
+        "status": "released",
+        "removed": [],
+        "freed_bytes": 0,
+        "errors": []
+      },
+      "before_run": {
+        "status": "released",
+        "removed": [],
+        "freed_bytes": 0,
+        "remaining": [],
+        "errors": [],
+        "training_python": {
+          "status": "released",
+          "removed": [],
+          "errors": [],
+          "freed_bytes": 0
+        },
+        "docker": {
+          "status": "released",
+          "removed": [],
+          "errors": []
+        },
+        "runtime_downloads": {
+          "status": "released",
+          "removed": [],
+          "freed_bytes": 0,
+          "errors": []
+        }
+      },
+      "replacements": []
+    }
+  }
+}

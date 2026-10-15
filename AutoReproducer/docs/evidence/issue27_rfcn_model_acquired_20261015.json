@@ -1,0 +1,11 @@
+{
+  "source": "https://www.deepdetect.com/models/resnet/ResNet-50-model.caffemodel",
+  "source_reference": "https://github.com/jolibrain/deepdetect/blob/a1c574cc54b49bc5706c84c12b68c2ba7cfd072b/get_models.sh",
+  "path": "data\\datasets\\rfcn\\imagenet_models\\ResNet-50-model.caffemodel",
+  "bytes": 102462397,
+  "sha256": "44ee2b08816cede2b7aaa047888df07dcab52f73399aa1c8bef05a17bfdd4888",
+  "network_name_in_binary": "ResNet-50",
+  "acquired_at": "2026-10-15T10:11:02.178228+00:00",
+  "verified_against_author_onedrive": false,
+  "scope": "Mirrored model input; no training or accuracy claim."
+}

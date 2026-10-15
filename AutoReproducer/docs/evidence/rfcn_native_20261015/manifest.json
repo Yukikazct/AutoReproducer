@@ -1,0 +1,31 @@
+{
+  "scope": "Audited snapshots of this local, task-specific preflight. These are evidence, not a general installer or the product author-training executor; the original controller ran from application .tmp/ with its recorded owned-image baseline.",
+  "files": [
+    {
+      "snapshot": "Dockerfile",
+      "original_location": ".tmp\\rfcn_native_runtime\\Dockerfile",
+      "sha256": "98de43f54e751532191b77d64e61c848d2f6a86f3491cfa731ec31963c672efc"
+    },
+    {
+      "snapshot": "buildkitd.toml",
+      "original_location": ".tmp\\rfcn_native_runtime\\buildkitd.toml",
+      "sha256": "a06d96d0fb1154d6b460f53eecb2a9141366ef955e1bed931a0c27b673452d14"
+    },
+    {
+      "snapshot": "psroi_health.prototxt",
+      "original_location": ".tmp\\rfcn_native_runtime\\psroi_health.prototxt",
+      "sha256": "5c82bf38b593ce2c287ac1889932cdefd13cac773aa3af23888ef51cdd1fb004"
+    },
+    {
+      "snapshot": "controller_snapshot.txt",
+      "original_location": ".tmp\\issue27_rfcn_native_build_05.py",
+      "sha256": "f43eb0ad9f6c1457d5361b39f92d3f7f2d7ec6b8ce9cc28466573cc6b0d88117"
+    }
+  ],
+  "post_run_verifier": {
+    "path": "verify_record.py",
+    "sha256": "1abe389cbaa56b8e3d9e56e8becffbe88bdc9ab4697de093989f1ef38b529957",
+    "scope": "Read-only verification of saved exit codes, GPU mode, constant-fixture checksum and cleanup."
+  },
+  "known_harness_check_issue": "The original controller matched Test score #0, whereas the pinned Caffe emits checksum = 49. Raw outputs remain unchanged; use the separate read-only verifier."
+}

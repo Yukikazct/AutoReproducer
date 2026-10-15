@@ -1,0 +1,71 @@
+{
+  "scope": "revalidate saved genuine API proposal against current parser/validators, not a new training run",
+  "commit": "62d91326882cbf0f487a005d3cb33fc60dc09ef0",
+  "source_run": "issue27_dgc_20261015_03",
+  "parse_errors": [],
+  "rows": [
+    {
+      "metric": "accuracy",
+      "reference": {
+        "name": "accuracy",
+        "value": 83.3,
+        "std": 0.0,
+        "unit": "percent",
+        "dataset": "Cora",
+        "method": "DGC (ours)",
+        "split": "test",
+        "aggregation": "mean",
+        "runs": 10,
+        "value_quote": "DGC (ours) 83.3\u00060.0 73.3\u00060.1 80.3\u00060.1",
+        "column_quote": "Type Method Cora Citeseer Pubmed",
+        "citations": [
+          "pdf_p7_0",
+          "pdf_p12_0"
+        ],
+        "proposed_metric_name": "DGC (ours)",
+        "name_correction": "Method row label normalized to the cited runtime metric",
+        "column_verified": true
+      },
+      "actual": {
+        "unit": "fraction",
+        "dataset": "cora",
+        "method": "DGC",
+        "split": "test",
+        "aggregation": "mean",
+        "runs": 10,
+        "std": 0.0003,
+        "citations": [
+          "repo_b10564ab7d2c_0",
+          "repo_89aa7df35185_0",
+          "repo_f8f2b3b4f9b7_0",
+          "repo_b33563055168_0"
+        ],
+        "value": 0.8329,
+        "source": "train-cora:stdout:22",
+        "id": "train-cora:stdout:0",
+        "source_quote": "Dataset: cora Test accuracy of 10 runs: mean 0.83290, std 0.00030"
+      },
+      "settings": {
+        "status": "matched",
+        "reason": "论文 Table 2 报告 DGC (ours) 在 Cora 半监督节点分类上的测试准确率为 83.3±0.0（%），并说明结果是对 10 次随机运行取平均（pdf_p7_0）。仓库 README 给出 Cora 的配置 T=5.27、K=250、Acc 83.3±0.0（repo_b33563055168_0），run_citation.sh 使用 --dataset cora --T 5.27 --K 250 --lr 0.156 --weight_decay 3.544e-5（repo_89aa7df35185_0），main.py 默认 trials=10、epochs=100、Adam 优化器，并输出 10 次运行的 mean/std（repo_b10564ab7d2c_0）。dgc.py 默认使用前向 Euler 积分（repo_f8f2b3b4f9b7_0），与论文默认的 DGC-Euler 一致。因此数据集、方法（DGC-Euler）、划分（标准半监督 Cora 测试集）与重复次数（10 次取均值）均匹配。",
+        "citations": [
+          "pdf_p7_0",
+          "pdf_p12_0",
+          "repo_b10564ab7d2c_0",
+          "repo_89aa7df35185_0",
+          "repo_f8f2b3b4f9b7_0",
+          "repo_b33563055168_0"
+        ]
+      },
+      "direction": "higher",
+      "status": "comparable",
+      "limitations": [],
+      "difference": -0.009999999999998899,
+      "relative_difference": -0.00012004801920766985,
+      "difference_unit": "percentage_points",
+      "within_tolerance": true,
+      "meets_reference": true
+    }
+  ],
+  "verified_citations": 6
+}

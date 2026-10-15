@@ -1,0 +1,40 @@
+{
+  "conclusion": "success",
+  "headSha": "62d91326882cbf0f487a005d3cb33fc60dc09ef0",
+  "jobs": [
+    {
+      "name": "tests (ubuntu-latest, 3.11)",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/Yukikazct/AutoReproducer/actions/runs/38721145017/job/116375722762",
+      "startedAt": "2026-10-15T10:33:48Z",
+      "completedAt": "2026-10-15T10:39:24Z"
+    },
+    {
+      "name": "tests (windows-latest, 3.12)",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/Yukikazct/AutoReproducer/actions/runs/38721145017/job/116375722872",
+      "startedAt": "2026-10-15T10:33:48Z",
+      "completedAt": "2026-10-15T10:50:40Z"
+    },
+    {
+      "name": "tests (ubuntu-latest, 3.12)",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/Yukikazct/AutoReproducer/actions/runs/38721145017/job/116375722982",
+      "startedAt": "2026-10-15T10:33:48Z",
+      "completedAt": "2026-10-15T10:38:36Z"
+    },
+    {
+      "name": "tests (windows-latest, 3.11)",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/Yukikazct/AutoReproducer/actions/runs/38721145017/job/116375723007",
+      "startedAt": "2026-10-15T10:34:00Z",
+      "completedAt": "2026-10-15T11:01:44Z"
+    }
+  ],
+  "status": "completed",
+  "url": "https://github.com/Yukikazct/AutoReproducer/actions/runs/38721145017"
+}

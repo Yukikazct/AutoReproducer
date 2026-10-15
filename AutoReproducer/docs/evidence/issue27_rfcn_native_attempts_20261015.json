@@ -1,0 +1,79 @@
+[
+  {
+    "attempt": 1,
+    "raw_state": "ERROR",
+    "build_exit_code": 100,
+    "gpu_query_exit": null,
+    "operator_exit": null,
+    "log_sha256": "cab662cc521f3c561e9700515c56d51bef45e6cf57d745ed77d9c38d55f73983",
+    "raw_log": "data\\runtime\\issue27_rfcn_native_build_20261015_01.log",
+    "selected_diagnostics": [
+      "  Sub-process /usr/bin/sqv returned an error code (1), error message is: Signing key on EB693B3035CD5710E231E123A4B469963BF863CC is not bound:            No binding signature at time 2026-10-13T15:29:40Z   because: Policy rejected non-revocation signature (PositiveCertification) requiring second pre-image resistance   because: SHA1 is not considered secure since 2026-02-01T00:00:00Z",
+      "\u001b[91mW: OpenPGP signature verification failed: https://developer.download.nvidia.cn/compute/cuda/repos/ubuntu2204/x86_64  InRelease: Sub-process /usr/bin/sqv returned an error code (1), error message is: Signing key on EB693B3035CD5710E231E123A4B469963BF863CC is not bound:            No binding signature at time 2026-10-13T15:29:40Z   because: Policy rejected non-revocation signature (PositiveCertification) requiring second pre-image resistance   because: SHA1 is not considered secure since 2026-02-01T00:00:00Z"
+    ]
+  },
+  {
+    "attempt": 2,
+    "raw_state": "ERROR",
+    "build_exit_code": 1,
+    "gpu_query_exit": null,
+    "operator_exit": null,
+    "log_sha256": "a823d7c3553400779f5377538f7cc8104290b31e9e72847b1baaa841b4a76a72",
+    "raw_log": "D:\\code\\AutoReproducer\\AutoReproducer\\data\\runtime\\issue27_rfcn_native_build_20261015_02.log",
+    "selected_diagnostics": [
+      "failed to apply diff: exit status 1: unpigz: skipping: <stdin>: corrupted -- invalid deflate data (invalid literal/length code)"
+    ]
+  },
+  {
+    "attempt": 3,
+    "raw_state": "ERROR",
+    "build_exit_code": 1,
+    "gpu_query_exit": null,
+    "operator_exit": null,
+    "log_sha256": "d51531fc04ca7acad03d7bbf877ba4ab05348eb9802cfe0173d2a897b54023f2",
+    "raw_log": "D:\\code\\AutoReproducer\\AutoReproducer\\data\\runtime\\issue27_rfcn_native_build_20261015_03.log",
+    "selected_diagnostics": [
+      "#10 97.90 [100%] Built target caffe",
+      "#10 100.5 /usr/bin/ld: ../lib/libcaffe.so.1.0.0-rc3: undefined reference to `H5LTget_dataset_ndims'",
+      "#10 100.5 /usr/bin/ld: ../lib/libcaffe.so.1.0.0-rc3: undefined reference to `H5LTmake_dataset_double'",
+      "#10 100.5 /usr/bin/ld: ../lib/libcaffe.so.1.0.0-rc3: undefined reference to `H5LTmake_dataset_int'",
+      "#10 100.5 /usr/bin/ld: ../lib/libcaffe.so.1.0.0-rc3: undefined reference to `H5LTread_dataset_float'",
+      "#10 100.5 /usr/bin/ld: ../lib/libcaffe.so.1.0.0-rc3: undefined reference to `H5LTmake_dataset_float'",
+      "#10 100.5 /usr/bin/ld: ../lib/libcaffe.so.1.0.0-rc3: undefined reference to `H5LTread_dataset_double'",
+      "#10 100.5 /usr/bin/ld: ../lib/libcaffe.so.1.0.0-rc3: undefined reference to `H5LTmake_dataset_string'",
+      "#10 100.5 /usr/bin/ld: ../lib/libcaffe.so.1.0.0-rc3: undefined reference to `H5LTread_dataset_int'",
+      "#10 100.5 /usr/bin/ld: ../lib/libcaffe.so.1.0.0-rc3: undefined reference to `H5LTfind_dataset'",
+      "#10 100.5 /usr/bin/ld: ../lib/libcaffe.so.1.0.0-rc3: undefined reference to `H5LTget_dataset_info'",
+      "#10 100.5 /usr/bin/ld: ../lib/libcaffe.so.1.0.0-rc3: undefined reference to `H5LTread_dataset_string'",
+      "100.5 /usr/bin/ld: ../lib/libcaffe.so.1.0.0-rc3: undefined reference to `H5LTmake_dataset_string'",
+      "100.5 /usr/bin/ld: ../lib/libcaffe.so.1.0.0-rc3: undefined reference to `H5LTread_dataset_int'",
+      "100.5 /usr/bin/ld: ../lib/libcaffe.so.1.0.0-rc3: undefined reference to `H5LTfind_dataset'"
+    ]
+  },
+  {
+    "attempt": 4,
+    "raw_state": "ERROR",
+    "build_exit_code": 0,
+    "gpu_query_exit": 0,
+    "operator_exit": 139,
+    "log_sha256": "3d8e0bf3dce01ab0648bb3b7c90cae5cf530842578239ade029662edae8743f1",
+    "raw_log": "D:\\code\\AutoReproducer\\AutoReproducer\\data\\runtime\\issue27_rfcn_native_build_20261015_04.log",
+    "selected_diagnostics": [
+      "#10 99.85 [100%] Built target caffe",
+      "#10 102.4 [100%] Built target caffe.bin"
+    ]
+  },
+  {
+    "attempt": 5,
+    "raw_state": "ERROR",
+    "build_exit_code": 0,
+    "gpu_query_exit": 0,
+    "operator_exit": 0,
+    "log_sha256": "a8aceb58f4c3bd86293c4bd89d55fd172863a64414b42b4d0368a3bc3949cfae",
+    "raw_log": "D:\\code\\AutoReproducer\\AutoReproducer\\data\\runtime\\issue27_rfcn_native_build_20261015_05.log",
+    "selected_diagnostics": [
+      "#10 99.50 [100%] Built target caffe",
+      "#10 102.1 [100%] Built target caffe.bin"
+    ]
+  }
+]
