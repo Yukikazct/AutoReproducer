@@ -19,7 +19,7 @@
 
 ### macOS / Linux
 
-选符合你情况的一段，完整复制执行。应用目录是包含 `app.py` 的 `AutoReproducer/`；外层目录是它的上一层。
+选符合你情况的一段，完整复制执行。本 README 位于仓库根目录（外层）；应用目录是其下包含 `app.py` 的 `AutoReproducer/`。除注明“当前在外层目录”的示例外，后文命令均在应用目录中执行。
 
 **情况 1：已经安装过，当前在 `AutoReproducer` 目录（也适用于这里再次 `cd AutoReproducer` 报错后）。**
 
@@ -190,7 +190,7 @@ PowerShell 安装步骤逐行执行，上一行成功后再执行下一行。改
 
 ### 保存配置
 
-可在项目内新建 `.streamlit/secrets.toml`，使用顶层字段：
+可在应用目录 `AutoReproducer/` 内新建 `.streamlit/secrets.toml`，使用顶层字段：
 
 ```toml
 LLM_BASE_URL = "https://api.deepseek.com"
@@ -295,19 +295,19 @@ python scripts/reproduce_repository.py --profile siren_camera_quick --prepare-en
 python scripts/reproduce_repository.py --profile neural_ode_spiral --offline
 ```
 
-首次准备环境会下载依赖，环境就绪不代表训练完成。`--prepare-environment` 保存准备结果后也会释放本次环境，下一次运行需要重新安装依赖。作者命令和固定预设不设执行时间上限；更完整的来源与参数见 [预设定义](src/repository_profiles.py)、[方法实验定义](src/method_profiles.py)和 [ReZero 定义](src/rezero_profiles.py)。
+首次准备环境会下载依赖，环境就绪不代表训练完成。`--prepare-environment` 保存准备结果后也会释放本次环境，下一次运行需要重新安装依赖。作者命令和固定预设不设执行时间上限；更完整的来源与参数见 [预设定义](AutoReproducer/src/repository_profiles.py)、[方法实验定义](AutoReproducer/src/method_profiles.py)和 [ReZero 定义](AutoReproducer/src/rezero_profiles.py)。
 
 ## 依赖与文件管理
 
 ### 应用依赖与实验依赖
 
-- [requirements.txt](requirements.txt) 统一维护网页和主进程依赖；[requirements-test.txt](requirements-test.txt) 引用它并增加 pytest、matplotlib。
+- [requirements.txt](AutoReproducer/requirements.txt) 统一维护网页和主进程依赖；[requirements-test.txt](AutoReproducer/requirements-test.txt) 引用它并增加 pytest、matplotlib。
 - PyTorch 等论文依赖按实验安装到托管目录，同一依赖根最多使用一套实验环境及补装包。报告和结构化结果保存后自动释放；切换依赖清单或训练 Python 前先清理上一套环境。
-- 作者仓库入口在安装后检查依赖版本和导入；固定预设仍按各自配置决定是否启用健康检查。自动释放不依赖健康检查开关、容量或缓存年龄。历史缓存及单独调用底层执行器的维护策略见 [依赖环境管理](docs/dependency_management.md)。
+- 作者仓库入口在安装后检查依赖版本和导入；固定预设仍按各自配置决定是否启用健康检查。自动释放不依赖健康检查开关、容量或缓存年龄。历史缓存及单独调用底层执行器的维护策略见 [依赖环境管理](AutoReproducer/docs/dependency_management.md)。
 
 ### 数据目录
 
-默认数据根是项目目录下的 `data/`，不随启动时的工作目录改变。常用目录如下：
+默认数据根是仓库内的 `AutoReproducer/data/`（应用目录中的 `data/`），不随启动时的工作目录改变。常用目录如下：
 
 代码获取共用按仓库 URL 与完整 commit 区分的 `repository_cache/` 源码缓存。通用资源获取每次导出到独立的 `repos/<paper_id>/workspaces/<运行ID>/repo/`；预设和 PDF 作者执行使用各自的独立运行目录。指定版本无法获取时停止使用该仓库，显式固定版本的通用任务也会停止后续执行；未指定版本时先将远端 HEAD 解析为完整 commit。报告和资源清单记录实际版本、源码归档及逐文件哈希，旧实验的修改和产物不会带入下一次运行。
 
@@ -324,7 +324,7 @@ python scripts/reproduce_repository.py --profile neural_ode_spiral --offline
 
 | 环境变量 | 默认值 | 作用 |
 | --- | --- | --- |
-| `AUTOREPRO_DATA_ROOT` | `<项目目录>/data` | 数据根目录 |
+| `AUTOREPRO_DATA_ROOT` | `<应用目录>/data` | 数据根目录 |
 | `AUTOREPRO_DEPS_ROOT` | `<数据根>/deps` | 独立依赖缓存目录，可放到另一块磁盘 |
 | `AUTOREPRO_L0_QUOTA_GB` | `20` GiB | 资源配额；不等于全部文件的总容量限制 |
 | `AUTOREPRO_DEPS_QUOTA_GB` | `20` GiB | 依赖回收的容量目标 |
@@ -339,7 +339,7 @@ $env:AUTOREPRO_DEPS_ROOT = "E:\AutoReproducer-deps"
 
 macOS/Linux 使用 `export AUTOREPRO_DATA_ROOT="/绝对路径"`。修改配置只改变后续读写位置，不会迁移已有文件；需要完整迁移时，先停止任务，再复制数据目录及独立配置的依赖目录。
 
-论文运行环境默认自动释放：同一依赖根的任务串行使用一套实验依赖，报告和结构化结果保存后删除论文包、补装包、托管训练 Python 及其下载缓存；异常和中断也执行清理。启动下一次任务前先清除遗留环境，清理失败则停止创建新环境。应用自身的 Python 与生产依赖保留，报告、图表和日志保留。详见 [依赖环境管理](docs/dependency_management.md)。
+论文运行环境默认自动释放：同一依赖根的任务串行使用一套实验依赖，报告和结构化结果保存后删除论文包、补装包、托管训练 Python 及其下载缓存；异常和中断也执行清理。启动下一次任务前先清除遗留环境，清理失败则停止创建新环境。应用自身的 Python 与生产依赖保留，报告、图表和日志保留。详见 [依赖环境管理](AutoReproducer/docs/dependency_management.md)。
 
 ### 查看与清理
 
@@ -368,31 +368,35 @@ pip 下载、解压和下载缓存统一放在依赖根的 `.pip-temporary/` 所
 python scripts/resource_cli.py --data-root E:/AutoReproducer-data status
 ```
 
-`archive PAPER_ID` / `restore ZIP路径` 用于单篇资源归档与恢复；`prune --yes` 在资源超配额时先归档再清理。**资源归档只包含已登记的代码、数据、本地权重及清单，不包含报告、运行日志或依赖环境。**目录迁移、归档校验和 Windows 文件占用处理见 [文件与存储管理](docs/file_management.md)。
+`archive PAPER_ID` / `restore ZIP路径` 用于单篇资源归档与恢复；`prune --yes` 在资源超配额时先归档再清理。**资源归档只包含已登记的代码、数据、本地权重及清单，不包含报告、运行日志或依赖环境。**目录迁移、归档校验和 Windows 文件占用处理见 [文件与存储管理](AutoReproducer/docs/file_management.md)。
 
 ## 开发与测试
 
 ### 项目结构
 
 ```text
-AutoReproducer/                 # 包含 app.py 的内层项目目录
-├── app.py                      # Streamlit 页面与任务入口
-├── frontend/                   # 页面样式、后台任务、历史与报告展示
-├── src/
-│   ├── orchestrator.py         # 流程编排与入口分流
-│   ├── agents/                 # 阅读、查找、环境、执行、报告等 Agent
-│   ├── llm/                    # OpenAI 兼容 API 客户端与 Mock 响应
-│   ├── repository_profiles.py  # 固定预设注册
-│   ├── dependency_cache.py     # 依赖缓存与健康检查实现
-│   ├── dependency_management.py # 依赖清单、复用与回收
-│   ├── project_paths.py        # 统一数据路径
-│   └── resource_manager.py     # 资源下载、清单、归档与恢复
-├── scripts/                    # 实验与资源 CLI
-├── tests/                      # pytest 回归测试
-├── docs/                       # 专题说明与历史实验记录
-├── examples/papers/            # PDF 样本与来源清单
-├── requirements.txt            # 应用依赖
-└── requirements-test.txt       # 测试依赖
+AutoReproducer/                  # 仓库根目录（外层）
+├── README.md                    # 项目说明
+├── LICENSE                      # MIT 许可证
+├── .github/workflows/           # 持续集成
+└── AutoReproducer/              # 应用目录，命令默认在这里执行
+    ├── app.py                   # Streamlit 页面与任务入口
+    ├── frontend/                # 页面样式、后台任务、历史与报告展示
+    ├── src/
+    │   ├── orchestrator.py      # 流程编排与入口分流
+    │   ├── agents/              # 阅读、查找、环境、执行、报告等 Agent
+    │   ├── llm/                 # OpenAI 兼容 API 客户端与 Mock 响应
+    │   ├── repository_profiles.py # 固定预设注册
+    │   ├── dependency_cache.py   # 依赖缓存与健康检查实现
+    │   ├── dependency_management.py # 依赖清单、复用与回收
+    │   ├── project_paths.py      # 统一数据路径
+    │   └── resource_manager.py   # 资源下载、清单、归档与恢复
+    ├── scripts/                 # 实验与资源 CLI
+    ├── tests/                   # pytest 回归测试
+    ├── docs/                    # 专题说明与历史实验记录
+    ├── examples/papers/         # PDF 样本与来源清单
+    ├── requirements.txt         # 应用依赖
+    └── requirements-test.txt    # 测试依赖
 ```
 
 ### 运行测试
@@ -408,7 +412,7 @@ python -m pytest tests/ -q -ra
 python -X utf8 -m pytest tests/ -q -ra
 ```
 
-[GitHub Actions](../.github/workflows/tests.yml) 配置为 Ubuntu / Windows × Python 3.11 / 3.12，Windows 另跑 UTF-8 模式。回归测试无需真实 LLM API；CI 配置和历史通过记录不能代替当前提交的测试结果，也不能证明真实论文训练完成。当前测试已迁移到作者代码执行和报告流程；本地全量结果、Windows 并发修复及真实 PDF 验证状态见 [测试跟进记录](docs/test_followup_20261013.md)。
+[GitHub Actions](.github/workflows/tests.yml) 配置为 Ubuntu / Windows × Python 3.11 / 3.12，Windows 另跑 UTF-8 模式。回归测试无需真实 LLM API；CI 配置和历史通过记录不能代替当前提交的测试结果，也不能证明真实论文训练完成。当前测试已迁移到作者代码执行和报告流程；本地全量结果、Windows 并发修复及真实 PDF 验证状态见 [测试跟进记录](AutoReproducer/docs/test_followup_20261013.md)。
 
 ### Python 编程接口
 
@@ -434,9 +438,13 @@ print(result["data"].get("validation"))
 
 | 文档 | 内容 |
 | --- | --- |
-| [PDF 样本归档](examples/papers/README.md) | 论文来源、版本与 SHA-256；收录不代表运行通过 |
-| [依赖环境管理](docs/dependency_management.md) | 应用清单、缓存复用条件及回收机制 |
-| [文件与存储管理](docs/file_management.md) | 数据路径、迁移、归档恢复及 Windows 文件规则 |
-| [当前执行流程与已知待办](docs/execution_without_reviews_20261012.md) | 移除审核后的 AdaGNN 实际运行记录、能力边界与回归情况 |
+| [PDF 样本归档](AutoReproducer/examples/papers/README.md) | 论文来源、版本与 SHA-256；收录不代表运行通过 |
+| [依赖环境管理](AutoReproducer/docs/dependency_management.md) | 应用清单、缓存复用条件及回收机制 |
+| [文件与存储管理](AutoReproducer/docs/file_management.md) | 数据路径、迁移、归档恢复及 Windows 文件规则 |
+| [当前执行流程与已知待办](AutoReproducer/docs/execution_without_reviews_20261012.md) | 移除审核后的 AdaGNN 实际运行记录、能力边界与回归情况 |
 
-历史实验资料：[DLinear](docs/dlinear_reproduction_result.md) · [SIREN](docs/siren_quick_result.md) · [Neural ODE](docs/neural_ode_result.md) · [独立 PDF 测试](docs/independent_pdf_acceptance.md)。这些文档保留当时的环境、指标和操作步骤；其中的旧审核开关、数值验收和优化结论不代表当前版本功能。
+历史实验资料：[DLinear](AutoReproducer/docs/dlinear_reproduction_result.md) · [SIREN](AutoReproducer/docs/siren_quick_result.md) · [Neural ODE](AutoReproducer/docs/neural_ode_result.md) · [独立 PDF 测试](AutoReproducer/docs/independent_pdf_acceptance.md)。这些文档保留当时的环境、指标和操作步骤；其中的旧审核开关、数值验收和优化结论不代表当前版本功能。
+
+## 许可证
+
+本项目采用 [MIT 许可证](LICENSE) 开源，版权归属为 © 2026 Yukikazct。
