@@ -357,6 +357,7 @@ class RepositoryRunner:
     def run(self, workspace, steps, env_config, use_docker=False, on_event=None):
         """Emit an invocation verdict after dependency cleanup and result collection."""
         invocation = {"execution_id": None, "emit": None}
+        previous_executor_events = getattr(self.executor, 'on_event', None)
         result, failure = None, None
         try:
             result = self._run_invocation(workspace, steps, env_config, use_docker,
@@ -366,6 +367,7 @@ class RepositoryRunner:
             failure = exc
             raise
         finally:
+            self.executor.on_event = previous_executor_events
             if invocation["execution_id"] is not None:
                 status = ("interrupted" if isinstance(failure, (KeyboardInterrupt, SystemExit))
                           or (result is not None and (result.get("cancelled") or result.get("interrupted")))
@@ -436,6 +438,7 @@ class RepositoryRunner:
             run_dir.mkdir()
             result["run_dir"] = str(run_dir)
             invocation["execution_id"] = run_dir.name
+            self.executor.on_event = lambda event: emit({**event, 'execution_id': run_dir.name})
             emit({"type": "execution_run", "execution_id": run_dir.name,
                   "status": "running"})
             # Native wheels cannot be shared across Python ABIs or machines.

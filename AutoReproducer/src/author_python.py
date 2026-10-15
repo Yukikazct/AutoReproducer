@@ -62,13 +62,13 @@ def _python_bounds(packet):
 def _probe(executable):
     try:
         outcome = run_owned_process([str(executable), '-I', '-c',
-            'import json,sys; print(json.dumps([sys.implementation.name,*sys.version_info[:2],sys.maxsize>2**32]))'],
+            'import json,sys; print(json.dumps([sys.implementation.name,*sys.version_info[:3],sys.maxsize>2**32]))'],
             timeout_s=15)
         if outcome.returncode:
             return None
-        name, major, minor, bits = json.loads(outcome.stdout.strip())
-        version = (major, minor)
-        if name != 'cpython' or version not in SUPPORTED or not bits:
+        name, major, minor, micro, bits = json.loads(outcome.stdout.strip())
+        version = (major, minor, micro)
+        if name != 'cpython' or version[:2] not in SUPPORTED or not bits:
             return None
         return version
     except (OSError, ValueError, RuntimeError):
@@ -97,7 +97,8 @@ def _uv_command(root, *, offline):
             failures.append(_safe_install_diagnostic(result.stderr or result.stdout)[-300:])
         else:
             raise TrainingPythonUnavailable('自动准备 uv 失败：' + '; '.join(failures))
-    binary = next((path for path in (target / 'bin/uv', target / 'Scripts/uv.exe', target / 'uv/_uv')
+    binary = next((path for path in (target / 'bin/uv', target / 'bin/uv.exe',
+                                   target / 'Scripts/uv.exe', target / 'uv/_uv')
                    if path.is_file()), None)
     if binary:
         return [str(binary)]
@@ -119,7 +120,7 @@ def _ensure_pip(executable, root):
 def _managed_venv(root, base, version):
     from filelock import FileLock
     from src.training_environment import training_process_environment
-    directory = root / 'envs' / ('cpython-' + '.'.join(map(str, version)))
+    directory = root / 'envs' / ('cpython-' + '.'.join(map(str, version[:2])))
     executable = directory / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
     root.mkdir(parents=True, exist_ok=True)
     with FileLock(str(root / '.python.lock')):
@@ -144,14 +145,19 @@ def select_author_python(packet, managed_root, *, offline=False, mirror=None,
             bounds.append(('actual_requested_dependency', required_python, SpecifierSet(required_python)))
         except InvalidSpecifier as exc:
             raise TrainingPythonUnavailable('无法核验所请求依赖的 Requires-Python 约束：' + required_python) from exc
-    admissible = [version for version in SUPPORTED
-                  if version not in exclude_versions
-                  and all(spec.contains('.'.join(map(str, version)) + '.0') for _, _, spec in bounds)]
+    admissible = [version for version in SUPPORTED if version not in exclude_versions]
     if not admissible:
         raise TrainingPythonUnavailable('作者 Python 声明与支持的 CPython 3.9–3.12 均不兼容：' +
                                         ', '.join(f'{name}: {value}' for name, value, _ in bounds))
     from src.training_environment import prepare_training_environment, training_process_environment
     root = prepare_training_environment(managed_root)
+
+    def matches(version):
+        # A minor family such as 3.12 cannot stand in for the actual patch
+        # release when evaluating declarations such as >=3.12.1 or !=3.12.10.
+        return (version is not None and version[:2] in admissible
+                and all(spec.contains('.'.join(map(str, version))) for _, _, spec in bounds))
+
     choices = [Path(sys.executable)]
     choices.extend(Path(path) for version in admissible
                    if (path := shutil.which('python' + '.'.join(map(str, version)))))
@@ -164,18 +170,24 @@ def select_author_python(packet, managed_root, *, offline=False, mirror=None,
             continue
         seen.add(str(candidate))
         version = _probe(candidate)
-        if version in admissible:
+        if matches(version):
             isolated = _managed_venv(root, candidate, version)
-            return {'python_executable': str(isolated), 'python_version': '.'.join(map(str, version)),
+            return {'python_executable': str(isolated), 'python_version': '.'.join(map(str, version[:2])),
                     'runtime_fingerprint': runtime_fingerprint(isolated), 'source': 'isolated_existing',
                     'requirements': [{'path': name, 'specifier': value} for name, value, _ in bounds]}
     if offline:
         raise TrainingPythonUnavailable('离线模式缺少符合作者版本声明的训练用 Python；请预先准备隔离解释器')
     uv = _uv_command(root, offline=offline)
-    version = admissible[0]
+    # Let uv select an available patch release from the exact intersection;
+    # testing only x.y.0 would discard otherwise compatible Python families.
+    lowest, highest = min(SUPPORTED), max(SUPPORTED)
+    constraints = [f'>={lowest[0]}.{lowest[1]}', f'<{highest[0]}.{highest[1] + 1}']
+    constraints.extend(value for _, value, _ in bounds)
+    constraints.extend(f'!={major}.{minor}.*' for major, minor in SUPPORTED if (major, minor) not in admissible)
+    request = 'cpython@' + ','.join(constraints)
     install_dir = root / 'interpreters'
-    command = [*uv, 'python', 'install', '.'.join(map(str, version)),
-               '--install-dir', str(install_dir), '--no-bin']
+    command = [*uv, 'python', 'install', request,
+               '--install-dir', str(install_dir), '--no-bin', '--no-registry']
     mirror = mirror or os.environ.get('AUTOREPRO_PYTHON_MIRROR', '').strip()
     if mirror:
         command += ['--mirror', mirror]
@@ -185,9 +197,10 @@ def select_author_python(packet, managed_root, *, offline=False, mirror=None,
     from src.runtime_preparation import safe_runtime_diagnostic
     candidates = list(install_dir.glob('cpython-*/bin/python3')) + list(install_dir.glob('cpython-*/python.exe'))
     for candidate in candidates:
-        if _probe(candidate) == version:
+        version = _probe(candidate)
+        if matches(version):
             _ensure_pip(candidate, root)
-            return {'python_executable': str(candidate.absolute()), 'python_version': '.'.join(map(str, version)),
+            return {'python_executable': str(candidate.absolute()), 'python_version': '.'.join(map(str, version[:2])),
                     'runtime_fingerprint': runtime_fingerprint(candidate), 'source': 'uv_managed',
                     'requirements': [{'path': name, 'specifier': value} for name, value, _ in bounds]}
     raise TrainingPythonUnavailable(safe_runtime_diagnostic('uv did not provide the selected CPython version'))

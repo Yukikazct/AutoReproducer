@@ -214,7 +214,8 @@ def test_internal_venv_links_are_unlinked_without_deleting_base_python(roots, tm
     assert not root.exists() and external.read_bytes() == b"retain host interpreter"
 
 
-def test_training_install_processes_own_scratch_and_disable_shared_caches(roots, monkeypatch):
+@pytest.mark.parametrize("binary_name", ["uv", "uv.exe"])
+def test_training_install_processes_own_scratch_and_disable_shared_caches(roots, monkeypatch, binary_name):
     data, deps = roots
     root = data / "training_python"
     calls = []
@@ -225,7 +226,9 @@ def test_training_install_processes_own_scratch_and_disable_shared_caches(roots,
         assert environment["PIP_NO_CACHE_DIR"] == "1"
         assert "GITHUB_TOKEN" not in environment
         calls.append(command)
-        binary = root / "tools" / "uv" / "Scripts" / "uv.exe"
+        # pip --target uses its home scheme: scripts go under bin on both
+        # POSIX and Windows; the Windows wheel retains its .exe suffix.
+        binary = root / "tools" / "uv" / "bin" / binary_name
         binary.parent.mkdir(parents=True, exist_ok=True)
         binary.touch()
         return Mock(returncode=1 if len(calls) == 2 else 0)
@@ -266,3 +269,88 @@ def test_nested_distinct_dependency_owner_preserves_outer_training_runtime(roots
             with lifecycle.managed_environment(tmp_path / "nested-deps"):
                 pytest.fail("nested owner must not take the live interpreter")
         assert root.exists()
+
+
+def test_author_python_probe_preserves_patch_version():
+    assert author_python._probe(sys.executable) == sys.version_info[:3]
+
+
+@pytest.mark.parametrize("specifier, compatible", [
+    (">=3.12.1,<3.13", True),
+    ("==3.12.10", True),
+    ("<3.12.10", False),
+    (">=3.12.11", False),
+    (">=3.12,!=3.12.10", False),
+])
+def test_existing_training_python_obeys_full_patch_constraints(roots, monkeypatch, specifier, compatible):
+    data, deps = roots
+    packet = {"repository": {"files": {"pyproject.toml": {
+        "text": f'[project]\nrequires-python = "{specifier}"\n'}}}}
+    monkeypatch.setattr(author_python.shutil, "which", lambda name: None)
+    monkeypatch.setattr(author_python, "_probe", lambda path: (3, 12, 10))
+    created = []
+    def create(root, base, version):
+        created.append(version)
+        return make_runtime(root)
+    monkeypatch.setattr(author_python, "_managed_venv", create)
+    monkeypatch.setattr(author_python, "runtime_fingerprint", lambda executable: "test-runtime")
+    with lifecycle.managed_environment():
+        if compatible:
+            selected = author_python.select_author_python(packet, data / "training_python", offline=True)
+            assert selected["python_version"] == "3.12"
+            assert created == [(3, 12, 10)]
+        else:
+            with pytest.raises(author_python.TrainingPythonUnavailable, match="离线模式"):
+                author_python.select_author_python(packet, data / "training_python", offline=True)
+            assert not created
+
+
+@pytest.mark.parametrize("downloaded_version, compatible", [
+    ((3, 11, 9), True),
+    ((3, 11, 8), False),
+    ((3, 10, 6), False),
+    ((3, 12, 10), False),
+])
+def test_managed_download_preserves_constraints_and_avoids_registry_changes(
+        roots, monkeypatch, downloaded_version, compatible):
+    from packaging.specifiers import SpecifierSet
+    data, deps = roots
+    root = data / "training_python"
+    executable = root / "interpreters" / "cpython-downloaded" / (
+        "python.exe" if os.name == "nt" else "bin/python3")
+    packet = {"repository": {"files": {"pyproject.toml": {
+        "text": '[project]\nrequires-python = ">=3.10.7,<3.13"\n'}}}}
+    calls = []
+    monkeypatch.setattr(author_python.shutil, "which", lambda name: None)
+    monkeypatch.setattr(author_python, "_probe", lambda path: downloaded_version if Path(path) == executable else None)
+    monkeypatch.setattr(author_python, "_uv_command", lambda *args, **kwargs: ["owned-uv"])
+    monkeypatch.setattr(author_python, "runtime_fingerprint", lambda executable: "test-runtime")
+    ensure_pip = Mock()
+    monkeypatch.setattr(author_python, "_ensure_pip", ensure_pip)
+    def execute(command, **kwargs):
+        calls.append(command)
+        executable.parent.mkdir(parents=True)
+        executable.touch()
+        return Mock(returncode=0)
+    monkeypatch.setattr(author_python, "run_owned_process", execute)
+    with lifecycle.managed_environment():
+        kwargs = {"exclude_versions": {(3, 12)}, "required_python": "!=3.11.8"}
+        if compatible:
+            selected = author_python.select_author_python(packet, root, **kwargs)
+            assert selected["python_version"] == "3.11" and selected["source"] == "uv_managed"
+            ensure_pip.assert_called_once_with(executable, root)
+        else:
+            with pytest.raises(author_python.TrainingPythonUnavailable, match="selected CPython version"):
+                author_python.select_author_python(packet, root, **kwargs)
+            ensure_pip.assert_not_called()
+    assert len(calls) == 1
+    command = calls[0]
+    assert command[:3] == ["owned-uv", "python", "install"]
+    assert command[3].startswith("cpython@")
+    constraint = SpecifierSet(command[3].removeprefix("cpython@"))
+    assert constraint.contains("3.11.9")
+    assert not any(constraint.contains(version) for version in (
+        "3.8.20", "3.10.6", "3.11.8", "3.12.10", "3.13.0"))
+    assert "--no-bin" in command and "--no-registry" in command
+    assert command[command.index("--install-dir") + 1] == str(root / "interpreters")
+    assert not root.exists()

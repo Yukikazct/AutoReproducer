@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 from copy import deepcopy
 import shutil
+import pytest
 
 from discovered_fixtures import make_experiment, write_pdf
 from src import discovered_repository_reproduction as service
@@ -94,7 +95,8 @@ def test_service_reads_discovered_alternate_after_download_failure_without_revie
     stop.assert_called_once()
 
 
-def test_environment_block_before_training_checks_readme_linked_implementation(tmp_path, monkeypatch):
+@pytest.mark.parametrize('failure_kind', ['wheel_unavailable', 'installation_timeout'])
+def test_environment_block_before_training_checks_readme_linked_implementation(tmp_path, monkeypatch, failure_kind):
     fixture = make_experiment(tmp_path)
     original = fixture['snapshot']['url']
     linked = 'https://github.com/author/linked-training'
@@ -123,7 +125,7 @@ def test_environment_block_before_training_checks_readme_linked_implementation(t
         if len(executed) == 1:
             failure = RuntimeError('Python environment cannot provide this author stack')
             failure.reproduction_phase = 'prepare_environment'
-            failure.category = 'wheel_unavailable'
+            failure.category = failure_kind
             raise failure
         data['validation'] = {'status': 'environment_ready', 'is_reproduced': None, 'result_level': 'prepared'}
     monkeypatch.setattr(service.DiscoveredRepositoryReproduction, '_execute_frozen', execute)
@@ -132,6 +134,12 @@ def test_environment_block_before_training_checks_readme_linked_implementation(t
     runner.llm.get_call_count.return_value = 0
     result = runner.run({'pdf_path': str(fixture['pdf']), 'author_execution_only': True,
                          'resources': {'code_repo_url': original}})
+    if failure_kind == 'installation_timeout':
+        assert executed == [original]
+        assert result['state'] == 'ERROR'
+        assert result['data']['resources']['selected_repo'] == original
+        assert result['data']['repository_identity_attempts'][0]['failure_kind'] == failure_kind
+        return
     assert executed == [original, linked]
     assert [item['planning_status'] for item in result['data']['repository_identity_attempts']] == [
         'environment_blocked', 'accepted']

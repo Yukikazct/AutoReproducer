@@ -64,7 +64,15 @@ sys.path[:0] = [str(path) for path in targets]
 # packaging can itself be one of the managed dependencies. Import the probe's
 # helper only after selecting the cache, otherwise sys.modules keeps the host
 # copy and a healthy managed packaging install is incorrectly rejected.
-from packaging.specifiers import SpecifierSet
+try:
+    from packaging.specifiers import SpecifierSet
+except ModuleNotFoundError as exc:
+    if exc.name != 'packaging':
+        raise
+    # Fresh training venvs have pip, but need not install packaging separately.
+    # Use pip's bundled parser without adding a dependency to the author plan.
+    # Broken managed packaging modules must still fail the health check.
+    from pip._vendor.packaging.specifiers import SpecifierSet
 canonical = lambda name: re.sub(r"[-_.]+", "-", name).lower()
 distributions = {}
 for path in targets:

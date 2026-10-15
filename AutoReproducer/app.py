@@ -35,9 +35,10 @@ from src.repository_profiles import PAPER_TITLE
 from src.title_routing import resolve_title_request
 from frontend.display_text import display_text
 from frontend.live_progress import (elapsed_seconds, progress_signature,
-                                    recent_progress_runs, render_activity, resolve_progress_run)
+                                    recent_progress_runs, render_activity, render_dependency_progress,
+                                    resolve_progress_run)
 from frontend import progress_state
-if getattr(progress_state, "PROGRESS_VIEW_VERSION", 0) != 2:
+if getattr(progress_state, "PROGRESS_VIEW_VERSION", 0) != 3:
     progress_state = importlib.reload(progress_state)
 from frontend.report_renderer import render_report, report_downloads
 from src.report_revisions import (can_regenerate_report, needs_report_upgrade,
@@ -677,6 +678,7 @@ def poll_live_progress():
                                + (f" · 已持续 {duration} 秒" if duration is not None else ""))
             if age is not None and age >= 30:
                 st.caption("后台暂未产生新日志，仍等待阶段返回；不能据此判定任务已完成。")
+        render_dependency_progress(snap or {}, st_module=st)
 
 
 poll_live_progress()

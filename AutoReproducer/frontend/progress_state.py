@@ -1,9 +1,12 @@
 """Progress state and explicit completion gates (stdlib only)."""
 import json
+import math
 from pathlib import Path
 from typing import Any, Dict, List
 
-PROGRESS_VIEW_VERSION = 2
+PROGRESS_VIEW_VERSION = 3
+INSTALLATION_HISTORY_LIMIT = 40
+INSTALLATION_LIMIT = 10
 
 
 COMPLETION_RULES = {
@@ -45,6 +48,7 @@ def read_progress_snapshot(path: str) -> Dict[str, Any]:
         "title_resolution": {},
         "pdf_resolution": {},
         "activities": [],
+        "dependency_installations": [],
     }
     stages: Dict[str, Dict[str, Any]] = {}
     stage_order: List[str] = []
@@ -55,6 +59,7 @@ def read_progress_snapshot(path: str) -> Dict[str, Any]:
     executions: Dict[tuple, Dict[str, Any]] = {}
     runs: Dict[str, Dict[str, Any]] = {}
     workers: Dict[str, Dict[str, Any]] = {}
+    installations: Dict[str, Dict[str, Any]] = {}
     run_end_order = {}
     worker_end_order = {}
     step_end_order = {}
@@ -62,6 +67,52 @@ def read_progress_snapshot(path: str) -> Dict[str, Any]:
     terminal_request = None
     output_key = None
     labeled_output = False
+
+    def installation_history(row, event):
+        entry = {key: row.get(key, "") for key in ("status", "phase", "package", "source_domain", "message")}
+        history = row.setdefault("history", [])
+        if not history or any(history[-1].get(key) != value for key, value in entry.items()):
+            history.append({"at": event.get("at", ""), **entry})
+            del history[:-INSTALLATION_HISTORY_LIMIT]
+
+    def update_installation(event):
+        identifier, status = event.get("installation_id"), event.get("status")
+        if (not view["running"] or not isinstance(identifier, str) or not identifier
+                or len(identifier) > 128 or status not in {"running", "success", "error", "cancelled"}):
+            return
+        previous = installations.get(identifier, {})
+        execution_id = event.get("execution_id", previous.get("execution_id", ""))
+        execution_id = execution_id if isinstance(execution_id, str) else ""
+        if (previous.get("status") not in {None, "running"}
+                or runs.get(execution_id, {}).get("status") in {"success", "error", "interrupted"}):
+            return  # A delayed pulse cannot reopen an installation or its owner.
+        row = {**previous, "installation_id": identifier, "execution_id": execution_id,
+               "status": status, "at": event.get("at", "")}
+        for key in ("phase", "package", "source_domain", "message"):
+            if key in event:
+                value = event[key]
+                row[key] = value[:1000 if key == "message" else 200] if isinstance(value, str) else ""
+        for key in ("downloaded_bytes", "total_bytes", "download_speed_bps", "elapsed_s", "timeout_s", "last_activity_at"):
+            if key in event:
+                value = event[key]
+                valid = type(value) in (int, float) and math.isfinite(value) and value >= 0
+                if key in {"downloaded_bytes", "total_bytes"}:
+                    valid = valid and type(value) is int
+                row[key] = value if valid else None
+        installation_history(row, event)
+        installations[identifier] = row
+        while len(installations) > INSTALLATION_LIMIT:
+            installations.pop(next(iter(installations)))
+
+    def finish_installations(event, execution_id=None, *, failed=False):
+        for row in installations.values():
+            if row["status"] != "running" or (execution_id is not None and row["execution_id"] != execution_id):
+                continue
+            # Owner termination ends live display, but does not prove that an
+            # installer whose final event is missing succeeded or itself failed.
+            row.update(status="interrupted" if failed else "unconfirmed", at=event.get("at", ""),
+                       message="所属任务已结束，未收到安装完成结果")
+            installation_history(row, event)
 
     def execution_context(event: Dict[str, Any]) -> Dict[str, Any]:
         identifier = event.get("execution_id")
@@ -225,6 +276,7 @@ def read_progress_snapshot(path: str) -> Dict[str, Any]:
             finish_pending("流水线异常终止，本阶段未执行", True)
         view["running"] = False
         view["finalization_pending"] = False
+        finish_installations(event, failed=view["state"] == "ERROR")
 
     if not p.exists():
         return view
@@ -323,6 +375,8 @@ def read_progress_snapshot(path: str) -> Dict[str, Any]:
             view["environment_preparation"] = ev.get("environment", {})
             activity(ev, phase_id=ev.get("phase_id", ""), agent="EnvBuilder",
                      status=ev.get("status", ""), message=ev.get("reason") or "准备运行依赖")
+        elif etype == "dependency_install_progress":
+            update_installation(ev)
         elif etype == "title_resolution":
             view["title_resolution"] = {key: ev[key] for key in ("requested_title", "profile", "source", "scope") if key in ev}
         elif etype == "pdf_resolution":
@@ -358,6 +412,7 @@ def read_progress_snapshot(path: str) -> Dict[str, Any]:
             status = runs[identifier]["status"]
             if status != "running":
                 run_end_order[identifier] = event_sequence
+                finish_installations(ev, identifier, failed=status != "success")
                 for step_context in executions.values():
                     if step_context["execution_id"] == identifier and step_context["status"] == "running":
                         # A scope end confirms cleanup, but cannot invent a lost
@@ -417,6 +472,7 @@ def read_progress_snapshot(path: str) -> Dict[str, Any]:
             terminal_request = None
         view["updated_at"] = ev.get("at", view["updated_at"])
     view["pipeline_stages"] = [stages[identifier] for identifier in stage_order]
+    view["dependency_installations"] = list(installations.values())
     if not view["running"]:
         for context in executions.values():
             if context["status"] == "running":

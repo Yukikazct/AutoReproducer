@@ -3,6 +3,9 @@ import json
 import importlib.metadata
 import shutil
 import subprocess
+import sys
+import tempfile
+import venv
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -211,6 +214,34 @@ def test_health_probe_imports_packaging_from_the_managed_environment(monkeypatch
     instance.env_config['requirements_txt'] = requirements
     assert prepare(instance, tmp_path) is None
     assert calls == [] and instance._deps_dir == str(directory)
+
+
+def test_health_probe_works_in_clean_training_python_without_packaging(tmp_path):
+    directory = ce.DEPS_CACHE_ROOT / ce.reqs_digest(REQUIREMENTS)
+    package(directory, ready=True)
+    with tempfile.TemporaryDirectory(prefix="training-python-", dir=tmp_path) as runtime:
+        venv.EnvBuilder(with_pip=True).create(runtime)
+        executable = Path(runtime) / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
+        subprocess.run([str(executable), "-I", "-c",
+                        "import importlib.util; assert importlib.util.find_spec('packaging') is None"],
+                       check=True, capture_output=True, text=True, timeout=15)
+        instance = executor()
+        instance.env_config["python_executable"] = str(executable)
+        assert instance._check_local_dependency_health(directory, REQUIREMENTS, "cached") is None
+        diagnostic = instance._check_local_dependency_health(directory, "native-demo>=2", "cached")
+        assert "cached version does not satisfy fixed requirement" in diagnostic
+
+
+@pytest.mark.parametrize("source,missing", [("", "packaging.specifiers"),
+                                           ("import missing_packaging_dependency", "missing_packaging_dependency")])
+def test_probe_does_not_mask_broken_managed_packaging(tmp_path, source, missing):
+    directory = ce.DEPS_CACHE_ROOT / ce.reqs_digest(REQUIREMENTS)
+    package(directory, ready=True)
+    managed_packaging = directory / "packaging"
+    managed_packaging.mkdir()
+    (managed_packaging / "__init__.py").write_text(source, encoding="utf-8")
+    diagnostic = executor()._check_local_dependency_health(directory, REQUIREMENTS, "cached")
+    assert "No module named '" + missing + "'" in diagnostic
 
 
 def test_health_probe_timeout_is_bounded_and_not_ready(monkeypatch, tmp_path):

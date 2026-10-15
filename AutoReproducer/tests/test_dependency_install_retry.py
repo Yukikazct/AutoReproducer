@@ -89,21 +89,24 @@ def test_reviewed_pytorch_extra_index_is_preserved_when_primary_mirror_fails(mon
     assert [call["requirements"] for call in calls] == [requirements, requirements]
 
 
-def test_auto_prepared_cuda_timeout_tries_domestic_mirror_with_same_pins(monkeypatch, tmp_path):
-    first_timeout = subprocess.TimeoutExpired(["pip"], 300, output=b"extracting CUDA wheel",
+def test_cuda_install_total_timeout_does_not_restart_completed_download_on_another_source(monkeypatch, tmp_path):
+    first_timeout = subprocess.TimeoutExpired(["pip"], 1800, output=b"extracting CUDA wheel",
                                              stderr=b"partial target copy")
-    calls = install_responses(monkeypatch, [first_timeout, (0, "installed", "")])
+    calls = install_responses(monkeypatch, [first_timeout])
     instance = executor()
     instance.env_config.update(requirements_txt=CUDA_REQUIREMENTS, auto_prepare=True)
-    assert prepare(instance, tmp_path) is None
-    assert [call["index"] for call in calls] == [MIRROR, ALIYUN]
-    assert [call["kwargs"]["timeout"] for call in calls] == [300, 300]
-    assert [call["requirements"] for call in calls] == [CUDA_REQUIREMENTS] * 2
+    diagnostic = prepare(instance, tmp_path)
+    assert [call["index"] for call in calls] == [MIRROR]
+    assert calls[0]["kwargs"]["timeout"] == 1800
+    assert calls[0]["requirements"] == CUDA_REQUIREMENTS
     records = instance.env_config["dependency_install_attempts"]
-    assert [record["timeout_s"] for record in records] == [300, 300]
-    assert records[0]["timed_out"] and not records[1]["timed_out"]
+    assert len(records) == 1 and records[0]["timeout_s"] == 1800
+    assert records[0]["timed_out"] and records[0]["failure_kind"] == "installation_timeout"
     assert "extracting CUDA wheel" in records[0]["diagnostic"]
     assert "partial target copy" in records[0]["diagnostic"]
+    assert "安装进程总时限" in diagnostic
+    assert "当前公共镜像未能提供依赖" not in repr(instance.logger.mock_calls)
+    assert instance.env_config["dependency_failure_kind"] == "installation_timeout"
 
 
 def test_explicit_official_cuda_install_has_same_long_budget_without_self_retry(monkeypatch, tmp_path):
@@ -116,6 +119,21 @@ def test_explicit_official_cuda_install_has_same_long_budget_without_self_retry(
     assert len(calls) == 1 and calls[0]["kwargs"]["timeout"] == 1800
     assert calls[0]["requirements"] == CUDA_REQUIREMENTS
     assert "依赖安装超时(1800s)" in diagnostic and "partial wheel copy" in diagnostic
+    assert instance.env_config["dependency_install_attempts"][0]["timeout_s"] == 1800
+
+
+@pytest.mark.parametrize("starting_source", [MIRROR, ALIYUN, USTC, OFFICIAL])
+@pytest.mark.parametrize("wheel", ["cpu", "cu121"])
+def test_reviewed_stack_receives_full_budget_on_its_first_source(monkeypatch, tmp_path, starting_source, wheel):
+    monkeypatch.setattr(ce, "PIP_INDEX_URL", starting_source)
+    requirements = f"--extra-index-url https://download.pytorch.org/whl/{wheel}\ntorch==2.5.1+{wheel}"
+    calls = install_responses(monkeypatch, [(0, "download and extraction completed", "")])
+    instance = executor()
+    instance.env_config.update(requirements_txt=requirements, auto_prepare=True)
+    assert prepare(instance, tmp_path) is None
+    assert len(calls) == 1 and calls[0]["index"] == starting_source
+    assert calls[0]["kwargs"]["timeout"] == 1800
+    assert calls[0]["requirements"] == requirements
     assert instance.env_config["dependency_install_attempts"][0]["timeout_s"] == 1800
 
 
@@ -163,13 +181,13 @@ def test_only_matching_auto_prepared_torch_wheels_get_long_retry(monkeypatch, tm
     assert [record["timeout_s"] for record in instance.env_config["dependency_install_attempts"]] == [300, 300]
 
 
-def test_auto_prepared_cpu_stack_gets_long_official_retry(monkeypatch, tmp_path):
+def test_auto_prepared_cpu_stack_gets_long_budget_on_first_and_fallback_mirrors(monkeypatch, tmp_path):
     requirements = "--extra-index-url https://download.pytorch.org/whl/cpu\ntorch==2.5.1+cpu\nnumpy==1.26.4"
-    calls = install_responses(monkeypatch, [subprocess.TimeoutExpired(["pip"], 300), (0, "installed", "")])
+    calls = install_responses(monkeypatch, [(1, "", "ConnectionError: mirror unavailable"), (0, "installed", "")])
     instance = executor()
     instance.env_config.update(requirements_txt=requirements, auto_prepare=True)
     assert prepare(instance, tmp_path) is None
-    assert [call["kwargs"]["timeout"] for call in calls] == [300, 300]
+    assert [call["kwargs"]["timeout"] for call in calls] == [1800, 1800]
     assert [call["requirements"] for call in calls] == [requirements] * 2
 
 
@@ -213,7 +231,7 @@ def test_cuda_native_health_rebuild_reuses_successful_domestic_source(monkeypatc
                         Mock(side_effect=["broken native DLL", None]))
     assert prepare(instance, tmp_path) is None
     assert [call["index"] for call in calls] == [MIRROR, ALIYUN, ALIYUN]
-    assert [call["kwargs"]["timeout"] for call in calls] == [300, 300, 300]
+    assert [call["kwargs"]["timeout"] for call in calls] == [1800, 1800, 1800]
     assert [call["requirements"] for call in calls] == [CUDA_REQUIREMENTS] * 3
 
 
@@ -235,6 +253,22 @@ def test_public_mirror_network_failure_tries_next_domestic_source(monkeypatch, t
     assert prepare(instance, tmp_path) is None
     assert [c["index"] for c in calls] == [MIRROR, ALIYUN]
     assert len(instance.env_config["dependency_install_attempts"]) == 2
+    first_record = instance.env_config["dependency_install_attempts"][0]
+    if isinstance(first_error, subprocess.TimeoutExpired):
+        assert first_record["failure_kind"] == "installation_timeout"
+        assert "日志包含来源失败" in repr(instance.logger.mock_calls)
+    else:
+        assert first_record["failure_kind"] == "source_unavailable"
+
+
+def test_generic_install_total_timeout_keeps_its_distinct_failure_without_switching_sources(monkeypatch, tmp_path):
+    calls = install_responses(monkeypatch, [subprocess.TimeoutExpired(["pip"], 300,
+                               output="Successfully downloaded; copying installed files")])
+    instance = executor()
+    assert prepare(instance, tmp_path) is not None
+    assert len(calls) == 1 and calls[0]["kwargs"]["timeout"] == 300
+    assert instance.env_config["dependency_failure_kind"] == "installation_timeout"
+    assert "当前公共镜像未能提供依赖" not in repr(instance.logger.mock_calls)
 
 
 def test_all_public_sources_fail_with_full_diagnostics_and_no_ready_marker(monkeypatch, tmp_path):
@@ -269,6 +303,14 @@ def test_python_conflict_and_wheel_absence_have_distinct_diagnostics():
     assert ce._install_failure_kind('ERROR: No matching distribution found for torch==2.5.1+cpu') == 'wheel_unavailable'
     assert ce._install_failure_kind('ERROR: ResolutionImpossible') == 'dependency_conflict'
     assert ce._install_failure_kind('ERROR: Could not build wheels for package') == 'build_failed'
+
+
+def test_process_deadline_is_distinct_from_network_request_timeout():
+    assert ce._install_failure_kind("extracting wheel", timed_out=True) == "installation_timeout"
+    assert not ce._public_mirror_failure("extracting wheel", timed_out=True)
+    diagnostic = "ReadTimeoutError: HTTPSConnectionPool(host='pypi.example')"
+    assert ce._install_failure_kind(diagnostic) == "source_unavailable"
+    assert ce._public_mirror_failure(diagnostic)
 
 
 def test_ignored_unrequested_python_versions_do_not_trigger_interpreter_switch():

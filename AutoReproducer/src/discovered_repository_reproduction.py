@@ -512,7 +512,7 @@ class DiscoveredRepositoryReproduction:
                     if getattr(exc, 'reproduction_phase', None) == 'prepare_environment':
                         attempt.update(error=str(exc), planning_status='environment_blocked',
                                        failure_kind=getattr(exc, 'category', 'environment_failure'))
-                        if (getattr(exc, 'category', None) != 'source_changed' and not manual
+                        if (getattr(exc, 'category', None) not in {'source_changed', 'installation_timeout'} and not manual
                                 and packet is not None and not data.get('repository_executed')):
                             linked = [item for item in linked_training_repositories(packet)
                                       if item['url'].casefold() not in {entry['url'].casefold() for entry in unique}]

@@ -1,6 +1,7 @@
 """Missing imports trigger bounded retries; unrelated failures remain truthful."""
 from copy import deepcopy
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
@@ -95,6 +96,21 @@ def test_repeated_missing_module_does_not_retry_forever_or_report_success(tmp_pa
     result = run_with_dependency_repair(runner, tmp_path, [], {}, plan(), {'file_inventory': {}},
                                        tmp_path, {}, lambda e: None, lambda: None)
     assert result['success'] is False and len(runner.calls) == 2
+
+
+def test_installation_deadline_does_not_trigger_model_or_missing_import_repair(tmp_path):
+    runner = FailingRunner(["Earlier output: ModuleNotFoundError: No module named 'einops'\n"
+                            "Installer exceeded total time limit"])
+    analyze = Mock(return_value={'action': 'replace_compatibility_pin',
+                                 'previous': 'numpy==1.26.4', 'requirement': 'numpy==1.24.4'})
+    environment = {'requirements_txt': 'numpy==1.26.4', 'dependency_failure_kind': 'installation_timeout'}
+    data = {}
+    result = run_with_dependency_repair(runner, tmp_path, [], environment, plan(), {'file_inventory': {}},
+                                       tmp_path, data, lambda e: None, lambda: None, analyze_failure=analyze)
+    assert result['success'] is False and len(runner.calls) == 1
+    assert result['effective_env_config']['requirements_txt'] == 'numpy==1.26.4'
+    assert not data['dependency_repair_attempts'] and not data['model_dependency_repairs']
+    analyze.assert_not_called()
 
 
 def test_repair_budget_is_shared_by_preflight_and_training(tmp_path):

@@ -74,6 +74,10 @@ def run_with_dependency_repair(runner, workspace, steps, environment, plan, pack
         result.setdefault('effective_env_config', effective)
         if result.get('success') or result.get('cancelled') or result.get('interrupted'):
             return result
+        if effective.get('dependency_failure_kind') == 'installation_timeout':
+            # A killed installer is not evidence of a missing module or a bad
+            # version pin. Retrying a model suggestion would restart downloads.
+            return result
         final = result.get('final') or {}
         if final.get('timed_out') or final.get('cancelled'):
             return result

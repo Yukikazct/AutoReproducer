@@ -70,8 +70,8 @@ DOCKER_STARTUP_TIMEOUT = 30
 EXIT_DEPENDENCY_FAILED = -7
 # 本地依赖安装超时（numpy/matplotlib/torch 等大包需要更长时间）
 LOCAL_PIP_TIMEOUT = 300
-# Cold pinned torch wheels need time for extraction and the --target copy. The
-# default mirror stays bounded at 300 s before the reviewed official retry.
+# Cold pinned torch wheels need time for download, extraction and the --target
+# copy, including when a public primary mirror uses the official extra index.
 LOCAL_CUDA_PIP_TIMEOUT = 1800
 LOCAL_CPU_PIP_TIMEOUT = 1800
 LOCAL_DEPENDENCY_HEALTH_TIMEOUT = 90
@@ -173,11 +173,15 @@ def _public_mirror_failure(detail: str, timed_out: bool = False, requirements: s
              "network is unreachable", "max retries exceeded", "proxyerror", "sslerror",
              "certificate_verify_failed", "readtimeouterror", "connecttimeout", "timed out",
              "http error 403", "http error 429", "http error 502", "http error 503", "http error 504")
-    return timed_out or any(hint in lowered for hint in hints)
+    # The process deadline also covers healthy downloads, extraction and copy.
+    # Only concrete source failures justify restarting on another primary index.
+    return any(hint in lowered for hint in hints)
 
 
 def _install_failure_kind(detail: str, timed_out: bool = False, requirements: str = '') -> str:
     lowered = (detail or '').lower()
+    if timed_out:
+        return 'installation_timeout'
     if 'resolutionimpossible' in lowered or 'conflicting dependencies' in lowered:
         return 'dependency_conflict'
     if (_requested_python_conflict(detail, requirements) if requirements else
@@ -185,8 +189,9 @@ def _install_failure_kind(detail: str, timed_out: bool = False, requirements: st
         return 'python_incompatible'
     if 'could not build wheels' in lowered or 'failed building wheel' in lowered or 'subprocess-exited-with-error' in lowered:
         return 'build_failed'
-    if timed_out or any(word in lowered for word in ('connectionerror', 'connection refused', 'could not fetch url',
-            'temporary failure in name resolution', 'network is unreachable', 'proxyerror', 'sslerror', 'timed out')):
+    if any(word in lowered for word in ('connectionerror', 'connection refused', 'could not fetch url',
+            'temporary failure in name resolution', 'network is unreachable', 'proxyerror', 'sslerror',
+            'readtimeouterror', 'connecttimeout', 'timed out')):
         return 'source_unavailable'
     if 'no matching distribution found' in lowered or 'from versions: none' in lowered:
         return 'wheel_unavailable'
@@ -1908,6 +1913,30 @@ class CodeExecutorAgent(BaseAgent):
             with pip_temporary(self._dependency_lock_root(), on_cleanup=self._record_pip_cleanup) as work:
                 env = {**env, 'TMPDIR': str(work), 'TEMP': str(work), 'TMP': str(work),
                        'PIP_CACHE_DIR': str(work / 'download-cache')}
+                if len(command) > 3 and command[3] in {'install', 'download'}:
+                    from src.dependency_install_progress import DependencyInstallProgress
+                    from urllib.parse import urlsplit
+                    monitor = DependencyInstallProgress(work, self._emit_execution_event, timeout)
+                    if '-i' in command:
+                        try:
+                            monitor.source_domain = urlsplit(command[command.index('-i') + 1]).hostname
+                        except (ValueError, IndexError):
+                            pass
+                    observed = [*command, '--log', str(monitor.log_path), '--progress-bar', 'off']
+                    previous = getattr(self, '_dependency_install_monitor', None)
+                    self._dependency_install_monitor = monitor
+                    status = 'error'
+                    try:
+                        monitor(None)
+                        result = self._invoke_dependency_command(observed, timeout=timeout, env=env)
+                        status = 'success' if result.returncode == 0 else 'error'
+                        return result
+                    except (KeyboardInterrupt, SystemExit):
+                        status = 'cancelled'
+                        raise
+                    finally:
+                        monitor.finish(status)
+                        self._dependency_install_monitor = previous
                 return self._invoke_dependency_command(command, timeout=timeout, env=env)
         return self._invoke_dependency_command(command, timeout=timeout, env=env)
 
@@ -1922,7 +1951,9 @@ class CodeExecutorAgent(BaseAgent):
             from src.runtime_preparation import RuntimePreparationTimeout, run_owned_process
             validate_windows_venv()
             try:
-                return run_owned_process(command, timeout_s=timeout, env=env)
+                monitor = getattr(self, '_dependency_install_monitor', None)
+                callbacks = {'on_poll': monitor} if monitor is not None else {}
+                return run_owned_process(command, timeout_s=timeout, env=env, **callbacks)
             except RuntimePreparationTimeout as exc:
                 raise subprocess.TimeoutExpired(command, timeout, output=exc.stdout,
                                                 stderr=exc.stderr) from exc
@@ -2329,10 +2360,9 @@ class CodeExecutorAgent(BaseAgent):
         sources = _public_install_sources(reqs)
         source_position = 0
         index, links = sources[0]
-        pinned_cuda = (bool(env_config.get("auto_prepare")) and _pinned_cuda_requirements(reqs)
-                       and links in {"", _DEFAULT_PUBLIC_FIND_LINKS})
-        pinned_cpu = (bool(env_config.get("auto_prepare")) and _pinned_cpu_requirements(reqs)
-                      and links in {"", _DEFAULT_PUBLIC_FIND_LINKS})
+        reviewed_public = bool(env_config.get("auto_prepare")) and _allow_official_pip_fallback(reqs)
+        pinned_cuda = reviewed_public and _pinned_cuda_requirements(reqs)
+        pinned_cpu = reviewed_public and _pinned_cpu_requirements(reqs)
         try:
             self._dependency_install_targets.add(str(deps_dir))
             deps_dir.mkdir(parents=True, exist_ok=True)
@@ -2369,13 +2399,12 @@ class CodeExecutorAgent(BaseAgent):
                            '-r', layer['requirements_file']]
                 timed_out, exit_code = False, None
                 timeout_s = LOCAL_PIP_TIMEOUT
-                if index.rstrip("/") == _OFFICIAL_PIP_INDEX:
-                    if pinned_cuda:
-                        timeout_s = LOCAL_CUDA_PIP_TIMEOUT
-                    elif pinned_cpu:
-                        timeout_s = LOCAL_CPU_PIP_TIMEOUT
+                if pinned_cuda:
+                    timeout_s = LOCAL_CUDA_PIP_TIMEOUT
+                elif pinned_cpu:
+                    timeout_s = LOCAL_CPU_PIP_TIMEOUT
                 self.log("install_deps", "RUNNING",
-                         f"第 {attempt} 轮依赖安装: {_safe_install_diagnostic(index)}")
+                         f"第 {attempt} 轮依赖安装（安装进程总时限 {timeout_s}s）: {_safe_install_diagnostic(index)}")
                 try:
                     res = (subprocess.CompletedProcess(cmd, 0, 'All resolved wheels reused', '')
                            if layer and not layer['installed_packages'] else
@@ -2390,7 +2419,8 @@ class CodeExecutorAgent(BaseAgent):
                             stream = stream.decode("utf-8", "replace")
                         if stream:
                             captured.append(stream)
-                    detail = f"依赖安装超时({timeout_s}s)\n" + "\n".join(captured)
+                    detail = (f"依赖安装超时({timeout_s}s)：达到安装进程总时限，"
+                              "下载、解压和文件复制均计入此时限。\n" + "\n".join(captured))
                 except Exception as exc:
                     detail = f"依赖安装异常: {exc}"
                 safe_detail = _safe_install_diagnostic(detail)[-1600:]
@@ -2437,8 +2467,10 @@ class CodeExecutorAgent(BaseAgent):
                     return None
                 if source_position + 1 < len(sources) and _public_mirror_failure(detail, timed_out, reqs):
                     self.log("install_deps", "WARNING",
-                             "当前公共镜像未能提供依赖，保留版本并尝试下一个来源",
-                             {"attempt": attempt, "diagnostic": safe_detail})
+                             ("依赖安装达到总时限，日志包含来源失败；保留版本并尝试下一个来源"
+                              if timed_out else "当前公共镜像未能提供依赖，保留版本并尝试下一个来源"),
+                             {"attempt": attempt, "diagnostic": safe_detail,
+                              "failure_kind": attempts[-1]['failure_kind']})
                     source_position += 1
                     index, links = sources[source_position]
                     continue

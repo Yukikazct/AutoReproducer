@@ -2,6 +2,7 @@
 import json
 import sys
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import Mock
@@ -163,6 +164,36 @@ def test_busy_writer_cannot_starve_the_initial_page_render(live_app, monkeypatch
     app.run(timeout=10)
     assert not app.exception
     assert "正在读取论文第 4 页" in " ".join(row.value for row in app.text)
+    start.assert_not_called()
+
+
+def test_reconnect_displays_installer_bytes_staleness_and_later_completion(live_app):
+    app, store, path, start = live_app
+    event = {"type": "dependency_install_progress", "installation_id": "install-cuda",
+             "execution_id": "prepare-cuda", "status": "running", "phase": "downloading",
+             "package": "torch-2.5.1+cu121.whl", "downloaded_bytes": 1024 * 1024,
+             "total_bytes": 4 * 1024 * 1024, "download_speed_bps": 512 * 1024,
+             "elapsed_s": 100, "timeout_s": 1800, "last_activity_at": time.time() - 60,
+             "message": "正在下载依赖", "source_domain": "download.pytorch.org"}
+    store.emit(event)
+    app.query_params["run"] = path.name
+    app.run()
+    assert not app.exception
+    assert any("依赖安装进度" in row.value for row in app.markdown)
+    metrics = {row.label: row.value for row in app.metric}
+    assert metrics["当前文件下载量"] == "1.0 MiB"
+    assert any(row.value == "文件总大小：4.0 MiB" for row in app.caption)
+    assert metrics["最近下载速度"] == "512.0 KiB/s"
+    assert metrics["安装时限"] == "1800 秒"
+    assert any("torch-2.5.1+cu121.whl" in row.value for row in app.caption)
+    assert any("软件源 / 下载来源：download.pytorch.org" == row.value for row in app.caption)
+    assert any("尚不能据此判定失败" in row.value for row in app.info)
+    assert not app.error
+    store.emit({**event, "status": "success", "phase": "installing", "message": "依赖安装完成"})
+    app.button(key="refresh_live_progress").click().run()
+    assert not app.exception
+    assert any("安装完成" in row.value for row in app.text)
+    assert not any("尚不能据此判定失败" in row.value for row in app.info)
     start.assert_not_called()
 
 
