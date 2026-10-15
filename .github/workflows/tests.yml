@@ -11,7 +11,8 @@ permissions:
 jobs:
   tests:
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    # Windows runs the complete suite in both locale and UTF-8 modes.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
