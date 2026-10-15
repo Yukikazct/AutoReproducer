@@ -1,5 +1,6 @@
 """Local browser-audit regressions; no browser, network, or training required."""
 from contextlib import contextmanager
+from copy import deepcopy
 import getpass
 import hashlib
 import io
@@ -11,6 +12,36 @@ import warnings
 import pytest
 
 from scripts import verify_browser_pdf_holdout as audit
+
+
+def compared_result():
+    observed = {'id': 'train:stdout:1', 'value': 0.8328, 'aggregation': 'mean', 'runs': 10,
+                'std': 0.0004, 'source': 'train:stdout:22', 'source_quote': 'mean 0.83280, std 0.00040'}
+    row = {'status': 'reference_only', 'difference': -0.02,
+           'reference': {'value_quote': 'DGC 83.3', 'citations': ['paper']},
+           'actual': {**observed, 'citations': ['author']}}
+    return {'data': {'validation': {'is_reproduced': None, 'paper_metrics_verified': False,
+        'author_claim_comparison': {'status': 'partial', 'metric_records': [observed], 'comparisons': [row],
+                                  'citations': [{'id': 'paper', 'source': 'pdf'},
+                                                {'id': 'author', 'source': 'repository'}]}}}}
+
+
+def test_comparison_acceptance_requires_nonempty_verified_results():
+    result = compared_result()
+    assert audit.verify_claim_comparison(result)['status'] == 'partial'
+    unavailable = deepcopy(result)
+    unavailable['data']['validation']['author_claim_comparison'].update(status='unavailable', comparisons=[])
+    with pytest.raises(AssertionError):
+        audit.verify_claim_comparison(unavailable)
+
+
+@pytest.mark.parametrize('field,wrong', [('value', 0.833), ('runs', 1), ('std', 0.01),
+                                       ('aggregation', 'single'), ('source_quote', 'invented output')])
+def test_comparison_acceptance_rejects_rewritten_observed_summary(field, wrong):
+    result = compared_result()
+    result['data']['validation']['author_claim_comparison']['comparisons'][0]['actual'][field] = wrong
+    with pytest.raises(AssertionError):
+        audit.verify_claim_comparison(result)
 
 
 def test_stdin_credential_never_opens_secrets_or_prompts(monkeypatch):

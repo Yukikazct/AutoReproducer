@@ -7,8 +7,8 @@ import pytest
 
 from discovered_fixtures import make_experiment
 from src import author_python
-from src.author_entrypoints import fixed_cuda_in_notebook, notebook_cells
-from src.author_execution_plan import plan_from_author_commands, validate_author_execution_plan, SCOPE
+from src.author_entrypoints import fixed_cuda_in_notebook, notebook_cells, resolve_entrypoint
+from src.author_execution_plan import plan_from_author_commands, propose_author_execution_plan, validate_author_execution_plan, SCOPE
 from src.discovered_repository_plan import build_evidence_packet, PlanEvidenceError
 from src.discovered_repository_reproduction import linked_training_repositories
 
@@ -30,6 +30,96 @@ def proposal(fixture, step):
     return {'version': 1, 'scope': SCOPE,
             'repository': {key: fixture['snapshot'][key] for key in ('url', 'revision')},
             'device': 'cpu', 'steps': [{'id': 'train', 'kind': 'train', 'cwd': '.', **step}]}
+
+
+def test_model_can_correct_nested_entrypoint_without_a_readme_command(tmp_path):
+    fixture = make_experiment(tmp_path)
+    add_file(fixture, 'README.md', 'Experiment implementations are in the experiments directory.\n')
+    add_file(fixture, 'experiments/sensors/run_model.py',
+             'import argparse\nimport torch\n'
+             'parser = argparse.ArgumentParser()\n'
+             'parser.add_argument("--epochs", type=int, default=17)\n'
+             'args = parser.parse_args()\n')
+    add_file(fixture, 'experiments/other/run_model.py', 'import torch\n')
+    packet = packet_for(fixture)
+    packet['repository']['files'].pop('experiments/sensors/run_model.py', None)
+
+    class NavigationLLM:
+        mock_mode = False
+
+        def __init__(self):
+            self.calls = 0
+
+        def chat(self, prompt, **kwargs):
+            self.calls += 1
+            assert kwargs['task'] == 'author_execution_plan'
+            if self.calls == 1:
+                return json.dumps(proposal(fixture, {'argv': ['python', 'run_model.py']}))
+            assert 'Matching pinned inventory paths:' in prompt
+            assert 'experiments/sensors/run_model.py' in prompt
+            assert 'experiments/other/run_model.py' in prompt
+            if self.calls == 2:
+                return json.dumps({'request_files': ['experiments/sensors/run_model.py']})
+            assert 'default=17' in prompt
+            return json.dumps(proposal(fixture, {'argv': ['python', 'run_model.py'],
+                'cwd': 'experiments/sensors'}))
+
+    llm = NavigationLLM()
+    plan = propose_author_execution_plan(llm, packet, fixture['workspace'])
+    assert llm.calls == 3
+    assert 'command_source' not in plan
+    assert plan['steps'][0]['cwd'] == 'experiments/sensors'
+    assert plan['steps'][0]['argv'] == ['python', 'run_model.py']
+    assert plan['steps'][0]['entrypoint']['source_path'] == 'experiments/sensors/run_model.py'
+
+
+def test_missing_entrypoint_diagnostics_do_not_allow_path_escape(tmp_path):
+    fixture = make_experiment(tmp_path)
+    packet = packet_for(fixture)
+    with pytest.raises(ValueError, match='relative path inside the workspace'):
+        resolve_entrypoint({'argv': ['python', '../outside.py']}, packet, fixture['workspace'])
+
+
+def test_legacy_syntax_reaches_model_feedback_and_keeps_runtime_failure_kind(tmp_path):
+    fixture = make_experiment(tmp_path)
+    add_file(fixture, 'README.md', 'Legacy implementation: legacy/train.py.\n')
+    add_file(fixture, 'legacy/train.py', "import caffe\nprint 'author training'\n")
+    packet = packet_for(fixture)
+    selected = proposal(fixture, {'argv': ['python', 'legacy/train.py']})
+
+    class LegacyLLM:
+        mock_mode = False
+
+        def __init__(self):
+            self.calls = 0
+
+        def chat(self, prompt, **kwargs):
+            self.calls += 1
+            if self.calls > 1:
+                assert 'legacy/train.py:2' in prompt
+                assert 'Missing parentheses' in prompt
+            return json.dumps(selected)
+
+    llm = LegacyLLM()
+    with pytest.raises(PlanEvidenceError, match='legacy/train.py:2') as rejected:
+        propose_author_execution_plan(llm, packet, fixture['workspace'])
+    assert llm.calls == 2
+    assert rejected.value.category == 'runtime_unsupported'
+    details = rejected.value.planning_evidence['failure_details']
+    assert len(details) == 2
+    assert all(row['category'] == 'runtime_unsupported' for row in details)
+    assert details[0]['evidence']['path'] == 'legacy/train.py'
+    assert (fixture['workspace'] / 'legacy/train.py').read_text('utf-8') == "import caffe\nprint 'author training'\n"
+
+
+def test_runtime_failure_report_does_not_blame_missing_paper_evidence():
+    from src.agents.report_generator import ReportGeneratorAgent
+    report = ReportGeneratorAgent()._build_report({
+        'execution': {'mode': 'repository', 'executed': False, 'success': False},
+        'validation': {'status': 'insufficient_evidence', 'failure_kind': 'runtime_unsupported',
+                       'is_reproduced': None, 'reason': 'Original source requires Python 2 and Caffe.'}})
+    assert '运行环境不受支持，未执行论文实验' in report
+    assert '论文证据不足，未执行论文实验' not in report
 
 
 def test_module_entrypoint_resolves_relative_imports_from_pinned_package(tmp_path):

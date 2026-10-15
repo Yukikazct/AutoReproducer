@@ -2,12 +2,33 @@
 from copy import deepcopy
 import hashlib
 import json
+import os
+from pathlib import Path
 import re
 
 from PyPDF2 import PdfWriter
 from PyPDF2.generic import DecodedStreamObject, DictionaryObject, NameObject
 
 from src.dependency_versions import compatibility_pins
+
+
+def configured_native_cache(variable, torch_version):
+    """Native fixtures opt into a dedicated cache, never a live app environment."""
+    configured = os.environ.get(variable, '').strip()
+    if not configured:
+        return None
+    cache = Path(configured).expanduser().resolve()
+    production_data = Path(__file__).resolve().parents[1] / 'data'
+    if cache.is_relative_to(production_data.resolve()):
+        return None
+    from src.runtime_platform import runtime_fingerprint
+    if (cache.parent.name != runtime_fingerprint() or cache.parent.parent.name != 'repository'
+            or cache.parents[2].name != 'deps'):
+        return None
+    if ((cache / '.ready').is_file() and (cache / f'torch-{torch_version}.dist-info').is_dir()
+            and (cache / 'numpy-1.26.4.dist-info').is_dir()):
+        return cache
+    return None
 
 
 def write_pdf(path, pages):

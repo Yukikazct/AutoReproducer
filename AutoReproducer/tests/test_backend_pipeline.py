@@ -269,6 +269,47 @@ def test_background_forwards_reserved_optimization(tmp_path, monkeypatch):
     assert captured["enable_optimization"] is True
 
 
+def test_backend_persists_installer_heartbeats_and_terminal_state(tmp_path, monkeypatch):
+    import frontend.backend_pipeline as backend
+
+    class PipelineFixture:
+        def __init__(self, **kwargs):
+            pass
+
+        def run(self, input_data, on_event):
+            event = {'type': 'dependency_install_progress', 'installation_id': 'pip-one',
+                     'execution_id': 'author-prepare', 'phase_id': 'prepare_environment',
+                     'phase': 'downloading', 'package': 'torch', 'downloaded_bytes': 1024,
+                     'total_bytes': 4096, 'download_speed_bps': 512, 'elapsed_s': 2,
+                     'timeout_s': 1800, 'last_activity_at': time.time(), 'status': 'running'}
+            on_event(event)
+            on_event({**event, 'status': 'success', 'downloaded_bytes': 4096})
+            return {'state': 'COMPLETED', 'data': {}}
+
+    monkeypatch.setattr(backend, 'Orchestrator', PipelineFixture)
+    path = tmp_path / 'install-progress.jsonl'
+    backend.run_pipeline_core(str(path), mock_mode=True)
+    snapshot = ProgressStore.read_snapshot(str(path))
+    assert len(snapshot['dependency_installations']) == 1
+    observed = snapshot['dependency_installations'][0]
+    assert observed['status'] == 'success' and observed['downloaded_bytes'] == 4096
+    forwarded = [json.loads(line) for line in path.read_text('utf-8').splitlines()
+                 if json.loads(line).get('type') == 'dependency_install_progress']
+    assert len(forwarded) == 2
+    assert all(event['phase_id'] == 'prepare_environment' for event in forwarded)
+
+
+def test_generic_orchestrator_forwards_installer_events():
+    from src.orchestrator import Orchestrator
+    from src.llm.llm_client import LLMClient
+    orchestrator = Orchestrator(llm_client=LLMClient(mock_mode=True), mock_mode=True)
+    events = []
+    orchestrator.on_event = events.append
+    orchestrator._emit_execution_event({'type': 'dependency_install_progress', 'installation_id': 'one',
+                                        'status': 'running'})
+    assert events and events[0]['phase_id'] == 'execute_code'
+
+
 # ---------------- 2. 后台全链路（Mock 模式） ----------------
 
 def test_run_pipeline_core_writes_full_progress(tmp_path):

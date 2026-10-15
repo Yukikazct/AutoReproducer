@@ -1067,7 +1067,15 @@ def _steps(items, citations, packet, workspace, *, device=None):
         prepared = []
         for source_path in sources:
             source = packet['repository']['files'][source_path]
-            for output in output_directories(source['text']):
+            try:
+                outputs = output_directories(source['text'])
+            except SyntaxError as exc:
+                reason = (f'当前 Python 3 分析器无法解析作者源码 {source_path}:{exc.lineno}: {exc.msg}。'
+                          '需要与原源码兼容的运行支持；尚未执行训练。')
+                raise PlanEvidenceError(reason, category='runtime_unsupported', planning_evidence={
+                    'stage': 'author_source_syntax', 'path': source_path, 'line': exc.lineno,
+                    'source_sha256': source['sha256'], 'diagnostic': exc.msg}) from exc
+            for output in outputs:
                 output_path = output['directory']
                 if Path(output_path).is_absolute() or PureWindowsPath(output_path).drive:
                     raise PlanEvidenceError('Author output directory must remain inside the workspace')

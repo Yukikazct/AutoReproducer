@@ -50,7 +50,8 @@ def _author_claim_comparison_lines(comparison):
     if not rows:
         note = ('实际输出中的指标保留在下方证据表；未将其他数据集或基线指标作为参考。'
                 if comparison.get('metric_records') else '作者输出中未识别到可比较的数值指标。')
-        return lines + [note, '']
+        diagnostic = comparison.get('diagnostic')
+        return lines + [note] + (['未完成原因：' + _markdown_text(str(diagnostic)[:2000])] if diagnostic else []) + ['']
     lines += ['', '| 指标 / 数据集 / 方法 | 论文宣称 | 作者运行输出 | 差值（实际 − 论文） | 结论 |',
               '| --- | --- | --- | --- | --- |']
     def value_cell(node):
@@ -58,7 +59,8 @@ def _author_claim_comparison_lines(comparison):
         suffix = {'percent': '%', 'fraction': '（比例）'}.get(node.get('unit'), '')
         aggregation = {'single': '单次', 'mean': '均值', 'median': '中位数', 'best': '最佳', 'unknown': '统计方式未明确'}.get(node.get('aggregation'), '')
         runs = node.get('runs')
-        return f"{value}{suffix}；{aggregation}" + (f"，{runs} 次" if runs else '')
+        deviation = f" ± {node['std']}" if node.get('std') is not None else ''
+        return f"{value}{deviation}{suffix}；{aggregation}" + (f"，{runs} 次" if runs else '')
     for row in rows:
         paper, actual = row['reference'], row['actual']
         difference = row.get('difference')
@@ -87,6 +89,12 @@ def _author_claim_comparison_lines(comparison):
         pages = [str(citations[key]['page']) for key in paper.get('citations', []) if key in citations and citations[key]['source'] == 'pdf']
         lines += ['- **论文来源**: PDF 第 ' + '、'.join(dict.fromkeys(pages)) + ' 页',
                   '> ' + _markdown_text(paper['value_quote'])]
+        if paper.get('column_quote'):
+            lines += ['- **论文列标题**: ' + _markdown_text(paper['column_quote'])]
+        if actual.get('source_quote'):
+            lines += ['- **实际输出原文**: ' + _markdown_text(actual['source_quote'])]
+    for error in comparison.get('validation_errors') or []:
+        lines.append('- **未完成的配对**: ' + _markdown_text(str(error.get('error', ''))[:600]))
     return lines + ['']
 
 
@@ -834,7 +842,9 @@ class ReportGeneratorAgent(BaseAgent):
         # 四态：复现成功 / 复现失败 / 无法验证（代码没跑起来，不能算复现失败）/
         # 无法核对（跑了，但论文信息不足、代码是占位实现——既不判成功也不判失败）
         if validation.get("status") == "insufficient_evidence":
-            state_text = "⚠️ 无法核验（论文证据不足，未执行论文实验）"
+            state_text = ("⚠️ 无法核验（运行环境不受支持，未执行论文实验）"
+                          if validation.get('failure_kind') == 'runtime_unsupported' else
+                          "⚠️ 无法核验（论文证据不足，未执行论文实验）")
         elif validation.get("status") == "not_runnable":
             state_text = "⚠️ 无法验证（代码未运行）"
         elif validation.get("status") == "best_effort":

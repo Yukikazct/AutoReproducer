@@ -320,7 +320,7 @@ class DiscoveredRepositoryReproduction:
         emit = on_event or (lambda event: None)
         execution_only = True
         phases = [("prepare_repository", "FIND_RESOURCES", "ResourceFinder", "获取代码仓库"),
-                  ("plan_repository", "READ_PAPER", "PaperReader", "按 README 规划运行命令"),
+                  ("plan_repository", "READ_PAPER", "PaperReader", "结合论文和源码规划作者命令"),
                   ("prepare_dataset", "FIND_RESOURCES", "ResourceFinder", "准备运行数据"),
                   ("prepare_environment", "BUILD_ENV", "EnvBuilder", "安装运行依赖"),
                   ("execute_repository", "EXECUTE_CODE", "CodeExecutor", "运行作者命令"),
@@ -501,6 +501,8 @@ class DiscoveredRepositoryReproduction:
                     selected, last_plan_error = False, exc
                     attempt.update(error=str(exc), planning_status='rejected',
                                    failure_kind=getattr(exc, 'category', 'invalid_evidence'))
+                    if getattr(exc, 'planning_evidence', None) is not None:
+                        attempt['planning_evidence'] = deepcopy(exc.planning_evidence)
                     if not manual and packet is not None:
                         linked = [item for item in linked_training_repositories(packet)
                                   if item['url'].casefold() not in {entry['url'].casefold() for entry in unique}]

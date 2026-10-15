@@ -262,7 +262,7 @@ def run_pipeline_core(progress_path: str,
                 if event.get("phase_id"):
                     state["phase_id"] = event["phase_id"]
                 store.emit({**event, "agent": display_names.get(event.get("agent"), event.get("agent", ""))})
-            elif event.get("type") in {"repository_step", "repository_output", "execution_step", "execution_output", "execution_run", "repository_environment"}:
+            elif event.get("type") in {"repository_step", "repository_output", "execution_step", "execution_output", "execution_run", "repository_environment", "dependency_install_progress"}:
                 store.emit(event)
             elif event.get("type") == "pipeline_plan":
                 store.emit({**event, "stages": [

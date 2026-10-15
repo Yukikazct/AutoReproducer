@@ -274,7 +274,7 @@ class Orchestrator:
         return self.get_result()
 
     def _emit_execution_event(self, event):
-        if self.on_event and event.get("type") in {"execution_step", "execution_output", "execution_run"}:
+        if self.on_event and event.get("type") in {"execution_step", "execution_output", "execution_run", "dependency_install_progress"}:
             self.on_event({**event, "phase_id": _MAIN_PHASE_IDS["EXECUTE_CODE"]})
 
     def _emit_state(self, state, agent, status, *, phase_id=None, attempt=None, reason=None, outcome=None):

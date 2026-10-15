@@ -104,7 +104,7 @@ def propose_author_execution_plan(llm, packet, workspace):
     if (llm is None or getattr(llm, 'mock_mode', False)
             or hasattr(llm, 'base_url') and (not llm.base_url or not llm.model)):
         return plan_from_author_commands(packet, workspace)
-    feedback, failures, reads, payload = '', [], 0, {}
+    feedback, failures, failure_details, reads, payload = '', [], [], 0, {}
     schema = """{version:1,scope:'author_code_execution',repository:{url,revision},device:'cpu|cuda',
 citations:[{id,evidence_id}],claims:{method:[ids],protocol:[ids],dataset:[ids]},
 requirements:{author:[verbatim dependency lines],compatibility:[],reason,citations:[ids]},
@@ -123,7 +123,12 @@ steps:[{id,kind:'train|eval',argv:['python','original.py',...] OR ['python','-m'
             'Paper metric agreement, checkpoint export and independent predictions are subsequent work; '
             'their absence must not block a valid original author training command in this execution objective. '
             'Select one runnable original author training command, preferring README examples and small '
-            'author-supported datasets. An original training entrypoint invoked by an author batch launcher '
+            'author-supported datasets. A step-by-step README command is not required: use the source_catalog '
+            'to locate real training entrypoints, inspect their argument parsers and data loaders, and plan '
+            'from those original sources. Resolve README placeholder directories against the actual inventory; '
+            'when several experiments share a script basename, read the relevant sources and explicitly '
+            'choose the corresponding cwd. Never assume a basename exists at the repository root. '
+            'An original training entrypoint invoked by an author batch launcher '
             'is also allowed: run that single invocation rather than the entire paper repetition sweep. '
             'Keep its native training and stopping behavior. A documented example is allowed but '
             'must remain identified as that example, never as the whole paper. Do not invent a replacement '
@@ -205,21 +210,29 @@ steps:[{id,kind:'train|eval',argv:['python','original.py',...] OR ['python','-m'
         except (ValueError, TypeError, KeyError, OSError, RuntimeError) as exc:
             feedback = str(exc)[:4000]
             failures.append(feedback)
+            failure_details.append({'error': feedback, 'category': getattr(exc, 'category', 'planning_error'),
+                **({'evidence': deepcopy(exc.planning_evidence)} if getattr(exc, 'planning_evidence', None) else {})})
             if len(failures) >= 2 and failures[-1] == failures[-2]:
                 break
     try:
         plan = plan_from_author_commands(packet, workspace)
         plan['planning_warnings'].append('Model planning unavailable; using a literal original README/launcher command.')
         plan['planning_failures'] = failures
+        plan['planning_failure_details'] = failure_details
         return plan
     except PlanEvidenceError as exc:
         reason = next((failure for failure in reversed(failures)
                        if failure.startswith('No original author execution plan:')), None)
-        category = ('runtime_unsupported' if reason and any(word in reason.lower() for word in ('matlab', 'caffe'))
+        runtime_error = next((item for item in reversed(failure_details)
+                              if item['category'] == 'runtime_unsupported'), None)
+        category = ('runtime_unsupported' if runtime_error or reason and any(
+                    word in reason.lower() for word in ('matlab', 'caffe', 'python 2', 'python2'))
                     else getattr(exc, 'category', 'missing_information'))
+        reason = reason or (runtime_error['error'] if runtime_error else None)
         raise PlanEvidenceError(reason or ('No runnable original author command: ' + str(exc)),
             category=category,
             planning_evidence={'stage': 'author_execution_plan', 'failures': failures,
+                               'failure_details': failure_details,
                                'fallback_failure': str(exc), 'proposal': payload,
                                'failure_kind': category}) from exc
 

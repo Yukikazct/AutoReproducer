@@ -11,7 +11,7 @@ import zipfile
 import numpy as np
 import pytest
 
-from discovered_fixtures import PlannedLLM, make_experiment
+from discovered_fixtures import PlannedLLM, make_experiment, configured_native_cache
 from src.discovered_repository_plan import build_evidence_packet, propose_plan
 from src.discovered_repository_reproduction import environment_for_plan
 from src.discovered_repository_runtime import materialize_capture, validate_capture, verify_capture
@@ -178,13 +178,10 @@ def test_selected_outputs_require_the_same_complete_test_indices_as_a_forward_in
 
 
 def cuda_dependency_cache():
-    root = Path(__file__).resolve().parents[1] / "data/deps/repository" / runtime_fingerprint()
-    caches = [path for path in root.glob("*") if (path / ".ready").is_file()
-              and (path / "torch-2.5.1+cu121.dist-info").is_dir()
-              and (path / "numpy-1.26.4.dist-info").is_dir()]
-    if not caches:
-        pytest.skip("Native CUDA test requires an installed reviewed CUDA cache")
-    return caches[0]
+    cache = configured_native_cache('AUTOREPRO_TEST_CUDA_DEPS', '2.5.1+cu121')
+    if cache is None:
+        pytest.skip("Native CUDA test requires a dedicated reviewed cache; set AUTOREPRO_TEST_CUDA_DEPS outside application data/")
+    return cache
 
 
 @pytest.fixture(scope="module")

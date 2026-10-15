@@ -10,12 +10,15 @@ from datetime import datetime, timezone
 import getpass
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
 import sys
 import time
 import warnings
+import io
+import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -207,6 +210,61 @@ def verify_author_completion(result, pdf_hash, expected_repo):
     return validation
 
 
+def verify_claim_comparison(result):
+    validation = (result.get('data') or {}).get('validation') or {}
+    comparison = validation.get('author_claim_comparison') or {}
+    assert comparison.get('status') in {'compared', 'partial'}, comparison.get('reason')
+    records = {row['id']: row for row in comparison.get('metric_records', [])}
+    citations = {ref['id']: ref for ref in comparison.get('citations', [])}
+    eligible = []
+    for row in comparison.get('comparisons') or []:
+        if row.get('status') not in {'comparable', 'reference_only'}:
+            continue
+        difference = row.get('difference')
+        assert type(difference) in (int, float) and math.isfinite(difference)
+        actual, reference = row['actual'], row['reference']
+        observed = records[actual['id']]
+        assert actual['value'] == observed['value'] and actual['source'] == observed['source']
+        for field in ('aggregation', 'runs', 'std'):
+            if observed.get(field) is not None:
+                assert actual.get(field) == observed[field]
+        assert any(citations[key]['source'] == 'pdf' for key in reference['citations'])
+        assert any(citations[key]['source'] == 'repository' for key in actual['citations'])
+        assert reference['value_quote'] and actual.get('source_quote') == observed.get('source_quote')
+        assert actual.get('source_quote')
+        eligible.append(row)
+    assert eligible, 'A verified, nonempty paper comparison is required for acceptance'
+    assert validation.get('paper_metrics_verified') is False and validation.get('is_reproduced') is None
+    return comparison
+
+
+def verify_report_reconnect(page, args, progress, runtime):
+    """Real browser downloads and a reload must retain the saved comparison."""
+    def show_report():
+        page.get_by_role('tab', name=re.compile('复现报告')).click()
+        table = page.get_by_role('table').filter(has_text='论文宣称').filter(has_text='作者运行输出').first
+        table.wait_for(timeout=30000)
+        return table.inner_text()
+    displayed = show_report()
+    content = []
+    for label, suffix in [('下载报告', '.md'), ('下载报告和图片（ZIP）', '.zip')]:
+        with page.expect_download(timeout=30000) as received:
+            page.get_by_role('button', name=label, exact=True).click()
+        path = runtime / (args.tag + '_downloaded_report' + suffix)
+        received.value.save_as(str(path))
+        content.append(path.read_bytes())
+    with zipfile.ZipFile(io.BytesIO(content[1])) as archive:
+        names = [name for name in archive.namelist() if name.endswith('.md')]
+        assert len(names) == 1 and archive.read(names[0]) == content[0]
+    assert '作者输出与论文宣称对比' in content[0].decode('utf-8')
+    before = set(runtime.glob('progress_*.jsonl'))
+    page.goto(f'http://localhost:{args.port}/?run={progress.name}', wait_until='domcontentloaded')
+    assert show_report() == displayed
+    assert set(runtime.glob('progress_*.jsonl')) == before
+    return {'comparison_table': displayed, 'markdown_zip_identical': True,
+            'report_sha256': hashlib.sha256(content[0]).hexdigest(), 'reconnect_preserved_comparison': True}
+
+
 def main(args):
     # Browser/runtime imports stay optional for CLI help and local audit tests.
     from playwright.sync_api import sync_playwright
@@ -278,9 +336,22 @@ def main(args):
                              "submitted_at": datetime.now(timezone.utc).isoformat()})
             emit({"progress_file": str(progress), "input": "real_browser_pdf_upload"})
             previous, observations = None, []
+            installation_checks = {'heartbeat_seen': False, 'measured_download_seen': False,
+                                   'live_panel_seen': False}
             deadline = time.monotonic() + args.observation_timeout
             while time.monotonic() < deadline:
                 snapshot = ProgressStore.read_snapshot(str(progress))
+                installations = snapshot.get('dependency_installations') or []
+                if args.require_install_progress and installations:
+                    installation_checks['heartbeat_seen'] = True
+                    current = installations[-1]
+                    if (current.get('downloaded_bytes') or 0) > 0 and not installation_checks['live_panel_seen']:
+                        installation_checks['measured_download_seen'] = True
+                        page.get_by_role('heading', name='依赖安装进度', exact=True).wait_for(timeout=30000)
+                        page.wait_for_timeout(2500)
+                        page.screenshot(path=str(runtime / f'{args.tag}_installation.png'), full_page=True)
+                        installation_checks['live_panel_seen'] = True
+                        installation_checks['sample'] = current
                 observation = {"state": snapshot["state"], "done": snapshot["done"],
                                "active_runs": len(snapshot["active_runs"]), "active_workers": len(snapshot["active_workers"]),
                                "active_executions": len(snapshot["active_executions"]),
@@ -297,6 +368,10 @@ def main(args):
                     save("cleanup", cleanup)
                     verify_frozen()
                     validation = verify_author_completion(result, pdf_hash, args.repo)
+                    comparison = verify_claim_comparison(result) if args.require_comparison else None
+                    if args.require_install_progress:
+                        assert all(installation_checks[key] for key in
+                                   ('heartbeat_seen', 'measured_download_seen', 'live_panel_seen')), installation_checks
                     assert cleanup["passed"], cleanup["checks"]
                     assert not snapshot["active_runs"] and not snapshot["active_workers"] and not snapshot["active_executions"]
                     assert all(row["status"] not in {"running", "waiting", "error", "blocked"}
@@ -316,12 +391,15 @@ def main(args):
                     if validation["training_observed"] is False:
                         page.get_by_text("本次未记录到优化器更新；详见作者程序输出。", exact=True).wait_for(timeout=30000)
                     page.get_by_text("任务完成", exact=True).wait_for(timeout=30000)
+                    report_check = verify_report_reconnect(page, args, progress, runtime) if comparison else None
                     page.screenshot(path=str(runtime / f"{args.tag}_final.png"), full_page=True)
                     record = {"input": "real_browser_pdf_upload", "state": result["state"], "progress_file": str(progress),
                               "freeze": freeze, "pdf_sha256": pdf_hash, "validation": validation,
                               "run_dir": result["data"]["run_dir"], "execution_run_starts": len(starts),
                               "execution_run_ends": len(ends), "observations": observations,
                               "cleanup": cleanup, "live_page_completed": True,
+                              "claim_comparison_required": args.require_comparison, "report_checks": report_check,
+                              "installation_checks": installation_checks,
                               "live_page_paper_accepted": False, "live_page_author_code_completed": True}
                     save("acceptance", record)
                     emit({"state": result["state"], "validation": validation["status"],
@@ -342,6 +420,10 @@ def build_parser():
     parser.add_argument("--port", type=int, default=8501)
     parser.add_argument("--execution-only", action="store_true", help="Compatibility flag; author execution is always used")
     parser.add_argument("--allow-no-preview-link", action="store_true")
+    parser.add_argument("--require-comparison", action="store_true",
+                        help="Require verified paper comparisons, matching downloads and browser reconnect")
+    parser.add_argument("--require-install-progress", action="store_true",
+                        help="Require measured installer events and the live browser progress panel")
     parser.add_argument("--credential-stdin", action="store_true", help='Read {"api_key": "..."} from stdin instead of hidden input')
     parser.add_argument("--base-url", help="Override the API URL shown on the page")
     parser.add_argument("--model", help="Override the model shown on the page")

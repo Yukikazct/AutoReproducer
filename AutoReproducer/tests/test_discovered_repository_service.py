@@ -13,7 +13,7 @@ from unittest.mock import Mock
 from filelock import FileLock
 import pytest
 
-from discovered_fixtures import PlannedLLM, accepted_review, make_experiment
+from discovered_fixtures import PlannedLLM, accepted_review, make_experiment, configured_native_cache
 from src import discovered_repository_reproduction as service
 from src.audit.audit_logger import AuditLogger
 from src.discovered_repository_runtime import CAPTURE_DIR
@@ -47,14 +47,11 @@ def setup_service(tmp_path, monkeypatch, family="signals", review=None):
 @pytest.fixture
 def cpu_dependency_cache():
     """Reuse an already installed exact CPU build; never install during tests."""
-    root = Path(__file__).resolve().parents[1] / "data" / "deps" / "repository" / runtime_fingerprint()
     torch_version = compatibility_pins()["torch"]
-    caches = [path for path in root.glob("*") if (path / ".ready").is_file()
-              and (path / f"torch-{torch_version}.dist-info").is_dir()
-              and (path / "numpy-1.26.4.dist-info").is_dir()]
-    if not caches:
-        pytest.skip(f"Native fixture requires a preinstalled torch {torch_version} / NumPy 1.26.4 cache")
-    return caches[0]
+    cache = configured_native_cache('AUTOREPRO_TEST_CPU_DEPS', torch_version)
+    if cache is None:
+        pytest.skip(f"Native fixture requires a dedicated torch {torch_version} / NumPy 1.26.4 cache; set AUTOREPRO_TEST_CPU_DEPS outside application data/")
+    return cache
 
 
 def use_preinstalled_cache(monkeypatch, runner, cache):

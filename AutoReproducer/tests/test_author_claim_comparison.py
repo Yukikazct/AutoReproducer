@@ -165,3 +165,168 @@ def test_report_exposes_gap_scope_and_sources_without_reproduction_success(sourc
     assert '作者输出与论文宣称对比' in report and '个百分点' in report
     assert 'PDF 第 3 页' in report and '尚未独立复算' in report
     assert '整篇论文数值复现通过' not in report
+
+
+@pytest.mark.parametrize('field,wrong', [('aggregation', 'single'), ('runs', 1), ('std', 0.03), ('runs', True)])
+def test_llm_cannot_rewrite_observed_summary_statistics(sources, field, wrong):
+    fixture, packet, records, payload = sources
+    record = next(row for row in records if row['split'] == 'test')
+    record.update(aggregation='mean', runs=10, std=0.01)
+    payload['comparisons'][0]['actual_context'].update(aggregation='mean', runs=10, std=0.01)
+    payload['comparisons'][0]['actual_context'][field] = wrong
+    with pytest.raises(ValueError, match='observed|Invalid actual'):
+        validate_comparisons(payload, packet, fixture['workspace'], records)
+
+
+def test_program_summary_fills_unknown_fields_and_report_keeps_std(sources):
+    fixture, packet, records, payload = sources
+    record = next(row for row in records if row['split'] == 'test')
+    record.update(aggregation='mean', runs=10, std=0.01)
+    payload['comparisons'][0]['actual_context'].update(aggregation='unknown', runs=None)
+    rows, citations = validate_comparisons(payload, packet, fixture['workspace'], records)
+    actual = rows[0]['actual']
+    assert actual['runs'] == 10 and actual['aggregation'] == 'mean' and actual['std'] == 0.01
+    assert rows[0]['status'] == 'reference_only'
+    report = ReportGeneratorAgent(logger=Mock())._build_report({'execution': {'mode': 'repository'},
+        'validation': {'status': 'author_code_completed', 'is_reproduced': None,
+            'author_claim_comparison': {'comparisons': rows, 'citations': citations}}})
+    assert '± 0.01' in report and '10 次' in report and '仅供参考' in report
+
+
+def _two_step_proposal(payload):
+    execution = actual_execution()
+    execution['steps'].append({'id': 'another', 'success': True, 'exit_code': 0,
+                               'stdout': 'Test accuracy: 0.9', 'stderr': ''})
+    records, _ = collect_author_metrics(execution)
+    second = deepcopy(payload['comparisons'][0])
+    second['actual_id'] = next(row['id'] for row in records if row['step_id'] == 'another')
+    return execution, second
+
+
+def test_bad_row_does_not_discard_valid_row_and_correction_merges_results(sources):
+    fixture, packet, _, payload = sources
+    execution, second = _two_step_proposal(payload)
+    first = deepcopy(payload)
+    broken = deepcopy(second); broken['reference']['value'] = 91.3
+    first['comparisons'].append(broken)
+    corrected = deepcopy(payload); corrected['comparisons'] = [second]
+    llm = Mock(mock_mode=False)
+    llm.chat.side_effect = [json.dumps(first), json.dumps(corrected)]
+    result = compare_author_claims(llm, packet, fixture['proposal'], fixture['workspace'], execution)
+    assert llm.chat.call_count == 2 and len(result['comparisons']) == 2
+    assert result['status'] == 'compared' and not result['validation_errors']
+    assert [row['actual']['value'] for row in result['comparisons']] == [1.0, 0.9]
+    assert result['extraction_attempts'][0]['validation_errors']
+    assert first['comparisons'][1]['reference']['value'] == 91.3
+
+
+@pytest.mark.parametrize('response', ['empty', 'api_failure', 'bad_citation', 'bad_identifier'])
+def test_unresolved_row_is_reported_while_valid_rows_survive(sources, response):
+    fixture, packet, _, payload = sources
+    execution, second = _two_step_proposal(payload)
+    first = deepcopy(payload)
+    second['reference']['value'] = 91.3
+    if response == 'bad_citation':
+        second['reference']['citations'] = ['does_not_exist']
+    if response == 'bad_identifier':
+        second['actual_id'] = ['not', 'a', 'string']
+    first['comparisons'].insert(0, second)
+    llm = Mock(mock_mode=False)
+    llm.chat.side_effect = [json.dumps(first), RuntimeError('API unavailable') if response == 'api_failure'
+                           else json.dumps({'comparisons': []})]
+    result = compare_author_claims(llm, packet, fixture['proposal'], fixture['workspace'], execution)
+    assert llm.chat.call_count == 2
+    assert result['status'] == 'partial' and len(result['comparisons']) == 1
+    assert result['comparisons'][0]['actual']['value'] == 1.0 and result['validation_errors']
+    if response == 'api_failure':
+        assert 'API unavailable' in result['diagnostic']
+    report = ReportGeneratorAgent(logger=Mock())._build_report({'execution': {'mode': 'repository'},
+        'validation': {'status': 'author_code_completed', 'author_claim_comparison': result}})
+    assert '未完成的配对' in report and '作者输出与论文宣称对比' in report
+
+
+def _flat_table(sources, annotation=None):
+    import hashlib
+    fixture, packet, records, payload = sources
+    packet = deepcopy(packet)
+    paper = next(ref for ref in payload['citations'] if ref['id'] == 'paper_results')
+    header = 'Method SignGrid OtherGrid'
+    method = 'Signal Linear' + (f' ({annotation})' if annotation else '')
+    row = method + ' test 100.0 98.0'
+    text = 'Test accuracy (%)\n' + header + '\n' + row
+    page = next(page for page in packet['pdf']['pages'] if page['page'] == paper['page'])
+    page['text'] += '\n' + text; page['sha256'] = hashlib.sha256(page['text'].encode()).hexdigest()
+    paper['quote'] = text
+    reference = payload['comparisons'][0]['reference']
+    reference.update(value_quote=row, column_quote=header, method=method)
+    return fixture, packet, records, payload
+
+
+def test_flat_table_value_must_belong_to_the_correct_dataset_column(sources):
+    fixture, packet, records, payload = _flat_table(sources)
+    rows, _ = validate_comparisons(payload, packet, fixture['workspace'], records)
+    assert rows[0]['reference']['column_verified'] is True
+    payload['comparisons'][0]['reference']['value'] = 98.0
+    with pytest.raises(ValueError, match='dataset column'):
+        validate_comparisons(payload, packet, fixture['workspace'], records)
+
+
+@pytest.mark.parametrize('separator', ['±', '+/-', '\x06'])
+def test_reference_deviation_cannot_come_from_another_dataset_column(sources, separator):
+    import hashlib
+    fixture, packet, records, payload = _flat_table(sources)
+    reference = payload['comparisons'][0]['reference']
+    old = reference['value_quote']
+    row = f'Signal Linear test 100.0 {separator} 0.1 98.0 {separator} 0.2'
+    paper = next(ref for ref in payload['citations'] if ref['id'] == 'paper_results')
+    page = next(page for page in packet['pdf']['pages'] if page['page'] == paper['page'])
+    page['text'] = page['text'].replace(old, row)
+    page['sha256'] = hashlib.sha256(page['text'].encode()).hexdigest()
+    paper['quote'] = paper['quote'].replace(old, row)
+    reference.update(value_quote=row, std=0.1)
+    accepted, _ = validate_comparisons(payload, packet, fixture['workspace'], records)
+    assert accepted[0]['reference']['std'] == 0.1
+    reference['std'] = 0.2
+    with pytest.raises(ValueError, match='standard deviation.*dataset column'):
+        validate_comparisons(payload, packet, fixture['workspace'], records)
+
+
+@pytest.mark.parametrize('header', [None, 'Method OtherGrid'])
+def test_multi_dataset_row_requires_its_exact_identifying_header(sources, header):
+    fixture, packet, records, payload = _flat_table(sources)
+    payload['comparisons'][0]['reference']['column_quote'] = header
+    with pytest.raises(ValueError, match='column_quote'):
+        validate_comparisons(payload, packet, fixture['workspace'], records)
+
+
+def test_separator_spelling_does_not_merge_distinct_variants():
+    from src.author_claim_comparison import _context
+    assert _context('Signal_Linear') == _context('Signal-Linear')
+    assert _context('DGC_Euler') != _context('DGC-PPR')
+
+
+@pytest.mark.parametrize('annotation', ['ours', 'our method', 'this work'])
+def test_author_table_annotation_is_not_an_algorithm_variant(sources, annotation):
+    fixture, packet, records, payload = _flat_table(sources, annotation)
+    rows, _ = validate_comparisons(payload, packet, fixture['workspace'], records)
+    assert rows[0]['status'] == 'comparable' and rows[0]['difference'] == 0
+    assert rows[0]['reference']['method'].endswith(f'({annotation})')
+
+
+@pytest.mark.parametrize('annotation', ['Euler', 'PPR', 'GAT'])
+def test_real_parenthetical_variants_are_not_stripped(sources, annotation):
+    fixture, packet, records, payload = _flat_table(sources, annotation)
+    rows, _ = validate_comparisons(payload, packet, fixture['workspace'], records)
+    assert rows[0]['status'] == 'not_comparable' and rows[0]['difference'] is None
+
+
+def test_method_row_name_correction_handles_only_cosmetic_author_annotations(sources):
+    fixture, packet, records, payload = _flat_table(sources, 'ours')
+    reference = payload['comparisons'][0]['reference']
+    reference.update(name='Signal Linear (ours)', method='Signal Linear')
+    rows, _ = validate_comparisons(payload, packet, fixture['workspace'], records)
+    assert rows[0]['metric'] == 'accuracy' and rows[0]['status'] == 'comparable'
+    assert rows[0]['reference']['proposed_metric_name'] == 'Signal Linear (ours)'
+    reference['name'] = 'Signal Linear (Euler)'
+    with pytest.raises(ValueError, match='Reference name'):
+        validate_comparisons(payload, packet, fixture['workspace'], records)

@@ -106,7 +106,17 @@ def resolve_entrypoint(item, packet, workspace):
         suffix = '.ipynb' if kind == 'notebook' else '.py'
         if not target.endswith(suffix):
             raise ValueError('Author entrypoint has an unexpected file type')
-        path = workspace_path(directory, target, 'author entrypoint', must_exist=True, forbid_git=True)
+        try:
+            path = workspace_path(directory, target, 'author entrypoint', must_exist=True, forbid_git=True)
+        except FileNotFoundError as exc:
+            # Return navigation evidence to the planner instead of guessing a
+            # cwd when several author experiments use the same script name.
+            matches = sorted(name for name in packet['file_inventory']
+                             if Path(name).name == Path(target).name)[:8]
+            raise ValueError(f'Author entrypoint {target!r} is missing under cwd {cwd!r}. '
+                'Matching pinned inventory paths: ' + json.dumps(matches) +
+                '. Read the relevant original source and choose its working directory; '
+                'do not invent a root-level script.') from exc
     name = path.relative_to(Path(workspace).resolve()).as_posix()
     if name not in packet['file_inventory']:
         raise ValueError('Author entrypoint is absent from the pinned repository inventory')
