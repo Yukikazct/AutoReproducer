@@ -1,0 +1,29 @@
+{
+  "scope": "Dataset evidence integrity mechanisms; invented fixture, not paper data or independent paper acceptance",
+  "platform": "Windows CPython3.12.10",
+  "tests": 55,
+  "failures": 0,
+  "skips": 0,
+  "elapsed_s": 5.48,
+  "new_negative_cases_first_reproduced": 4,
+  "verified_boundaries": [
+    "file symlink",
+    "directory symlink",
+    "root retarget before observer finish",
+    "root retarget before parent verification",
+    "Windows directory junction"
+  ],
+  "native_positive": {
+    "framework": "torch_geometric2.6.1",
+    "dataset_class": "WikiCS",
+    "fixture": "invented3nodeJSON",
+    "sample_count": 1,
+    "num_nodes": 3,
+    "raw_and_processed_hashes_verified": true,
+    "raw_bytes_unchanged": true
+  },
+  "source_sha256": {
+    "src/experiments/observe_datasets.py": "80ea2f8dab410292daa57bf77ede71bd54ec420e19218a1da8b4485c4195ba62",
+    "src/runtime_dataset_evidence.py": "5cd31b8763fe3efd91104ea07993d31d259b86790f28ddc79d3f19fe578d9c53"
+  }
+}

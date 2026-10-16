@@ -125,3 +125,9 @@ C&S 新 PDF 的真实网页任务发现原作者 `CUAI/CorrectAndSmooth` 后，�
 现在把已观测的误差值、类型、置信水平和源码依据直接复制到比较行，拒绝模型修改或凭空添加这些字段。比较表及无有效配对时的实际指标证据表均保留误差值，并明确标为 **95% bootstrap 置信区间半宽**，不按标准差显示。定向解析、比较、报告版本和归档检查 **84 passed**（5.23 秒）；包括真实 CPU 作者执行的服务及网页/报告相关检查 **56 passed**（169.82 秒）。
 
 真实旧日志只读渲染证据为 [chebnetii_uncertainty_report_replay_20261016.json](evidence/chebnetii_uncertainty_report_replay_20261016.json)：均值 71.5974、半宽 1.5536 及 95% 水平均保留，原始 result/report/execution 文件 SHA-256 前后一致。这不是新训练或独立论文验收。本修复在隔离工作区完成，进行中的 NodeFormer 网页测试仍使用冻结的 `d9ff662`。
+
+## #41：数据路径链接不能冒充未变化的输入
+
+数据观察器和父核验原先先调用 `resolve()`，会抹掉文件或目录链接的原位置；若训练后把原数据目录换为指向相同字节的目录链接，仍可能误报输入未变。新增 4 项真实文件系统用例先复现此问题，覆盖文件链接、目录链接和两个终态核对位置的根目录重定向。
+
+现在在解析真实位置和读取摘要前检查原路径及所有父目录的 symlink / Windows reparse-point 属性，观察器和父核验使用相同规则，不跟随这些链接取得通过证明。正常原文件仍按原始完整字节和元数据核对。相关路径和数据证据检查 **55 passed、0 skipped**（5.87 秒），包含 Windows 原生目录 junction，以及实际 PyG 2.6.1 的 WikiCS 构造、原生 raw/processed 文件和父流程摘要核对。该正向机制使用自建 3 节点 JSON，不能称为真实论文数据或训练通过。证据：[native_dataset_link_integrity_20261016.json](evidence/native_dataset_link_integrity_20261016.json)。

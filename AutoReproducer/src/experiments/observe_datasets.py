@@ -3,10 +3,22 @@ import hashlib
 import importlib
 import inspect
 from pathlib import Path
+import stat
+
+
+def real_dataset_path(path):
+    """Reject link indirection before resolving an observed input's identity."""
+    path = Path(path).absolute()
+    for component in (path, *path.parents):
+        metadata = component.lstat()
+        if (stat.S_ISLNK(metadata.st_mode) or getattr(metadata, 'st_file_attributes', 0)
+                & getattr(stat, 'FILE_ATTRIBUTE_REPARSE_POINT', 0)):
+            raise ValueError('Original dataset path contains a symlink or junction')
+    return path.resolve(strict=True)
 
 
 def file_record(path, role):
-    path = Path(path).resolve(strict=True)
+    path = real_dataset_path(path)
     if not path.is_file() or not path.stat().st_size:
         raise ValueError('Original framework dataset is missing a complete real file')
     digest = hashlib.sha256()
@@ -47,7 +59,7 @@ class DatasetObserver:
                 cls.__init__ = observed
 
     def capture(self, dataset, declaration, before_training):
-        root = Path(dataset.root).resolve(strict=True)
+        root = real_dataset_path(dataset.root)
         files = {}
         for role, paths in [('raw', dataset.raw_paths), ('processed', dataset.processed_paths)]:
             for path in paths:

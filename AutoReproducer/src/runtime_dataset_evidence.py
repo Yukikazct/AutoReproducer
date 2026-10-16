@@ -1,8 +1,8 @@
 """Bind author-native dataset construction to observed complete framework files."""
 import ast
-from pathlib import Path
 
 from src.method_adapters import digest
+from src.experiments.observe_datasets import real_dataset_path
 from src.safety.paths import workspace_path
 
 
@@ -155,9 +155,9 @@ def verify_runtime_datasets(plan, receipts, workspace):
                     or type(record.get('sample_count')) is not int or record['sample_count'] <= 0
                     or not record.get('files') or not any(value.get('role') == 'raw' for value in record['files'].values())):
                 raise ValueError('Native dataset lacks complete real-file and pre-training construction evidence')
-            root = Path(record['root']).resolve(strict=True)
+            root = real_dataset_path(record['root'])
             for name, value in record['files'].items():
-                path = Path(name).resolve(strict=True)
+                path = real_dataset_path(name)
                 if (not path.is_relative_to(root) or not path.is_file()
                         or type(value.get('bytes')) is not int or value['bytes'] <= 0
                         or path.stat().st_size != value['bytes'] or digest(path) != value.get('sha256')):
