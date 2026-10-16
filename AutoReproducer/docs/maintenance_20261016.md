@@ -127,3 +127,11 @@ C&S 新 PDF 的真实网页任务发现原作者 `CUAI/CorrectAndSmooth` 后，�
 主分支 [CI 38864337951](https://github.com/Yukikazct/AutoReproducer/actions/runs/38864337951) 唯一失败为超时用例要求 stdout 包含 `PARTIAL`，但其 300ms 预算可能在 Windows Python 启动完毕前耗尽。受控加入 600ms 启动延迟确认：300ms 时确实没有输出，1500ms 时保留输出，两者均正确超时并返回 124，见 [timeout_partial_log_startup_20261016.json](evidence/timeout_partial_log_startup_20261016.json)。
 
 该测试现在给冷启动留出预算，并先取得孙进程实际启动的 PID 证据，再检查真实超时、部分日志、时限和进程退出；孙进程只有在持有者清理结束后收到释放信号才会写逃逸标记，因此保留了后代清理的实质断言。Windows 另核对原生进程句柄已结束。没有修改产品超时策略。Runner 与进程生命周期专项 **62 passed、1 skipped**（38.30 秒），跳过项为 POSIX 信号语义。
+
+## #41 / #27：Google Drive 包名与模块名一致核对
+
+NodeFormer 的真实网页试验在依赖安装后被健康检查误拦：作者固定要求的 `googledrivedownloader==0.4` 已安装且 pip 退出 0，但健康检查尝试导入不存在的同名模块。该发行包的原始公共模块为 `google_drive_downloader`；计划读取器已有这个知识，通用依赖解析器缺少相同映射，导致两轮完整安装重复失败。
+
+已补齐通用模块/发行包映射，健康检查、自愈解析和源码依赖识别使用同一个正确名称。新增四种真实子进程探测用例，分别检查正常模块、错误版本、只有错误同名模块及真实导入异常；其中三项先复现失败，原有版本及导入错误保护保留。相关依赖、重试与健康检查 **122 passed**（27.51 秒）。实际从 PyPI 安装的 0.4 包也通过了同目录修复前/后的探测，原包源码摘要保持不变，见 [google_drive_import_native_20261016.json](evidence/google_drive_import_native_20261016.json)。
+
+原网页任务在开始训练前停止，监督进程释放 **665,145,502 字节**、无错误或剩余环境，活动进程归零，源码在试验结束前保持冻结；证据为 [nodeformer_health_import_failure_20261016.json](evidence/nodeformer_health_import_failure_20261016.json)。该 PDF 因触发此修复转为回归样本，后续重跑不计新的独立论文验收。

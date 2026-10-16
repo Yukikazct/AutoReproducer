@@ -121,6 +121,31 @@ def test_healthy_cache_uses_real_probe_without_pip_or_manifest_rewrite(monkeypat
     assert second.env_config["dependency_health_attempts"][0]["success"]
 
 
+@pytest.mark.parametrize('layout', ['healthy', 'wrong_version', 'wrong_module_only', 'broken_import'])
+def test_google_drive_distribution_uses_original_public_import(layout):
+    requirements = 'googledrivedownloader==0.4'
+    directory = ce.DEPS_CACHE_ROOT / 'google-drive-alias'
+    directory.mkdir(parents=True)
+    version = '0.5' if layout == 'wrong_version' else '0.4'
+    metadata = directory / f'googledrivedownloader-{version}.dist-info'
+    metadata.mkdir()
+    (metadata / 'METADATA').write_text(
+        f'Metadata-Version: 2.1\nName: googledrivedownloader\nVersion: {version}\n', encoding='utf-8')
+    name = 'googledrivedownloader.py' if layout == 'wrong_module_only' else 'google_drive_downloader.py'
+    source = "raise ImportError('broken downloader dependency')\n" if layout == 'broken_import' else 'VALUE = 1\n'
+    (directory / name).write_text(source, encoding='utf-8')
+    instance = executor()
+    instance.env_config['requirements_txt'] = requirements
+    error = instance._check_local_dependency_health(directory, requirements, 'public_import_alias')
+    if layout == 'healthy':
+        assert error is None, error
+        assert ce.python_package_for('google_drive_downloader') == 'googledrivedownloader'
+    else:
+        assert error is not None
+        if layout == 'broken_import':
+            assert 'broken downloader dependency' in error
+
+
 @pytest.mark.parametrize("state", ["missing", "corrupt", "healthy"])
 def test_offline_presets_only_use_healthy_cached_dependencies(monkeypatch, tmp_path, state):
     directory = ce.DEPS_CACHE_ROOT / ce.reqs_digest(REQUIREMENTS)

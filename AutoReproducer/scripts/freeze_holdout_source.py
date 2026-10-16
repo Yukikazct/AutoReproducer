@@ -48,6 +48,7 @@ record['excluded_regression_papers'].extend(['Graph Contrastive Learning with Ad
     'SGFormer: Simplifying and Empowering Transformers for Large-Graph Representations',
     'Finding Global Homophily in Graph Neural Networks When Meeting Heterophily'])
 record['excluded_regression_papers'].append('Combining Label Propagation and Simple Models Out-performs Graph Neural Networks')
+record['excluded_regression_papers'].append('NodeFormer: A Scalable Graph Structure Learning Transformer for Node Classification')
 target = root / "data/runtime" / (args.tag + "_source_freeze.json")
 if target.exists():
     raise ValueError("Never overwrite a previous holdout source freeze")
