@@ -35,6 +35,18 @@ class RepositoryRunner:
         self.executor = executor or CodeExecutorAgent(None, logger=logger)
         self.logger = logger or self.executor.logger
 
+    def run_with_repairs(self, workspace, steps, env_config, *, llm, editable,
+                         max_rounds=2, on_event=None):
+        """Explicit compatibility-repair mode for a caller-owned isolated tree.
+
+        Ordinary run() never rewrites author sources. This separate entry point
+        requires a whitelist and retains each proposal, diff and real retry.
+        """
+        from src.repository_repairer import RepositoryRepairer
+        from src.safety.patch_policy import PatchPolicy
+        repairer = RepositoryRepairer(self, llm, PatchPolicy(editable=editable), max_rounds=max_rounds)
+        return repairer.run(workspace, steps, env_config, on_event=on_event)
+
     @staticmethod
     def cached_environment(env_config):
         runtime = runtime_fingerprint(env_config.get('python_executable'))

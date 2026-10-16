@@ -15,4 +15,14 @@
 
 验证：`tests/test_workspace_snapshot_fusion.py`、`tests/test_patch_policy_fusion.py`、`tests/test_safety.py`、`tests/test_optimizer_real.py`，**89 passed**（3.38 秒）；`git diff --check` 通过。包含真实文件链接、硬链接、取消与多文件恢复验证，没有 API 请求或论文训练。这是 #20 的基础修复，不代表整个 issue 已验收。
 
-全量基线仍在运行，日志与 JUnit 位于 `.tmp/maintenance_20261016_baseline.*`；其最终状态完成后记录，不将进行中的检查记为通过。
+全量基线为 **3219 passed、87 skipped、0 failed**（502.46 秒），日志与 JUnit 位于 `.tmp/maintenance_20261016_baseline.*`。跳过项主要缺少原生 CPU/GPU、Notebook 等运行依赖以及 POSIX 信号能力，不作为这些能力通过的证据。第一轮修复提交 `267c145` 已推送；上述 89 项专项在默认编码下另有 **89 passed**（3.34 秒）。
+
+## #20：多文件事务与显式修复入口
+
+新增 `PatchTransaction` 和 `RepositoryRunner.run_with_repairs()`：一个候选最多三个既有文件，统一校验路径、保护规则、重复目标、体积、原哈希和语法，全部通过后应用。失败或取消恢复整个工作区；应用第二个文件时模拟失败的回归确认第一个文件也恢复。补丁应用和恢复都会清除受影响字节码，真实子进程验证同尺寸、同时间戳修改不会继续执行旧缓存。
+
+显式修复入口要求隔离导出目录和源码白名单，拒绝 Git 工作目录；真实失败后按 traceback 准备上下文，最多两轮，保留理由、diff、日志和结果。模型不能改写命令、依赖或环境；候选按原完整命令计划重跑。成功退出后仍核对原有受保护输入，不能靠修改数据拿到成功；回滚失败立即停止。原 PDF/预设直接执行路径保持现有行为，入口使用及限制见 [repository_repairs.md](repository_repairs.md)。
+
+相关集成专项 **176 passed**（33.57 秒），覆盖真实仓库子进程、预算耗尽、取消、非法候选和整体恢复。此后增加 Git 工作区拒绝与恢复失败停止两项，以及危险生成代码和受保护输入校验，新增模块专项合计 **34 passed**（11.90 秒）。完整回归 `.tmp/maintenance_20261016_repairs.*` 为 **3266 passed、87 skipped、0 failed**（505.60 秒）；该全量收集早于最终五项边界回归，后者由上述 34 项专项覆盖，推送后的 CI 再验证最终提交。
+
+已完成真实 DeepSeek API 兼容性冒烟：`collections.MutableMapping` 与 `inspect.getargspec` 分别位于两个文件；模型一轮给出两个兼容替换，原命令重跑输出 `COMPAT_REPAIR_OK`、退出码 0，固定数据保持不变。该验证使用标准库小程序，不是论文训练或数值复现。最终保护措施版本再次通过真实 API，输入/输出 token 为 585/270；五个相关产品文件的测试前后摘要一致。脱敏证据为 [issue20_compatibility_api_20261016.json](evidence/issue20_compatibility_api_20261016.json)。
