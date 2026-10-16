@@ -128,6 +128,46 @@ def test_real_simulator_rolls_back_after_execution_failure(workspace):
     assert (workspace / "run.py").read_text(encoding="utf-8") == _BASELINE_CODE
 
 
+@pytest.mark.parametrize("error", [KeyboardInterrupt, SystemExit, RuntimeError])
+def test_real_simulator_restores_all_files_after_unexpected_failure(workspace, monkeypatch, error):
+    llm = _BadPatchLLM("print('candidate')\n")
+    executor = CodeExecutorAgent(llm)
+    sim = RealSimulator(llm, executor, str(workspace))
+    module = workspace / "model.py"
+    module.write_bytes(b"original module\n")
+
+    def execute(*args, **kwargs):
+        module.write_bytes(b"changed module\n")
+        (workspace / "candidate.py").write_bytes(b"new module\n")
+        if error is RuntimeError:
+            return {"success": True, "stdout": "candidate"}
+        raise error("cancelled")
+
+    monkeypatch.setattr(executor, "execute_in_workspace", execute)
+    if error is RuntimeError:
+        def metric_failure(*args):
+            raise RuntimeError("invalid metric")
+        monkeypatch.setattr(sim, "_compute_reward", metric_failure)
+
+    with pytest.raises(error):
+        sim.run_trial("compatibility", 0.85)
+
+    assert (workspace / "run.py").read_text(encoding="utf-8") == _BASELINE_CODE
+    assert module.read_bytes() == b"original module\n"
+    assert not (workspace / "candidate.py").exists()
+
+
+def test_real_simulator_rejects_external_target_before_reading_it(workspace):
+    outside = workspace.parent / "outside.py"
+    outside.write_bytes(b"outside\n")
+    sim = RealSimulator(_BadPatchLLM(), CodeExecutorAgent(None), str(workspace),
+                        target_file="../outside.py")
+    reward, detail = sim.run_trial("compatibility", 0.85)
+    assert reward == 0
+    assert detail["status"] == "policy_rejected"
+    assert outside.read_bytes() == b"outside\n"
+
+
 def test_patch_syntax_gate_rejects_before_touching_workspace(workspace):
     """不可编译的补丁必须被语法门拦下：不写盘、不执行。"""
     llm = _BadPatchLLM("def broken(: 语法错误\n")

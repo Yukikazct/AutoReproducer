@@ -47,6 +47,27 @@ def test_legacy_traversal_and_absolute_rejected():
     assert policy.check("C:/Windows/system32/x.dll")[0] is False
 
 
+@pytest.mark.parametrize("path", ["C:relative.py", "model.py:stream", "./", "model\x00.py"])
+def test_patch_policy_rejects_portable_invalid_paths(path):
+    assert PatchPolicy().decide(path).allowed is False
+
+
+def test_patch_policy_normalizes_alias_before_checking_protected_directories():
+    assert PatchPolicy().decide("src//.git/config").allowed is False
+    assert PatchPolicy().decide("src/./.git/config").allowed is False
+
+
+def test_patch_policy_rejects_workspace_link(tmp_path, require_symlinks):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside = tmp_path / "outside.py"
+    outside.write_bytes(b"outside\n")
+    (workspace / "model.py").symlink_to(outside)
+    decision = PatchPolicy(workspace=str(workspace)).decide("model.py")
+    assert decision.allowed is False
+    assert decision.rule == "illegal"
+
+
 def test_legacy_backslash_and_dot_normalized():
     policy = PatchPolicy(editable=["src/model.py"])
     assert policy.check("src\\model.py")[0] is True

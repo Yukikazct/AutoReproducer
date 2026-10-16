@@ -14,8 +14,13 @@
 from __future__ import annotations
 
 import hashlib
+import os
+import stat
+import tempfile
 from pathlib import Path
 from typing import Dict, Iterable, List, Mapping, Optional, Tuple
+
+from src.safety.paths import is_link, workspace_path
 
 # 快照条目的类型别名：{rel_path: {"sha256": str, "content": bytes}}
 Snapshot = Dict[str, Dict[str, object]]
@@ -37,28 +42,37 @@ def _sha256_bytes(data: bytes) -> str:
 def iter_workspace_files(root: Path, skip_dirs: Optional[Iterable[str]] = None,
                          skip_files: Optional[Iterable[str]] = None) -> Iterable[Path]:
     """遍历工作区内的普通文件（跳过 .git、缓存目录与临时文件）。"""
-    skip_dirs = set(skip_dirs or _DEFAULT_SKIP_DIRS)
-    skip_files = set(skip_files or _DEFAULT_SKIP_FILES)
-    root = Path(root)
-    for path in root.rglob("*"):
-        if not path.is_file():
-            continue
-        if any(d in path.parts for d in skip_dirs):
-            continue
-        if path.name in skip_files:
-            continue
-        yield path
+    skip_dirs = set(_DEFAULT_SKIP_DIRS if skip_dirs is None else skip_dirs)
+    skip_files = set(_DEFAULT_SKIP_FILES if skip_files is None else skip_files)
+    root = workspace_path(root, ".", "snapshot root", must_exist=True)
+    if not root.is_dir():
+        raise ValueError("snapshot root must be a directory")
+
+    def fail(error):
+        raise error
+
+    for directory, dirs, files in os.walk(root, followlinks=False, onerror=fail):
+        dirs[:] = sorted(name for name in dirs if name not in skip_dirs)
+        for name in dirs + sorted(files):
+            if name in skip_files or name in skip_dirs:
+                continue
+            path = Path(directory) / name
+            if is_link(path):
+                raise ValueError(f"snapshot contains a symlink or junction: {path.relative_to(root)}")
+            if path.is_file():
+                yield path
 
 
 def snapshot_workspace(root: Path, skip_dirs: Optional[Iterable[str]] = None,
                        skip_files: Optional[Iterable[str]] = None) -> Snapshot:
     """对工作区生成 {相对路径: {"sha256": 指纹, "content": 内容}} 快照。"""
-    root = Path(root)
+    root = workspace_path(root, ".", "snapshot root", must_exist=True)
     snap: Snapshot = {}
     for f in iter_workspace_files(root, skip_dirs=skip_dirs, skip_files=skip_files):
         rel = f.relative_to(root).as_posix()
         data = f.read_bytes()
-        snap[rel] = {"sha256": _sha256_bytes(data), "content": data}
+        snap[rel] = {"sha256": _sha256_bytes(data), "content": data,
+                     "mode": stat.S_IMODE(f.stat().st_mode)}
     return snap
 
 
@@ -181,32 +195,60 @@ def restore_snapshot(root: Path, snapshot: Snapshot,
     - 快照中存在、但当前缺失或内容不符 -> 重建为快照版本（记入 restored）；
     - 快照后新增的文件 -> 删除（记入 removed）。
     """
-    root = Path(root)
+    root = workspace_path(root, ".", "snapshot root", must_exist=True)
     restored: List[str] = []
     removed: List[str] = []
 
-    # 1) 还原快照内文件
+    # Validate the entire snapshot and current tree before the first mutation.
+    # A forged later entry must not partially restore an earlier valid file.
+    entries = []
+    seen = set()
     for rel, entry in snapshot.items():
-        target = root / rel
-        if not target.exists():
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(entry["content"])  # type: ignore[arg-type]
-            restored.append(rel)
-        elif isinstance(entry["content"], bytes) and \
-                _sha256_bytes(target.read_bytes()) != entry["sha256"]:
-            target.write_bytes(entry["content"])
-            restored.append(rel)
+        target = workspace_path(root, rel, "snapshot path", forbid_git=True)
+        if (not isinstance(rel, str) or rel != target.relative_to(root).as_posix()
+                or target == root or target in seen or (target.exists() and not target.is_file())):
+            raise ValueError(f"invalid snapshot file: {rel}")
+        seen.add(target)
+        content = entry.get("content")
+        mode = entry.get("mode")
+        if (not isinstance(content, bytes) or _sha256_bytes(content) != entry.get("sha256")
+                or (mode is not None and (type(mode) is not int or not 0 <= mode <= 0o7777))):
+            raise ValueError(f"invalid snapshot content or hash: {rel}")
+        entries.append((rel, target, content, mode))
+    current = list(iter_workspace_files(root, skip_dirs=skip_dirs, skip_files=skip_files))
+
+    # 1) 还原快照内文件
+    for rel, target, content, mode in entries:
+        if (target.is_file() and _sha256_bytes(target.read_bytes()) == _sha256_bytes(content)
+                and (mode is None or stat.S_IMODE(target.stat().st_mode) == mode)):
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        # Replacing a directory entry, rather than writing through it, also
+        # prevents a hardlink from changing a file outside the workspace.
+        descriptor, temporary = tempfile.mkstemp(prefix=".snapshot-", dir=target.parent)
+        try:
+            with os.fdopen(descriptor, "wb") as file:
+                file.write(content)
+            if mode is not None:
+                os.chmod(temporary, mode)
+            workspace_path(root, rel, "snapshot path", forbid_git=True)
+            os.replace(temporary, target)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+        restored.append(rel)
 
     # 2) 删除快照之后新增的文件（先收集再删除，避免遍历中目录变化）
-    current = list(iter_workspace_files(root, skip_dirs=skip_dirs,
-                                        skip_files=skip_files))
     for f in current:
         rel = f.relative_to(root).as_posix()
         if rel not in snapshot:
+            workspace_path(root, rel, "snapshot cleanup", forbid_git=True)
             f.unlink()
             removed.append(rel)
 
     for d in sorted({p.parent for p in current}, key=lambda v: -len(v.parts)):
+        if d == root:
+            continue
         try:
             d.rmdir()          # 清理可能变空的目录（非递归，失败忽略）
         except OSError:

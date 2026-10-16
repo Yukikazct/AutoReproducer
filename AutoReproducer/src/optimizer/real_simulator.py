@@ -25,6 +25,7 @@ from src.agents.code_executor import CodeExecutorAgent
 from src.agents.result_validator import ResultValidatorAgent
 from src.metric_keys import norm_metric_key
 from src.safety.patch_policy import PatchPolicy
+from src.safety.paths import workspace_path
 from src.safety.workspace_snapshot import restore_snapshot, snapshot_workspace
 
 # 越小越好的指标键
@@ -103,7 +104,15 @@ class RealSimulator:
                            "note": f"工作区不存在: {self.workspace}"})
             return 0.0, detail
 
-        target = self.workspace / self.target_file
+        ok, reason = self.policy.check(self.target_file, workspace=str(self.workspace))
+        if not ok:
+            detail.update({"status": "policy_rejected", "reason": reason})
+            return 0.0, detail
+        try:
+            target = workspace_path(self.workspace, self.target_file, "optimization target", forbid_git=True)
+        except (ValueError, OSError) as exc:
+            detail.update({"status": "policy_rejected", "reason": str(exc)})
+            return 0.0, detail
         if not target.exists():
             detail.update({"status": "rejected",
                            "note": f"缺少待优化文件: {self.target_file}"})
@@ -122,10 +131,6 @@ class RealSimulator:
         detail["patch_len"] = len(code)
 
         # 3) 补丁白名单 + 有效性检查
-        ok, reason = self.policy.check(self.target_file)
-        if not ok:
-            detail.update({"status": "policy_rejected", "reason": reason})
-            return 0.0, detail
         if not code or code == original:
             detail.update({"status": "rejected", "note": "补丁为空或与基线无变化"})
             return 0.0, detail
@@ -145,24 +150,28 @@ class RealSimulator:
             return 0.0, detail
 
         # 4) 应用补丁并真实重跑
-        target.write_text(code, encoding="utf-8")
         stdout, success = "", False
         result: Dict = {}
         try:
-            result = self.executor.execute_in_workspace(
-                code, str(self.workspace), stage="full")
-            stdout = result.get("stdout", "") or ""
-            success = bool(result.get("success", False))
-        except Exception as e:      # 执行器异常 -> 视作失败
-            detail["exec_error"] = str(e)[:200]
+            target.write_text(code, encoding="utf-8")
+            try:
+                result = self.executor.execute_in_workspace(
+                    code, str(self.workspace), stage="full")
+                stdout = result.get("stdout", "") or ""
+                success = bool(result.get("success", False))
+            except Exception as e:      # 执行器异常 -> 视作失败
+                detail["exec_error"] = str(e)[:200]
 
-        # 5) 真实指标与奖励
-        reward, metric, basis = self._compute_reward(baseline, stdout, success)
+            # 5) 真实指标与奖励
+            reward, metric, basis = self._compute_reward(baseline, stdout, success)
+        finally:
+            # Cancellation and metric parsing exceptions must restore every
+            # touched module just like an ordinary unsuccessful execution.
+            restored, removed = restore_snapshot(self.workspace, snap)
         detail["metric"] = metric
         detail["reward_basis"] = basis
 
         # 6) 安全网：还原工作区(无论成败);Keep 的补丁落盘供导出
-        restored, removed = restore_snapshot(self.workspace, snap)
         detail["restored"] = restored
         detail["removed"] = removed
         if reward > 0:
