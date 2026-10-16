@@ -545,7 +545,7 @@ def test_cleanup_reports_failures_and_retains_live_manifest_paths(mgr, monkeypat
     original_rmtree = __import__("shutil").rmtree
 
     def fail_repo(path, *args, **kwargs):
-        if path == repo:
+        if Path(path).samefile(repo):
             raise PermissionError("busy repository")
         return original_rmtree(path, *args, **kwargs)
 

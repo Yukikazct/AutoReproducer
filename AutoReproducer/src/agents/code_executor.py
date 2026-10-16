@@ -59,7 +59,7 @@ from src.dependency_management import (
     choose_base, prune_cache, cache_policy, write_maintenance, directory_bytes,
 )
 from src.dependency_temporary import pip_temporary, reap_pip_temporary
-from src.safety.paths import workspace_path
+from src.safety.paths import filesystem_path, workspace_path
 
 LOCAL_TIMEOUT_SMOKE = 10
 LOCAL_TIMEOUT_FULL = 60
@@ -1911,8 +1911,9 @@ class CodeExecutorAgent(BaseAgent):
         """Own preset installers/probes so timeout stops their descendants."""
         if command[1:3] == ['-m', 'pip']:
             with pip_temporary(self._dependency_lock_root(), on_cleanup=self._record_pip_cleanup) as work:
-                env = {**env, 'TMPDIR': str(work), 'TEMP': str(work), 'TMP': str(work),
-                       'PIP_CACHE_DIR': str(work / 'download-cache')}
+                scratch = filesystem_path(work)
+                env = {**env, 'TMPDIR': scratch, 'TEMP': scratch, 'TMP': scratch,
+                       'PIP_CACHE_DIR': filesystem_path(work / 'download-cache')}
                 if len(command) > 3 and command[3] in {'install', 'download'}:
                     from src.dependency_install_progress import DependencyInstallProgress
                     from urllib.parse import urlsplit

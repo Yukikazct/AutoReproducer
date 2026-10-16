@@ -13,7 +13,7 @@ from filelock import FileLock, Timeout
 
 from src.dependency_cache import cache_guard
 from src.safety.files import remove_tree
-from src.safety.paths import workspace_path
+from src.safety.paths import filesystem_path, workspace_path
 
 
 TEMP_NAMESPACE = '.pip-temporary'
@@ -24,7 +24,7 @@ ORPHAN_GRACE_SECONDS = 86400
 
 def temporary_bytes(directory):
     """Count regular files without following pip-created links or junctions."""
-    total, pending = 0, [Path(directory)]
+    total, pending = 0, [Path(filesystem_path(directory))]
     while pending:
         with os.scandir(pending.pop()) as entries:
             for entry in entries:
