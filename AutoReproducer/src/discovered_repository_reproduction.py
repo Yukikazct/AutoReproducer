@@ -983,6 +983,24 @@ class DiscoveredRepositoryReproduction:
             validation = verify_author_execution(plan, workspace, execution, data['spec_sha256'])
             validation.update(reviews_removed=True, paper_metrics_verified=False,
                               pre_execution_review='disabled', dataset_provenance_verified=False)
+            if runtime_loaders:
+                from src.runtime_dataset_evidence import audit_runtime_datasets
+                dataset_audit = audit_runtime_datasets(plan, validation['author_execution'], workspace)
+                data['runtime_dataset_evidence'] = validation['runtime_dataset_evidence'] = dataset_audit
+                validation['dataset_observation_verified'] = dataset_audit['verified']
+                data['dataset_provenance']['runtime_observation'] = dataset_audit
+                data['dataset_provenance']['reason'] = ('实际输入已按原加载器观测并在运行结束后核对；尚未与独立官方参考摘要核对。'
+                    if dataset_audit['verified'] else '原作者代码已结束，完整输入观测未通过或尚未覆盖；保留未知状态。')
+                for filename, value in [('runtime_dataset_evidence.json', dataset_audit),
+                                        ('dataset.json', data['dataset_provenance'])]:
+                    try:
+                        write_json(run_dir / filename, value)
+                    except OSError as exc:
+                        dataset_audit.setdefault('persistence_errors', []).append({'file': filename, 'reason': str(exc)})
+                        validation.setdefault('warnings', []).append('输入观测记录未能单独保存：' + filename + ': ' + str(exc))
+                if dataset_audit['errors']:
+                    validation.setdefault('warnings', []).append('原作者输入观测未完成核对：' +
+                        '; '.join(item['reason'] for item in dataset_audit['errors']))
             if validation.get('numeric_compatibility'):
                 kinds = {item['kind'] for item in validation['numeric_compatibility']}
                 notes = []
@@ -992,7 +1010,7 @@ class DiscoveredRepositoryReproduction:
                     notes.append('旧 NumPy 类型别名兼容修复')
                 if 'numpy_ragged_summary' in kinds:
                     notes.append('旧 NumPy 不规则结果表汇总兼容修复')
-                validation['warnings'] = ['执行包含实际报错后记录的' + '、'.join(notes) + '；原仓库文件未改写。']
+                validation.setdefault('warnings', []).append('执行包含实际报错后记录的' + '、'.join(notes) + '；原仓库文件未改写。')
             if validation.get('path_compatibility'):
                 validation.setdefault('warnings', []).append('作者缺失的临时数据目录已在实际报错后映射到本任务内；原仓库文件未改写。')
             if validation.get('pyg_compatibility'):

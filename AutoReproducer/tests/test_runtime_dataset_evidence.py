@@ -12,7 +12,7 @@ import types
 import pytest
 
 from src import discovered_repository_plan as planner
-from src.runtime_dataset_evidence import compile_runtime_dataset, verify_runtime_datasets
+from src.runtime_dataset_evidence import audit_runtime_datasets, compile_runtime_dataset, verify_runtime_datasets
 from src.experiments.observe_datasets import DatasetObserver, file_record
 from discovered_fixtures import make_experiment
 from test_discovered_repository_service import cpu_dependency_cache
@@ -208,6 +208,44 @@ def test_changed_data_and_unobserved_loaders_cannot_finish(tmp_path, monkeypatch
             observer.finish()
     finally:
         observer.close()
+
+
+def test_informational_missing_inputs_preserve_original_constructor_return(tmp_path, monkeypatch):
+    workspace, packet, item, citations = setup(tmp_path)
+    declaration = compile_runtime_dataset(item, packet, workspace, citations)
+    framework = fake_framework(monkeypatch)
+    original = framework.WikiCS.__init__
+    def cached(instance, root):
+        original(instance, root)
+        Path(instance.raw_paths[0]).unlink()
+    framework.WikiCS.__init__ = cached
+    observer = DatasetObserver([declaration], workspace, lambda: 0, strict=False)
+    try:
+        namespace = runpy.run_path(str(workspace / 'data_loader.py'), init_globals={'DATA_ROOT': tmp_path / 'cached_data'})
+        assert isinstance(namespace['dataset'], framework.WikiCS)
+        records = observer.finish()
+    finally:
+        observer.close()
+    assert records and all(record['verified'] is False for record in records)
+    audit = audit_runtime_datasets({'datasets': [declaration]}, [{'native_datasets': records}], workspace)
+    assert audit['verified'] is False and audit['independent_reference_verified'] is False
+    assert audit['errors'][0]['observation_errors']
+
+
+def test_informational_changed_inputs_keep_failure_evidence_without_replacing_return(tmp_path, monkeypatch):
+    workspace, packet, item, citations = setup(tmp_path)
+    declaration = compile_runtime_dataset(item, packet, workspace, citations)
+    fake_framework(monkeypatch)
+    observer = DatasetObserver([declaration], workspace, lambda: 0, strict=False)
+    try:
+        runpy.run_path(str(workspace / 'data_loader.py'), init_globals={'DATA_ROOT': tmp_path / 'changed_input'})
+        Path(next(iter(observer.records[0]['files']))).write_bytes(b'changed during training')
+        records = observer.finish()
+    finally:
+        observer.close()
+    assert records[0]['verified'] is False
+    assert 'changed during' in records[0]['verification_error']
+    assert audit_runtime_datasets({'datasets': [declaration]}, [{'native_datasets': records}], workspace)['verified'] is False
 
 
 @pytest.mark.parametrize('change', [

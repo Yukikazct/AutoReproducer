@@ -152,6 +152,28 @@ NodeFormer 的真实网页试验在依赖安装后被健康检查误拦：作者
 
 报告与数据路径修复 `e6d305c` 的完整原生回归为 **3425 passed、26 skipped、0 failed**（1127.18 秒），精选证据：[author_evidence_native_20261016.json](evidence/author_evidence_native_20261016.json)。合并随后独立验证的 Google Drive 模块映射及超时测试后，组合定向检查另有 **76 passed**（23.54 秒），同时覆盖实际 PyG 数据、置信区间比较、真实模块探测与 Windows 孙进程超时清理。
 
+## #41：干净训练环境的解析器副作用与 DGL 运行依赖
+
+标准 CPython 3.11 的真实 DGL 准备暴露两层问题。健康检查在缺少独立 packaging 时直接导入 pip 的内置解析器，会改变 setuptools/distutils 的导入钩子，使原本可用的旧运行库发生 AssertionError；改为从 pip 元数据定位内置解析器，并在私有命名空间加载，保留训练解释器的 marker 环境及损坏模块检查。
+
+DGL 1.1.2 还直接使用 `setuptools.extern.packaging` 和独立 `packaging.version`，其 wheel 没有完整声明这些运行依赖。现在在首次依赖规划和真实缺包修复中统一加入 `setuptools==69.5.1`、`packaging==24.2`，保留原 DGL、Torch、数据和命令。健康与运行依赖相关检查 **74 passed**（25.84 秒），最终版本选择专项另有 **29 passed**（1.41 秒）；干净环境及损坏解析器保护补查 **3 passed**（7.36 秒）。
+
+独立标准 CPython 3.11 / Torch 2.5.1+cpu / DGL 1.1.2 环境已通过实际矩阵运算、NumPy 桥接和 DGL 消息传递健康检查。另将同一真实 setuptools 69.5.1 的相同源字节分别交给旧、新健康探针，确认旧探针失败、新探针成功；未依赖 Store Python 测试结果，也没有关闭健康检查。证据：[dgl_clean_health_20261016.json](evidence/dgl_clean_health_20261016.json)。
+
+## #34 / #41：原生 DGL 数据加载观测接入作者入口
+
+新增对 DGL 1.1.2 的 CoraGraphDataset、CiteseerGraphDataset、PubmedGraphDataset 的原构造器观测，绑定原源码 SHA、导入类、函数作用域和数据名。Cora 的公开名称与框架内部 `cora_v2` 同时保留；固定类的内部命名转换不替换数据。作者直接执行入口现在保留经确定性编译通过的 author_runtime 声明，并复制完整观测器到本轮运行目录。
+
+记录实际原生下载来源、8 份原始文件与 2 份框架缓存的大小和 SHA-256，记录图的节点/边/特征/类别、原生 mask 数量及张量摘要；不额外调用 dataset[0] 或执行作者 transform。运行结束再次核对文件。独立标准 CPython 3.11 的真实 Cora 检查得到 **2708 节点、10556 边、1433 特征、7 类，140/500/1000 划分**，并通过实际包装器完成 **10 次优化更新**。原文件及张量值保持一致。这是机制训练夹具，不是 CCA-SSG 原论文训练。
+
+观测为信息性核对：缺失输入、不曾构造或运行后变化时保留未核对原因，不能替代作者原本的返回结果；作者自身的构造、下载或训练异常仍按原异常失败。服务保存独立 JSON、结果归档及报告表格，`dataset_observation_verified` 只表示原加载器与文件核对；`dataset_provenance_verified`、`paper_metrics_verified` 仍为 false，尚未独立匹配官方参考数据或完整论文协议。
+
+本轮数据、原生与报告专项 **67 passed、0 skipped**（41.93 秒）；服务“完整、未观测、结束后变化”三种状态 **3 passed**（34.18 秒），均保留实际作者完成状态。观测缺失/变化的信息性行为及正常作者计划接线另已定向通过。精选证据：[dgl_cora_observation_20261016.json](evidence/dgl_cora_observation_20261016.json)。完整原生回归和原作者命令回归接着进行。
+
+最终完整原生回归 **3450 passed、26 skipped、0 failed**（1123.23 秒），新 DGL 原生用例均实际执行，没有用跳过替代验证。证据：[dgl_full_native_20261016.json](evidence/dgl_full_native_20261016.json)。
+
+另导出 CCA-SSG 固定原作者提交 `ce5b2c0ad4f05811008559f66e5e114dbd71a82b`，以原 README 的 Cora 命令完整执行 **50 轮表征训练 + 2000 轮线性评估、2050 次实际优化更新**，自然退出 0。任务独立的标准 CPython 3.11 / DGL 1.1.2 环境完成运行；原加载器使用受支持的 `DGL_DOWNLOAD_DIR` 选择本任务缓存，算法、命令、数据和 transform 未重写。结束后原作者全部源码、观测器产品源码及原生输入文件摘要均保持不变，原生文件观测核对通过。它是已退役 CCA-SSG 的真实原作者回归，未做新 PDF 或独立数值验收：[ccassg_dgl_dataset_regression_20261016.json](evidence/ccassg_dgl_dataset_regression_20261016.json)。
+
 ## #27 / #41：保留原作者 Final Test 跨运行汇总
 
 NodeFormer 网页第三轮按原命令自然完成 **5 次 × 1000 轮、5000 次优化更新**。环境释放 **1,553,571,232 字节**，活动进程归零，无错误或剩余环境，源码在结束前仍与 `2d9b199` 的冻结摘要一致。旧解析器却漏掉 `Final Test` 这种没有重复写指标名的 logger 输出，交给论文比较的性能证据只剩末轮日志；实际程序末尾完整打印了 **89.48 ± 0.40**。旧比较仍为 unavailable，不将这轮记作论文数值验收，见 [nodeformer_regression_20261016_03.json](evidence/nodeformer_regression_20261016_03.json)。

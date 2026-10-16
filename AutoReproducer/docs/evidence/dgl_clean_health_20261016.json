@@ -1,0 +1,44 @@
+{
+  "scope": "Standard CPython3.11 actual setuptools69.5.1 import, paired before/after health probes with identical package bytes; actual DGL1.1.2 graph health also passed after declaring its omitted runtime dependencies. Not paper reproduction.",
+  "runtime_source": "uv_managed",
+  "runtime_fingerprint": "cpython-311-win32-win-amd64",
+  "legacy_probe_before_failed": true,
+  "legacy_probe_after_passed": true,
+  "same_package_source_bytes": true,
+  "old_probe_sha256": "4ef18002ee3ab32c39e53f483b9e8fd237daebd2f3e0789a97d1517cb4c9638f",
+  "new_probe_sha256": "59cbb5dd76b3c3cf65e3d685c18330923e239103e3804592b1b54a4a7c3ada6f",
+  "legacy_health_checks": [
+    {
+      "phase": "original_pip_import_side_effect",
+      "path": "D:\\code\\AutoReproducer\\.tmp\\maintenance-native-dgl-7e1tsfr7\\legacy_setuptools_probe\\target",
+      "runtime": "cpython-311-win32-win-amd64",
+      "success": false,
+      "exit_code": 1,
+      "timed_out": false,
+      "duration_s": 0.797,
+      "diagnostic": "rozen importlib._bootstrap>\", line 1204, in _gcd_import\n  File \"<frozen importlib._bootstrap>\", line 1176, in _find_and_load\n  File \"<frozen importlib._bootstrap>\", line 1147, in _find_and_load_unlocked\n  File \"<frozen importlib._bootstrap>\", line 690, in _load_unlocked\n  File \"<frozen importlib._bootstrap_external>\", line 940, in exec_module\n  File \"<frozen importlib._bootstrap>\", line 241, in _call_with_frames_removed\n  File \"D:\\code\\AutoReproducer\\.tmp\\maintenance-native-dgl-7e1tsfr7\\legacy_setuptools_probe\\target\\setuptools\\__init__.py\", line 8, in <module>\n    import _distutils_hack.override  # noqa: F401\n    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"D:\\code\\AutoReproducer\\.tmp\\maintenance-native-dgl-7e1tsfr7\\training_python\\interpreters\\cpython-3.11-windows-x86_64-none\\Lib\\site-packages\\_distutils_hack\\override.py\", line 1, in <module>\n    __import__('_distutils_hack').do_override()\n  File \"D:\\code\\AutoReproducer\\.tmp\\maintenance-native-dgl-7e1tsfr7\\training_python\\interpreters\\cpython-3.11-windows-x86_64-none\\Lib\\site-packages\\_distutils_hack\\__init__.py\", line 89, in do_override\n    ensure_local_distutils()\n  File \"D:\\code\\AutoReproducer\\.tmp\\maintenance-native-dgl-7e1tsfr7\\training_python\\interpreters\\cpython-3.11-windows-x86_64-none\\Lib\\site-packages\\_distutils_hack\\__init__.py\", line 76, in ensure_local_distutils\n    assert '_distutils' in core.__file__, core.__file__\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: D:\\code\\AutoReproducer\\.tmp\\maintenance-native-dgl-7e1tsfr7\\training_python\\interpreters\\cpython-3.11-windows-x86_64-none\\Lib\\distutils\\core.py"
+    },
+    {
+      "phase": "private_parser_namespace",
+      "path": "D:\\code\\AutoReproducer\\.tmp\\maintenance-native-dgl-7e1tsfr7\\legacy_setuptools_probe\\target",
+      "runtime": "cpython-311-win32-win-amd64",
+      "success": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.906,
+      "diagnostic": "{\"versions\": {\"setuptools\": \"69.5.1\"}}"
+    }
+  ],
+  "dgl_native_health_checks": [
+    {
+      "phase": "installed",
+      "path": "D:\\code\\AutoReproducer\\.tmp\\maintenance-native-dgl-7e1tsfr7\\deps\\8e019933240639a7",
+      "runtime": "cpython-311-win32-win-amd64",
+      "success": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 14.188,
+      "diagnostic": "{\"versions\": {\"numpy\": \"1.26.4\", \"scipy\": \"1.14.1\", \"networkx\": \"2.8.8\", \"psutil\": \"6.1.0\", \"requests\": \"2.32.3\", \"tqdm\": \"4.67.1\", \"torch\": \"2.5.1+cpu\", \"dgl\": \"1.1.2\", \"setuptools\": \"69.5.1\", \"packaging\": \"24.2\"}}"
+    }
+  ]
+}

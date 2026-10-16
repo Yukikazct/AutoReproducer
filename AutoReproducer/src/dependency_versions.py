@@ -15,7 +15,7 @@ CPU_COMPATIBILITY_PINS = {
     "googledrivedownloader": "0.4", "requests": "2.32.3",
     "torch-geometric": "2.6.1", "pyyaml": "6.0.2", "absl-py": "2.1.0", "tensorboard": "2.18.0",
     "torch-scatter": "2.1.2+pt25cpu",
-    "torch-sparse": "0.6.18+pt25cpu", "dgl": "1.1.2",
+    "torch-sparse": "0.6.18+pt25cpu", "dgl": "1.1.2", "setuptools": "69.5.1", "packaging": "24.2",
     "aiohttp": "3.10.10", "fsspec": "2024.10.0", "jinja2": "3.1.6",
     "psutil": "6.1.0", "pyparsing": "3.2.0",
     "optuna": "3.6.1", "deeprobust": "0.2.11", "ogb": "1.3.6",
