@@ -63,6 +63,20 @@ def _method_context(value):
     return _context(label)
 
 
+def _quoted_method_typography(method, quote):
+    """Recover an exact PDF label only for spacing/case, preserving variants."""
+    if not isinstance(method, str):
+        return None
+    first = re.search(r'(?<![\w.])(?:' + NUMBER_PATTERN + r')(?![\w.])', quote, re.I)
+    if first is None:
+        return None
+    label = re.sub(r'(?:\s+-)+\s*$', '', quote[:first.start()].strip()).strip()
+    def typography(value):
+        value = re.sub(r'\s*\((?:ours|our method|this work)\)\s*$', '', value, flags=re.I)
+        return re.sub(r'\s+', '', value).casefold()
+    return label if label and typography(label) == typography(method) else None
+
+
 def _column_value(reference, quote, header, field='value'):
     """Resolve a flat original table; multi-level/ambiguous headers stay unknown."""
     columns = header.split()
@@ -80,10 +94,12 @@ def _column_value(reference, quote, header, field='value'):
     if start < 0:
         return None
     tail = quote[start + len(method):]
-    cells = list(re.finditer(r'(?<![\w.])(?P<value>' + NUMBER_PATTERN + r')(?![\w.])'
-        r'(?:\s*(?:±|\+/-|\x06)\s*(?P<std>' + NUMBER_PATTERN + r')(?![\w.]))?', tail, re.I))
+    cells = list(re.finditer(r'(?<![\w.])(?:(?P<placeholder>-)(?=\s|$)|(?P<value>' + NUMBER_PATTERN + r')(?![\w.])'
+        r'(?:\s*(?:±|\+/-|\x06)\s*(?P<std>' + NUMBER_PATTERN + r')(?![\w.]))?)', tail, re.I))
     if len(cells) != len(columns):
         return None
+    if cells[indexes[0]].group('placeholder') is not None:
+        raise ValueError('Quoted dataset column has no reported value')
     return metric_number(cells[indexes[0]].group(field))
 
 
@@ -134,7 +150,12 @@ def validate_comparisons(payload, packet, workspace, records):
         # Ground the table row and dataset header separately, so a baseline
         # number elsewhere on the same page cannot serve as the method row.
         if not _has_value(reference.get('method'), [{'source': 'pdf', 'quote': quote}]):
-            raise ValueError('Reference quotation must identify the method row')
+            label = _quoted_method_typography(reference.get('method'), quote)
+            if label is None:
+                raise ValueError('Reference quotation must identify the method row')
+            reference['proposed_method_label'] = reference['method']
+            reference['method'] = label
+            reference['method_label_correction'] = 'Exact PDF row typography recovered without changing variant or values'
         # A row spanning several datasets needs its original column header on
         # the same page, rather than a dataset mentioned elsewhere in the PDF.
         if reference.get('dataset') and not _has_value(reference['dataset'], [{'source': 'pdf', 'quote': quote}]):

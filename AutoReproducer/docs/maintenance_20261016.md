@@ -189,3 +189,11 @@ NodeFormer 网页第三轮按原命令自然完成 **5 次 × 1000 轮、5000 �
 现在把整个 vendored 解析器依赖放入私有命名空间加载，只在内存中调整安装器内部导入前缀，不执行 pip 初始化、不复用原 pyc，也不改写安装器文件。新增不联网的旧式绝对导入夹具先复现失败；最终健康、版本选择和所属命令检查 **70 passed**（31.00 秒），真实 pip 24.0 对照探测从失败变为成功：[legacy_pip_vendor_20261016.json](evidence/legacy_pip_vendor_20261016.json)。
 
 此修正在独立工作区进行。正在运行的 DIFFormer 独立 PDF 试验仍固定于 `710e151`，不能把该试验追溯记作本次后续兼容修正的独立验收。
+
+## DIFFormer 冻结版结果及 PDF 方法字距
+
+独立新 PDF 的 `710e151` 冻结版已真实执行原作者 Cora / simple-kernel / 8 层命令：**5 次 × 500 轮、2500 次优化更新**，自然退出 0，输出 **85.38 ± 0.45 / 5 次均值**。产品源码在试验前后一致，所属进程为零，环境释放 **1,551,719,889 字节**、无错误或剩余环境。要求论文比较的网页脚本仍返回失败，不能记作完整验收通过：[difformer_execution_20261016_01.json](evidence/difformer_execution_20261016_01.json)。
+
+原文把 `DIFFormer-s` 提取为 `DIFF ORMER -s`，且 Cora 列前有三列 `-` 元数据占位符。新增保留原引文的字距/大小写恢复及占位符列对齐；只接受相同字符与方法变体，不丢弃 -s、(PPR) 等变体信息。目标数据列为空时直接拒绝借用相邻数据集数值。两项新增边界先复现失败，最终指标/配对专项 **95 passed**（1.75 秒）。
+
+对原保存候选及真实输出的只读重放已精确核对 Cora 的论文 **85.9 ± 0.4** 与实测 **85.38 ± 0.45 / 5 次**，原 result/report/execution/comparison 文件摘要均未改变。方法标识和超参仍有差异，结果保留 `not_comparable`、`meets_reference=null`，不降低验收条件、不宣称独立数值复现：[difformer_typography_replay_20261016.json](evidence/difformer_typography_replay_20261016.json)。该 PDF 随后因产品修复退役，最新版本仍需另一篇未参与修复的新 PDF。

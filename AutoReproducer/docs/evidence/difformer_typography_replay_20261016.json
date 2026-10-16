@@ -1,0 +1,28 @@
+{
+  "scope": "Read-only deterministic replay of the saved original model proposal and native stdout; not new training or independent paper acceptance",
+  "source_run": "repository_8153f121f0d84760aeb69241144060db",
+  "original_artifacts_unchanged": true,
+  "original_artifact_hashes": {
+    "result.json": "e780825e31b2e01c12a8a1009b33ee6fcc8d7bb895ee76126805e278e8bd49d9",
+    "report.md": "8a08735ef784d410819cb4e18820d072d24947c6a1e2b9d8168898be34890315",
+    "execution.json": "58b28baeaf747f72c176e1100fa7ee52d46225915fbd1f621b7cc345cabd4b5b",
+    "author_claim_comparison.json": "9f815b07ab21fbf5f621eae35aa4db87c9c92876c6b8bdbd6dce21e3dca189b0"
+  },
+  "reference_method_raw_pdf": "DIFF ORMER -s",
+  "reference_method_proposed": "DIFFormer-s",
+  "reference_value": 85.9,
+  "reference_std": 0.4,
+  "column_verified": true,
+  "actual_value": 85.38,
+  "actual_std": 0.45,
+  "actual_runs": 5,
+  "settings_status": "different",
+  "comparison_status": "not_comparable",
+  "limitations": [
+    "method 不一致：DIFF ORMER -s / difformer",
+    "实验设置不同，数值差值仅供参考：数据集、划分与重复次数一致（Cora，每类20标签的随机划分，5次运行取均值±标准差，测试准确率）。但模型变体不同：论文表2的85.9±0.4对应DIFFormer-s（kernel='simple'，线性复杂度）；本次执行命令使用--kernel simple，但额外启用了--use_graph、--use_bn、--use_residual、--alpha 0.5、--num_layers 8、--hidden_channels 64、--lr 0.001、--weight_decay 0.01、--dropout 0.2、--epochs 500、--seed 123。论文附录H.1说明节点分类实验使用τ=0.5并纳入输入图，但未逐项给出与本次完全相同的超参数组合，因此设置不能判定为完全匹配。"
+  ],
+  "meets_reference": null,
+  "independent_numerical_acceptance": false,
+  "report_sha256": "badde0b281bb7bc915529077e631a7f407131010f72b31cff1035982fca3ecc9"
+}

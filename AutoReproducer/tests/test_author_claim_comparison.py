@@ -351,6 +351,47 @@ def test_multi_dataset_row_requires_its_exact_identifying_header(sources, header
         validate_comparisons(payload, packet, fixture['workspace'], records)
 
 
+def _spaced_method_table(sources, label='SIG NAL LIN EAR', first='100.0 ±0.1'):
+    import hashlib
+    fixture, packet, records, payload = _flat_table(sources)
+    paper = next(ref for ref in payload['citations'] if ref['id'] == 'paper_results')
+    page = next(page for page in packet['pdf']['pages'] if page['page'] == paper['page'])
+    header = 'Type Model Non-linearity PDE-solver Input-G SignGrid OtherGrid'
+    row = f'{label} - - - {first} 98.0 ±0.2'
+    text = 'Test accuracy (%)\n' + header + '\n' + row
+    page['text'] += '\n' + text
+    page['sha256'] = hashlib.sha256(page['text'].encode()).hexdigest()
+    paper['quote'] = text
+    payload['comparisons'][0]['reference'].update(value_quote=row, column_quote=header, std=0.1)
+    return fixture, packet, records, payload
+
+
+def test_pdf_method_kerning_and_metadata_placeholders_keep_exact_column_evidence(sources):
+    fixture, packet, records, payload = _spaced_method_table(sources)
+    rows, _ = validate_comparisons(payload, packet, fixture['workspace'], records)
+    ref = rows[0]['reference']
+    assert ref['method'] == 'SIG NAL LIN EAR' and ref['proposed_method_label'] == 'Signal Linear'
+    assert ref['column_verified'] is True and ref['value'] == 100 and ref['std'] == 0.1
+    assert payload['comparisons'][0]['reference']['method'] == 'Signal Linear'
+    payload['comparisons'][0]['reference']['std'] = 0.2
+    with pytest.raises(ValueError, match='standard deviation.*dataset column'):
+        validate_comparisons(payload, packet, fixture['workspace'], records)
+
+
+@pytest.mark.parametrize('label', ['SIG NAL LIN EAR (PPR)', 'SIG NAL LIN EAR-s', 'OTHER METHOD'])
+def test_pdf_typography_does_not_drop_variant_suffixes_or_change_methods(sources, label):
+    fixture, packet, records, payload = _spaced_method_table(sources, label=label)
+    with pytest.raises(ValueError, match='method row'):
+        validate_comparisons(payload, packet, fixture['workspace'], records)
+
+
+def test_dataset_column_placeholder_is_not_a_neighboring_dataset_result(sources):
+    fixture, packet, records, payload = _spaced_method_table(sources, first='-')
+    payload['comparisons'][0]['reference'].update(value=98.0, std=0.2)
+    with pytest.raises(ValueError, match='column.*(?:value|reported)'):
+        validate_comparisons(payload, packet, fixture['workspace'], records)
+
+
 def test_separator_spelling_does_not_merge_distinct_variants():
     from src.author_claim_comparison import _context
     assert _context('Signal_Linear') == _context('Signal-Linear')

@@ -1,0 +1,208 @@
+{
+  "trial": "independent_difformer_20261016_01",
+  "input": "real_browser_pdf_upload",
+  "frozen_commit": "710e151d9679b69425dc2e465f21c8efe0d2fd59",
+  "product_source_sha256": "92f21d3aa91b18fe6ab2f96c73fc13e9c166878898308a0032a66c91b45cd37d",
+  "product_source_unchanged_during_trial": true,
+  "pdf_sha256": "3993e06305e68a7555f5322c69304f2f9ad31fc21f1bb2667a7643f76eae8255",
+  "repository": {
+    "url": "https://github.com/qitianwu/DIFFormer",
+    "resolved_sha": "89af3b234b19893b2723624fc597f70c8e21b48c",
+    "archive_sha256": "fc63af9a67d070cf81301cab8aa3dc40b92f6be5aa217e797171c5357b653e8a"
+  },
+  "original_commands": [
+    [
+      "python",
+      "main.py",
+      "--dataset",
+      "cora",
+      "--method",
+      "difformer",
+      "--rand_split_class",
+      "--lr",
+      "0.001",
+      "--weight_decay",
+      "0.01",
+      "--dropout",
+      "0.2",
+      "--num_layers",
+      "8",
+      "--hidden_channels",
+      "64",
+      "--num_heads",
+      "1",
+      "--kernel",
+      "simple",
+      "--use_graph",
+      "--use_bn",
+      "--use_residual",
+      "--alpha",
+      "0.5",
+      "--runs",
+      "5",
+      "--epochs",
+      "500",
+      "--seed",
+      "123",
+      "--device",
+      "2"
+    ]
+  ],
+  "state": "COMPLETED",
+  "natural_return": true,
+  "exit_code": 0,
+  "optimizer_steps": 2500,
+  "author_metrics": [
+    {
+      "name": "accuracy",
+      "value": 85.38,
+      "unit": "",
+      "split": "test",
+      "stage": "final",
+      "source": "train:stdout:2559",
+      "source_quote": "Final Test: 85.38 ± 0.45",
+      "std": 0.45,
+      "aggregation": "mean",
+      "runs": 5,
+      "id": "train:stdout:20",
+      "step_id": "train"
+    }
+  ],
+  "comparison_status": "unavailable",
+  "comparison_errors": [
+    {
+      "index": 0,
+      "actual_id": "train:stdout:20",
+      "error": "Reference quotation must identify the method row"
+    }
+  ],
+  "comparison_required_browser_audit_passed": false,
+  "independent_numerical_acceptance": false,
+  "paper_metrics_verified": false,
+  "is_reproduced": null,
+  "active_workers": 0,
+  "active_runs": 0,
+  "active_executions": 0,
+  "environment_cleanup": {
+    "status": "released",
+    "removed": [
+      {
+        "path": ".maintenance.json",
+        "bytes": 979
+      },
+      {
+        "path": ".pip-temporary",
+        "bytes": 0
+      },
+      {
+        "path": "repository",
+        "bytes": 1539683784
+      }
+    ],
+    "freed_bytes": 1551719889,
+    "remaining": [],
+    "errors": [],
+    "training_python": {
+      "status": "released",
+      "removed": [
+        {
+          "path": "D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\maintenance_browser_20261016\\data\\training_python",
+          "bytes": 12035126
+        }
+      ],
+      "errors": [],
+      "freed_bytes": 12035126
+    },
+    "docker": {
+      "status": "released",
+      "removed": [],
+      "errors": []
+    },
+    "runtime_downloads": {
+      "status": "released",
+      "removed": [],
+      "freed_bytes": 0,
+      "errors": []
+    },
+    "before_run": {
+      "status": "released",
+      "removed": [],
+      "freed_bytes": 0,
+      "remaining": [],
+      "errors": [],
+      "training_python": {
+        "status": "released",
+        "removed": [],
+        "errors": [],
+        "freed_bytes": 0
+      },
+      "docker": {
+        "status": "released",
+        "removed": [],
+        "errors": []
+      },
+      "runtime_downloads": {
+        "status": "released",
+        "removed": [],
+        "freed_bytes": 0,
+        "errors": []
+      }
+    },
+    "replacements": [
+      {
+        "status": "released",
+        "errors": [],
+        "dependencies": {
+          "status": "released",
+          "removed": [],
+          "freed_bytes": 0,
+          "remaining": [],
+          "errors": []
+        },
+        "training_python": {
+          "status": "released",
+          "removed": [],
+          "errors": [],
+          "freed_bytes": 0
+        }
+      },
+      {
+        "status": "released",
+        "removed": [
+          {
+            "path": ".maintenance.json",
+            "bytes": 768
+          }
+        ],
+        "freed_bytes": 768,
+        "remaining": [],
+        "errors": []
+      }
+    ],
+    "supervisor_cleanup": {
+      "status": "released",
+      "removed": [],
+      "freed_bytes": 0,
+      "remaining": [],
+      "errors": [],
+      "training_python": {
+        "status": "released",
+        "removed": [],
+        "errors": [],
+        "freed_bytes": 0
+      },
+      "docker": {
+        "status": "released",
+        "removed": [],
+        "errors": []
+      },
+      "runtime_downloads": {
+        "status": "released",
+        "removed": [],
+        "freed_bytes": 0,
+        "errors": []
+      }
+    }
+  },
+  "later_version_note": "Subsequent pip3.11 compatibility repair is separate; this frozen710e151 milestone does not establish acceptance of later versions."
+}
