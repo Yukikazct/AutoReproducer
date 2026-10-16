@@ -6,6 +6,7 @@ numpy.float_power instead of numpy.power; every other AST node stays original.
 import ast
 import builtins
 import hashlib
+import json
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 import runpy
@@ -18,6 +19,104 @@ import numpy as np
 
 ERROR = 'Integers to negative integer powers are not allowed.'
 BUILTIN_ALIASES = {'bool', 'int', 'float', 'complex', 'object', 'str'}
+RAGGED_KIND = 'numpy_ragged_summary'
+RAGGED_HELPER = '__autorepro_legacy_ragged_array__'
+
+
+def ragged_schema(values):
+    if not isinstance(values, (list, tuple)) or not 2 <= len(values) <= 10000:
+        raise ValueError('Unsupported ragged result table')
+    if not isinstance(values[0], (list, tuple)) or not 2 <= len(values[0]) <= 16:
+        raise ValueError('Unsupported ragged result row')
+    width = len(values[0])
+    if any(not isinstance(row, (list, tuple)) or len(row) != width for row in values):
+        raise ValueError('Inconsistent ragged result rows')
+    columns = []
+    for index in range(width):
+        column = [row[index] for row in values]
+        first = column[0]
+        if isinstance(first, np.ndarray):
+            if (not first.shape or first.size > 1000000 or first.dtype.kind not in 'fiu'
+                    or any(not isinstance(item, np.ndarray) or item.shape != first.shape
+                           or item.dtype != first.dtype or not np.isfinite(item).all() for item in column)):
+                raise ValueError('Inconsistent result vector column')
+            columns.append({'kind': 'array', 'shape': list(first.shape), 'dtype': str(first.dtype)})
+        elif all((type(item) in (int, float) or isinstance(item, np.generic) and item.dtype.kind in 'fiu')
+                 and bool(np.isfinite(item)) for item in column):
+            columns.append({'kind': 'scalar'})
+        else:
+            raise ValueError('Unsupported result table value')
+    if not any(c['kind'] == 'array' for c in columns) or not any(c['kind'] == 'scalar' for c in columns):
+        raise ValueError('A legacy result table must mix scalars and uniform vectors')
+    return {'rows': len(values), 'columns': columns}
+
+
+def ragged_calls(tree, variable, alias):
+    def module_nodes(node):
+        yield node
+        for child in ast.iter_child_nodes(node):
+            if not isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+                yield from module_nodes(child)
+    return [node for node in module_nodes(tree) if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute) and node.func.attr in ('mean', 'var')
+            and isinstance(node.func.value, ast.Name) and node.func.value.id == alias
+            and len(node.args) == 1 and isinstance(node.args[0], ast.Name) and node.args[0].id == variable
+            and len(node.keywords) == 1 and node.keywords[0].arg == 'axis'
+            and isinstance(node.keywords[0].value, ast.Constant)
+            and type(node.keywords[0].value.value) is int and node.keywords[0].value.value == 0]
+
+
+def validate_ragged_repair(tree, repair, source_text):
+    calls = ragged_calls(tree, repair.get('variable'), repair.get('numpy_alias'))
+    actual = [{'line': node.lineno, 'column': node.col_offset, 'operation': node.func.attr,
+               'original_expression': ast.get_source_segment(source_text, node)} for node in calls]
+    if not calls or actual != repair.get('calls') or not isinstance(repair.get('schema'), dict):
+        raise ValueError('Ragged compatibility does not match the original reductions')
+    if any(isinstance(node, ast.Name) and node.id == RAGGED_HELPER for node in ast.walk(tree)):
+        raise ValueError('Ragged compatibility helper conflicts with original code')
+    return calls
+
+
+def diagnose_ragged_summary(exc, script, workspace, sources):
+    if type(exc) is not ValueError or 'inhomogeneous' not in str(exc):
+        return None
+    script, workspace = Path(script).resolve(), Path(workspace).resolve()
+    relative = script.relative_to(workspace).as_posix()
+    expected = sources.get(relative)
+    if not expected or hashlib.sha256(script.read_bytes()).hexdigest() != expected:
+        return None
+    tree = ast.parse(script.read_bytes())
+    trace = exc.__traceback__
+    while trace:
+        if Path(trace.tb_frame.f_code.co_filename).resolve() == script and trace.tb_frame.f_code.co_name == '<module>':
+            values = {**trace.tb_frame.f_globals, **trace.tb_frame.f_locals}
+            for node in ast.walk(tree):
+                if (isinstance(node, ast.Call) and node.lineno == trace.tb_lineno
+                        and isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name)
+                        and values.get(node.func.value.id) is np and len(node.args) == 1
+                        and isinstance(node.args[0], ast.Name)
+                        and node in ragged_calls(tree, node.args[0].id, node.func.value.id)):
+                    try:
+                        schema = ragged_schema(values.get(node.args[0].id))
+                    except (ValueError, TypeError, OverflowError):
+                        return None
+                    calls = ragged_calls(tree, node.args[0].id, node.func.value.id)
+                    return {'kind': RAGGED_KIND, 'path': relative, 'source_sha256': expected,
+                        'variable': node.args[0].id, 'numpy_alias': node.func.value.id, 'schema': schema,
+                        'calls': [{'line': call.lineno, 'column': call.col_offset, 'operation': call.func.attr,
+                                  'original_expression': ast.get_source_segment(script.read_text('utf-8'), call)} for call in calls],
+                        'error': str(exc)}
+        trace = trace.tb_next
+    return None
+
+
+def _legacy_ragged_array(values, encoded_schema):
+    if ragged_schema(values) != json.loads(encoded_schema):
+        raise ValueError('Legacy result table changed shape or dtype before reduction')
+    result = np.asarray(values, dtype=object)
+    if result.shape != (len(values), len(values[0])):
+        raise ValueError('Legacy object result table has an unexpected outer shape')
+    return result
 
 
 def diagnose_numpy_alias_error(exc, script, workspace, sources):
@@ -96,7 +195,7 @@ def diagnose_reciprocal_error(exc, script, workspace, sources):
 
 def run_entrypoint(script, repairs, workspace, sources, path_repairs=()):
     for repair in repairs:
-        if repair.get('kind') not in ('numpy_builtin_alias', 'numpy_float_reciprocal'):
+        if repair.get('kind') not in ('numpy_builtin_alias', 'numpy_float_reciprocal', RAGGED_KIND):
             raise ValueError('Unknown numeric compatibility operation')
         if repair.get('kind') != 'numpy_builtin_alias':
             continue
@@ -115,10 +214,11 @@ def run_entrypoint(script, repairs, workspace, sources, path_repairs=()):
             raise ValueError('NumPy alias repair does not match the original expression')
         setattr(np, alias, getattr(builtins, alias))
     relative = script.relative_to(workspace).as_posix()
+    ragged = [repair for repair in repairs if repair.get('kind') == RAGGED_KIND and repair.get('path') == relative]
     path_repairs = [repair for repair in path_repairs if repair.get('path') == relative]
     repairs = [repair for repair in repairs if repair.get('kind') == 'numpy_float_reciprocal'
                and repair.get('path') == relative]
-    if not repairs and not path_repairs:
+    if not repairs and not path_repairs and not ragged:
         return runpy.run_path(str(script), run_name='__main__')
     tree = ast.parse(script.read_bytes(), filename=str(script))
     if path_repairs:
@@ -138,10 +238,21 @@ def run_entrypoint(script, repairs, workspace, sources, path_repairs=()):
                 or repair.get('replacement') != call.func.value.id + '.float_power'):
             raise ValueError('Numeric compatibility does not match the recorded original call')
         call.func.attr = 'float_power'
+    for repair in ragged:
+        if (repair.get('source_sha256') != sources.get(relative)
+                or hashlib.sha256(script.read_bytes()).hexdigest() != repair['source_sha256']):
+            raise ValueError('Ragged compatibility does not match the pinned entrypoint')
+        for call in validate_ragged_repair(tree, repair, script.read_text('utf-8')):
+            original = call.args[0]
+            call.args[0] = ast.copy_location(ast.Call(func=ast.Name(id=RAGGED_HELPER, ctx=ast.Load()),
+                args=[original, ast.Constant(value=json.dumps(repair['schema'], sort_keys=True))], keywords=[]), original)
+    ast.fix_missing_locations(tree)
     # Preserve normal main-module identity for author classes and imports.
     main = types.ModuleType('__main__')
     main.__dict__.update(__file__=str(script), __package__='', __spec__=None,
                          __loader__=SourceFileLoader('__main__', str(script)), __cached__=None)
+    if ragged:
+        main.__dict__[RAGGED_HELPER] = _legacy_ragged_array
     previous = sys.modules.get('__main__')
     sys.modules['__main__'] = main
     try:

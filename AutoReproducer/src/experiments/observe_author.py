@@ -11,7 +11,7 @@ import types
 import torch
 from torch.optim.optimizer import register_optimizer_step_post_hook
 from observe_datasets import DatasetObserver
-from author_numeric_compatibility import diagnose_numpy_alias_error, diagnose_reciprocal_error, run_entrypoint
+from author_numeric_compatibility import diagnose_numpy_alias_error, diagnose_reciprocal_error, diagnose_ragged_summary, run_entrypoint
 from author_path_compatibility import diagnose_temporary_root_error
 from author_pyg_compatibility import LegacyPyGCompatibility
 
@@ -111,7 +111,8 @@ try:
             raise
     except Exception as exc:
         candidate = (diagnose_reciprocal_error(exc, script, workspace, config['source_files'])
-                     or diagnose_numpy_alias_error(exc, script, workspace, config['source_files']))
+                     or diagnose_numpy_alias_error(exc, script, workspace, config['source_files'])
+                     or diagnose_ragged_summary(exc, script, workspace, config['source_files']))
         if candidate:
             failure_path.write_text(json.dumps({'spec_sha256': config['spec_sha256'],
                 'step': identifier, 'optimizer_steps': updates, 'repair': candidate}), encoding='utf-8')

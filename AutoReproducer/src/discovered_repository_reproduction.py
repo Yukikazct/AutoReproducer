@@ -736,11 +736,13 @@ class DiscoveredRepositoryReproduction:
                     candidate = read_json(candidate_path)
                     fix = candidate.get('repair') or {}
                     if (candidate.get('spec_sha256') != data['spec_sha256']
-                            or candidate.get('step') != identifier or candidate.get('optimizer_steps') != 0
-                            or fix.get('kind') not in ('numpy_float_reciprocal', 'numpy_builtin_alias')
+                            or candidate.get('step') != identifier
+                            or type(candidate.get('optimizer_steps')) is not int or candidate['optimizer_steps'] < 0
+                            or fix.get('kind') != 'numpy_ragged_summary' and candidate['optimizer_steps'] != 0
+                            or fix.get('kind') not in ('numpy_float_reciprocal', 'numpy_builtin_alias', 'numpy_ragged_summary')
                             or fix.get('source_sha256') != snapshot['files'].get(fix.get('path'))):
                         return None
-                    from src.experiments.author_numeric_compatibility import BUILTIN_ALIASES, power_call
+                    from src.experiments.author_numeric_compatibility import BUILTIN_ALIASES, power_call, validate_ragged_repair
                     import ast
                     source = workspace_path(workspace, fix['path'], 'numeric compatibility source', must_exist=True)
                     tree = ast.parse(source.read_bytes())
@@ -749,7 +751,7 @@ class DiscoveredRepositoryReproduction:
                         if (call is None or ast.get_source_segment(source.read_text('utf-8'), call) != fix.get('original_expression')
                                 or fix.get('replacement') != call.func.value.id + '.float_power'):
                             return None
-                    else:
+                    elif fix['kind'] == 'numpy_builtin_alias':
                         alias = fix.get('alias')
                         matches = [node for node in ast.walk(tree) if isinstance(node, ast.Attribute)
                                    and node.attr == alias and node.lineno == fix.get('line')
@@ -757,10 +759,15 @@ class DiscoveredRepositoryReproduction:
                                    and ast.get_source_segment(source.read_text('utf-8'), node) == fix.get('original_expression')]
                         if alias not in BUILTIN_ALIASES or len(matches) != 1 or fix.get('replacement') != 'builtins.' + alias:
                             return None
+                    else:
+                        try:
+                            validate_ragged_repair(tree, fix, source.read_text('utf-8'))
+                        except ValueError:
+                            return None
                     capture_config = read_json(runtime_dir / 'config.json')
                     configured = capture_config.setdefault('numeric_compatibility', [])
-                    if any(item['path'] == fix['path'] and item['line'] == fix['line']
-                           and item['column'] == fix['column'] for item in configured):
+                    if any(item['path'] == fix['path'] and item.get('line') == fix.get('line')
+                           and item.get('column') == fix.get('column') and item['kind'] == fix['kind'] for item in configured):
                         return None
                     verify_frozen_inputs()
                     configured.append(fix)
@@ -983,6 +990,8 @@ class DiscoveredRepositoryReproduction:
                     notes.append('浮点倒数兼容修复')
                 if 'numpy_builtin_alias' in kinds:
                     notes.append('旧 NumPy 类型别名兼容修复')
+                if 'numpy_ragged_summary' in kinds:
+                    notes.append('旧 NumPy 不规则结果表汇总兼容修复')
                 validation['warnings'] = ['执行包含实际报错后记录的' + '、'.join(notes) + '；原仓库文件未改写。']
             if validation.get('path_compatibility'):
                 validation.setdefault('warnings', []).append('作者缺失的临时数据目录已在实际报错后映射到本任务内；原仓库文件未改写。')
