@@ -13,6 +13,7 @@ from torch.optim.optimizer import register_optimizer_step_post_hook
 from observe_datasets import DatasetObserver
 from author_numeric_compatibility import diagnose_numpy_alias_error, diagnose_reciprocal_error, run_entrypoint
 from author_path_compatibility import diagnose_temporary_root_error
+from author_pyg_compatibility import LegacyPyGCompatibility
 
 
 runtime = Path(__file__).resolve().parent
@@ -24,6 +25,8 @@ failure_path = runtime / ('numeric_failure_' + identifier + '.json')
 failure_path.unlink(missing_ok=True)
 path_failure = runtime / ('path_failure_' + identifier + '.json')
 path_failure.unlink(missing_ok=True)
+pyg_failure = runtime / ('pyg_failure_' + identifier + '.json')
+pyg_failure.unlink(missing_ok=True)
 (runtime / ('author_' + identifier + '.json')).unlink(missing_ok=True)
 for relative, expected in config['source_files'].items():
     source = (workspace / relative).resolve(strict=True)
@@ -66,6 +69,8 @@ def after_step(optimizer, args, kwargs):
 
 handle = register_optimizer_step_post_hook(after_step)
 datasets = DatasetObserver(config.get('runtime_datasets', []) if step['kind'] == 'train' else [], workspace, lambda: updates)
+legacy_pyg = LegacyPyGCompatibility(workspace, config['source_files'], config.get('pyg_compatibility', []),
+    lambda: updates, enabled=config.get('observe_legacy_pyg', False) and entrypoint['kind'] != 'notebook')
 os.chdir(directory)
 if entrypoint['kind'] == 'module':
     sys.argv = [entrypoint['target'], *argv[index + 2:]]
@@ -114,16 +119,23 @@ try:
         if candidate:
             path_failure.write_text(json.dumps({'spec_sha256': config['spec_sha256'],
                 'step': identifier, 'optimizer_steps': updates, 'repair': candidate}), encoding='utf-8')
+        candidate = legacy_pyg.diagnose(exc)
+        if candidate:
+            pyg_failure.write_text(json.dumps({'spec_sha256': config['spec_sha256'],
+                'step': identifier, 'optimizer_steps': updates, 'repair': candidate}), encoding='utf-8')
         raise
     native_data = datasets.finish()
 finally:
     handle.remove()
     datasets.close()
+    legacy_pyg.close()
 # Failed exits, exceptions and interrupted processes never create a receipt.
 receipt = {'spec_sha256': config['spec_sha256'], 'step': step,
            'natural_return': True, 'optimizer_steps': updates,
            'torch_version': torch.__version__, 'native_datasets': native_data,
            'numeric_compatibility': config.get('numeric_compatibility', []),
-           'path_compatibility': config.get('path_compatibility', [])}
+           'path_compatibility': config.get('path_compatibility', []),
+           'pyg_compatibility': config.get('pyg_compatibility', []),
+           'pyg_conversions': legacy_pyg.applied}
 (runtime / ('author_' + identifier + '.json')).write_text(json.dumps(receipt, indent=2), encoding='utf-8')
 print(json.dumps({'author_command_finished': identifier, 'optimizer_steps': updates}), flush=True)

@@ -808,6 +808,39 @@ class DiscoveredRepositoryReproduction:
                     return fix
                 return None
 
+            def repair_pyg(result):
+                from src.experiments.author_pyg_compatibility import validate_repair
+                for failed in result.get('steps', []):
+                    if failed.get('executed') is not True or failed.get('exit_code') in (None, 0):
+                        continue
+                    identifier = failed.get('id')
+                    if not any(step['id'] == identifier for step in plan['steps']):
+                        continue
+                    candidate_path = runtime_dir / ('pyg_failure_' + identifier + '.json')
+                    if not candidate_path.exists():
+                        continue
+                    candidate = read_json(candidate_path)
+                    fix = candidate.get('repair') or {}
+                    if (candidate.get('spec_sha256') != data['spec_sha256'] or candidate.get('step') != identifier
+                            or candidate.get('optimizer_steps') != 0):
+                        return None
+                    try:
+                        validate_repair(workspace, snapshot['files'], fix)
+                    except (ValueError, OSError, TypeError):
+                        return None
+                    capture_config = read_json(runtime_dir / 'config.json')
+                    configured = capture_config.setdefault('pyg_compatibility', [])
+                    if fix in configured:
+                        return None
+                    verify_frozen_inputs()
+                    configured.append(fix)
+                    write_json(runtime_dir / 'config.json', capture_config)
+                    generated[f'{CAPTURE_DIR}/config.json'] = digest(runtime_dir / 'config.json')
+                    write_json(run_dir / 'adapter_manifest.json', {'files': generated,
+                        'note': '原作者源码与数据未改写；记录实际失败后的旧 PyG 内存容器兼容。'})
+                    return fix
+                return None
+
             def run_steps(selected, runtime_environment):
                 from src.author_runtime_dependencies import run_with_dependency_repair
                 from src.author_failure_analysis import analyze_author_failure
@@ -826,7 +859,7 @@ class DiscoveredRepositoryReproduction:
                     return suggestion
                 return run_with_dependency_repair(self.runner, workspace, selected, runtime_environment,
                     plan, packet, run_dir, data, progress, verify_frozen_inputs, repair_numeric, repair_path,
-                    analyze_failure)
+                    analyze_failure, repair_pyg=repair_pyg)
 
             preflight = [{"id": "native_preflight", "kind": "check", "required": True,
                           "argv": ["python", "-u", f"{CAPTURE_DIR}/preflight.py"], "cwd": ".",
@@ -953,6 +986,8 @@ class DiscoveredRepositoryReproduction:
                 validation['warnings'] = ['执行包含实际报错后记录的' + '、'.join(notes) + '；原仓库文件未改写。']
             if validation.get('path_compatibility'):
                 validation.setdefault('warnings', []).append('作者缺失的临时数据目录已在实际报错后映射到本任务内；原仓库文件未改写。')
+            if validation.get('pyg_compatibility'):
+                validation.setdefault('warnings', []).append('执行包含实际报错后的旧 PyG 容器兼容；原数据文件、张量值与划分未改写。')
             from src.author_claim_comparison import collect_author_metrics
             try:
                 validation['metric_records'], data['metric_parse_errors'] = collect_author_metrics(execution)

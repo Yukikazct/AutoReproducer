@@ -56,7 +56,7 @@ def repair_requirement(stderr, plan, packet):
 
 def run_with_dependency_repair(runner, workspace, steps, environment, plan, packet,
                                run_dir, data, on_event, verify_inputs, repair_numeric=None, repair_path=None,
-                               analyze_failure=None):
+                               analyze_failure=None, repair_pyg=None):
     """Retry after cleanup, retaining every failed run and the unchanged argv."""
     effective = deepcopy(environment)
     # Retry allowance counts actual failures, never time spent running code.
@@ -66,6 +66,7 @@ def run_with_dependency_repair(runner, workspace, steps, environment, plan, pack
     numeric_repairs = data.setdefault('numeric_repair_attempts', [])
     path_repairs = data.setdefault('path_repair_attempts', [])
     model_repairs = data.setdefault('model_dependency_repairs', [])
+    pyg_repairs = data.setdefault('pyg_repair_attempts', [])
     seen = {repair['package'] for repair in repairs}
     for attempt in range(MAX_DEPENDENCY_REPAIRS + 1):
         verify_inputs()
@@ -82,7 +83,7 @@ def run_with_dependency_repair(runner, workspace, steps, environment, plan, pack
         if final.get('timed_out') or final.get('cancelled'):
             return result
         stderr = str(final.get('stderr') or result.get('reason') or '')
-        used = len(repairs) + len(numeric_repairs) + len(path_repairs) + len(model_repairs)
+        used = len(repairs) + len(numeric_repairs) + len(path_repairs) + len(model_repairs) + len(pyg_repairs)
         suggestion = analyze_failure(result, effective) if analyze_failure else None
         if used >= MAX_DEPENDENCY_REPAIRS:
             return result
@@ -105,6 +106,14 @@ def run_with_dependency_repair(runner, workspace, steps, environment, plan, pack
                 continue
         fix = repair_requirement(stderr, plan, packet)
         if not fix:
+            pyg = repair_pyg(result) if repair_pyg else None
+            if pyg is not None:
+                pyg_repairs.append({**pyg, 'failed_execution_dir': result.get('run_dir'), 'attempt': used + 1})
+                write_json(run_dir / 'pyg_repairs.json', pyg_repairs)
+                on_event({'type': 'log', 'log': {'agent': 'CodeExecutor', 'action': 'repair_pyg_data_state',
+                    'status': 'RUNNING', 'detail': '旧 PyG 数据对象缺少新版容器结构；保持原数据与划分，在内存中兼容后重试原命令。',
+                    'data': pyg_repairs[-1]}})
+                continue
             path_fix = repair_path(result) if repair_path else None
             if path_fix is not None:
                 path_repairs.append({**path_fix, 'failed_execution_dir': result.get('run_dir'),
