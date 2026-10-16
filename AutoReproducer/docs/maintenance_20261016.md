@@ -117,3 +117,7 @@ C&S 新 PDF 的真实网页任务发现原作者 `CUAI/CorrectAndSmooth` 后，�
 两项新增正向用例（含真实 Git 的 120000 链接对象）先复现失败。最终仓库导出、资源来源及子模块专项 **108 passed**（26.99 秒），包含文件链接链、原字节执行、原子拒绝及来源记录；另外验证了真实 CUAI 提交 `b910314a59270984f5e249462ee3faa815fc9a0c` 的两处链接与原提交目标字节完全一致。证据：[correctandsmooth_file_aliases_20261016.json](evidence/correctandsmooth_file_aliases_20261016.json)。这是固定源码获取能力验证，尚未执行 C&S 作者训练；该 PDF 因触发产品修复转为回归样本。
 
 用户将本次持续工作窗口延长至北京时间 **2026-10-16 21:20**，后续修复继续在完成适当测试后提交并推送功能分支。
+
+`d9ff662` 的最终完整原生回归为 **3412 passed、26 skipped、0 failed**（1135.41 秒），包含置信区间源码上下文、最终异常边界测试签名修正，以及内部文件链接导出的全部用例。日志/JUnit 为 `.tmp/maintenance_aliases_native_20261016.*`，精选证据为 [file_aliases_uncertainty_native_20261016.json](evidence/file_aliases_uncertainty_native_20261016.json)。
+
+新的独立 NodeFormer PDF 已核对标题及原作者仓库链接，SHA-256 为 `d714e7b797a6e5d2855d51c50cc6c8423b3bf1639d36c5918a2a84f8d8bd14bf`。网页任务 `independent_nodeformer_20261016_02` 使用冻结产品 `d9ff662` / `e07ff3c7ba918c3c4a0aaaca62ff5e940f357d77c3e1edb2182f8e2df837087d`；已选择原作者 `qitianwu/NodeFormer@5390b6908326905b2eb840f65a70b0f4082aef43` 的 Cora / NodeFormer 原命令，保留 5 次运行、每次 1000 轮及原超参，并使用作者支持的 `--cpu`。当前仅到环境准备，未认定作者完成或论文比较通过。此前误填 arXiv 编号下载到无关 hydrides PDF 的候选在预检就被排除，未进入网页执行，不作为本论文证据。
