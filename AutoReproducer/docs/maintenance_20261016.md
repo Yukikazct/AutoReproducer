@@ -169,3 +169,7 @@ DGL 1.1.2 还直接使用 `setuptools.extern.packaging` 和独立 `packaging.ver
 观测为信息性核对：缺失输入、不曾构造或运行后变化时保留未核对原因，不能替代作者原本的返回结果；作者自身的构造、下载或训练异常仍按原异常失败。服务保存独立 JSON、结果归档及报告表格，`dataset_observation_verified` 只表示原加载器与文件核对；`dataset_provenance_verified`、`paper_metrics_verified` 仍为 false，尚未独立匹配官方参考数据或完整论文协议。
 
 本轮数据、原生与报告专项 **67 passed、0 skipped**（41.93 秒）；服务“完整、未观测、结束后变化”三种状态 **3 passed**（34.18 秒），均保留实际作者完成状态。观测缺失/变化的信息性行为及正常作者计划接线另已定向通过。精选证据：[dgl_cora_observation_20261016.json](evidence/dgl_cora_observation_20261016.json)。完整原生回归和原作者命令回归接着进行。
+
+最终完整原生回归 **3450 passed、26 skipped、0 failed**（1123.23 秒），新 DGL 原生用例均实际执行，没有用跳过替代验证。证据：[dgl_full_native_20261016.json](evidence/dgl_full_native_20261016.json)。
+
+另导出 CCA-SSG 固定原作者提交 `ce5b2c0ad4f05811008559f66e5e114dbd71a82b`，以原 README 的 Cora 命令完整执行 **50 轮表征训练 + 2000 轮线性评估、2050 次实际优化更新**，自然退出 0。任务独立的标准 CPython 3.11 / DGL 1.1.2 环境完成运行；原加载器使用受支持的 `DGL_DOWNLOAD_DIR` 选择本任务缓存，算法、命令、数据和 transform 未重写。结束后原作者全部源码、观测器产品源码及原生输入文件摘要均保持不变，原生文件观测核对通过。它是已退役 CCA-SSG 的真实原作者回归，未做新 PDF 或独立数值验收：[ccassg_dgl_dataset_regression_20261016.json](evidence/ccassg_dgl_dataset_regression_20261016.json)。

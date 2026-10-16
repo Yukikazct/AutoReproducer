@@ -1,0 +1,15 @@
+{
+  "tested_commit": "f6cf0b985518cbd15c695a4dbfe7a9e2f0d14a0c",
+  "platform": "Windows standard CPython3.12.10 with separate standard CPython3.11 DGL runtime",
+  "passed": 3450,
+  "skipped": 26,
+  "failed": 0,
+  "elapsed_s": 1123.23,
+  "native_fixtures": [
+    "Torch2.5.1+cpu / NumPy1.26.4 / PyG2.6.1 on CPython3.12",
+    "Torch2.5.1+cpu / DGL1.1.2 on standard CPython3.11"
+  ],
+  "new_dgl_native_cases_not_skipped": true,
+  "log_sha256": "4caf98e2915fee8ec047222b6e1f2580a4c8a89f634733669c3bfeb355fb2a03",
+  "junit_sha256": "0e8af2501bc399d3c218c31b083e9e38eed1accede917c2cbecd8eeedd963926"
+}
