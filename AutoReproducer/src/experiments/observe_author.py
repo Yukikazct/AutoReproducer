@@ -68,7 +68,8 @@ def after_step(optimizer, args, kwargs):
 
 
 handle = register_optimizer_step_post_hook(after_step)
-datasets = DatasetObserver(config.get('runtime_datasets', []) if step['kind'] == 'train' else [], workspace, lambda: updates)
+datasets = DatasetObserver(config.get('runtime_datasets', []) if step['kind'] == 'train' else [], workspace,
+                           lambda: updates, strict=False)
 legacy_pyg = LegacyPyGCompatibility(workspace, config['source_files'], config.get('pyg_compatibility', []),
     lambda: updates, enabled=config.get('observe_legacy_pyg', False) and entrypoint['kind'] != 'notebook')
 os.chdir(directory)

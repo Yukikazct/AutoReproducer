@@ -110,6 +110,43 @@ def _author_claim_comparison_lines(comparison):
     return lines + ['']
 
 
+def _runtime_dataset_lines(evidence):
+    if not evidence:
+        return []
+    lines = ['', '### 原作者数据加载观测', '',
+             '以下记录核对原加载器及其输入文件，官方参考数据与完整训练协议尚未独立核对。']
+    for source in evidence.get('sources', []):
+        observations = source.get('observations') or []
+        if not observations:
+            continue
+        record = observations[0]
+        loader = source.get('loader') or {}
+        identity = (f"{record.get('dataset_name', '未知')}；{loader.get('dataset_class', '')}；"
+                    f"框架 {loader.get('framework', '')} {record.get('framework_version', '')}；"
+                    f"观测 {len(observations)} 次")
+        lines += ['', '- **加载观测已核对**: ' + _markdown_text(identity)]
+        counts = '；'.join(f'{label} {record[field]}' for field, label in (
+            ('num_nodes', '节点'), ('num_edges', '边'), ('num_features', '特征'), ('num_classes', '类别')) if field in record)
+        if counts:
+            lines.append('- **原生规模**: ' + _markdown_text(counts))
+        if record.get('mask_counts'):
+            lines.append('- **原生划分样本数**: ' + _markdown_text('；'.join(
+                f'{name} {count}' for name, count in record['mask_counts'].items())))
+        if record.get('source_url'):
+            lines.append('- **框架下载来源**: ' + _markdown_text(str(record['source_url'])))
+        lines += ['', '| 输入文件 | 类型 | 字节数 | SHA-256 |', '| --- | --- | --- | --- |']
+        for name, info in sorted(record.get('files', {}).items()):
+            cells = [str(name).replace('\\', '/').rsplit('/', 1)[-1], info.get('role'), info.get('bytes'), info.get('sha256')]
+            lines.append('| ' + ' | '.join(_markdown_text(_txt(value)) for value in cells) + ' |')
+    for error in evidence.get('errors', []):
+        lines.append('- **观测未核对**: ' + _markdown_text(str(error.get('reason', '未知'))))
+        for reason in error.get('observation_errors', []):
+            lines.append('  - ' + _markdown_text(str(reason)))
+    for error in evidence.get('persistence_errors', []):
+        lines.append('- **保存说明**: ' + _markdown_text(str(error.get('reason', '未知'))))
+    return lines + ['']
+
+
 def _disk_usage_lines(usage):
     components = (usage or {}).get("components") or []
     if not components:
@@ -973,6 +1010,7 @@ class ReportGeneratorAgent(BaseAgent):
                     pv = metric_cell(pv, metrics_comp.get("paper_units") or {}, pk)
                     av = metric_cell(av, metrics_comp.get("actual_units") or {}, ak)
                     lines.append(f"| {name} | {pv} | {av} |")
+        lines += _runtime_dataset_lines(validation.get('runtime_dataset_evidence'))
         lines += _author_claim_comparison_lines(validation.get('author_claim_comparison'))
         records = validation.get("metric_records") or []
         if records:

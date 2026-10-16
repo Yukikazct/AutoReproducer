@@ -159,3 +159,13 @@ NodeFormer 的真实网页试验在依赖安装后被健康检查误拦：作者
 DGL 1.1.2 还直接使用 `setuptools.extern.packaging` 和独立 `packaging.version`，其 wheel 没有完整声明这些运行依赖。现在在首次依赖规划和真实缺包修复中统一加入 `setuptools==69.5.1`、`packaging==24.2`，保留原 DGL、Torch、数据和命令。健康与运行依赖相关检查 **74 passed**（25.84 秒），最终版本选择专项另有 **29 passed**（1.41 秒）；干净环境及损坏解析器保护补查 **3 passed**（7.36 秒）。
 
 独立标准 CPython 3.11 / Torch 2.5.1+cpu / DGL 1.1.2 环境已通过实际矩阵运算、NumPy 桥接和 DGL 消息传递健康检查。另将同一真实 setuptools 69.5.1 的相同源字节分别交给旧、新健康探针，确认旧探针失败、新探针成功；未依赖 Store Python 测试结果，也没有关闭健康检查。证据：[dgl_clean_health_20261016.json](evidence/dgl_clean_health_20261016.json)。
+
+## #34 / #41：原生 DGL 数据加载观测接入作者入口
+
+新增对 DGL 1.1.2 的 CoraGraphDataset、CiteseerGraphDataset、PubmedGraphDataset 的原构造器观测，绑定原源码 SHA、导入类、函数作用域和数据名。Cora 的公开名称与框架内部 `cora_v2` 同时保留；固定类的内部命名转换不替换数据。作者直接执行入口现在保留经确定性编译通过的 author_runtime 声明，并复制完整观测器到本轮运行目录。
+
+记录实际原生下载来源、8 份原始文件与 2 份框架缓存的大小和 SHA-256，记录图的节点/边/特征/类别、原生 mask 数量及张量摘要；不额外调用 dataset[0] 或执行作者 transform。运行结束再次核对文件。独立标准 CPython 3.11 的真实 Cora 检查得到 **2708 节点、10556 边、1433 特征、7 类，140/500/1000 划分**，并通过实际包装器完成 **10 次优化更新**。原文件及张量值保持一致。这是机制训练夹具，不是 CCA-SSG 原论文训练。
+
+观测为信息性核对：缺失输入、不曾构造或运行后变化时保留未核对原因，不能替代作者原本的返回结果；作者自身的构造、下载或训练异常仍按原异常失败。服务保存独立 JSON、结果归档及报告表格，`dataset_observation_verified` 只表示原加载器与文件核对；`dataset_provenance_verified`、`paper_metrics_verified` 仍为 false，尚未独立匹配官方参考数据或完整论文协议。
+
+本轮数据、原生与报告专项 **67 passed、0 skipped**（41.93 秒）；服务“完整、未观测、结束后变化”三种状态 **3 passed**（34.18 秒），均保留实际作者完成状态。观测缺失/变化的信息性行为及正常作者计划接线另已定向通过。精选证据：[dgl_cora_observation_20261016.json](evidence/dgl_cora_observation_20261016.json)。完整原生回归和原作者命令回归接着进行。
