@@ -1,0 +1,72 @@
+{
+  "kind": "browser_pdf_regression_failure",
+  "tag": "regression_chebnetii_20261016_02",
+  "sample_role": "retired_regression",
+  "source_commit": "6807252b5057af957b2c44dcf996c32f5cbe0a1a",
+  "source_sha256": "fe7a95d552505ceca3c5fab7071333e75743b2f5e080b23513bcf50e95d40ded",
+  "source_unchanged": true,
+  "pdf_sha256": "c32e1ebcd886611ff66293f211e7f1b9e1ffebc6668a4b853de3bc0d2f357e37",
+  "state": "ERROR",
+  "author_command_executed": true,
+  "author_steps": [
+    {
+      "id": "train",
+      "argv": [
+        "python",
+        "training.py",
+        "--net",
+        "ChebNetII",
+        "--dataset",
+        "Chameleon",
+        "--full",
+        "True",
+        "--lr",
+        "0.05",
+        "--weight_decay",
+        "0.0",
+        "--prop_wd",
+        "0.0",
+        "--dprate",
+        "0.6"
+      ],
+      "cwd": "main",
+      "timeout_s": null
+    }
+  ],
+  "environment": {
+    "success": true,
+    "preparation_seconds": 280.78100000000086,
+    "versions": {
+      "aiohttp": "3.10.10",
+      "fsspec": "2024.10.0",
+      "jinja2": "3.1.6",
+      "numpy": "1.26.4",
+      "psutil": "6.1.0",
+      "pyparsing": "3.2.0",
+      "requests": "2.32.3",
+      "scipy": "1.14.1",
+      "seaborn": "0.13.2",
+      "torch": "2.5.1+cpu",
+      "torch_geometric": "2.6.1",
+      "torch_scatter": "2.1.2+pt25cpu",
+      "torch_sparse": "0.6.18+pt25cpu",
+      "tqdm": "4.67.1"
+    }
+  },
+  "failure": {
+    "kind": "legacy_pyg_serialization",
+    "stage": "dataset_access_before_training",
+    "source": "main/training.py:152",
+    "summary": "An author data object serialized by an older PyG version lacks modern _store state; dataset[0] fails."
+  },
+  "active_runs": 0,
+  "active_workers": 0,
+  "active_executions": 0,
+  "cleanup": {
+    "status": "released",
+    "freed_bytes": 1565918886,
+    "errors": [],
+    "remaining": []
+  },
+  "limitations": "Dependency installation and native checks passed. Training and paper comparison did not complete; the selected experiment is Chameleon, not issue30's exact Cora protocol."
+}

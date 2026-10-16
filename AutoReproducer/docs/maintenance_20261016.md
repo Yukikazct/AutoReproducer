@@ -63,3 +63,13 @@
 首次长路径全量为 **3299 passed、1 failed、87 skipped**（502.22 秒）。唯一失败用例的清理错误注入原先按 Path 文本判断目标，未匹配到同一目录的 Windows 扩展路径；现在使用实际文件标识注入同一权限错误，继续确认清理失败必须返回失败并保留存活清单路径。该模块及长路径、文件与依赖清理专项 **108 passed**（8.20 秒），最终全量继续确认。
 
 前两批修复已由 [PR #44](https://github.com/Yukikazct/AutoReproducer/pull/44) 和 [PR #45](https://github.com/Yukikazct/AutoReproducer/pull/45) 合入 `main`。长路径修复同步主分支 `c2d22d5` 后，在 `codex/windows-pip-long-paths-20261016` 继续，避免向已合并的 PR 追加新修复。
+
+长路径修复提交 `6807252` 的最终全量为 **3300 passed、87 skipped、0 failed**（517.14 秒），仅有既有 PyPDF2 弃用警告。日志和 JUnit 已保存到主工作区 `.tmp/maintenance_longpath_final_20261016.*`。四项原生 Windows 长路径回归无跳过全部通过，测试前后 `LongPathsEnabled` 均为 0，没有修改系统设置。精选证据为 [windows_pip_long_paths_20261016.json](evidence/windows_pip_long_paths_20261016.json)。
+
+## 真实网页第二轮：长路径已解除，定位下一阻塞
+
+主工作区重启测试服务后，按 `6807252` 重新冻结产品：`fe7a95d552505ceca3c5fab7071333e75743b2f5e080b23513bcf50e95d40ded`。`regression_chebnetii_20261016_02` 再次真实上传同一 PDF，一轮完成 CPU 依赖安装（安装监控 244.484 秒），NumPy 1.26.4、Torch 2.5.1+cpu、PyG 2.6.1 及稀疏原生扩展的版本、导入与实际运算检查均通过，原 NumPy DLL 长路径错误不再出现。
+
+原作者 Chameleon 命令随后启动，但在 `main/training.py:152` 的 `dataset[0]` 处失败：原数据中序列化的旧 PyG Data 缺少新版 `_store` 结构。未产生训练结果或论文数值比较，不能因环境成功而记作论文运行通过。终态活动进程全部为零，环境释放 **1,565,918,886 字节**，错误和剩余环境均为空，产品源码摘要前后一致。证据为 [issue30_chebnetii_pyg_legacy_20261016.json](evidence/issue30_chebnetii_pyg_legacy_20261016.json)。
+
+下一项优先工作是验证旧 PyG 数据对象的格式兼容，保留原始数据和划分，并重跑作者命令。#30 的 Cora 精确协议及 #27 的最终独立新 PDF 验收仍待完成。
