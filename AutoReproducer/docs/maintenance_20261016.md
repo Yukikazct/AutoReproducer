@@ -181,3 +181,11 @@ NodeFormer 网页第三轮按原命令自然完成 **5 次 × 1000 轮、5000 �
 新增按已打印的 `Namespace(metric=...)` 确定指标类型的 logger 解析，不把所有裸 Test 标签都猜成 accuracy。Final Test 汇总优先于单次和 Highest Test；均值、标准差与原行号原样保存。只有声明次数、连续完整的 Run 记录和最终块同时吻合时才确定次数；缺失或重复的运行记录保留未知，不凭一个进程推断多次运行。未标单位的汇总仍保留未标注，结构化指标继续优先，CI 不误记为 std。
 
 新增相关用例先得到 **9 failed**；修复后解析/比较相关 **90 passed**（1.78 秒），指标判定、汇总和报告专项另有 **119 passed**（4.28 秒）。实际保存日志只读重放得到 accuracy **89.48 ± 0.40 / 5 次均值**，来源为原 stdout 第 5060 行，原 result/report/execution/comparison 文件摘要均未改变：[nodeformer_summary_replay_20261016.json](evidence/nodeformer_summary_replay_20261016.json)。这是解释层修复，无新训练或独立论文验收。
+
+## Python 3.11 CI：旧 pip 的间接 vendored 导入
+
+早期健康检查修复在新 pip 环境通过后，Python 3.11 CI 的干净 venv 仍失败：其自带 pip 24.0 的旧 packaging 使用 `pip._vendor.pyparsing` 绝对导入，又间接加载了安装器。已用标准 CPython 3.11 新建 venv，在相同 pip 24.0 和相同目标模块下实际复现。
+
+现在把整个 vendored 解析器依赖放入私有命名空间加载，只在内存中调整安装器内部导入前缀，不执行 pip 初始化、不复用原 pyc，也不改写安装器文件。新增不联网的旧式绝对导入夹具先复现失败；最终健康、版本选择和所属命令检查 **70 passed**（31.00 秒），真实 pip 24.0 对照探测从失败变为成功：[legacy_pip_vendor_20261016.json](evidence/legacy_pip_vendor_20261016.json)。
+
+此修正在独立工作区进行。正在运行的 DIFFormer 独立 PDF 试验仍固定于 `710e151`，不能把该试验追溯记作本次后续兼容修正的独立验收。

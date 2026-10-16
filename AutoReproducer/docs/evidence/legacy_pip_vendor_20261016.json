@@ -1,0 +1,30 @@
+{
+  "scope": "Standard CPython3.11 fresh venv with ensurepip24.0; identical native-demo guard module before/after health probe; no training or paper acceptance",
+  "pip_version": "24.0",
+  "before_failed": true,
+  "after_passed": true,
+  "old_probe_sha256": "59cbb5dd76b3c3cf65e3d685c18330923e239103e3804592b1b54a4a7c3ada6f",
+  "new_probe_sha256": "238e7a620f4c6937c33bc80d113c5851c741cb4eb77df127e78818adaac54ad0",
+  "health_checks": [
+    {
+      "phase": "stock_pip24_before",
+      "path": "D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\legacy_pip_probe_20261016\\target",
+      "runtime": "cpython-311-win32-win-amd64",
+      "success": false,
+      "exit_code": 1,
+      "timed_out": false,
+      "duration_s": 0.469,
+      "diagnostic": "Traceback (most recent call last):\n  File \"<string>\", line 63, in <module>\n  File \"D:\\code\\AutoReproducer\\.tmp\\maintenance-native-dgl-7e1tsfr7\\training_python\\interpreters\\cpython-3.11-windows-x86_64-none\\Lib\\importlib\\__init__.py\", line 126, in import_module\n    return _bootstrap._gcd_import(name[level:], package, level)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"<frozen importlib._bootstrap>\", line 1204, in _gcd_import\n  File \"<frozen importlib._bootstrap>\", line 1176, in _find_and_load\n  File \"<frozen importlib._bootstrap>\", line 1147, in _find_and_load_unlocked\n  File \"<frozen importlib._bootstrap>\", line 690, in _load_unlocked\n  File \"<frozen importlib._bootstrap_external>\", line 940, in exec_module\n  File \"<frozen importlib._bootstrap>\", line 241, in _call_with_frames_removed\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\legacy_pip_probe_20261016\\target\\native_demo.py\", line 2, in <module>\n    if 'pip' in sys.modules:raise RuntimeError('installer imported before author packages')\n                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nRuntimeError: installer imported before author packages"
+    },
+    {
+      "phase": "stock_pip24_after",
+      "path": "D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\legacy_pip_probe_20261016\\target",
+      "runtime": "cpython-311-win32-win-amd64",
+      "success": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.344,
+      "diagnostic": "{\"versions\": {\"native_demo\": \"1.0\"}}"
+    }
+  ]
+}

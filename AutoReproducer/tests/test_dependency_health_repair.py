@@ -295,6 +295,35 @@ def test_health_probe_works_in_clean_training_python_without_packaging(tmp_path)
             directory, "native-demo>=2; python_full_version < '3.0'", "cached") is None
 
 
+def test_legacy_vendored_parser_dependencies_do_not_import_the_installer(tmp_path):
+    import packaging
+    directory = ce.DEPS_CACHE_ROOT / 'legacy-vendored-parser'
+    package(directory, source="import sys\nassert 'pip' not in sys.modules\nVALUE=7\n")
+    pip = directory / 'pip'
+    vendor = pip / '_vendor'
+    vendor.mkdir(parents=True)
+    (pip / '__init__.py').write_text("raise RuntimeError('installer executed while loading its parser')\n", encoding='utf-8')
+    metadata = directory / 'pip-0.1.dist-info'
+    metadata.mkdir()
+    (metadata / 'METADATA').write_text('Name: pip\nVersion: 0.1\n', encoding='utf-8')
+    shutil.copytree(Path(packaging.__file__).parent, vendor / 'packaging')
+    # Older pip rewrites these imports to pip._vendor rather than relative paths.
+    markers = vendor / 'packaging/markers.py'
+    source = markers.read_text('utf-8')
+    future = 'from __future__ import annotations\n'
+    insertion = 'from pip._vendor.legacy_marker_helper import SENTINEL\n'
+    source = source.replace(future, future + insertion) if future in source else insertion + source
+    markers.write_text(source, encoding='utf-8')
+    (vendor / 'legacy_marker_helper.py').write_text('SENTINEL=True\n', encoding='utf-8')
+    with tempfile.TemporaryDirectory(prefix='legacy-parser-python-', dir=tmp_path) as runtime:
+        venv.EnvBuilder(with_pip=True).create(runtime)
+        executable = Path(runtime) / ('Scripts/python.exe' if sys.platform == 'win32' else 'bin/python')
+        instance = executor()
+        instance.env_config['python_executable'] = str(executable)
+        assert instance._check_local_dependency_health(directory,
+            'native-demo==1.0; python_version >= "3.0"', 'legacy_vendored_parser') is None
+
+
 @pytest.mark.parametrize("source,missing", [("", "packaging.specifiers"),
                                            ("import missing_packaging_dependency", "missing_packaging_dependency")])
 def test_probe_does_not_mask_broken_managed_packaging(tmp_path, source, missing):
