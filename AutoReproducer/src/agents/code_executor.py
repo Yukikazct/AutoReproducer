@@ -1993,12 +1993,9 @@ class CodeExecutorAgent(BaseAgent):
                                     "-i ", "-f ")) or line == "--no-index":
                     continue
                 requirement = Requirement(line)
-                target_version = env_config.get('python_version')
-                marker_env = {'python_version': target_version} if target_version else None
-                if requirement.marker and not requirement.marker.evaluate(environment=marker_env):
-                    continue
                 name = canonicalize_name(requirement.name)
                 parsed.append({"name": name, "specifier": str(requirement.specifier),
+                               "marker": str(requirement.marker) if requirement.marker else "",
                                "module": import_names.get(name, requirement.name.replace("-", "_"))})
             env = self._pip_env()
             env["MPLBACKEND"] = "Agg"

@@ -216,6 +216,39 @@ def test_health_probe_imports_packaging_from_the_managed_environment(monkeypatch
     assert calls == [] and instance._deps_dir == str(directory)
 
 
+@pytest.mark.parametrize(("marker", "active"), [
+    ("python_full_version >= '3.0'", True),
+    ("python_full_version < '3.0'", False),
+    ("platform_python_implementation == 'CPython'", True),
+])
+def test_health_markers_use_the_probe_interpreter_environment(monkeypatch, tmp_path, marker, active):
+    import packaging.markers
+
+    directory = ce.DEPS_CACHE_ROOT / "marker-environment"
+    package(directory, ready=True)
+    app_environment = packaging.markers.default_environment()
+    app_environment.update(python_full_version="0.0.0", platform_python_implementation="Other")
+    monkeypatch.setattr(packaging.markers, "default_environment", lambda: app_environment)
+    instance = executor()
+    instance.env_config["python_version"] = f"{sys.version_info.major}.{sys.version_info.minor}"
+
+    diagnostic = instance._check_local_dependency_health(directory, f"native-demo>=2; {marker}", "cached")
+    if active:
+        assert diagnostic and "does not satisfy fixed requirement" in diagnostic
+    else:
+        assert diagnostic is None
+
+
+def test_full_python_hint_does_not_hide_an_active_minor_version_marker(tmp_path):
+    directory = ce.DEPS_CACHE_ROOT / "full-version-hint"
+    package(directory, ready=True)
+    instance = executor()
+    instance.env_config["python_version"] = ".".join(map(str, sys.version_info[:3]))
+    marker = f"python_version == '{sys.version_info.major}.{sys.version_info.minor}'"
+    diagnostic = instance._check_local_dependency_health(directory, f"native-demo>=2; {marker}", "cached")
+    assert diagnostic and "does not satisfy fixed requirement" in diagnostic
+
+
 def test_health_probe_works_in_clean_training_python_without_packaging(tmp_path):
     directory = ce.DEPS_CACHE_ROOT / ce.reqs_digest(REQUIREMENTS)
     package(directory, ready=True)
@@ -230,6 +263,8 @@ def test_health_probe_works_in_clean_training_python_without_packaging(tmp_path)
         assert instance._check_local_dependency_health(directory, REQUIREMENTS, "cached") is None
         diagnostic = instance._check_local_dependency_health(directory, "native-demo>=2", "cached")
         assert "cached version does not satisfy fixed requirement" in diagnostic
+        assert instance._check_local_dependency_health(
+            directory, "native-demo>=2; python_full_version < '3.0'", "cached") is None
 
 
 @pytest.mark.parametrize("source,missing", [("", "packaging.specifiers"),
