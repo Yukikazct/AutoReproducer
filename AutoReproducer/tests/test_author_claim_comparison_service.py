@@ -185,7 +185,7 @@ def test_unexpected_comparison_error_is_informational(tmp_path, monkeypatch):
     from src import author_claim_comparison
     _, runner, request = comparison_service(tmp_path, monkeypatch)
 
-    def fail_comparison(*args):
+    def fail_comparison(*args, **kwargs):
         raise RuntimeError('comparison boundary unavailable')
 
     monkeypatch.setattr(author_claim_comparison, 'compare_author_claims', fail_comparison)
