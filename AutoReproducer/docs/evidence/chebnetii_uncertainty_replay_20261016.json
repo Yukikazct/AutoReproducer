@@ -1,0 +1,40 @@
+{
+  "records": [
+    {
+      "name": "accuracy",
+      "value": 71.5974,
+      "unit": "",
+      "split": "test",
+      "stage": "final",
+      "source": "train:stdout:26",
+      "source_quote": "test acc mean = 71.5974 ± 1.5536  \t val acc mean = 71.3407",
+      "aggregation": "mean",
+      "reported_uncertainty": 1.5536,
+      "uncertainty_kind": "bootstrap_confidence_interval",
+      "confidence_level": 95,
+      "uncertainty_source": {
+        "path": "main/training.py",
+        "source_sha256": "5b5a3a9785922429526586bc2c33b8bd3235b81a2ff4f94d319c9c710d70118b",
+        "definition_line": 184,
+        "print_line": 186
+      },
+      "id": "train:stdout:15",
+      "step_id": "train"
+    },
+    {
+      "name": "accuracy",
+      "value": 71.3407,
+      "unit": "",
+      "split": "validation",
+      "stage": "validation",
+      "source": "train:stdout:26",
+      "source_quote": "test acc mean = 71.5974 ± 1.5536  \t val acc mean = 71.3407",
+      "aggregation": "mean",
+      "id": "train:stdout:16",
+      "step_id": "train"
+    }
+  ],
+  "errors": [],
+  "source_run": "repository_1774a1c7d5004e79bb34d22e53a6a2e0",
+  "scope": "Read-only replay of saved original author output using frozen source hashes; values unchanged, bootstrap CI not SD; not a new paper run"
+}

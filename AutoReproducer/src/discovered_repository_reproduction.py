@@ -999,7 +999,10 @@ class DiscoveredRepositoryReproduction:
                 validation.setdefault('warnings', []).append('执行包含实际报错后的旧 PyG 容器兼容；原数据文件、张量值与划分未改写。')
             from src.author_claim_comparison import collect_author_metrics
             try:
-                validation['metric_records'], data['metric_parse_errors'] = collect_author_metrics(execution)
+                validation['metric_records'], data['metric_parse_errors'] = collect_author_metrics(
+                    execution, workspace=workspace, plan=plan, sources=snapshot['files'])
+                if any(record.get('uncertainty_kind') == 'bootstrap_confidence_interval' for record in validation['metric_records']):
+                    validation.setdefault('warnings', []).append('作者打印的误差项为 bootstrap 置信区间半宽，未当作标准差比较。')
             except Exception as exc:
                 validation['metric_records'] = []
                 data['metric_parse_errors'] = [str(exc)]
@@ -1019,7 +1022,8 @@ class DiscoveredRepositoryReproduction:
             validation['author_claim_comparison'] = comparison
             event(phase, 'running')
             try:
-                comparison.update(compare_author_claims(self.llm, packet, plan, workspace, execution))
+                comparison.update(compare_author_claims(self.llm, packet, plan, workspace, execution,
+                                                        sources=snapshot['files']))
             except Exception as exc:
                 comparison['diagnostic'] = str(exc) or type(exc).__name__
             for name, value in (('author_claim_comparison.json', comparison),

@@ -95,3 +95,13 @@
 此类错误可发生在训练后，但仍要保留真实失败记录并重跑完整原作者命令，不跳过或缩短训练；其他原有类型兼容仍只允许在零更新时启用，共享 8 次修复额度不变。相关测试 **31 passed**（66.82 秒），包含 NumPy 1.26 原生服务中训练后失败、重试并完成原命令；作用域保护修订后纯数值专项另有 **7 passed**（8.17 秒）。全量与网页重跑待完成。
 
 汇总兼容 `fe2a30e` 原生全量已完成：**3381 passed、26 skipped、0 failed**（1342.66 秒）。新增 8 项汇总测试均通过，包含训练后真实报错的服务重试、权重向量统计保留、源码/结构变更拒绝及不改写其他函数作用域。证据：[numpy_ragged_native_20261016.json](evidence/numpy_ragged_native_20261016.json)，日志/JUnit 存于 `.tmp/maintenance_ragged_native_20261016.*`。真实网页第四轮仍在原命令执行中，最终论文比较待运行结束后核对。
+
+第四轮真实作者命令已自然返回：**10 次运行、2097 次优化更新**，完整生成末尾汇总，测试准确率均值 **71.5974%**，验证准确率均值 **71.3407%**。终态为 `COMPLETED/author_code_completed`，环境清理 released、释放 1,565,918,886 字节，所属进程全为零。但论文配对因多数据集表格缺少有效同页列标题引文而保留 unavailable；要求比较通过的网页验收脚本因此返回失败，不能称为完整论文复现成功。证据：[chebnetii_regression_20261016_04.json](evidence/chebnetii_regression_20261016_04.json)。
+
+## #41：防止把置信区间误标为标准差
+
+实际作者汇总打印的 `±1.5536` 来自 `max(abs(ci(bootstrap(values),95)-values.mean()))`，不是另行计算的 `test_acc_std`。原解析器按常规均值±SD 约定将其记为 std，会错误解释统计口径。
+
+新增确定性源码上下文标注：只在原源码 SHA-256 仍匹配、原 f-string 与实际日志正确匹配、误差变量的原 Seaborn bootstrap CI 计算形式被 AST 证明时，保留误差数值但标为 `reported_uncertainty / bootstrap_confidence_interval / 95`，不再当作 std。均值、原引文、分割和输出行号不变，也不允许模型改写实测值。真正 SD、不相关的 CI 代码、派生其他统计的表达式及显式结构化协议不受此文本推断覆盖。
+
+定向与比较相关回归 **65 passed、1 skipped**（140.50 秒），最终定向版本另有 **48 passed**（10.61 秒）。真实已保存作者日志的只读重放确认 71.5974 和 1.5536 保持原数值，仅修正误差类型：[chebnetii_uncertainty_replay_20261016.json](evidence/chebnetii_uncertainty_replay_20261016.json)。这是解释层修复，不是新训练或论文比较通过。

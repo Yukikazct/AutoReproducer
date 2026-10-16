@@ -4,6 +4,7 @@ The model locates claims and explains settings. Values come from unchanged
 PDF quotations and actual step output; comparison never gates code execution.
 """
 from copy import deepcopy
+import hashlib
 import re
 
 from src.discovered_repository_plan import (
@@ -16,7 +17,7 @@ TOLERANCE = 0.05
 _AGGREGATIONS = {'single', 'mean', 'median', 'best', 'unknown'}
 
 
-def collect_author_metrics(execution):
+def collect_author_metrics(execution, *, workspace=None, plan=None, sources=None):
     records, errors = [], []
     for step in execution.get('steps', []):
         if step.get('success') is not True or step.get('exit_code') != 0:
@@ -29,6 +30,20 @@ def collect_author_metrics(execution):
                 continue
             parsed, failures = parse_runtime_metrics(step.get(stream, ''), structured if stream == 'stdout' else None,
                                                      preserve_contexts=True)
+            if workspace is not None and plan is not None and sources is not None and stream == 'stdout' and structured is None:
+                selected = next((item for item in plan.get('steps', []) if item.get('id') == step.get('id')), {})
+                relative = (selected.get('entrypoint') or {}).get('source_path')
+                if relative and relative in sources:
+                    try:
+                        from src.safety.paths import workspace_path
+                        from src.author_metric_context import annotate_uncertainty
+                        source = workspace_path(workspace, relative, 'metric context source', must_exist=True, forbid_git=True)
+                        raw = source.read_bytes()
+                        if hashlib.sha256(raw).hexdigest() != sources[relative]:
+                            raise ValueError('Metric context source differs from the frozen author source')
+                        parsed = annotate_uncertainty(parsed, raw.decode('utf-8'), relative, sources[relative])
+                    except (OSError, ValueError, UnicodeError, SyntaxError) as exc:
+                        failures.append('Original uncertainty context could not be verified: ' + str(exc))
             errors.extend(f"{step['id']}:{stream}: {error}" for error in failures)
             for record in parsed:
                 source = record['source'].replace('stdout:', stream + ':')
@@ -283,8 +298,8 @@ def _validated_rows(payload, packet, workspace, records, accepted, known_citatio
     return errors
 
 
-def compare_author_claims(llm, packet, plan, workspace, execution):
-    records, errors = collect_author_metrics(execution)
+def compare_author_claims(llm, packet, plan, workspace, execution, *, sources=None):
+    records, errors = collect_author_metrics(execution, workspace=workspace, plan=plan, sources=sources)
     result = {'status': 'unavailable', 'basis': 'author_output', 'relative_tolerance': TOLERANCE,
               'metric_records': records, 'parse_errors': errors, 'comparisons': [], 'citations': [],
               'validation_errors': [],
@@ -318,6 +333,7 @@ settings:{status:'matched|different|unknown',reason,citations:[PDF and repositor
         'Include full experiment settings in the assessment: split, model variant, hyperparameters, '
         'preprocessing, model selection. Mark unknown when original evidence is insufficient. '
         'Observed aggregation, runs and std fields are authoritative and cannot be changed. '
+        'reported_uncertainty with uncertainty_kind=bootstrap_confidence_interval is a confidence half-width, never std. '
         'A single process can execute many trials: inspect the exact print/aggregation source and preserve '
         'the selected final summary. Missing repetition information stays unknown, never assume runs=1. '
         'Report the paper aggregation and repetition count honestly. Single run versus paper mean must '
