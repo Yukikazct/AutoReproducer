@@ -24,6 +24,8 @@ def relative_path(value, kind="path", *, forbid_git=False):
     windows, posix = PureWindowsPath(raw), PurePosixPath(raw)
     if (windows.drive or windows.root or posix.root or ".." in windows.parts
             or any(":" in part for part in windows.parts)
+            or any(part.endswith((".", " ")) or PureWindowsPath(part).is_reserved()
+                   for part in windows.parts)
             or (forbid_git and any(part.casefold() == ".git" for part in windows.parts))):
         raise ValueError(f"{kind} must be a relative path inside the workspace")
     return Path(*windows.parts)

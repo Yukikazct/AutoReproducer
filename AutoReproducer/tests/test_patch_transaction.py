@@ -9,6 +9,7 @@ import pytest
 
 from src.safety.patch_policy import PatchPolicy
 from src.safety.patch_transaction import PatchTransaction
+import src.safety.patch_transaction as transaction_module
 from src.safety.workspace_snapshot import snapshot_workspace
 
 
@@ -150,3 +151,18 @@ def test_same_size_same_timestamp_patch_cannot_reuse_stale_bytecode(workspace, m
     result = subprocess.run([sys.executable, "-c", "import model; print(model.VALUE)"],
                             cwd=workspace, capture_output=True, text=True, timeout=10)
     assert result.stdout.strip() == "1"
+
+
+@pytest.mark.parametrize("error", [KeyboardInterrupt, SystemExit, RuntimeError])
+def test_failed_rollback_preserves_original_exception(workspace, monkeypatch, error):
+    transaction = PatchTransaction(workspace, [patch(workspace, "model.py", "VALUE = 2\n")], PatchPolicy())
+
+    def cannot_restore(*args, **kwargs):
+        raise PermissionError("snapshot restoration denied")
+
+    monkeypatch.setattr(transaction_module, "restore_snapshot", cannot_restore)
+    with pytest.raises(error, match="original failure") as caught:
+        with transaction:
+            raise error("original failure")
+    assert "snapshot restoration denied" in transaction.rollback_error
+    assert any("rollback" in note for note in caught.value.__notes__)
