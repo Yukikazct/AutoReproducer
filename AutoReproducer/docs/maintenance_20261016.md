@@ -151,3 +151,11 @@ NodeFormer 的真实网页试验在依赖安装后被健康检查误拦：作者
 现在在解析真实位置和读取摘要前检查原路径及所有父目录的 symlink / Windows reparse-point 属性，观察器和父核验使用相同规则，不跟随这些链接取得通过证明。正常原文件仍按原始完整字节和元数据核对。相关路径和数据证据检查 **55 passed、0 skipped**（5.87 秒），包含 Windows 原生目录 junction，以及实际 PyG 2.6.1 的 WikiCS 构造、原生 raw/processed 文件和父流程摘要核对。该正向机制使用自建 3 节点 JSON，不能称为真实论文数据或训练通过。证据：[native_dataset_link_integrity_20261016.json](evidence/native_dataset_link_integrity_20261016.json)。
 
 报告与数据路径修复 `e6d305c` 的完整原生回归为 **3425 passed、26 skipped、0 failed**（1127.18 秒），精选证据：[author_evidence_native_20261016.json](evidence/author_evidence_native_20261016.json)。合并随后独立验证的 Google Drive 模块映射及超时测试后，组合定向检查另有 **76 passed**（23.54 秒），同时覆盖实际 PyG 数据、置信区间比较、真实模块探测与 Windows 孙进程超时清理。
+
+## #27 / #41：保留原作者 Final Test 跨运行汇总
+
+NodeFormer 网页第三轮按原命令自然完成 **5 次 × 1000 轮、5000 次优化更新**。环境释放 **1,553,571,232 字节**，活动进程归零，无错误或剩余环境，源码在结束前仍与 `2d9b199` 的冻结摘要一致。旧解析器却漏掉 `Final Test` 这种没有重复写指标名的 logger 输出，交给论文比较的性能证据只剩末轮日志；实际程序末尾完整打印了 **89.48 ± 0.40**。旧比较仍为 unavailable，不将这轮记作论文数值验收，见 [nodeformer_regression_20261016_03.json](evidence/nodeformer_regression_20261016_03.json)。
+
+新增按已打印的 `Namespace(metric=...)` 确定指标类型的 logger 解析，不把所有裸 Test 标签都猜成 accuracy。Final Test 汇总优先于单次和 Highest Test；均值、标准差与原行号原样保存。只有声明次数、连续完整的 Run 记录和最终块同时吻合时才确定次数；缺失或重复的运行记录保留未知，不凭一个进程推断多次运行。未标单位的汇总仍保留未标注，结构化指标继续优先，CI 不误记为 std。
+
+新增相关用例先得到 **9 failed**；修复后解析/比较相关 **90 passed**（1.78 秒），指标判定、汇总和报告专项另有 **119 passed**（4.28 秒）。实际保存日志只读重放得到 accuracy **89.48 ± 0.40 / 5 次均值**，来源为原 stdout 第 5060 行，原 result/report/execution/comparison 文件摘要均未改变：[nodeformer_summary_replay_20261016.json](evidence/nodeformer_summary_replay_20261016.json)。这是解释层修复，无新训练或独立论文验收。
