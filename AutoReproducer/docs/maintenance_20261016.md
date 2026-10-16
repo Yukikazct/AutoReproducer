@@ -151,3 +151,11 @@ NodeFormer 的真实网页试验在依赖安装后被健康检查误拦：作者
 现在在解析真实位置和读取摘要前检查原路径及所有父目录的 symlink / Windows reparse-point 属性，观察器和父核验使用相同规则，不跟随这些链接取得通过证明。正常原文件仍按原始完整字节和元数据核对。相关路径和数据证据检查 **55 passed、0 skipped**（5.87 秒），包含 Windows 原生目录 junction，以及实际 PyG 2.6.1 的 WikiCS 构造、原生 raw/processed 文件和父流程摘要核对。该正向机制使用自建 3 节点 JSON，不能称为真实论文数据或训练通过。证据：[native_dataset_link_integrity_20261016.json](evidence/native_dataset_link_integrity_20261016.json)。
 
 报告与数据路径修复 `e6d305c` 的完整原生回归为 **3425 passed、26 skipped、0 failed**（1127.18 秒），精选证据：[author_evidence_native_20261016.json](evidence/author_evidence_native_20261016.json)。合并随后独立验证的 Google Drive 模块映射及超时测试后，组合定向检查另有 **76 passed**（23.54 秒），同时覆盖实际 PyG 数据、置信区间比较、真实模块探测与 Windows 孙进程超时清理。
+
+## #41：干净训练环境的解析器副作用与 DGL 运行依赖
+
+标准 CPython 3.11 的真实 DGL 准备暴露两层问题。健康检查在缺少独立 packaging 时直接导入 pip 的内置解析器，会改变 setuptools/distutils 的导入钩子，使原本可用的旧运行库发生 AssertionError；改为从 pip 元数据定位内置解析器，并在私有命名空间加载，保留训练解释器的 marker 环境及损坏模块检查。
+
+DGL 1.1.2 还直接使用 `setuptools.extern.packaging` 和独立 `packaging.version`，其 wheel 没有完整声明这些运行依赖。现在在首次依赖规划和真实缺包修复中统一加入 `setuptools==69.5.1`、`packaging==24.2`，保留原 DGL、Torch、数据和命令。健康与运行依赖相关检查 **74 passed**（25.84 秒），最终版本选择专项另有 **29 passed**（1.41 秒）；干净环境及损坏解析器保护补查 **3 passed**（7.36 秒）。
+
+独立标准 CPython 3.11 / Torch 2.5.1+cpu / DGL 1.1.2 环境已通过实际矩阵运算、NumPy 桥接和 DGL 消息传递健康检查。另将同一真实 setuptools 69.5.1 的相同源字节分别交给旧、新健康探针，确认旧探针失败、新探针成功；未依赖 Store Python 测试结果，也没有关闭健康检查。证据：[dgl_clean_health_20261016.json](evidence/dgl_clean_health_20261016.json)。

@@ -276,7 +276,10 @@ def test_full_python_hint_does_not_hide_an_active_minor_version_marker(tmp_path)
 
 def test_health_probe_works_in_clean_training_python_without_packaging(tmp_path):
     directory = ce.DEPS_CACHE_ROOT / ce.reqs_digest(REQUIREMENTS)
-    package(directory, ready=True)
+    package(directory, ready=True, source=(
+        "import sys\n"
+        "if 'pip' in sys.modules: raise RuntimeError('health probe imported the installer before author packages')\n"
+        "VALUE = 7\n"))
     with tempfile.TemporaryDirectory(prefix="training-python-", dir=tmp_path) as runtime:
         venv.EnvBuilder(with_pip=True).create(runtime)
         executable = Path(runtime) / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")

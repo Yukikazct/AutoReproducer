@@ -51,7 +51,7 @@ def reset_managed_environment(root, directory):
 
 
 DEPENDENCY_HEALTH_PROBE = r'''
-import importlib, importlib.metadata, json, os, re, sys
+import importlib, importlib.metadata, importlib.util, json, os, re, sys
 from pathlib import Path
 
 target = Path(sys.argv[1]).resolve(strict=True)
@@ -68,11 +68,19 @@ try:
 except ModuleNotFoundError as exc:
     if exc.name != 'packaging':
         raise
-    # Fresh training venvs have pip, but need not install packaging separately.
-    # Use pip's bundled parser without adding a dependency to the author plan.
-    # Broken managed packaging modules must still fail the health check.
-    from pip._vendor.packaging.specifiers import SpecifierSet
-    from pip._vendor.packaging.markers import Marker
+    # Importing pip changes setuptools/distutils import hooks on Python 3.11
+    # and can break healthy legacy packages such as DGL. Read its bundled
+    # parser in a private namespace without importing the installer itself.
+    # A broken managed packaging module still fails above, without fallback.
+    parser_root = Path(importlib.metadata.distribution('pip').locate_file('pip/_vendor/packaging'))
+    namespace = '_autorepro_health_packaging'
+    spec = importlib.util.spec_from_file_location(namespace, parser_root / '__init__.py',
+                                                submodule_search_locations=[str(parser_root)])
+    parser = importlib.util.module_from_spec(spec)
+    sys.modules[namespace] = parser
+    spec.loader.exec_module(parser)
+    SpecifierSet = importlib.import_module(namespace + '.specifiers').SpecifierSet
+    Marker = importlib.import_module(namespace + '.markers').Marker
 # Conditional dependencies must use this selected training interpreter's full
 # environment. A host Python hint omits python_full_version, implementation and
 # platform markers, and may itself contain an incorrect patch-level value.

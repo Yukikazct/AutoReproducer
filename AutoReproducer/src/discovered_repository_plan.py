@@ -45,7 +45,8 @@ _RUNTIME_DEPENDENCIES = {
     'googledrivedownloader': ('requests',),
     'torch-geometric': ('aiohttp', 'fsspec', 'jinja2', 'numpy', 'psutil', 'pyparsing', 'requests', 'tqdm'),
     'torch-sparse': ('scipy', 'torch-scatter'),
-    'dgl': ('numpy', 'scipy', 'networkx', 'requests', 'tqdm', 'psutil'),
+    # DGL 1.1.2 imports setuptools.extern.packaging; setuptools >= 71 removed it.
+    'dgl': ('numpy', 'scipy', 'networkx', 'requests', 'tqdm', 'psutil', 'setuptools', 'packaging'),
     # DeepRobust's wheel permits any newer torchvision. Freeze the matching
     # native torch/vision pair rather than letting pip choose another build.
     'deeprobust': ('torchvision', 'numpy', 'scipy', 'networkx', 'pillow',
