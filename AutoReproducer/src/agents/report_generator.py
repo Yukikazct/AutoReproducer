@@ -40,6 +40,20 @@ def _markdown_text(value: str) -> str:
                   value.replace("\n", " ").replace("\r", " "))
 
 
+def _metric_value_text(node, suffix=''):
+    value = _txt(node.get('value'))
+    uncertainty = node.get('reported_uncertainty')
+    if uncertainty is not None:
+        if node.get('uncertainty_kind') == 'bootstrap_confidence_interval':
+            level = node.get('confidence_level')
+            label = (f'{level}% ' if level is not None else '') + 'bootstrap 置信区间半宽'
+        else:
+            label = '误差含义未明确'
+        return f'{value} ± {uncertainty}{suffix}（{label}）'
+    deviation = f" ± {node['std']}" if node.get('std') is not None else ''
+    return value + deviation + suffix
+
+
 def _author_claim_comparison_lines(comparison):
     if not comparison:
         return []
@@ -55,12 +69,10 @@ def _author_claim_comparison_lines(comparison):
     lines += ['', '| 指标 / 数据集 / 方法 | 论文宣称 | 作者运行输出 | 差值（实际 − 论文） | 结论 |',
               '| --- | --- | --- | --- | --- |']
     def value_cell(node):
-        value = node.get('value')
         suffix = {'percent': '%', 'fraction': '（比例）'}.get(node.get('unit'), '')
         aggregation = {'single': '单次', 'mean': '均值', 'median': '中位数', 'best': '最佳', 'unknown': '统计方式未明确'}.get(node.get('aggregation'), '')
         runs = node.get('runs')
-        deviation = f" ± {node['std']}" if node.get('std') is not None else ''
-        return f"{value}{deviation}{suffix}；{aggregation}" + (f"，{runs} 次" if runs else '')
+        return _metric_value_text(node, suffix) + f"；{aggregation}" + (f"，{runs} 次" if runs else '')
     for row in rows:
         paper, actual = row['reference'], row['actual']
         difference = row.get('difference')
@@ -967,7 +979,7 @@ class ReportGeneratorAgent(BaseAgent):
             lines += ["", "### 实际指标证据", "| 指标 | 实测值 | 单位 | 数据划分 | 阶段 | 来源 |",
                       "|------|------|------|----------|------|------|"]
             for record in records:
-                cells = [record.get("name"), record.get("value"), record.get("unit") or "未标注",
+                cells = [record.get("name"), _metric_value_text(record), record.get("unit") or "未标注",
                          record.get("split") or "未标注", record.get("stage") or "未标注",
                          record.get("source")]
                 lines.append("| " + " | ".join(_markdown_text(_txt(c)) for c in cells) + " |")

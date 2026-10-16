@@ -193,6 +193,58 @@ def test_program_summary_fills_unknown_fields_and_report_keeps_std(sources):
     assert '± 0.01' in report and '10 次' in report and '仅供参考' in report
 
 
+def _confidence_record(records):
+    record = next(row for row in records if row['split'] == 'test')
+    record.update(reported_uncertainty=0.015536, uncertainty_kind='bootstrap_confidence_interval',
+                  confidence_level=95, uncertainty_source={'path': 'train.py',
+                  'source_sha256': 'a' * 64, 'definition_line': 5, 'print_line': 6})
+    return record
+
+
+def test_observed_confidence_half_width_survives_comparison_and_report(sources):
+    fixture, packet, records, payload = sources
+    original = _confidence_record(records)
+    rows, citations = validate_comparisons(payload, packet, fixture['workspace'], records)
+    actual = rows[0]['actual']
+    assert actual['reported_uncertainty'] == original['reported_uncertainty']
+    assert actual['uncertainty_kind'] == 'bootstrap_confidence_interval'
+    assert actual['confidence_level'] == 95
+    assert actual['uncertainty_source'] == original['uncertainty_source']
+    assert actual.get('std') is None
+    report = ReportGeneratorAgent(logger=Mock())._build_report({'execution': {'mode': 'repository'},
+        'validation': {'status': 'author_code_completed', 'is_reproduced': None,
+            'author_claim_comparison': {'comparisons': rows, 'citations': citations}}})
+    assert '± 0.015536' in report and '95% bootstrap 置信区间半宽' in report
+
+
+@pytest.mark.parametrize('field,value', [('reported_uncertainty', 0.1),
+    ('uncertainty_kind', 'standard_deviation'), ('confidence_level', 99),
+    ('uncertainty_source', {'path': 'invented.py'})])
+def test_model_cannot_change_observed_uncertainty_context(sources, field, value):
+    fixture, packet, records, payload = sources
+    _confidence_record(records)
+    payload['comparisons'][0]['actual_context'][field] = value
+    with pytest.raises(ValueError, match='observed'):
+        validate_comparisons(payload, packet, fixture['workspace'], records)
+
+
+def test_model_cannot_invent_unobserved_confidence_context(sources):
+    fixture, packet, records, payload = sources
+    payload['comparisons'][0]['actual_context'].update(reported_uncertainty=0.1,
+        uncertainty_kind='bootstrap_confidence_interval', confidence_level=95)
+    with pytest.raises(ValueError, match='unobserved'):
+        validate_comparisons(payload, packet, fixture['workspace'], records)
+
+
+def test_unpaired_actual_evidence_table_keeps_confidence_half_width(sources):
+    _, _, records, _ = sources
+    _confidence_record(records)
+    report = ReportGeneratorAgent(logger=Mock())._build_report({'execution': {'mode': 'repository'},
+        'validation': {'status': 'author_code_completed', 'is_reproduced': None, 'metric_records': records,
+            'author_claim_comparison': {'status': 'unavailable', 'metric_records': records}}})
+    assert '± 0.015536' in report and '95% bootstrap 置信区间半宽' in report
+
+
 def _two_step_proposal(payload):
     execution = actual_execution()
     execution['steps'].append({'id': 'another', 'success': True, 'exit_code': 0,

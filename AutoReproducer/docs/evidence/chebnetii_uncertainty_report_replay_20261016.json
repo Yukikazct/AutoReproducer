@@ -1,0 +1,22 @@
+{
+  "source_run": "repository_1774a1c7d5004e79bb34d22e53a6a2e0",
+  "scope": "Read-only render of saved original author output, not new execution or independent acceptance",
+  "mean": 71.5974,
+  "reported_uncertainty": 1.5536,
+  "uncertainty_kind": "bootstrap_confidence_interval",
+  "confidence_level": 95,
+  "uncertainty_source": {
+    "path": "main/training.py",
+    "source_sha256": "5b5a3a9785922429526586bc2c33b8bd3235b81a2ff4f94d319c9c710d70118b",
+    "definition_line": 184,
+    "print_line": 186
+  },
+  "original_artifacts_unchanged": true,
+  "original_artifact_hashes": {
+    "result.json": "cea3e79e4cd68b002aa430286de7e61aeca934982e4069a5c4fbbed587250f97",
+    "report.md": "89f305be1063d3c818b5f2e389ebc0efff7dc062a956fa0c073e8c03476f881a",
+    "execution.json": "98c8f02e4fcdb1b2b7b601dbdab3773e54bcff075514e6798c1849eeb9782149"
+  },
+  "rendered_report_sha256": "23218bff2b3eb67ce8210785260a16c38d63be9c64fabfe9883bafabd6453563",
+  "rendered_evidence_line": "| accuracy | 71.5974 ± 1.5536（95% bootstrap 置信区间半宽） | 未标注 | test | final | train:stdout:26 |"
+}

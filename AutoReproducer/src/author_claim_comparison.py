@@ -165,6 +165,14 @@ def validate_comparisons(payload, packet, workspace, records):
                 actual[field] = observed
             elif field == 'std' and proposed is not None:
                 raise ValueError('Model cannot invent an unobserved standard deviation')
+        for field in ('reported_uncertainty', 'uncertainty_kind', 'confidence_level', 'uncertainty_source'):
+            observed, proposed = record.get(field), actual.get(field)
+            if proposed is not None and observed is None:
+                raise ValueError(f'Model cannot invent unobserved {field}')
+            if proposed is not None and proposed != observed:
+                raise ValueError(f'Model cannot override observed {field}')
+            if observed is not None:
+                actual[field] = deepcopy(observed)
         if reference.get('std') is not None:
             std = metric_number(reference['std'])
             if std is None or std < 0 or not _has_value(std, [{'source': 'pdf', 'quote': quote}]):
@@ -332,7 +340,7 @@ settings:{status:'matched|different|unknown',reason,citations:[PDF and repositor
         'sample_count means fraction), never from numeric magnitude. Preserve explicit output units/splits. '
         'Include full experiment settings in the assessment: split, model variant, hyperparameters, '
         'preprocessing, model selection. Mark unknown when original evidence is insufficient. '
-        'Observed aggregation, runs and std fields are authoritative and cannot be changed. '
+        'Observed aggregation, runs, std and uncertainty context fields are authoritative and cannot be changed. '
         'reported_uncertainty with uncertainty_kind=bootstrap_confidence_interval is a confidence half-width, never std. '
         'A single process can execute many trials: inspect the exact print/aggregation source and preserve '
         'the selected final summary. Missing repetition information stays unknown, never assume runs=1. '
