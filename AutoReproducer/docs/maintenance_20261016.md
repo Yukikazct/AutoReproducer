@@ -149,3 +149,5 @@ NodeFormer 的真实网页试验在依赖安装后被健康检查误拦：作者
 数据观察器和父核验原先先调用 `resolve()`，会抹掉文件或目录链接的原位置；若训练后把原数据目录换为指向相同字节的目录链接，仍可能误报输入未变。新增 4 项真实文件系统用例先复现此问题，覆盖文件链接、目录链接和两个终态核对位置的根目录重定向。
 
 现在在解析真实位置和读取摘要前检查原路径及所有父目录的 symlink / Windows reparse-point 属性，观察器和父核验使用相同规则，不跟随这些链接取得通过证明。正常原文件仍按原始完整字节和元数据核对。相关路径和数据证据检查 **55 passed、0 skipped**（5.87 秒），包含 Windows 原生目录 junction，以及实际 PyG 2.6.1 的 WikiCS 构造、原生 raw/processed 文件和父流程摘要核对。该正向机制使用自建 3 节点 JSON，不能称为真实论文数据或训练通过。证据：[native_dataset_link_integrity_20261016.json](evidence/native_dataset_link_integrity_20261016.json)。
+
+报告与数据路径修复 `e6d305c` 的完整原生回归为 **3425 passed、26 skipped、0 failed**（1127.18 秒），精选证据：[author_evidence_native_20261016.json](evidence/author_evidence_native_20261016.json)。合并随后独立验证的 Google Drive 模块映射及超时测试后，组合定向检查另有 **76 passed**（23.54 秒），同时覆盖实际 PyG 数据、置信区间比较、真实模块探测与 Windows 孙进程超时清理。
