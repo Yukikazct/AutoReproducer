@@ -1,0 +1,19 @@
+{
+  "tested_commit": "d9ff6624fc55bd2e3e07e6a89e52ca72c747f5a4",
+  "platform": "Windows CPython3.12.10",
+  "native_cache": "dedicated task CPU test cache outside production data; torch2.5.1+cpu, NumPy1.26.4, PyG2.6.1",
+  "tests": 3438,
+  "passed": 3412,
+  "skipped": 26,
+  "failed": 0,
+  "elapsed_s": 1135.41,
+  "files": {
+    "maintenance_aliases_native_20261016.log": {
+      "sha256": "263730f5454c77ad938cdd19b4f2d5192451fe93c638937ef9735b47ee06c1bb"
+    },
+    "maintenance_aliases_native_20261016.xml": {
+      "sha256": "64cc29a5bdfc5d9bfaeff772c64f988cceb537961d67518b3835ee2158234981"
+    }
+  },
+  "scope": "Entire tests/ suite including actual CPU fixtures; skipped CUDA, notebook and unavailable parent-environment modules remain unverified."
+}

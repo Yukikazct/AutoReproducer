@@ -55,3 +55,145 @@
 环境安装在 804.562 秒失败：NumPy DLL 在任务自有 pip 临时目录中的文件名路径长 **264 字符**，而此机器 `LongPathsEnabled=0`，超过旧 Win32 上限。训练未启动，没有论文指标比较。源码摘要在测试前后一致；终态活动 worker/run/execution 均为零，环境清理 `released`，回执释放 **12,035,895 字节**，错误和剩余环境为空。精选证据为 [issue30_chebnetii_windows_path_20261016.json](evidence/issue30_chebnetii_windows_path_20261016.json)；原始网页日志、报告及失败截图留在本地测试数据目录。
 
 已用完全离线的测试 wheel 确认：普通临时路径稳定复现同一错误，改用 Windows 扩展路径前缀即安装成功，无需改注册表。正在修复安装与清理路径；新增三项回归已分别复现真实 pip 安装失败、异常后长文件未释放、遗留长文件未被回收，未将这些失败计作通过。
+
+修复使用扩展路径传递任务自有 `TMPDIR/TEMP/TMP/PIP_CACHE_DIR`，并在监控和已验证目录的文件访问、统计、清理时使用相同格式；所属关系、链接检查、标记与锁机制继续先行校验。原所属测试使用操作系统文件标识核对实际目录，不把两种 Windows 文本路径误判为不同的位置。
+
+四项原生 Windows 用例已通过：真实离线 pip 安装后文件完整且能真实导入包、异常后长文件计数与释放、遗留所属目录回收、超长 wheel 下载文件字节可见。安装、清理、取消、超时、训练环境释放相关专项共 **109 passed**（52.86 秒），全量回归进行中。这是依赖安装层的证据，真实论文训练仍需重跑。
+
+首次长路径全量为 **3299 passed、1 failed、87 skipped**（502.22 秒）。唯一失败用例的清理错误注入原先按 Path 文本判断目标，未匹配到同一目录的 Windows 扩展路径；现在使用实际文件标识注入同一权限错误，继续确认清理失败必须返回失败并保留存活清单路径。该模块及长路径、文件与依赖清理专项 **108 passed**（8.20 秒），最终全量继续确认。
+
+前两批修复已由 [PR #44](https://github.com/Yukikazct/AutoReproducer/pull/44) 和 [PR #45](https://github.com/Yukikazct/AutoReproducer/pull/45) 合入 `main`。长路径修复同步主分支 `c2d22d5` 后，在 `codex/windows-pip-long-paths-20261016` 继续，避免向已合并的 PR 追加新修复。
+
+长路径修复提交 `6807252` 的最终全量为 **3300 passed、87 skipped、0 failed**（517.14 秒），仅有既有 PyPDF2 弃用警告。日志和 JUnit 已保存到主工作区 `.tmp/maintenance_longpath_final_20261016.*`。四项原生 Windows 长路径回归无跳过全部通过，测试前后 `LongPathsEnabled` 均为 0，没有修改系统设置。精选证据为 [windows_pip_long_paths_20261016.json](evidence/windows_pip_long_paths_20261016.json)。
+
+## 真实网页第二轮：长路径已解除，定位下一阻塞
+
+主工作区重启测试服务后，按 `6807252` 重新冻结产品：`fe7a95d552505ceca3c5fab7071333e75743b2f5e080b23513bcf50e95d40ded`。`regression_chebnetii_20261016_02` 再次真实上传同一 PDF，一轮完成 CPU 依赖安装（安装监控 244.484 秒），NumPy 1.26.4、Torch 2.5.1+cpu、PyG 2.6.1 及稀疏原生扩展的版本、导入与实际运算检查均通过，原 NumPy DLL 长路径错误不再出现。
+
+原作者 Chameleon 命令随后启动，但在 `main/training.py:152` 的 `dataset[0]` 处失败：原数据中序列化的旧 PyG Data 缺少新版 `_store` 结构。未产生训练结果或论文数值比较，不能因环境成功而记作论文运行通过。终态活动进程全部为零，环境释放 **1,565,918,886 字节**，错误和剩余环境均为空，产品源码摘要前后一致。证据为 [issue30_chebnetii_pyg_legacy_20261016.json](evidence/issue30_chebnetii_pyg_legacy_20261016.json)。
+
+下一项优先工作是验证旧 PyG 数据对象的格式兼容，保留原始数据和划分，并重跑作者命令。#30 的 Cora 精确协议及 #27 的最终独立新 PDF 验收仍待完成。
+
+## #30：旧 PyG Data 内存容器兼容
+
+新增一项受真实错误驱动的兼容能力：仅针对 PyG 2.6.1 的原生同构 Data、单图 InMemoryDataset 中缺少 `_store` 的旧公共字典格式。先让原命令真实失败，记录原调用点、作者数据类源码摘要、实际 processed 文件 SHA-256、原字段形状和类型，再由父流程校验。只有训练更新数为 0 且同一源码/输入仍匹配时，才在下一次原命令重试中应用。此能力计入依赖、路径与 NumPy 兼容共享的最多 8 次错误修复额度。
+
+转换只在内存中补齐当前 PyG 存储结构，保持原对象身份、原张量引用、None 字段和元数据，并显式修正存储的父对象弱引用。不删除、重写或重新准备原作者数据，不改源码、分割、参数、轮次或中止规则。现代 Data 原样运行；未知私有字段、链接输入、已变更的源码/数据和已开始训练的任务不自动转换。观察器等待作者自己导入 PyG 后再安装钩子，不强制导入可选框架。
+
+独立、已通过原生健康检查的 CPU 测试环境位于应用 data 以外，不借用生产运行依赖。新模块的 **10 项测试全部通过**（98.82 秒），包含真实旧格式 pickle、全张量字节和 mask 校验、GC 后父引用、整体服务自动重试并完成 **40 次原命令优化更新**、原始失败日志留存与适配清单摘要一致。共享额度与重试相关检查另有 **14 passed**（35.36 秒）。这些是机制回归，不作为真实论文训练完成的证据。更广的原生全量与网页回归接着进行。
+
+启用该独立 CPU 缓存后，`e43db79` 原生全量为 **3373 passed、26 skipped、0 failed**（1035.96 秒），比此前普通回归执行了更多真实 Torch/NumPy/PyG 机制测试。跳过项包括未准备的 CUDA、Notebook、父应用环境中未安装的可选包及 POSIX 信号能力，未记作它们通过。日志/JUnit 已复制至主工作区 `.tmp/maintenance_pyg_native_20261016.*`，精选证据为 [pyg_legacy_native_20261016.json](evidence/pyg_legacy_native_20261016.json)。
+
+真实网页第三轮 `regression_chebnetii_20261016_03` 使用冻结源码 `6e98aeb05fe6979e30279143ce63b5e0353e6d999c7e6fdd0b648f7291c618d1`，依赖安装已在 902.516 秒完成，原作者命令仍为 Chameleon / full 的原完整参数，正继续检查作者执行与运行后论文比较。该测试结束前主工作区产品源码保持冻结。
+
+第三轮已结束：真实 PyG 错误被记录后自动兼容，作者 **10 次原生运行全部返回**，保留了每次准确率和权重输出。但程序在 `np.mean(results, axis=0)` 最终汇总处退出 1，原因是 NumPy 新版本不再隐式把准确率标量和权重向量组成的结果表视为 object 数组。本轮仍为 ERROR，不记作完整运行或论文比较通过。清理 `released`、释放 1,565,918,886 字节，无剩余环境或活动进程。证据：[issue30_chebnetii_summary_failure_20261016.json](evidence/issue30_chebnetii_summary_failure_20261016.json)。
+
+## #30 后续：旧 NumPy 结果表统计兼容
+
+新增源码位置和形状/类型绑定的汇总兼容：只在真实 `inhomogeneous` 错误后，针对入口顶层同一结果变量的 `mean(..., axis=0)` 和 `var(..., axis=0)`，恢复旧 NumPy 的显式 object 数组统计语义。保留所有列与权重向量，不丢弃第三列、不换评价算法、不改数据。形状不一致、其他 axis/dtype 参数、其他函数作用域或源码已改的调用不自动改写。每次调用前再校验结果表结构，原来的统计参数和计算方法保留。
+
+此类错误可发生在训练后，但仍要保留真实失败记录并重跑完整原作者命令，不跳过或缩短训练；其他原有类型兼容仍只允许在零更新时启用，共享 8 次修复额度不变。相关测试 **31 passed**（66.82 秒），包含 NumPy 1.26 原生服务中训练后失败、重试并完成原命令；作用域保护修订后纯数值专项另有 **7 passed**（8.17 秒）。全量与网页重跑待完成。
+
+汇总兼容 `fe2a30e` 原生全量已完成：**3381 passed、26 skipped、0 failed**（1342.66 秒）。新增 8 项汇总测试均通过，包含训练后真实报错的服务重试、权重向量统计保留、源码/结构变更拒绝及不改写其他函数作用域。证据：[numpy_ragged_native_20261016.json](evidence/numpy_ragged_native_20261016.json)，日志/JUnit 存于 `.tmp/maintenance_ragged_native_20261016.*`。真实网页第四轮仍在原命令执行中，最终论文比较待运行结束后核对。
+
+第四轮真实作者命令已自然返回：**10 次运行、2097 次优化更新**，完整生成末尾汇总，测试准确率均值 **71.5974%**，验证准确率均值 **71.3407%**。终态为 `COMPLETED/author_code_completed`，环境清理 released、释放 1,565,918,886 字节，所属进程全为零。但论文配对因多数据集表格缺少有效同页列标题引文而保留 unavailable；要求比较通过的网页验收脚本因此返回失败，不能称为完整论文复现成功。证据：[chebnetii_regression_20261016_04.json](evidence/chebnetii_regression_20261016_04.json)。
+
+## #41：防止把置信区间误标为标准差
+
+实际作者汇总打印的 `±1.5536` 来自 `max(abs(ci(bootstrap(values),95)-values.mean()))`，不是另行计算的 `test_acc_std`。原解析器按常规均值±SD 约定将其记为 std，会错误解释统计口径。
+
+新增确定性源码上下文标注：只在原源码 SHA-256 仍匹配、原 f-string 与实际日志正确匹配、误差变量的原 Seaborn bootstrap CI 计算形式被 AST 证明时，保留误差数值但标为 `reported_uncertainty / bootstrap_confidence_interval / 95`，不再当作 std。均值、原引文、分割和输出行号不变，也不允许模型改写实测值。真正 SD、不相关的 CI 代码、派生其他统计的表达式及显式结构化协议不受此文本推断覆盖。
+
+定向与比较相关回归 **65 passed、1 skipped**（140.50 秒），最终定向版本另有 **48 passed**（10.61 秒）。真实已保存作者日志的只读重放确认 71.5974 和 1.5536 保持原数值，仅修正误差类型：[chebnetii_uncertainty_replay_20261016.json](evidence/chebnetii_uncertainty_replay_20261016.json)。这是解释层修复，不是新训练或论文比较通过。
+
+原生全量中发现一项异常注入测试入口不再接收新增加的 `sources` 关键字，因此断言前实际触发的是签名错误。已让该替身接收关键字，保留“比较异常不能替代作者完成结果”及原异常说明的原断言；此用例已定向重新通过。原生全量其余结果待终态核对。
+
+## #27：原作者仓库内部文件链接导出
+
+C&S 新 PDF 的真实网页任务发现原作者 `CUAI/CorrectAndSmooth` 后，其固定归档在 `gat/logger.py -> ../logger.py` 处被导出器一律拒绝，流程随后选择另一份 DGL 实现。该任务在安装阶段由本次维护主动停止，未开始训练，不计原作者或独立论文验收。监督进程关闭了其持有的进程组并释放 **2,644,454,897 字节**，环境无错误或残留，活动 worker/run/execution 均为零；源码在该轮测试前后一致。已对退出持有者的状态执行显式恢复，保留原始失败记录。证据：[correctandsmooth_repository_fallback_20261016.json](evidence/correctandsmooth_repository_fallback_20261016.json)。
+
+现在允许固定 Git 归档中可完整解析到另一个已提交普通文件的相对文件链接，以原提交目标字节复制成普通文件，不创建操作系统链接。来源清单记录原链接目标、最终文件、目标 SHA-256 和物化方式；子模块路径也保留带挂载位置的记录。越界、绝对路径、Windows 别名、目录链接、硬链接、缺失目标、循环及目录/大小写冲突在创建导出目录前拒绝。
+
+两项新增正向用例（含真实 Git 的 120000 链接对象）先复现失败。最终仓库导出、资源来源及子模块专项 **108 passed**（26.99 秒），包含文件链接链、原字节执行、原子拒绝及来源记录；另外验证了真实 CUAI 提交 `b910314a59270984f5e249462ee3faa815fc9a0c` 的两处链接与原提交目标字节完全一致。证据：[correctandsmooth_file_aliases_20261016.json](evidence/correctandsmooth_file_aliases_20261016.json)。这是固定源码获取能力验证，尚未执行 C&S 作者训练；该 PDF 因触发产品修复转为回归样本。
+
+用户将本次持续工作窗口延长至北京时间 **2026-10-16 21:20**，后续修复继续在完成适当测试后提交并推送功能分支。
+
+`d9ff662` 的最终完整原生回归为 **3412 passed、26 skipped、0 failed**（1135.41 秒），包含置信区间源码上下文、最终异常边界测试签名修正，以及内部文件链接导出的全部用例。日志/JUnit 为 `.tmp/maintenance_aliases_native_20261016.*`，精选证据为 [file_aliases_uncertainty_native_20261016.json](evidence/file_aliases_uncertainty_native_20261016.json)。
+
+新的独立 NodeFormer PDF 已核对标题及原作者仓库链接，SHA-256 为 `d714e7b797a6e5d2855d51c50cc6c8423b3bf1639d36c5918a2a84f8d8bd14bf`。网页任务 `independent_nodeformer_20261016_02` 使用冻结产品 `d9ff662` / `e07ff3c7ba918c3c4a0aaaca62ff5e940f357d77c3e1edb2182f8e2df837087d`；已选择原作者 `qitianwu/NodeFormer@5390b6908326905b2eb840f65a70b0f4082aef43` 的 Cora / NodeFormer 原命令，保留 5 次运行、每次 1000 轮及原超参，并使用作者支持的 `--cpu`。当前仅到环境准备，未认定作者完成或论文比较通过。此前误填 arXiv 编号下载到无关 hydrides PDF 的候选在预检就被排除，未进入网页执行，不作为本论文证据。
+
+## Windows CI：超时日志测试等待实际启动证据
+
+主分支 [CI 38864337951](https://github.com/Yukikazct/AutoReproducer/actions/runs/38864337951) 唯一失败为超时用例要求 stdout 包含 `PARTIAL`，但其 300ms 预算可能在 Windows Python 启动完毕前耗尽。受控加入 600ms 启动延迟确认：300ms 时确实没有输出，1500ms 时保留输出，两者均正确超时并返回 124，见 [timeout_partial_log_startup_20261016.json](evidence/timeout_partial_log_startup_20261016.json)。
+
+该测试现在给冷启动留出预算，并先取得孙进程实际启动的 PID 证据，再检查真实超时、部分日志、时限和进程退出；孙进程只有在持有者清理结束后收到释放信号才会写逃逸标记，因此保留了后代清理的实质断言。Windows 另核对原生进程句柄已结束。没有修改产品超时策略。Runner 与进程生命周期专项 **62 passed、1 skipped**（38.30 秒），跳过项为 POSIX 信号语义。
+
+## #41 / #27：Google Drive 包名与模块名一致核对
+
+NodeFormer 的真实网页试验在依赖安装后被健康检查误拦：作者固定要求的 `googledrivedownloader==0.4` 已安装且 pip 退出 0，但健康检查尝试导入不存在的同名模块。该发行包的原始公共模块为 `google_drive_downloader`；计划读取器已有这个知识，通用依赖解析器缺少相同映射，导致两轮完整安装重复失败。
+
+已补齐通用模块/发行包映射，健康检查、自愈解析和源码依赖识别使用同一个正确名称。新增四种真实子进程探测用例，分别检查正常模块、错误版本、只有错误同名模块及真实导入异常；其中三项先复现失败，原有版本及导入错误保护保留。相关依赖、重试与健康检查 **122 passed**（27.51 秒）。实际从 PyPI 安装的 0.4 包也通过了同目录修复前/后的探测，原包源码摘要保持不变，见 [google_drive_import_native_20261016.json](evidence/google_drive_import_native_20261016.json)。
+
+原网页任务在开始训练前停止，监督进程释放 **665,145,502 字节**、无错误或剩余环境，活动进程归零，源码在试验结束前保持冻结；证据为 [nodeformer_health_import_failure_20261016.json](evidence/nodeformer_health_import_failure_20261016.json)。该 PDF 因触发此修复转为回归样本，后续重跑不计新的独立论文验收。
+
+## #41：比较与报告保留置信区间口径
+
+继续检查发现，原解析记录虽已保存 bootstrap CI，比较行只复制了模型上下文，导致该误差信息没有传入比较结果；实际指标证据表也只显示均值。新增 7 项用例先复现了字段丢失、报告丢失及模型可以夹带或改写误差口径的问题。
+
+现在把已观测的误差值、类型、置信水平和源码依据直接复制到比较行，拒绝模型修改或凭空添加这些字段。比较表及无有效配对时的实际指标证据表均保留误差值，并明确标为 **95% bootstrap 置信区间半宽**，不按标准差显示。定向解析、比较、报告版本和归档检查 **84 passed**（5.23 秒）；包括真实 CPU 作者执行的服务及网页/报告相关检查 **56 passed**（169.82 秒）。
+
+真实旧日志只读渲染证据为 [chebnetii_uncertainty_report_replay_20261016.json](evidence/chebnetii_uncertainty_report_replay_20261016.json)：均值 71.5974、半宽 1.5536 及 95% 水平均保留，原始 result/report/execution 文件 SHA-256 前后一致。这不是新训练或独立论文验收。本修复在隔离工作区完成，进行中的 NodeFormer 网页测试仍使用冻结的 `d9ff662`。
+
+## #41：数据路径链接不能冒充未变化的输入
+
+数据观察器和父核验原先先调用 `resolve()`，会抹掉文件或目录链接的原位置；若训练后把原数据目录换为指向相同字节的目录链接，仍可能误报输入未变。新增 4 项真实文件系统用例先复现此问题，覆盖文件链接、目录链接和两个终态核对位置的根目录重定向。
+
+现在在解析真实位置和读取摘要前检查原路径及所有父目录的 symlink / Windows reparse-point 属性，观察器和父核验使用相同规则，不跟随这些链接取得通过证明。正常原文件仍按原始完整字节和元数据核对。相关路径和数据证据检查 **55 passed、0 skipped**（5.87 秒），包含 Windows 原生目录 junction，以及实际 PyG 2.6.1 的 WikiCS 构造、原生 raw/processed 文件和父流程摘要核对。该正向机制使用自建 3 节点 JSON，不能称为真实论文数据或训练通过。证据：[native_dataset_link_integrity_20261016.json](evidence/native_dataset_link_integrity_20261016.json)。
+
+报告与数据路径修复 `e6d305c` 的完整原生回归为 **3425 passed、26 skipped、0 failed**（1127.18 秒），精选证据：[author_evidence_native_20261016.json](evidence/author_evidence_native_20261016.json)。合并随后独立验证的 Google Drive 模块映射及超时测试后，组合定向检查另有 **76 passed**（23.54 秒），同时覆盖实际 PyG 数据、置信区间比较、真实模块探测与 Windows 孙进程超时清理。
+
+## #41：干净训练环境的解析器副作用与 DGL 运行依赖
+
+标准 CPython 3.11 的真实 DGL 准备暴露两层问题。健康检查在缺少独立 packaging 时直接导入 pip 的内置解析器，会改变 setuptools/distutils 的导入钩子，使原本可用的旧运行库发生 AssertionError；改为从 pip 元数据定位内置解析器，并在私有命名空间加载，保留训练解释器的 marker 环境及损坏模块检查。
+
+DGL 1.1.2 还直接使用 `setuptools.extern.packaging` 和独立 `packaging.version`，其 wheel 没有完整声明这些运行依赖。现在在首次依赖规划和真实缺包修复中统一加入 `setuptools==69.5.1`、`packaging==24.2`，保留原 DGL、Torch、数据和命令。健康与运行依赖相关检查 **74 passed**（25.84 秒），最终版本选择专项另有 **29 passed**（1.41 秒）；干净环境及损坏解析器保护补查 **3 passed**（7.36 秒）。
+
+独立标准 CPython 3.11 / Torch 2.5.1+cpu / DGL 1.1.2 环境已通过实际矩阵运算、NumPy 桥接和 DGL 消息传递健康检查。另将同一真实 setuptools 69.5.1 的相同源字节分别交给旧、新健康探针，确认旧探针失败、新探针成功；未依赖 Store Python 测试结果，也没有关闭健康检查。证据：[dgl_clean_health_20261016.json](evidence/dgl_clean_health_20261016.json)。
+
+## #34 / #41：原生 DGL 数据加载观测接入作者入口
+
+新增对 DGL 1.1.2 的 CoraGraphDataset、CiteseerGraphDataset、PubmedGraphDataset 的原构造器观测，绑定原源码 SHA、导入类、函数作用域和数据名。Cora 的公开名称与框架内部 `cora_v2` 同时保留；固定类的内部命名转换不替换数据。作者直接执行入口现在保留经确定性编译通过的 author_runtime 声明，并复制完整观测器到本轮运行目录。
+
+记录实际原生下载来源、8 份原始文件与 2 份框架缓存的大小和 SHA-256，记录图的节点/边/特征/类别、原生 mask 数量及张量摘要；不额外调用 dataset[0] 或执行作者 transform。运行结束再次核对文件。独立标准 CPython 3.11 的真实 Cora 检查得到 **2708 节点、10556 边、1433 特征、7 类，140/500/1000 划分**，并通过实际包装器完成 **10 次优化更新**。原文件及张量值保持一致。这是机制训练夹具，不是 CCA-SSG 原论文训练。
+
+观测为信息性核对：缺失输入、不曾构造或运行后变化时保留未核对原因，不能替代作者原本的返回结果；作者自身的构造、下载或训练异常仍按原异常失败。服务保存独立 JSON、结果归档及报告表格，`dataset_observation_verified` 只表示原加载器与文件核对；`dataset_provenance_verified`、`paper_metrics_verified` 仍为 false，尚未独立匹配官方参考数据或完整论文协议。
+
+本轮数据、原生与报告专项 **67 passed、0 skipped**（41.93 秒）；服务“完整、未观测、结束后变化”三种状态 **3 passed**（34.18 秒），均保留实际作者完成状态。观测缺失/变化的信息性行为及正常作者计划接线另已定向通过。精选证据：[dgl_cora_observation_20261016.json](evidence/dgl_cora_observation_20261016.json)。完整原生回归和原作者命令回归接着进行。
+
+最终完整原生回归 **3450 passed、26 skipped、0 failed**（1123.23 秒），新 DGL 原生用例均实际执行，没有用跳过替代验证。证据：[dgl_full_native_20261016.json](evidence/dgl_full_native_20261016.json)。
+
+另导出 CCA-SSG 固定原作者提交 `ce5b2c0ad4f05811008559f66e5e114dbd71a82b`，以原 README 的 Cora 命令完整执行 **50 轮表征训练 + 2000 轮线性评估、2050 次实际优化更新**，自然退出 0。任务独立的标准 CPython 3.11 / DGL 1.1.2 环境完成运行；原加载器使用受支持的 `DGL_DOWNLOAD_DIR` 选择本任务缓存，算法、命令、数据和 transform 未重写。结束后原作者全部源码、观测器产品源码及原生输入文件摘要均保持不变，原生文件观测核对通过。它是已退役 CCA-SSG 的真实原作者回归，未做新 PDF 或独立数值验收：[ccassg_dgl_dataset_regression_20261016.json](evidence/ccassg_dgl_dataset_regression_20261016.json)。
+
+## #27 / #41：保留原作者 Final Test 跨运行汇总
+
+NodeFormer 网页第三轮按原命令自然完成 **5 次 × 1000 轮、5000 次优化更新**。环境释放 **1,553,571,232 字节**，活动进程归零，无错误或剩余环境，源码在结束前仍与 `2d9b199` 的冻结摘要一致。旧解析器却漏掉 `Final Test` 这种没有重复写指标名的 logger 输出，交给论文比较的性能证据只剩末轮日志；实际程序末尾完整打印了 **89.48 ± 0.40**。旧比较仍为 unavailable，不将这轮记作论文数值验收，见 [nodeformer_regression_20261016_03.json](evidence/nodeformer_regression_20261016_03.json)。
+
+新增按已打印的 `Namespace(metric=...)` 确定指标类型的 logger 解析，不把所有裸 Test 标签都猜成 accuracy。Final Test 汇总优先于单次和 Highest Test；均值、标准差与原行号原样保存。只有声明次数、连续完整的 Run 记录和最终块同时吻合时才确定次数；缺失或重复的运行记录保留未知，不凭一个进程推断多次运行。未标单位的汇总仍保留未标注，结构化指标继续优先，CI 不误记为 std。
+
+新增相关用例先得到 **9 failed**；修复后解析/比较相关 **90 passed**（1.78 秒），指标判定、汇总和报告专项另有 **119 passed**（4.28 秒）。实际保存日志只读重放得到 accuracy **89.48 ± 0.40 / 5 次均值**，来源为原 stdout 第 5060 行，原 result/report/execution/comparison 文件摘要均未改变：[nodeformer_summary_replay_20261016.json](evidence/nodeformer_summary_replay_20261016.json)。这是解释层修复，无新训练或独立论文验收。
+
+## Python 3.11 CI：旧 pip 的间接 vendored 导入
+
+早期健康检查修复在新 pip 环境通过后，Python 3.11 CI 的干净 venv 仍失败：其自带 pip 24.0 的旧 packaging 使用 `pip._vendor.pyparsing` 绝对导入，又间接加载了安装器。已用标准 CPython 3.11 新建 venv，在相同 pip 24.0 和相同目标模块下实际复现。
+
+现在把整个 vendored 解析器依赖放入私有命名空间加载，只在内存中调整安装器内部导入前缀，不执行 pip 初始化、不复用原 pyc，也不改写安装器文件。新增不联网的旧式绝对导入夹具先复现失败；最终健康、版本选择和所属命令检查 **70 passed**（31.00 秒），真实 pip 24.0 对照探测从失败变为成功：[legacy_pip_vendor_20261016.json](evidence/legacy_pip_vendor_20261016.json)。
+
+此修正在独立工作区进行。正在运行的 DIFFormer 独立 PDF 试验仍固定于 `710e151`，不能把该试验追溯记作本次后续兼容修正的独立验收。
+
+## DIFFormer 冻结版结果及 PDF 方法字距
+
+独立新 PDF 的 `710e151` 冻结版已真实执行原作者 Cora / simple-kernel / 8 层命令：**5 次 × 500 轮、2500 次优化更新**，自然退出 0，输出 **85.38 ± 0.45 / 5 次均值**。产品源码在试验前后一致，所属进程为零，环境释放 **1,551,719,889 字节**、无错误或剩余环境。要求论文比较的网页脚本仍返回失败，不能记作完整验收通过：[difformer_execution_20261016_01.json](evidence/difformer_execution_20261016_01.json)。
+
+原文把 `DIFFormer-s` 提取为 `DIFF ORMER -s`，且 Cora 列前有三列 `-` 元数据占位符。新增保留原引文的字距/大小写恢复及占位符列对齐；只接受相同字符与方法变体，不丢弃 -s、(PPR) 等变体信息。目标数据列为空时直接拒绝借用相邻数据集数值。两项新增边界先复现失败，最终指标/配对专项 **95 passed**（1.75 秒）。
+
+对原保存候选及真实输出的只读重放已精确核对 Cora 的论文 **85.9 ± 0.4** 与实测 **85.38 ± 0.45 / 5 次**，原 result/report/execution/comparison 文件摘要均未改变。方法标识和超参仍有差异，结果保留 `not_comparable`、`meets_reference=null`，不降低验收条件、不宣称独立数值复现：[difformer_typography_replay_20261016.json](evidence/difformer_typography_replay_20261016.json)。该 PDF 随后因产品修复退役，最新版本仍需另一篇未参与修复的新 PDF。

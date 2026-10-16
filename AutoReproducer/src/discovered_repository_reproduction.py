@@ -736,11 +736,13 @@ class DiscoveredRepositoryReproduction:
                     candidate = read_json(candidate_path)
                     fix = candidate.get('repair') or {}
                     if (candidate.get('spec_sha256') != data['spec_sha256']
-                            or candidate.get('step') != identifier or candidate.get('optimizer_steps') != 0
-                            or fix.get('kind') not in ('numpy_float_reciprocal', 'numpy_builtin_alias')
+                            or candidate.get('step') != identifier
+                            or type(candidate.get('optimizer_steps')) is not int or candidate['optimizer_steps'] < 0
+                            or fix.get('kind') != 'numpy_ragged_summary' and candidate['optimizer_steps'] != 0
+                            or fix.get('kind') not in ('numpy_float_reciprocal', 'numpy_builtin_alias', 'numpy_ragged_summary')
                             or fix.get('source_sha256') != snapshot['files'].get(fix.get('path'))):
                         return None
-                    from src.experiments.author_numeric_compatibility import BUILTIN_ALIASES, power_call
+                    from src.experiments.author_numeric_compatibility import BUILTIN_ALIASES, power_call, validate_ragged_repair
                     import ast
                     source = workspace_path(workspace, fix['path'], 'numeric compatibility source', must_exist=True)
                     tree = ast.parse(source.read_bytes())
@@ -749,7 +751,7 @@ class DiscoveredRepositoryReproduction:
                         if (call is None or ast.get_source_segment(source.read_text('utf-8'), call) != fix.get('original_expression')
                                 or fix.get('replacement') != call.func.value.id + '.float_power'):
                             return None
-                    else:
+                    elif fix['kind'] == 'numpy_builtin_alias':
                         alias = fix.get('alias')
                         matches = [node for node in ast.walk(tree) if isinstance(node, ast.Attribute)
                                    and node.attr == alias and node.lineno == fix.get('line')
@@ -757,10 +759,15 @@ class DiscoveredRepositoryReproduction:
                                    and ast.get_source_segment(source.read_text('utf-8'), node) == fix.get('original_expression')]
                         if alias not in BUILTIN_ALIASES or len(matches) != 1 or fix.get('replacement') != 'builtins.' + alias:
                             return None
+                    else:
+                        try:
+                            validate_ragged_repair(tree, fix, source.read_text('utf-8'))
+                        except ValueError:
+                            return None
                     capture_config = read_json(runtime_dir / 'config.json')
                     configured = capture_config.setdefault('numeric_compatibility', [])
-                    if any(item['path'] == fix['path'] and item['line'] == fix['line']
-                           and item['column'] == fix['column'] for item in configured):
+                    if any(item['path'] == fix['path'] and item.get('line') == fix.get('line')
+                           and item.get('column') == fix.get('column') and item['kind'] == fix['kind'] for item in configured):
                         return None
                     verify_frozen_inputs()
                     configured.append(fix)
@@ -808,6 +815,39 @@ class DiscoveredRepositoryReproduction:
                     return fix
                 return None
 
+            def repair_pyg(result):
+                from src.experiments.author_pyg_compatibility import validate_repair
+                for failed in result.get('steps', []):
+                    if failed.get('executed') is not True or failed.get('exit_code') in (None, 0):
+                        continue
+                    identifier = failed.get('id')
+                    if not any(step['id'] == identifier for step in plan['steps']):
+                        continue
+                    candidate_path = runtime_dir / ('pyg_failure_' + identifier + '.json')
+                    if not candidate_path.exists():
+                        continue
+                    candidate = read_json(candidate_path)
+                    fix = candidate.get('repair') or {}
+                    if (candidate.get('spec_sha256') != data['spec_sha256'] or candidate.get('step') != identifier
+                            or candidate.get('optimizer_steps') != 0):
+                        return None
+                    try:
+                        validate_repair(workspace, snapshot['files'], fix)
+                    except (ValueError, OSError, TypeError):
+                        return None
+                    capture_config = read_json(runtime_dir / 'config.json')
+                    configured = capture_config.setdefault('pyg_compatibility', [])
+                    if fix in configured:
+                        return None
+                    verify_frozen_inputs()
+                    configured.append(fix)
+                    write_json(runtime_dir / 'config.json', capture_config)
+                    generated[f'{CAPTURE_DIR}/config.json'] = digest(runtime_dir / 'config.json')
+                    write_json(run_dir / 'adapter_manifest.json', {'files': generated,
+                        'note': '原作者源码与数据未改写；记录实际失败后的旧 PyG 内存容器兼容。'})
+                    return fix
+                return None
+
             def run_steps(selected, runtime_environment):
                 from src.author_runtime_dependencies import run_with_dependency_repair
                 from src.author_failure_analysis import analyze_author_failure
@@ -826,7 +866,7 @@ class DiscoveredRepositoryReproduction:
                     return suggestion
                 return run_with_dependency_repair(self.runner, workspace, selected, runtime_environment,
                     plan, packet, run_dir, data, progress, verify_frozen_inputs, repair_numeric, repair_path,
-                    analyze_failure)
+                    analyze_failure, repair_pyg=repair_pyg)
 
             preflight = [{"id": "native_preflight", "kind": "check", "required": True,
                           "argv": ["python", "-u", f"{CAPTURE_DIR}/preflight.py"], "cwd": ".",
@@ -943,6 +983,24 @@ class DiscoveredRepositoryReproduction:
             validation = verify_author_execution(plan, workspace, execution, data['spec_sha256'])
             validation.update(reviews_removed=True, paper_metrics_verified=False,
                               pre_execution_review='disabled', dataset_provenance_verified=False)
+            if runtime_loaders:
+                from src.runtime_dataset_evidence import audit_runtime_datasets
+                dataset_audit = audit_runtime_datasets(plan, validation['author_execution'], workspace)
+                data['runtime_dataset_evidence'] = validation['runtime_dataset_evidence'] = dataset_audit
+                validation['dataset_observation_verified'] = dataset_audit['verified']
+                data['dataset_provenance']['runtime_observation'] = dataset_audit
+                data['dataset_provenance']['reason'] = ('实际输入已按原加载器观测并在运行结束后核对；尚未与独立官方参考摘要核对。'
+                    if dataset_audit['verified'] else '原作者代码已结束，完整输入观测未通过或尚未覆盖；保留未知状态。')
+                for filename, value in [('runtime_dataset_evidence.json', dataset_audit),
+                                        ('dataset.json', data['dataset_provenance'])]:
+                    try:
+                        write_json(run_dir / filename, value)
+                    except OSError as exc:
+                        dataset_audit.setdefault('persistence_errors', []).append({'file': filename, 'reason': str(exc)})
+                        validation.setdefault('warnings', []).append('输入观测记录未能单独保存：' + filename + ': ' + str(exc))
+                if dataset_audit['errors']:
+                    validation.setdefault('warnings', []).append('原作者输入观测未完成核对：' +
+                        '; '.join(item['reason'] for item in dataset_audit['errors']))
             if validation.get('numeric_compatibility'):
                 kinds = {item['kind'] for item in validation['numeric_compatibility']}
                 notes = []
@@ -950,12 +1008,19 @@ class DiscoveredRepositoryReproduction:
                     notes.append('浮点倒数兼容修复')
                 if 'numpy_builtin_alias' in kinds:
                     notes.append('旧 NumPy 类型别名兼容修复')
-                validation['warnings'] = ['执行包含实际报错后记录的' + '、'.join(notes) + '；原仓库文件未改写。']
+                if 'numpy_ragged_summary' in kinds:
+                    notes.append('旧 NumPy 不规则结果表汇总兼容修复')
+                validation.setdefault('warnings', []).append('执行包含实际报错后记录的' + '、'.join(notes) + '；原仓库文件未改写。')
             if validation.get('path_compatibility'):
                 validation.setdefault('warnings', []).append('作者缺失的临时数据目录已在实际报错后映射到本任务内；原仓库文件未改写。')
+            if validation.get('pyg_compatibility'):
+                validation.setdefault('warnings', []).append('执行包含实际报错后的旧 PyG 容器兼容；原数据文件、张量值与划分未改写。')
             from src.author_claim_comparison import collect_author_metrics
             try:
-                validation['metric_records'], data['metric_parse_errors'] = collect_author_metrics(execution)
+                validation['metric_records'], data['metric_parse_errors'] = collect_author_metrics(
+                    execution, workspace=workspace, plan=plan, sources=snapshot['files'])
+                if any(record.get('uncertainty_kind') == 'bootstrap_confidence_interval' for record in validation['metric_records']):
+                    validation.setdefault('warnings', []).append('作者打印的误差项为 bootstrap 置信区间半宽，未当作标准差比较。')
             except Exception as exc:
                 validation['metric_records'] = []
                 data['metric_parse_errors'] = [str(exc)]
@@ -975,7 +1040,8 @@ class DiscoveredRepositoryReproduction:
             validation['author_claim_comparison'] = comparison
             event(phase, 'running')
             try:
-                comparison.update(compare_author_claims(self.llm, packet, plan, workspace, execution))
+                comparison.update(compare_author_claims(self.llm, packet, plan, workspace, execution,
+                                                        sources=snapshot['files']))
             except Exception as exc:
                 comparison['diagnostic'] = str(exc) or type(exc).__name__
             for name, value in (('author_claim_comparison.json', comparison),

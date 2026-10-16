@@ -1,0 +1,43 @@
+{
+  "at_utc": "2026-10-16T07:27:28.369441+00:00",
+  "kind": "windows_managed_pip_long_paths",
+  "source_commit": "6807252b5057af957b2c44dcf996c32f5cbe0a1a",
+  "windows_long_paths_enabled": 0,
+  "registry_modified": false,
+  "source_sha256_in_test_worktree": {
+    "src/agents/code_executor.py": "76c34fb2697d18319e5444c35b7427f933bbe0049052b64c5593547efa00f366",
+    "src/dependency_install_progress.py": "a9d7a775df47dfbdfa74bf82c018098ea3b2cd4425cd8912ee49bbd1f3bf40cf",
+    "src/dependency_temporary.py": "139c0f45f4e0af199532f097528c90afea351b53ddb829cc69d7dc2682b6fc06",
+    "src/safety/files.py": "dea7e76c26b4be0be1f4e147fa61558709784a9fffdf81727da811090f08c1ce",
+    "src/safety/paths.py": "5ffad257375296bc41c9c75c858f93039308d1849f68e029645ac3d13a884e08"
+  },
+  "full_regression": {
+    "passed": 3300,
+    "skipped": 87,
+    "failed": 0,
+    "seconds": 516.203
+  },
+  "native_cases": [
+    {
+      "name": "test_managed_pip_installs_wheel_with_a_long_extraction_path",
+      "passed": true,
+      "seconds": 1.719
+    },
+    {
+      "name": "test_owned_long_temporary_files_are_counted_and_removed_after_error",
+      "passed": true,
+      "seconds": 0.015
+    },
+    {
+      "name": "test_download_monitor_measures_files_past_max_path",
+      "passed": true,
+      "seconds": 0.009
+    },
+    {
+      "name": "test_abandoned_long_temporary_files_are_reaped_from_owned_namespace",
+      "passed": true,
+      "seconds": 0.017
+    }
+  ],
+  "scope": "Real offline wheel installation/import and long-path monitoring, cleanup and orphan recovery. No paper numerical validation."
+}

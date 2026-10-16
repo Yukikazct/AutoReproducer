@@ -121,6 +121,31 @@ def test_healthy_cache_uses_real_probe_without_pip_or_manifest_rewrite(monkeypat
     assert second.env_config["dependency_health_attempts"][0]["success"]
 
 
+@pytest.mark.parametrize('layout', ['healthy', 'wrong_version', 'wrong_module_only', 'broken_import'])
+def test_google_drive_distribution_uses_original_public_import(layout):
+    requirements = 'googledrivedownloader==0.4'
+    directory = ce.DEPS_CACHE_ROOT / 'google-drive-alias'
+    directory.mkdir(parents=True)
+    version = '0.5' if layout == 'wrong_version' else '0.4'
+    metadata = directory / f'googledrivedownloader-{version}.dist-info'
+    metadata.mkdir()
+    (metadata / 'METADATA').write_text(
+        f'Metadata-Version: 2.1\nName: googledrivedownloader\nVersion: {version}\n', encoding='utf-8')
+    name = 'googledrivedownloader.py' if layout == 'wrong_module_only' else 'google_drive_downloader.py'
+    source = "raise ImportError('broken downloader dependency')\n" if layout == 'broken_import' else 'VALUE = 1\n'
+    (directory / name).write_text(source, encoding='utf-8')
+    instance = executor()
+    instance.env_config['requirements_txt'] = requirements
+    error = instance._check_local_dependency_health(directory, requirements, 'public_import_alias')
+    if layout == 'healthy':
+        assert error is None, error
+        assert ce.python_package_for('google_drive_downloader') == 'googledrivedownloader'
+    else:
+        assert error is not None
+        if layout == 'broken_import':
+            assert 'broken downloader dependency' in error
+
+
 @pytest.mark.parametrize("state", ["missing", "corrupt", "healthy"])
 def test_offline_presets_only_use_healthy_cached_dependencies(monkeypatch, tmp_path, state):
     directory = ce.DEPS_CACHE_ROOT / ce.reqs_digest(REQUIREMENTS)
@@ -251,7 +276,10 @@ def test_full_python_hint_does_not_hide_an_active_minor_version_marker(tmp_path)
 
 def test_health_probe_works_in_clean_training_python_without_packaging(tmp_path):
     directory = ce.DEPS_CACHE_ROOT / ce.reqs_digest(REQUIREMENTS)
-    package(directory, ready=True)
+    package(directory, ready=True, source=(
+        "import sys\n"
+        "if 'pip' in sys.modules: raise RuntimeError('health probe imported the installer before author packages')\n"
+        "VALUE = 7\n"))
     with tempfile.TemporaryDirectory(prefix="training-python-", dir=tmp_path) as runtime:
         venv.EnvBuilder(with_pip=True).create(runtime)
         executable = Path(runtime) / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
@@ -265,6 +293,35 @@ def test_health_probe_works_in_clean_training_python_without_packaging(tmp_path)
         assert "cached version does not satisfy fixed requirement" in diagnostic
         assert instance._check_local_dependency_health(
             directory, "native-demo>=2; python_full_version < '3.0'", "cached") is None
+
+
+def test_legacy_vendored_parser_dependencies_do_not_import_the_installer(tmp_path):
+    import packaging
+    directory = ce.DEPS_CACHE_ROOT / 'legacy-vendored-parser'
+    package(directory, source="import sys\nassert 'pip' not in sys.modules\nVALUE=7\n")
+    pip = directory / 'pip'
+    vendor = pip / '_vendor'
+    vendor.mkdir(parents=True)
+    (pip / '__init__.py').write_text("raise RuntimeError('installer executed while loading its parser')\n", encoding='utf-8')
+    metadata = directory / 'pip-0.1.dist-info'
+    metadata.mkdir()
+    (metadata / 'METADATA').write_text('Name: pip\nVersion: 0.1\n', encoding='utf-8')
+    shutil.copytree(Path(packaging.__file__).parent, vendor / 'packaging')
+    # Older pip rewrites these imports to pip._vendor rather than relative paths.
+    markers = vendor / 'packaging/markers.py'
+    source = markers.read_text('utf-8')
+    future = 'from __future__ import annotations\n'
+    insertion = 'from pip._vendor.legacy_marker_helper import SENTINEL\n'
+    source = source.replace(future, future + insertion) if future in source else insertion + source
+    markers.write_text(source, encoding='utf-8')
+    (vendor / 'legacy_marker_helper.py').write_text('SENTINEL=True\n', encoding='utf-8')
+    with tempfile.TemporaryDirectory(prefix='legacy-parser-python-', dir=tmp_path) as runtime:
+        venv.EnvBuilder(with_pip=True).create(runtime)
+        executable = Path(runtime) / ('Scripts/python.exe' if sys.platform == 'win32' else 'bin/python')
+        instance = executor()
+        instance.env_config['python_executable'] = str(executable)
+        assert instance._check_local_dependency_health(directory,
+            'native-demo==1.0; python_version >= "3.0"', 'legacy_vendored_parser') is None
 
 
 @pytest.mark.parametrize("source,missing", [("", "packaging.specifiers"),

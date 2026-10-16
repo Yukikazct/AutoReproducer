@@ -1,0 +1,202 @@
+{
+  "tag": "regression_nodeformer_20261016_03",
+  "scope": "Retired PDF original-author browser regression",
+  "state": "COMPLETED",
+  "frozen_commit": "2d9b199e5d64362eac4eea348da4e5ddb3b8e285",
+  "source_sha256": "5daedf9d8d17f09aa33938114690edbf230d6d07b3d392b4522bb219e859cf43",
+  "source_unchanged_at_terminal_before_parser_repair": true,
+  "repository": {
+    "url": "https://github.com/qitianwu/NodeFormer",
+    "resolved_sha": "5390b6908326905b2eb840f65a70b0f4082aef43",
+    "archive_sha256": "483f25813310ee88d125931ca209fe1952ae0ccc1fe9407e4d5f481976719dcc"
+  },
+  "original_commands": [
+    [
+      "python",
+      "main.py",
+      "--dataset",
+      "cora",
+      "--rand_split",
+      "--metric",
+      "acc",
+      "--method",
+      "nodeformer",
+      "--lr",
+      "0.001",
+      "--weight_decay",
+      "5e-3",
+      "--num_layers",
+      "2",
+      "--hidden_channels",
+      "32",
+      "--num_heads",
+      "4",
+      "--rb_order",
+      "2",
+      "--rb_trans",
+      "sigmoid",
+      "--lamda",
+      "1.0",
+      "--M",
+      "30",
+      "--K",
+      "10",
+      "--use_bn",
+      "--use_residual",
+      "--use_gumbel",
+      "--runs",
+      "5",
+      "--epochs",
+      "1000",
+      "--cpu"
+    ]
+  ],
+  "original_runs": 5,
+  "original_epochs_per_run": 1000,
+  "optimizer_steps": 5000,
+  "natural_return": true,
+  "exit_code": 0,
+  "old_parser_missed_final_summary": true,
+  "final_stdout_summary": {
+    "name": "accuracy",
+    "value": 89.48,
+    "unit": "",
+    "split": "test",
+    "stage": "final",
+    "source": "train_cora:stdout:5060",
+    "source_quote": "Final Test: 89.48 ± 0.40",
+    "std": 0.4,
+    "aggregation": "mean",
+    "runs": 5,
+    "id": "train_cora:stdout:29",
+    "step_id": "train_cora"
+  },
+  "comparison_status": "unavailable",
+  "comparison_reason_note": "Original comparison used incomplete parser records; no new comparison or independent numerical acceptance is claimed in this terminal evidence.",
+  "active_workers": 0,
+  "active_runs": 0,
+  "active_executions": 0,
+  "environment_cleanup": {
+    "status": "released",
+    "removed": [
+      {
+        "path": ".maintenance.json",
+        "bytes": 979
+      },
+      {
+        "path": ".pip-temporary",
+        "bytes": 0
+      },
+      {
+        "path": "repository",
+        "bytes": 1541535127
+      }
+    ],
+    "freed_bytes": 1553571232,
+    "remaining": [],
+    "errors": [],
+    "training_python": {
+      "status": "released",
+      "removed": [
+        {
+          "path": "D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\maintenance_browser_20261016\\data\\training_python",
+          "bytes": 12035126
+        }
+      ],
+      "errors": [],
+      "freed_bytes": 12035126
+    },
+    "docker": {
+      "status": "released",
+      "removed": [],
+      "errors": []
+    },
+    "runtime_downloads": {
+      "status": "released",
+      "removed": [],
+      "freed_bytes": 0,
+      "errors": []
+    },
+    "before_run": {
+      "status": "released",
+      "removed": [],
+      "freed_bytes": 0,
+      "remaining": [],
+      "errors": [],
+      "training_python": {
+        "status": "released",
+        "removed": [],
+        "errors": [],
+        "freed_bytes": 0
+      },
+      "docker": {
+        "status": "released",
+        "removed": [],
+        "errors": []
+      },
+      "runtime_downloads": {
+        "status": "released",
+        "removed": [],
+        "freed_bytes": 0,
+        "errors": []
+      }
+    },
+    "replacements": [
+      {
+        "status": "released",
+        "errors": [],
+        "dependencies": {
+          "status": "released",
+          "removed": [],
+          "freed_bytes": 0,
+          "remaining": [],
+          "errors": []
+        },
+        "training_python": {
+          "status": "released",
+          "removed": [],
+          "errors": [],
+          "freed_bytes": 0
+        }
+      },
+      {
+        "status": "released",
+        "removed": [
+          {
+            "path": ".maintenance.json",
+            "bytes": 768
+          }
+        ],
+        "freed_bytes": 768,
+        "remaining": [],
+        "errors": []
+      }
+    ],
+    "supervisor_cleanup": {
+      "status": "released",
+      "removed": [],
+      "freed_bytes": 0,
+      "remaining": [],
+      "errors": [],
+      "training_python": {
+        "status": "released",
+        "removed": [],
+        "errors": [],
+        "freed_bytes": 0
+      },
+      "docker": {
+        "status": "released",
+        "removed": [],
+        "errors": []
+      },
+      "runtime_downloads": {
+        "status": "released",
+        "removed": [],
+        "freed_bytes": 0,
+        "errors": []
+      }
+    }
+  },
+  "paper_metrics_verified": false,
+  "is_reproduced": null
+}

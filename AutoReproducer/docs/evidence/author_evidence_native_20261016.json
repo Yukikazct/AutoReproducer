@@ -1,0 +1,12 @@
+{
+  "tested_commit": "e6d305c",
+  "platform": "Windows CPython3.12.10",
+  "passed": 3425,
+  "skipped": 26,
+  "failed": 0,
+  "elapsed_s": 1127.18,
+  "native_fixture": "dedicated torch2.5.1+cpu / NumPy1.26.4 / PyG2.6.1 cache, separate from production environments",
+  "log_sha256": "f888f4fa2a16a5b64e6a90dee4f5715d4d1ae1ea207bb7103ef4df3fbb4ec87e",
+  "junit_sha256": "ad6ad2107f27eae81a5363dbc4509054a38bb66abedaacdd1173eade6d8f1ace",
+  "later_merged_changes": "Google Drive alias mapping separately passed122 checks and actual package probe; timeout test stability separately passed62 checks with1POSIX skip. These were not part of this frozen full run."
+}

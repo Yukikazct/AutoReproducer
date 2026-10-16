@@ -1,0 +1,66 @@
+{
+  "kind": "browser_regression_post_training_summary_failure",
+  "tag": "regression_chebnetii_20261016_03",
+  "source_commit": "e43db792eb63f7c9f8262b5a1cc347d131eec650",
+  "source_sha256": "6e98aeb05fe6979e30279143ce63b5e0353e6d999c7e6fdd0b648f7291c618d1",
+  "state": "ERROR",
+  "pyg_repair_count": 1,
+  "recorded_author_runs": [
+    {
+      "run": 1,
+      "accuracy": 0.6915
+    },
+    {
+      "run": 2,
+      "accuracy": 0.7374
+    },
+    {
+      "run": 3,
+      "accuracy": 0.6805
+    },
+    {
+      "run": 4,
+      "accuracy": 0.6783
+    },
+    {
+      "run": 5,
+      "accuracy": 0.7462
+    },
+    {
+      "run": 6,
+      "accuracy": 0.7287
+    },
+    {
+      "run": 7,
+      "accuracy": 0.744
+    },
+    {
+      "run": 8,
+      "accuracy": 0.7112
+    },
+    {
+      "run": 9,
+      "accuracy": 0.7024
+    },
+    {
+      "run": 10,
+      "accuracy": 0.7396
+    }
+  ],
+  "completed_run_count": 10,
+  "failure": {
+    "kind": "numpy_ragged_result_summary",
+    "source": "main/training.py:181",
+    "summary": "All ten runs returned; np.mean on scalar/vector result rows failed before final aggregate output."
+  },
+  "cleanup": {
+    "status": "released",
+    "freed_bytes": 1565918886,
+    "errors": [],
+    "remaining": []
+  },
+  "active_runs": 0,
+  "active_workers": 0,
+  "active_executions": 0,
+  "limitations": "The author process exited1 during summary. This is not a successful completed experiment or a paper metric comparison. Recorded run accuracies are preliminary author stdout values."
+}

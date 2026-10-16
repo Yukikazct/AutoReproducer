@@ -1,0 +1,77 @@
+{
+  "at_utc": "2026-10-16T09:14:15.463552+00:00",
+  "kind": "legacy_pyg_native_regression",
+  "source_commit": "e43db792eb63f7c9f8262b5a1cc347d131eec650",
+  "source_sha256_in_test_worktree": {
+    "src/experiments/author_pyg_compatibility.py": "03c8c532d73a030ee5566cc1b05fea580a43bf95355119caa945fbb4e90c4f66",
+    "src/experiments/observe_author.py": "ccd5fe5e071960acdb37881b9fde9969dff9936cf8329638c6159c21c3996271",
+    "src/author_execution_plan.py": "492aff66451a012c88d40ac0f5289666a2377aada07bb50eff17a840c2ad5102",
+    "src/author_runtime_dependencies.py": "1331864841d39701a013fd2bb5d4db7b24e28f3834c12687555e22473beb74ec",
+    "src/discovered_repository_reproduction.py": "83f666648e8844b8e7ca6d3685083e56157b7e4f078de8de6d959faa1319dfe7"
+  },
+  "full_regression": {
+    "passed": 3373,
+    "skipped": 26,
+    "failed": 0,
+    "seconds": 1035.299
+  },
+  "native_cases": [
+    {
+      "name": "test_actual_failure_then_recorded_upgrade_preserves_tensor_bytes_masks_and_identity",
+      "passed": true,
+      "seconds": 12.274
+    },
+    {
+      "name": "test_modern_data_is_not_converted_or_recorded",
+      "passed": true,
+      "seconds": 7.839
+    },
+    {
+      "name": "test_unknown_private_legacy_fields_remain_an_original_failure",
+      "passed": true,
+      "seconds": 7.414
+    },
+    {
+      "name": "test_repair_is_not_applied_after_training_updates",
+      "passed": true,
+      "seconds": 11.32
+    },
+    {
+      "name": "test_linked_processed_input_is_not_authorized",
+      "passed": true,
+      "seconds": 7.285
+    },
+    {
+      "name": "test_recorded_context_rejects_changed_source_or_data[loader.py]",
+      "passed": true,
+      "seconds": 7.23
+    },
+    {
+      "name": "test_recorded_context_rejects_changed_source_or_data[train.py]",
+      "passed": true,
+      "seconds": 7.29
+    },
+    {
+      "name": "test_recorded_context_rejects_changed_source_or_data[graph.pt]",
+      "passed": true,
+      "seconds": 7.202
+    },
+    {
+      "name": "test_passive_observer_does_not_import_optional_framework",
+      "passed": true,
+      "seconds": 0.004
+    },
+    {
+      "name": "test_full_service_retries_real_legacy_data_error_and_preserves_original_files",
+      "passed": true,
+      "seconds": 36.646
+    }
+  ],
+  "environment": {
+    "torch": "2.5.1+cpu",
+    "numpy": "1.26.4",
+    "torch_geometric": "2.6.1",
+    "cache_role": "dedicated test cache outside application data"
+  },
+  "scope": "Mechanics tests use synthetic fixture documents/data. They verify bytes/masks/identity, actual failure then retry, 40 original optimizer updates, immutable files and adapter receipts. Real paper browser regression remains separate."
+}

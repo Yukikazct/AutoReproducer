@@ -51,7 +51,7 @@ def reset_managed_environment(root, directory):
 
 
 DEPENDENCY_HEALTH_PROBE = r'''
-import importlib, importlib.metadata, json, os, re, sys
+import importlib, importlib.metadata, importlib.util, json, os, re, sys
 from pathlib import Path
 
 target = Path(sys.argv[1]).resolve(strict=True)
@@ -68,11 +68,39 @@ try:
 except ModuleNotFoundError as exc:
     if exc.name != 'packaging':
         raise
-    # Fresh training venvs have pip, but need not install packaging separately.
-    # Use pip's bundled parser without adding a dependency to the author plan.
-    # Broken managed packaging modules must still fail the health check.
-    from pip._vendor.packaging.specifiers import SpecifierSet
-    from pip._vendor.packaging.markers import Marker
+    # Importing pip changes setuptools/distutils import hooks on Python 3.11
+    # and can break healthy legacy packages such as DGL. Read its bundled
+    # parser in a private namespace without importing the installer itself.
+    # A broken managed packaging module still fails above, without fallback.
+    import importlib.abc, importlib.machinery
+    vendor_root = Path(importlib.metadata.distribution('pip').locate_file('pip/_vendor'))
+    namespace = '_autorepro_health_vendor'
+    class PrivateVendorLoader(importlib.machinery.SourceFileLoader):
+        def get_code(self, fullname):
+            # pip 24 and earlier also vendor pyparsing through absolute imports.
+            # Load all parser dependencies privately; never reuse their .pyc or
+            # rewrite the installer's files or initialize its import hooks.
+            data = self.get_data(self.path).replace(b'pip._vendor', namespace.encode('ascii'))
+            return self.source_to_code(data, self.path)
+    class PrivateVendorFinder(importlib.abc.MetaPathFinder):
+        def find_spec(self, fullname, path=None, target=None):
+            if not fullname.startswith(namespace + '.'):
+                return None
+            base = vendor_root.joinpath(*fullname[len(namespace) + 1:].split('.'))
+            package = base / '__init__.py'
+            source = package if package.is_file() else base.with_suffix('.py')
+            if not source.is_file():
+                return None
+            return importlib.util.spec_from_file_location(fullname, source,
+                loader=PrivateVendorLoader(fullname, str(source)),
+                submodule_search_locations=[str(base)] if package.is_file() else None)
+    spec = importlib.machinery.ModuleSpec(namespace, loader=None, is_package=True)
+    vendor = importlib.util.module_from_spec(spec)
+    vendor.__path__ = [str(vendor_root)]
+    sys.modules[namespace] = vendor
+    sys.meta_path.insert(0, PrivateVendorFinder())
+    SpecifierSet = importlib.import_module(namespace + '.packaging.specifiers').SpecifierSet
+    Marker = importlib.import_module(namespace + '.packaging.markers').Marker
 # Conditional dependencies must use this selected training interpreter's full
 # environment. A host Python hint omits python_full_version, implementation and
 # platform markers, and may itself contain an incorrect patch-level value.

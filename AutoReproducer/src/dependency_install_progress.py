@@ -6,6 +6,8 @@ import time
 from urllib.parse import unquote, urlsplit
 import uuid
 
+from src.safety.paths import filesystem_path
+
 
 def parse_pip_line(line):
     """Return only package facts, never URL credentials or arbitrary pip output."""
@@ -50,7 +52,7 @@ class DependencyInstallProgress:
 
     def _read_log(self):
         try:
-            with self.log_path.open('rb') as stream:
+            with Path(filesystem_path(self.log_path)).open('rb') as stream:
                 size = os.fstat(stream.fileno()).st_size
                 if size < self._offset:
                     self._offset, self._pending = 0, ''
@@ -92,7 +94,7 @@ class DependencyInstallProgress:
         for directory in self.work.iterdir():
             if not directory.name.startswith(('pip-unpack-', 'pip-download-')) or self._linked(directory):
                 continue
-            candidate = directory / self.file_name
+            candidate = Path(filesystem_path(directory / self.file_name))
             try:
                 if not candidate.is_file() or self._linked(candidate):
                     continue

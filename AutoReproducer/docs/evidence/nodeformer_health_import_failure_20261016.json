@@ -1,0 +1,59 @@
+{
+  "trial": "independent_nodeformer_20261016_02",
+  "status": "cancelled_before_training_after_confirmed_health_mapping_error",
+  "frozen_commit": "d9ff6624fc55bd2e3e07e6a89e52ca72c747f5a4",
+  "source_sha256": "e07ff3c7ba918c3c4a0aaaca62ff5e940f357d77c3e1edb2182f8e2df837087d",
+  "source_unchanged_during_trial": true,
+  "repository_url": "https://github.com/qitianwu/NodeFormer",
+  "repository_revision": "5390b6908326905b2eb840f65a70b0f4082aef43",
+  "selected_protocol": "original Cora / NodeFormer,5runs1000epochsCPU",
+  "confirmed_failure": "pip exited0, but dependency health imported distribution name googledrivedownloader instead of actual module google_drive_downloader; repeated full installations failed the same incorrect probe",
+  "environment_cleanup": {
+    "status": "released",
+    "removed": [
+      {
+        "path": ".maintenance.json",
+        "bytes": 942
+      },
+      {
+        "path": ".pip-temporary",
+        "bytes": 653109434
+      },
+      {
+        "path": "repository",
+        "bytes": 0
+      }
+    ],
+    "freed_bytes": 665145502,
+    "remaining": [],
+    "errors": [],
+    "training_python": {
+      "status": "released",
+      "removed": [
+        {
+          "path": "D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\maintenance_browser_20261016\\data\\training_python",
+          "bytes": 12035126
+        }
+      ],
+      "errors": [],
+      "freed_bytes": 12035126
+    },
+    "docker": {
+      "status": "released",
+      "removed": [],
+      "errors": []
+    },
+    "runtime_downloads": {
+      "status": "released",
+      "removed": [],
+      "freed_bytes": 0,
+      "errors": []
+    }
+  },
+  "active_workers": 0,
+  "active_runs": 0,
+  "active_executions": 0,
+  "paper_retired_for_product_repairs": true,
+  "paper_acceptance": false,
+  "scope": "Original PDF and repository were selected; no author training occurred. Owned worker stopped; supervisor confirmed cleanup."
+}

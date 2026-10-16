@@ -40,6 +40,20 @@ def _markdown_text(value: str) -> str:
                   value.replace("\n", " ").replace("\r", " "))
 
 
+def _metric_value_text(node, suffix=''):
+    value = _txt(node.get('value'))
+    uncertainty = node.get('reported_uncertainty')
+    if uncertainty is not None:
+        if node.get('uncertainty_kind') == 'bootstrap_confidence_interval':
+            level = node.get('confidence_level')
+            label = (f'{level}% ' if level is not None else '') + 'bootstrap 置信区间半宽'
+        else:
+            label = '误差含义未明确'
+        return f'{value} ± {uncertainty}{suffix}（{label}）'
+    deviation = f" ± {node['std']}" if node.get('std') is not None else ''
+    return value + deviation + suffix
+
+
 def _author_claim_comparison_lines(comparison):
     if not comparison:
         return []
@@ -55,12 +69,10 @@ def _author_claim_comparison_lines(comparison):
     lines += ['', '| 指标 / 数据集 / 方法 | 论文宣称 | 作者运行输出 | 差值（实际 − 论文） | 结论 |',
               '| --- | --- | --- | --- | --- |']
     def value_cell(node):
-        value = node.get('value')
         suffix = {'percent': '%', 'fraction': '（比例）'}.get(node.get('unit'), '')
         aggregation = {'single': '单次', 'mean': '均值', 'median': '中位数', 'best': '最佳', 'unknown': '统计方式未明确'}.get(node.get('aggregation'), '')
         runs = node.get('runs')
-        deviation = f" ± {node['std']}" if node.get('std') is not None else ''
-        return f"{value}{deviation}{suffix}；{aggregation}" + (f"，{runs} 次" if runs else '')
+        return _metric_value_text(node, suffix) + f"；{aggregation}" + (f"，{runs} 次" if runs else '')
     for row in rows:
         paper, actual = row['reference'], row['actual']
         difference = row.get('difference')
@@ -95,6 +107,43 @@ def _author_claim_comparison_lines(comparison):
             lines += ['- **实际输出原文**: ' + _markdown_text(actual['source_quote'])]
     for error in comparison.get('validation_errors') or []:
         lines.append('- **未完成的配对**: ' + _markdown_text(str(error.get('error', ''))[:600]))
+    return lines + ['']
+
+
+def _runtime_dataset_lines(evidence):
+    if not evidence:
+        return []
+    lines = ['', '### 原作者数据加载观测', '',
+             '以下记录核对原加载器及其输入文件，官方参考数据与完整训练协议尚未独立核对。']
+    for source in evidence.get('sources', []):
+        observations = source.get('observations') or []
+        if not observations:
+            continue
+        record = observations[0]
+        loader = source.get('loader') or {}
+        identity = (f"{record.get('dataset_name', '未知')}；{loader.get('dataset_class', '')}；"
+                    f"框架 {loader.get('framework', '')} {record.get('framework_version', '')}；"
+                    f"观测 {len(observations)} 次")
+        lines += ['', '- **加载观测已核对**: ' + _markdown_text(identity)]
+        counts = '；'.join(f'{label} {record[field]}' for field, label in (
+            ('num_nodes', '节点'), ('num_edges', '边'), ('num_features', '特征'), ('num_classes', '类别')) if field in record)
+        if counts:
+            lines.append('- **原生规模**: ' + _markdown_text(counts))
+        if record.get('mask_counts'):
+            lines.append('- **原生划分样本数**: ' + _markdown_text('；'.join(
+                f'{name} {count}' for name, count in record['mask_counts'].items())))
+        if record.get('source_url'):
+            lines.append('- **框架下载来源**: ' + _markdown_text(str(record['source_url'])))
+        lines += ['', '| 输入文件 | 类型 | 字节数 | SHA-256 |', '| --- | --- | --- | --- |']
+        for name, info in sorted(record.get('files', {}).items()):
+            cells = [str(name).replace('\\', '/').rsplit('/', 1)[-1], info.get('role'), info.get('bytes'), info.get('sha256')]
+            lines.append('| ' + ' | '.join(_markdown_text(_txt(value)) for value in cells) + ' |')
+    for error in evidence.get('errors', []):
+        lines.append('- **观测未核对**: ' + _markdown_text(str(error.get('reason', '未知'))))
+        for reason in error.get('observation_errors', []):
+            lines.append('  - ' + _markdown_text(str(reason)))
+    for error in evidence.get('persistence_errors', []):
+        lines.append('- **保存说明**: ' + _markdown_text(str(error.get('reason', '未知'))))
     return lines + ['']
 
 
@@ -961,13 +1010,14 @@ class ReportGeneratorAgent(BaseAgent):
                     pv = metric_cell(pv, metrics_comp.get("paper_units") or {}, pk)
                     av = metric_cell(av, metrics_comp.get("actual_units") or {}, ak)
                     lines.append(f"| {name} | {pv} | {av} |")
+        lines += _runtime_dataset_lines(validation.get('runtime_dataset_evidence'))
         lines += _author_claim_comparison_lines(validation.get('author_claim_comparison'))
         records = validation.get("metric_records") or []
         if records:
             lines += ["", "### 实际指标证据", "| 指标 | 实测值 | 单位 | 数据划分 | 阶段 | 来源 |",
                       "|------|------|------|----------|------|------|"]
             for record in records:
-                cells = [record.get("name"), record.get("value"), record.get("unit") or "未标注",
+                cells = [record.get("name"), _metric_value_text(record), record.get("unit") or "未标注",
                          record.get("split") or "未标注", record.get("stage") or "未标注",
                          record.get("source")]
                 lines.append("| " + " | ".join(_markdown_text(_txt(c)) for c in cells) + " |")

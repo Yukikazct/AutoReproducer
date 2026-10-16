@@ -1,0 +1,213 @@
+{
+  "scope": "Retired CCA-SSG original-author regression; not an independent PDF or numerical reproduction",
+  "producer_commit": "f6cf0b985518cbd15c695a4dbfe7a9e2f0d14a0c",
+  "producer_source_unchanged": true,
+  "repository_url": "https://github.com/hengruizhang98/CCA-SSG",
+  "repository_revision": "ce5b2c0ad4f05811008559f66e5e114dbd71a82b",
+  "archive_sha256": "199c8804a7a8dd713fca1c46a9a39999a821b50cd9bcfe21ea4f3d1b94b80a85",
+  "original_source_unchanged": true,
+  "argv": [
+    "python",
+    "main.py",
+    "--dataname",
+    "cora",
+    "--epochs",
+    "50",
+    "--lambd",
+    "1e-3",
+    "--dfr",
+    "0.1",
+    "--der",
+    "0.4",
+    "--lr2",
+    "1e-2",
+    "--wd2",
+    "1e-4"
+  ],
+  "timeout_s": null,
+  "original_epochs": 50,
+  "original_linear_evaluation_epochs": 2000,
+  "optimizer_steps": 2050,
+  "natural_return": true,
+  "exit_code": 0,
+  "dataset_observation": {
+    "status": "verified",
+    "verified": true,
+    "basis": "native_constructor_and_unchanged_input_files",
+    "independent_reference_verified": false,
+    "sources": [
+      {
+        "kind": "author_runtime",
+        "loader": {
+          "kind": "author_runtime",
+          "path": "dataset.py",
+          "function": "load",
+          "dataset_class": "CoraGraphDataset",
+          "dataset_name": "cora",
+          "source_sha256": "11d6819f7347a74385402fb108cb2ef054350417211b94534183fbd06dbd079b",
+          "citations": [
+            "loader"
+          ],
+          "framework": "dgl.data",
+          "constructor_quotes": [
+            "CoraGraphDataset()"
+          ],
+          "framework_version": "1.1.2",
+          "framework_dataset_name": "cora_v2"
+        },
+        "verified": true,
+        "observations": [
+          {
+            "declaration": {
+              "kind": "author_runtime",
+              "path": "dataset.py",
+              "function": "load",
+              "dataset_class": "CoraGraphDataset",
+              "dataset_name": "cora",
+              "source_sha256": "11d6819f7347a74385402fb108cb2ef054350417211b94534183fbd06dbd079b",
+              "citations": [
+                "loader"
+              ],
+              "framework": "dgl.data",
+              "constructor_quotes": [
+                "CoraGraphDataset()"
+              ],
+              "framework_version": "1.1.2",
+              "framework_dataset_name": "cora_v2"
+            },
+            "dataset_name": "cora",
+            "framework_dataset_name": "cora_v2",
+            "framework_version": "1.1.2",
+            "source_url": "https://data.dgl.ai/dataset/cora_v2.zip",
+            "root": "D:\\code\\AutoReproducer\\.tmp\\maintenance-ccassg-4vzy08qm\\native_data",
+            "raw_path": "D:\\code\\AutoReproducer\\.tmp\\maintenance-ccassg-4vzy08qm\\native_data\\cora_v2_d697a464",
+            "graph_path": "D:\\code\\AutoReproducer\\.tmp\\maintenance-ccassg-4vzy08qm\\native_data\\cora_v2_d697a464\\cora_v2_dgl_graph.bin",
+            "info_path": "D:\\code\\AutoReproducer\\.tmp\\maintenance-ccassg-4vzy08qm\\native_data\\cora_v2_d697a464\\cora_v2_dgl_graph.pkl",
+            "files": {
+              "D:\\code\\AutoReproducer\\.tmp\\maintenance-ccassg-4vzy08qm\\native_data\\cora_v2_d697a464\\ind.cora_v2.x": {
+                "sha256": "23cfa55d91c6f624233f5eb7b6e3f141f1bd2b2ae39608a63cf5d084bb27baab",
+                "bytes": 22119,
+                "role": "raw"
+              },
+              "D:\\code\\AutoReproducer\\.tmp\\maintenance-ccassg-4vzy08qm\\native_data\\cora_v2_d697a464\\ind.cora_v2.y": {
+                "sha256": "94465c14eb53e04ca262198dcbb2521ee8af60fb3f3d546cd6ca24a511b0e7d1",
+                "bytes": 4054,
+                "role": "raw"
+              },
+              "D:\\code\\AutoReproducer\\.tmp\\maintenance-ccassg-4vzy08qm\\native_data\\cora_v2_d697a464\\ind.cora_v2.tx": {
+                "sha256": "b9afbaa4a400df991f6f02ef677e1e44da55ffc04801fd02f9e673987829226a",
+                "bytes": 148025,
+                "role": "raw"
+              },
+              "D:\\code\\AutoReproducer\\.tmp\\maintenance-ccassg-4vzy08qm\\native_data\\cora_v2_d697a464\\ind.cora_v2.ty": {
+                "sha256": "41f5ac76596a1699cc33f53084a2419e92961c42bb75f36fc38e616d348532ad",
+                "bytes": 28135,
+                "role": "raw"
+              },
+              "D:\\code\\AutoReproducer\\.tmp\\maintenance-ccassg-4vzy08qm\\native_data\\cora_v2_d697a464\\ind.cora_v2.allx": {
+                "sha256": "9419ba2f26f5c35243db64aba110e0f35a04851609e0dc5433450676ca6b8543",
+                "bytes": 257305,
+                "role": "raw"
+              },
+              "D:\\code\\AutoReproducer\\.tmp\\maintenance-ccassg-4vzy08qm\\native_data\\cora_v2_d697a464\\ind.cora_v2.ally": {
+                "sha256": "2b998f5cc7fedc86e7f97ca2498f47a1ffc1462c29e2d578b23bf3f62b6e7d71",
+                "bytes": 47959,
+                "role": "raw"
+              },
+              "D:\\code\\AutoReproducer\\.tmp\\maintenance-ccassg-4vzy08qm\\native_data\\cora_v2_d697a464\\ind.cora_v2.graph": {
+                "sha256": "58f13302f39dde8852dad6fe6d15b89b077b6d7f837626bce671ef80344b383d",
+                "bytes": 59847,
+                "role": "raw"
+              },
+              "D:\\code\\AutoReproducer\\.tmp\\maintenance-ccassg-4vzy08qm\\native_data\\cora_v2_d697a464\\ind.cora_v2.test.index": {
+                "sha256": "297ce89af2b51a6a194181c7dbe1796c6a1cf9cd9349a88383b1b1e227867875",
+                "bytes": 5000,
+                "role": "raw"
+              },
+              "D:\\code\\AutoReproducer\\.tmp\\maintenance-ccassg-4vzy08qm\\native_data\\cora_v2_d697a464\\cora_v2_dgl_graph.bin": {
+                "sha256": "1dbb3eeb05d07824b52f8edc38461b44ce1acdf8673bb04db0b63a2e13fd195c",
+                "bytes": 15726120,
+                "role": "processed"
+              },
+              "D:\\code\\AutoReproducer\\.tmp\\maintenance-ccassg-4vzy08qm\\native_data\\cora_v2_d697a464\\cora_v2_dgl_graph.pkl": {
+                "sha256": "558645f950c66edb97c190741bc43ceb194dcfb462d229eca9c6dbc7740e1166",
+                "bytes": 31,
+                "role": "processed"
+              }
+            },
+            "loaded_before_training": true,
+            "verified": true,
+            "sample_count": 1,
+            "num_nodes": 2708,
+            "num_edges": 10556,
+            "num_features": 1433,
+            "num_classes": 7,
+            "mask_counts": {
+              "train": 140,
+              "validation": 500,
+              "test": 1000
+            },
+            "tensor_evidence": {
+              "feat": {
+                "shape": [
+                  2708,
+                  1433
+                ],
+                "dtype": "torch.float32",
+                "sha256": "1a213087243ca1ee26967d0809d04997d276f0911fe5f8d994f49b3aa873b675"
+              },
+              "label": {
+                "shape": [
+                  2708
+                ],
+                "dtype": "torch.int64",
+                "sha256": "d0018d7ffd314eb25a4904973f2c7eb1b7be135d668de42d453714724f8e9d03"
+              },
+              "train_mask": {
+                "shape": [
+                  2708
+                ],
+                "dtype": "torch.bool",
+                "sha256": "b211325c561d6f73f978a4b0f3d44571c58eb70ca55a2aa27b9d4988344476c1"
+              },
+              "val_mask": {
+                "shape": [
+                  2708
+                ],
+                "dtype": "torch.bool",
+                "sha256": "96c8f5dc197fc3c014b3d655f1c28d0d276221e867ca01d64f74edb39cfb7173"
+              },
+              "test_mask": {
+                "shape": [
+                  2708
+                ],
+                "dtype": "torch.bool",
+                "sha256": "ec05c123cc125ff38ad3963cba5d85415a2e7b125dc68064bbf65fb0661644e6"
+              }
+            }
+          }
+        ],
+        "source": "original_author_constructor_and_fixed_framework"
+      }
+    ],
+    "errors": []
+  },
+  "dataset_cache_configuration": "Documented DGL_DOWNLOAD_DIR selects task-owned native cache; original loader and transforms unchanged",
+  "paper_metrics_verified": false,
+  "is_reproduced": null,
+  "stdout_sha256": "9b1eb93a7562f0886a21b0ad91c92b0123665c3fc687ade4f564d6d44f05f52e",
+  "stdout_tail": [
+    "Epoch:1990, train_acc:0.9429, val_acc:0.808000, test_acc:0.839000",
+    "Epoch:1991, train_acc:0.9429, val_acc:0.808000, test_acc:0.839000",
+    "Epoch:1992, train_acc:0.9429, val_acc:0.808000, test_acc:0.839000",
+    "Epoch:1993, train_acc:0.9429, val_acc:0.808000, test_acc:0.839000",
+    "Epoch:1994, train_acc:0.9429, val_acc:0.808000, test_acc:0.839000",
+    "Epoch:1995, train_acc:0.9429, val_acc:0.808000, test_acc:0.839000",
+    "Epoch:1996, train_acc:0.9429, val_acc:0.808000, test_acc:0.839000",
+    "Epoch:1997, train_acc:0.9429, val_acc:0.808000, test_acc:0.839000",
+    "Epoch:1998, train_acc:0.9429, val_acc:0.808000, test_acc:0.839000",
+    "Epoch:1999, train_acc:0.9429, val_acc:0.808000, test_acc:0.839000",
+    "Linear evaluation accuracy:0.8430",
+    "{\"author_command_finished\": \"train_cora\", \"optimizer_steps\": 2050}"
+  ]
+}

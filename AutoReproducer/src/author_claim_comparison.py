@@ -4,6 +4,7 @@ The model locates claims and explains settings. Values come from unchanged
 PDF quotations and actual step output; comparison never gates code execution.
 """
 from copy import deepcopy
+import hashlib
 import re
 
 from src.discovered_repository_plan import (
@@ -16,7 +17,7 @@ TOLERANCE = 0.05
 _AGGREGATIONS = {'single', 'mean', 'median', 'best', 'unknown'}
 
 
-def collect_author_metrics(execution):
+def collect_author_metrics(execution, *, workspace=None, plan=None, sources=None):
     records, errors = [], []
     for step in execution.get('steps', []):
         if step.get('success') is not True or step.get('exit_code') != 0:
@@ -29,6 +30,20 @@ def collect_author_metrics(execution):
                 continue
             parsed, failures = parse_runtime_metrics(step.get(stream, ''), structured if stream == 'stdout' else None,
                                                      preserve_contexts=True)
+            if workspace is not None and plan is not None and sources is not None and stream == 'stdout' and structured is None:
+                selected = next((item for item in plan.get('steps', []) if item.get('id') == step.get('id')), {})
+                relative = (selected.get('entrypoint') or {}).get('source_path')
+                if relative and relative in sources:
+                    try:
+                        from src.safety.paths import workspace_path
+                        from src.author_metric_context import annotate_uncertainty
+                        source = workspace_path(workspace, relative, 'metric context source', must_exist=True, forbid_git=True)
+                        raw = source.read_bytes()
+                        if hashlib.sha256(raw).hexdigest() != sources[relative]:
+                            raise ValueError('Metric context source differs from the frozen author source')
+                        parsed = annotate_uncertainty(parsed, raw.decode('utf-8'), relative, sources[relative])
+                    except (OSError, ValueError, UnicodeError, SyntaxError) as exc:
+                        failures.append('Original uncertainty context could not be verified: ' + str(exc))
             errors.extend(f"{step['id']}:{stream}: {error}" for error in failures)
             for record in parsed:
                 source = record['source'].replace('stdout:', stream + ':')
@@ -48,6 +63,20 @@ def _method_context(value):
     return _context(label)
 
 
+def _quoted_method_typography(method, quote):
+    """Recover an exact PDF label only for spacing/case, preserving variants."""
+    if not isinstance(method, str):
+        return None
+    first = re.search(r'(?<![\w.])(?:' + NUMBER_PATTERN + r')(?![\w.])', quote, re.I)
+    if first is None:
+        return None
+    label = re.sub(r'(?:\s+-)+\s*$', '', quote[:first.start()].strip()).strip()
+    def typography(value):
+        value = re.sub(r'\s*\((?:ours|our method|this work)\)\s*$', '', value, flags=re.I)
+        return re.sub(r'\s+', '', value).casefold()
+    return label if label and typography(label) == typography(method) else None
+
+
 def _column_value(reference, quote, header, field='value'):
     """Resolve a flat original table; multi-level/ambiguous headers stay unknown."""
     columns = header.split()
@@ -65,10 +94,12 @@ def _column_value(reference, quote, header, field='value'):
     if start < 0:
         return None
     tail = quote[start + len(method):]
-    cells = list(re.finditer(r'(?<![\w.])(?P<value>' + NUMBER_PATTERN + r')(?![\w.])'
-        r'(?:\s*(?:±|\+/-|\x06)\s*(?P<std>' + NUMBER_PATTERN + r')(?![\w.]))?', tail, re.I))
+    cells = list(re.finditer(r'(?<![\w.])(?:(?P<placeholder>-)(?=\s|$)|(?P<value>' + NUMBER_PATTERN + r')(?![\w.])'
+        r'(?:\s*(?:±|\+/-|\x06)\s*(?P<std>' + NUMBER_PATTERN + r')(?![\w.]))?)', tail, re.I))
     if len(cells) != len(columns):
         return None
+    if cells[indexes[0]].group('placeholder') is not None:
+        raise ValueError('Quoted dataset column has no reported value')
     return metric_number(cells[indexes[0]].group(field))
 
 
@@ -119,7 +150,12 @@ def validate_comparisons(payload, packet, workspace, records):
         # Ground the table row and dataset header separately, so a baseline
         # number elsewhere on the same page cannot serve as the method row.
         if not _has_value(reference.get('method'), [{'source': 'pdf', 'quote': quote}]):
-            raise ValueError('Reference quotation must identify the method row')
+            label = _quoted_method_typography(reference.get('method'), quote)
+            if label is None:
+                raise ValueError('Reference quotation must identify the method row')
+            reference['proposed_method_label'] = reference['method']
+            reference['method'] = label
+            reference['method_label_correction'] = 'Exact PDF row typography recovered without changing variant or values'
         # A row spanning several datasets needs its original column header on
         # the same page, rather than a dataset mentioned elsewhere in the PDF.
         if reference.get('dataset') and not _has_value(reference['dataset'], [{'source': 'pdf', 'quote': quote}]):
@@ -150,6 +186,14 @@ def validate_comparisons(payload, packet, workspace, records):
                 actual[field] = observed
             elif field == 'std' and proposed is not None:
                 raise ValueError('Model cannot invent an unobserved standard deviation')
+        for field in ('reported_uncertainty', 'uncertainty_kind', 'confidence_level', 'uncertainty_source'):
+            observed, proposed = record.get(field), actual.get(field)
+            if proposed is not None and observed is None:
+                raise ValueError(f'Model cannot invent unobserved {field}')
+            if proposed is not None and proposed != observed:
+                raise ValueError(f'Model cannot override observed {field}')
+            if observed is not None:
+                actual[field] = deepcopy(observed)
         if reference.get('std') is not None:
             std = metric_number(reference['std'])
             if std is None or std < 0 or not _has_value(std, [{'source': 'pdf', 'quote': quote}]):
@@ -283,8 +327,8 @@ def _validated_rows(payload, packet, workspace, records, accepted, known_citatio
     return errors
 
 
-def compare_author_claims(llm, packet, plan, workspace, execution):
-    records, errors = collect_author_metrics(execution)
+def compare_author_claims(llm, packet, plan, workspace, execution, *, sources=None):
+    records, errors = collect_author_metrics(execution, workspace=workspace, plan=plan, sources=sources)
     result = {'status': 'unavailable', 'basis': 'author_output', 'relative_tolerance': TOLERANCE,
               'metric_records': records, 'parse_errors': errors, 'comparisons': [], 'citations': [],
               'validation_errors': [],
@@ -317,7 +361,8 @@ settings:{status:'matched|different|unknown',reason,citations:[PDF and repositor
         'sample_count means fraction), never from numeric magnitude. Preserve explicit output units/splits. '
         'Include full experiment settings in the assessment: split, model variant, hyperparameters, '
         'preprocessing, model selection. Mark unknown when original evidence is insufficient. '
-        'Observed aggregation, runs and std fields are authoritative and cannot be changed. '
+        'Observed aggregation, runs, std and uncertainty context fields are authoritative and cannot be changed. '
+        'reported_uncertainty with uncertainty_kind=bootstrap_confidence_interval is a confidence half-width, never std. '
         'A single process can execute many trials: inspect the exact print/aggregation source and preserve '
         'the selected final summary. Missing repetition information stays unknown, never assume runs=1. '
         'Report the paper aggregation and repetition count honestly. Single run versus paper mean must '

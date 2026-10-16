@@ -4,12 +4,12 @@ import shutil
 import stat
 from pathlib import Path
 
-from src.safety.paths import is_link
+from src.safety.paths import filesystem_path, is_link
 
 
 def directory_bytes(directory):
     """Measure an owned tree without following symlinks or Windows junctions."""
-    total, pending = 0, [Path(directory)]
+    total, pending = 0, [Path(filesystem_path(directory))]
     while pending:
         with os.scandir(pending.pop()) as entries:
             for entry in entries:
@@ -45,6 +45,6 @@ def remove_tree(path) -> None:
     sharing violations and non-read-only access failures continue to propagate.
     """
     if os.name == "nt":
-        shutil.rmtree(path, onerror=_remove_readonly_file)
+        shutil.rmtree(filesystem_path(path), onerror=_remove_readonly_file)
     else:
         shutil.rmtree(path)

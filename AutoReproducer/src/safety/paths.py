@@ -4,6 +4,21 @@ import stat
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
 
+def filesystem_path(value):
+    """Format an already-validated path for Windows APIs without MAX_PATH limits.
+
+    This only changes filesystem syntax; callers still validate containment and
+    ownership with workspace_path before accessing or removing managed trees.
+    """
+    path = os.fspath(value)
+    if os.name != "nt" or not isinstance(path, str) or path.startswith("\\\\?\\"):
+        return path
+    path = os.path.abspath(path)
+    if path.startswith("\\\\"):
+        return "\\\\?\\UNC\\" + path[2:]
+    return "\\\\?\\" + path
+
+
 def is_link(path):
     """Include Windows junctions, including on Python 3.11."""
     path = Path(path)

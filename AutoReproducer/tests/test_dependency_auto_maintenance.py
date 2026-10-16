@@ -136,7 +136,8 @@ def test_pip_temporary_files_are_owned_and_released_on_every_exit(executor, tmp_
     def pip(command, **kwargs):
         env = kwargs['env']
         owned = Path(env['TMPDIR'])
-        assert owned != inherited and owned.is_relative_to(executor._dependency_lock_root())
+        assert not os.path.samefile(owned, inherited)
+        assert os.path.samefile(owned.parent.parent, executor._dependency_lock_root())
         assert env['TEMP'] == env['TMP'] == str(owned)
         assert Path(env['PIP_CACHE_DIR']).is_relative_to(owned)
         (owned / 'pip-unpack-fixture').mkdir()

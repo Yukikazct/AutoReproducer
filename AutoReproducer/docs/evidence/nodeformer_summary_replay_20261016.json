@@ -1,0 +1,32 @@
+{
+  "scope": "Read-only reparse of saved original NodeFormer stdout; not new training or independent numerical acceptance",
+  "source_run": "repository_9035bd1f702b41af9c7c643e216ddb5f",
+  "original_frozen_commit": "2d9b199e5d64362eac4eea348da4e5ddb3b8e285",
+  "original_stdout_sha256": "509c2da07d88d5f298f663c79f9d453643aa5684260fabb667f1996762ec0bb2",
+  "parser_sha256": "f1f1a14f3717f748a9cb24871e46f25e70da2fcd5d15dc18f21cece2585ee2be",
+  "optimizer_steps": 5000,
+  "original_source_and_result_artifacts_unchanged": true,
+  "original_artifact_hashes": {
+    "result.json": "ccca24ce863ddd521eeb9cee0f828fdb2203ca56bf51c1e1679c17f37f60f42f",
+    "report.md": "ce954716146d5cc046e25bcff4b3ed8501c1b66e24867b34ba44519c1877f0f7",
+    "execution.json": "ab886b9ba0d754201b147cb41c47eae3b73bbf918fe6a9778d3a451256370e23",
+    "author_claim_comparison.json": "8349c4a63ff5c8140acc0e43af34e78d035dffa6375dfd2ca7bdd9494027b9c3"
+  },
+  "correct_final_summary": {
+    "name": "accuracy",
+    "value": 89.48,
+    "unit": "",
+    "split": "test",
+    "stage": "final",
+    "source": "train_cora:stdout:5060",
+    "source_quote": "Final Test: 89.48 ± 0.40",
+    "std": 0.4,
+    "aggregation": "mean",
+    "runs": 5,
+    "id": "train_cora:stdout:29",
+    "step_id": "train_cora"
+  },
+  "old_comparison_status": "unavailable",
+  "paper_metrics_verified": false,
+  "is_reproduced": null
+}

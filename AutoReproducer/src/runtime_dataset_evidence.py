@@ -1,13 +1,16 @@
 """Bind author-native dataset construction to observed complete framework files."""
 import ast
-from pathlib import Path
 
 from src.method_adapters import digest
+from src.experiments.observe_datasets import real_dataset_path
 from src.safety.paths import workspace_path
 
 
 PYG_CLASSES = {'Planetoid', 'WikiCS', 'Coauthor', 'Amazon', 'CitationFull', 'Reddit',
                'PPI', 'Flickr', 'Actor', 'WebKB', 'HeterophilousGraphDataset'}
+DGL_CLASSES = {'CoraGraphDataset': ('cora', 'cora_v2'),
+               'CiteseerGraphDataset': ('citeseer', 'citeseer'),
+               'PubmedGraphDataset': ('pubmed', 'pubmed')}
 
 
 def scope_nodes(scope):
@@ -18,7 +21,7 @@ def scope_nodes(scope):
             yield from scope_nodes(child)
 
 
-def constructor_calls(tree, scope, class_name):
+def constructor_calls(tree, scope, class_name, framework='torch_geometric.datasets'):
     """Resolve original imports and literal dataset factory tables, without execution.
 
     A table may contain several dataset classes. This establishes a possible
@@ -30,16 +33,16 @@ def constructor_calls(tree, scope, class_name):
     for node in [*tree.body, *nodes]:
         if isinstance(node, ast.ImportFrom) and node.level == 0:
             for alias in node.names:
-                if node.module == 'torch_geometric.datasets' and alias.name == class_name:
+                if node.module == framework and alias.name == class_name:
                     symbols.add(alias.asname or alias.name)
-                elif node.module == 'torch_geometric' and alias.name == 'datasets':
+                elif node.module == framework.rsplit('.', 1)[0] and alias.name == framework.rsplit('.', 1)[1]:
                     symbols.add((alias.asname or alias.name) + '.' + class_name)
         elif isinstance(node, ast.Import):
             for alias in node.names:
-                if alias.name == 'torch_geometric.datasets':
+                if alias.name == framework:
                     symbols.add((alias.asname or alias.name) + '.' + class_name)
-                elif alias.name == 'torch_geometric':
-                    symbols.add((alias.asname or alias.name) + '.datasets.' + class_name)
+                elif alias.name == framework.rsplit('.', 1)[0]:
+                    symbols.add((alias.asname or alias.name) + '.' + framework.rsplit('.', 1)[1] + '.' + class_name)
 
     def matches(node):
         return (ast.unparse(node) in symbols or isinstance(node, ast.IfExp)
@@ -78,8 +81,9 @@ def discover_runtime_constructors(files):
         functions = [node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)]
         scopes = [tree, *[node for node in functions if sum(item.name == node.name for item in functions) == 1]]
         for scope in scopes:
-            for class_name in sorted(PYG_CLASSES):
-                for call in constructor_calls(tree, scope, class_name):
+            for class_name in sorted(PYG_CLASSES | DGL_CLASSES.keys()):
+                framework = 'dgl.data' if class_name in DGL_CLASSES else 'torch_geometric.datasets'
+                for call in constructor_calls(tree, scope, class_name, framework):
                     options.append({'path': path, 'function': getattr(scope, 'name', '<module>'),
                                     'dataset_class': class_name,
                                     'constructor_quote': ast.get_source_segment(source['text'], call),
@@ -106,9 +110,10 @@ def compile_runtime_dataset(item, packet, workspace, citations):
     if len(scopes) != 1:
         raise PlanEvidenceError('Native dataset scope must identify one original function or module')
     class_name = item['dataset_class']
-    if class_name not in PYG_CLASSES:
-        raise PlanEvidenceError('Native dataset class is outside the observed PyG framework classes')
-    calls = constructor_calls(tree, scopes[0], class_name)
+    if class_name not in PYG_CLASSES | DGL_CLASSES.keys():
+        raise PlanEvidenceError('Native dataset class is outside the observed framework classes')
+    framework = 'dgl.data' if class_name in DGL_CLASSES else 'torch_geometric.datasets'
+    calls = constructor_calls(tree, scopes[0], class_name, framework)
     if not calls:
         alternatives = [item['function'] for item in discover_runtime_constructors({name: source})
                         if item['dataset_class'] == class_name]
@@ -120,6 +125,12 @@ def compile_runtime_dataset(item, packet, workspace, citations):
     dataset_name = item['dataset_name']
     if not isinstance(dataset_name, str) or not dataset_name.strip() or not _has_value(dataset_name, refs):
         raise PlanEvidenceError('Native data identity needs original repository evidence')
+    dgl_context = {}
+    if class_name in DGL_CLASSES:
+        canonical, native = DGL_CLASSES[class_name]
+        if dataset_name.casefold() not in {canonical, native}:
+            raise PlanEvidenceError('DGL native class does not establish the declared dataset identity')
+        dgl_context = {'framework_version': '1.1.2', 'framework_dataset_name': native}
     def covered(quote):
         import re
         quote = re.sub(r'\s+', ' ', quote).strip()
@@ -130,7 +141,7 @@ def compile_runtime_dataset(item, packet, workspace, citations):
     return {'kind': 'author_runtime', 'path': name, 'function': function,
             'dataset_class': class_name, 'dataset_name': dataset_name,
             'source_sha256': source['sha256'], 'citations': list(item['citations']),
-            'framework': 'torch_geometric.datasets', 'constructor_quotes': quotes}
+            'framework': framework, 'constructor_quotes': quotes, **dgl_context}
 
 
 def verify_runtime_datasets(plan, receipts, workspace):
@@ -155,9 +166,12 @@ def verify_runtime_datasets(plan, receipts, workspace):
                     or type(record.get('sample_count')) is not int or record['sample_count'] <= 0
                     or not record.get('files') or not any(value.get('role') == 'raw' for value in record['files'].values())):
                 raise ValueError('Native dataset lacks complete real-file and pre-training construction evidence')
-            root = Path(record['root']).resolve(strict=True)
+            if declaration.get('framework') == 'dgl.data':
+                from src.experiments.observe_dgl_datasets import validate_dgl_record
+                validate_dgl_record(declaration, record, real_dataset_path)
+            root = real_dataset_path(record['root'])
             for name, value in record['files'].items():
-                path = Path(name).resolve(strict=True)
+                path = real_dataset_path(name)
                 if (not path.is_relative_to(root) or not path.is_file()
                         or type(value.get('bytes')) is not int or value['bytes'] <= 0
                         or path.stat().st_size != value['bytes'] or digest(path) != value.get('sha256')):
@@ -165,3 +179,21 @@ def verify_runtime_datasets(plan, receipts, workspace):
         records.append({'kind': 'author_runtime', 'loader': declaration, 'verified': True,
                         'observations': observed, 'source': 'original_author_constructor_and_fixed_framework'})
     return records
+
+
+def audit_runtime_datasets(plan, receipts, workspace):
+    """Keep observed input checks separate from author completion and reference identity."""
+    declarations = [item for item in plan.get('datasets', []) if item.get('kind') == 'author_runtime']
+    sources, errors = [], []
+    for declaration in declarations:
+        try:
+            sources.extend(verify_runtime_datasets({'datasets': [declaration]}, receipts, workspace))
+        except Exception as exc:
+            details = [record['verification_error'] for receipt in receipts
+                       for record in receipt.get('native_datasets', [])
+                       if record.get('declaration') == declaration and record.get('verification_error')]
+            errors.append({'loader': declaration, 'reason': str(exc), 'observation_errors': details})
+    verified = bool(declarations) and not errors and len(sources) == len(declarations)
+    return {'status': 'verified' if verified else 'partial' if sources else 'unavailable',
+            'verified': verified, 'basis': 'native_constructor_and_unchanged_input_files',
+            'independent_reference_verified': False, 'sources': sources, 'errors': errors}

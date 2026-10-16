@@ -1,0 +1,160 @@
+{
+  "scope": "Real native DGL1.1.2 Cora observation and ten-update instrumentation fixture; not original CCA-SSG training or independent PDF acceptance",
+  "runtime": "Standard CPython3.11/Torch2.5.1+cpu/DGL1.1.2",
+  "optimizer_steps": 10,
+  "natural_return": true,
+  "observation": {
+    "declaration": {
+      "kind": "author_runtime",
+      "path": "native_train.py",
+      "function": "<module>",
+      "dataset_class": "CoraGraphDataset",
+      "dataset_name": "cora",
+      "source_sha256": "2264f2285f1ce52f53d7594220c1cb7725894a419b8bc7572f906d26a57651b5",
+      "citations": [
+        "loader"
+      ],
+      "framework": "dgl.data",
+      "constructor_quotes": [
+        "CoraGraphDataset(raw_dir='C:\\\\Users\\\\24886\\\\AppData\\\\Local\\\\Temp\\\\pytest-of-24886\\\\pytest-147\\\\native_dgl_input0\\\\actual_cora', verbose=False)"
+      ],
+      "framework_version": "1.1.2",
+      "framework_dataset_name": "cora_v2"
+    },
+    "dataset_name": "cora",
+    "framework_dataset_name": "cora_v2",
+    "framework_version": "1.1.2",
+    "source_url": "https://data.dgl.ai/dataset/cora_v2.zip",
+    "root": "C:\\Users\\24886\\AppData\\Local\\Temp\\pytest-of-24886\\pytest-147\\native_dgl_input0\\actual_cora",
+    "raw_path": "C:\\Users\\24886\\AppData\\Local\\Temp\\pytest-of-24886\\pytest-147\\native_dgl_input0\\actual_cora\\cora_v2_d697a464",
+    "graph_path": "C:\\Users\\24886\\AppData\\Local\\Temp\\pytest-of-24886\\pytest-147\\native_dgl_input0\\actual_cora\\cora_v2_d697a464\\cora_v2_dgl_graph.bin",
+    "info_path": "C:\\Users\\24886\\AppData\\Local\\Temp\\pytest-of-24886\\pytest-147\\native_dgl_input0\\actual_cora\\cora_v2_d697a464\\cora_v2_dgl_graph.pkl",
+    "files": {
+      "C:\\Users\\24886\\AppData\\Local\\Temp\\pytest-of-24886\\pytest-147\\native_dgl_input0\\actual_cora\\cora_v2_d697a464\\ind.cora_v2.x": {
+        "sha256": "23cfa55d91c6f624233f5eb7b6e3f141f1bd2b2ae39608a63cf5d084bb27baab",
+        "bytes": 22119,
+        "role": "raw"
+      },
+      "C:\\Users\\24886\\AppData\\Local\\Temp\\pytest-of-24886\\pytest-147\\native_dgl_input0\\actual_cora\\cora_v2_d697a464\\ind.cora_v2.y": {
+        "sha256": "94465c14eb53e04ca262198dcbb2521ee8af60fb3f3d546cd6ca24a511b0e7d1",
+        "bytes": 4054,
+        "role": "raw"
+      },
+      "C:\\Users\\24886\\AppData\\Local\\Temp\\pytest-of-24886\\pytest-147\\native_dgl_input0\\actual_cora\\cora_v2_d697a464\\ind.cora_v2.tx": {
+        "sha256": "b9afbaa4a400df991f6f02ef677e1e44da55ffc04801fd02f9e673987829226a",
+        "bytes": 148025,
+        "role": "raw"
+      },
+      "C:\\Users\\24886\\AppData\\Local\\Temp\\pytest-of-24886\\pytest-147\\native_dgl_input0\\actual_cora\\cora_v2_d697a464\\ind.cora_v2.ty": {
+        "sha256": "41f5ac76596a1699cc33f53084a2419e92961c42bb75f36fc38e616d348532ad",
+        "bytes": 28135,
+        "role": "raw"
+      },
+      "C:\\Users\\24886\\AppData\\Local\\Temp\\pytest-of-24886\\pytest-147\\native_dgl_input0\\actual_cora\\cora_v2_d697a464\\ind.cora_v2.allx": {
+        "sha256": "9419ba2f26f5c35243db64aba110e0f35a04851609e0dc5433450676ca6b8543",
+        "bytes": 257305,
+        "role": "raw"
+      },
+      "C:\\Users\\24886\\AppData\\Local\\Temp\\pytest-of-24886\\pytest-147\\native_dgl_input0\\actual_cora\\cora_v2_d697a464\\ind.cora_v2.ally": {
+        "sha256": "2b998f5cc7fedc86e7f97ca2498f47a1ffc1462c29e2d578b23bf3f62b6e7d71",
+        "bytes": 47959,
+        "role": "raw"
+      },
+      "C:\\Users\\24886\\AppData\\Local\\Temp\\pytest-of-24886\\pytest-147\\native_dgl_input0\\actual_cora\\cora_v2_d697a464\\ind.cora_v2.graph": {
+        "sha256": "58f13302f39dde8852dad6fe6d15b89b077b6d7f837626bce671ef80344b383d",
+        "bytes": 59847,
+        "role": "raw"
+      },
+      "C:\\Users\\24886\\AppData\\Local\\Temp\\pytest-of-24886\\pytest-147\\native_dgl_input0\\actual_cora\\cora_v2_d697a464\\ind.cora_v2.test.index": {
+        "sha256": "297ce89af2b51a6a194181c7dbe1796c6a1cf9cd9349a88383b1b1e227867875",
+        "bytes": 5000,
+        "role": "raw"
+      },
+      "C:\\Users\\24886\\AppData\\Local\\Temp\\pytest-of-24886\\pytest-147\\native_dgl_input0\\actual_cora\\cora_v2_d697a464\\cora_v2_dgl_graph.bin": {
+        "sha256": "787c8062966ad5c086ee154c435df041d8b881ec602e8362fe84a11a9630a08e",
+        "bytes": 15726120,
+        "role": "processed"
+      },
+      "C:\\Users\\24886\\AppData\\Local\\Temp\\pytest-of-24886\\pytest-147\\native_dgl_input0\\actual_cora\\cora_v2_d697a464\\cora_v2_dgl_graph.pkl": {
+        "sha256": "558645f950c66edb97c190741bc43ceb194dcfb462d229eca9c6dbc7740e1166",
+        "bytes": 31,
+        "role": "processed"
+      }
+    },
+    "loaded_before_training": true,
+    "verified": true,
+    "sample_count": 1,
+    "num_nodes": 2708,
+    "num_edges": 10556,
+    "num_features": 1433,
+    "num_classes": 7,
+    "mask_counts": {
+      "train": 140,
+      "validation": 500,
+      "test": 1000
+    },
+    "tensor_evidence": {
+      "feat": {
+        "shape": [
+          2708,
+          1433
+        ],
+        "dtype": "torch.float32",
+        "sha256": "1a213087243ca1ee26967d0809d04997d276f0911fe5f8d994f49b3aa873b675"
+      },
+      "label": {
+        "shape": [
+          2708
+        ],
+        "dtype": "torch.int64",
+        "sha256": "d0018d7ffd314eb25a4904973f2c7eb1b7be135d668de42d453714724f8e9d03"
+      },
+      "train_mask": {
+        "shape": [
+          2708
+        ],
+        "dtype": "torch.bool",
+        "sha256": "b211325c561d6f73f978a4b0f3d44571c58eb70ca55a2aa27b9d4988344476c1"
+      },
+      "val_mask": {
+        "shape": [
+          2708
+        ],
+        "dtype": "torch.bool",
+        "sha256": "96c8f5dc197fc3c014b3d655f1c28d0d276221e867ca01d64f74edb39cfb7173"
+      },
+      "test_mask": {
+        "shape": [
+          2708
+        ],
+        "dtype": "torch.bool",
+        "sha256": "ec05c123cc125ff38ad3963cba5d85415a2e7b125dc68064bbf65fb0661644e6"
+      }
+    }
+  },
+  "independent_reference_verified": false,
+  "paper_metrics_verified": false,
+  "mechanism_checks": {
+    "all_raw_files": 8,
+    "all_processed_files": 2,
+    "no_extra_getitem_or_transform_calls": true,
+    "native_tensor_values_and_original_source_unchanged": true
+  },
+  "targeted_result": {
+    "passed": 67,
+    "skipped": 0,
+    "failed": 0,
+    "elapsed_s": 41.93
+  },
+  "service_results": {
+    "passed": 3,
+    "failed": 0,
+    "elapsed_s": 34.18,
+    "states": [
+      "complete",
+      "unobserved",
+      "changed"
+    ],
+    "original_author_completion_preserved_in_all_states": true
+  }
+}

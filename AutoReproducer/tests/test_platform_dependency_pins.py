@@ -71,6 +71,32 @@ def script_digest(fixture):
     return hashlib.sha256((fixture['workspace'] / 'train.py').read_bytes()).hexdigest()
 
 
+def test_dgl_source_import_keeps_its_legacy_setuptools_runtime_dependency(tmp_path):
+    fixture = make_experiment(tmp_path)
+    script = fixture['workspace'] / 'train.py'
+    source = 'import dgl\n' + script.read_text('utf-8')
+    script.write_bytes(source.encode())
+    fixture['snapshot']['files']['train.py'] = hashlib.sha256(script.read_bytes()).hexdigest()
+    next(c for c in fixture['proposal']['citations'] if c['id'] == 'script')['quote'] = source
+    packet = planner.build_evidence_packet(fixture['pdf'], fixture['workspace'], fixture['snapshot'])
+    packet['author_execution_only'] = True
+    proposal = deepcopy(fixture['proposal'])
+    proposal.update(scope='author_code_execution', device='cpu')
+    plan = validate_author_execution_plan(proposal, packet, fixture['workspace'])
+    assert 'dgl==1.1.2' in plan['requirements']['compatibility']
+    assert 'setuptools==69.5.1' in environment_for_plan(plan)['requirements_txt'].splitlines()
+    assert 'packaging==24.2' in environment_for_plan(plan)['requirements_txt'].splitlines()
+    assert plan['steps'][0]['argv'] == proposal['steps'][0]['argv']
+
+
+def test_missing_dgl_repair_adds_the_same_legacy_runtime_dependency():
+    plan = {'scope': 'author_code_execution', 'capture': {'device': 'cpu'},
+            'requirements': {'author': ['dgl==1.1.2'], 'compatibility': []}}
+    repair = repair_requirement("ModuleNotFoundError: No module named 'dgl'", plan, {'file_inventory': {}})
+    assert 'setuptools==69.5.1' in repair['additions']
+    assert 'packaging==24.2' in repair['additions']
+
+
 @pytest.mark.parametrize('platform_name,device,versions', HOST_BUILDS)
 def test_missing_native_import_repairs_use_the_same_build_family(monkeypatch, platform_name, device, versions):
     set_host(monkeypatch, platform_name)

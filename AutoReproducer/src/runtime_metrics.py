@@ -1,4 +1,5 @@
 """最终运行指标：结构化输出优先，文本回退保留单位和来源。"""
+import ast
 import json
 import math
 import re
@@ -34,6 +35,30 @@ _FINAL_STAGES = {"final", "full", "test", "eval", "evaluation"}
 _TEXT_METRICS = {"accuracy", "f1_score", "precision", "recall", "loss", "mse", "rmse", "mae",
                  "r2", "auc", "roc_auc", "mape", "smape", "psnr", "ssim", "bleu", "rouge",
                  "perplexity", "score", "reproduction_score"}
+_LOGGER_RUN = re.compile(r'^\s*Run\s+(\d+)\s*:\s*$', re.I)
+_LOGGER_ALL = re.compile(r'^\s*All\s+runs\s*:\s*$', re.I)
+_LOGGER_FINAL = re.compile(r'^\s*Final\s+(?P<split>train|valid|validation|test)\s*:\s*'
+                           r'(?P<value>' + NUMBER_PATTERN + r')(?![\w.])\s*(?P<percent>%)?', re.I)
+
+
+def _printed_logger_context(line):
+    if not line.strip().startswith('Namespace('):
+        return None
+    fields = {}
+    try:
+        node = ast.parse(line.strip(), mode='eval').body
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name) or node.func.id != 'Namespace':
+            return fields
+        for keyword in node.keywords:
+            if keyword.arg in ('metric', 'runs'):
+                fields[keyword.arg] = ast.literal_eval(keyword.value)
+    except (SyntaxError, ValueError, TypeError):
+        return {}
+    name = {'rocauc': 'roc_auc'}.get(str(fields.get('metric')), norm_metric_key(fields.get('metric')))
+    fields['metric'] = name if name in _TEXT_METRICS else None
+    if type(fields.get('runs')) is not int or fields['runs'] < 1:
+        fields.pop('runs', None)
+    return fields
 
 
 def metric_number(value):
@@ -185,7 +210,40 @@ def parse_runtime_metrics(text, structured=None, expected_names=(), *, preserve_
 
     records = []
     known_names = _TEXT_METRICS | {norm_metric_key(key) for key in expected_names}
+    logger, current_run, all_runs, completed_runs = {}, None, False, {}
     for line_number, line in enumerate(lines, 1):
+        context = _printed_logger_context(line)
+        if context is not None:
+            logger, current_run, all_runs, completed_runs = context, None, False, {}
+        run_header = _LOGGER_RUN.fullmatch(line)
+        if run_header:
+            current_run, all_runs = int(run_header[1]), False
+        if _LOGGER_ALL.fullmatch(line):
+            current_run, all_runs = None, True
+        final = _LOGGER_FINAL.match(line) if logger.get('metric') else None
+        if final and not _REFERENCE_RE.search(line):
+            suffix = line[final.end():]
+            # Do not attach a second metric's uncertainty to this bare label.
+            others = [match for match in _METRIC_RE.finditer(suffix)
+                      if norm_metric_key(match['name']) not in _STAT_NAMES]
+            if not others:
+                split = {'valid': 'validation'}.get(final['split'].lower(), final['split'].lower())
+                stats = _statistics('', suffix)
+                if not all_runs and current_run is not None:
+                    stats.setdefault('aggregation', 'single')
+                    stats.setdefault('runs', 1)
+                    if split == 'test' and metric_number(final['value']) is not None:
+                        completed_runs[current_run] = completed_runs.get(current_run, 0) + 1
+                count = logger.get('runs')
+                complete_ids = set(completed_runs)
+                if (all_runs and count and len(complete_ids) == count
+                        and all(value == 1 for value in completed_runs.values())
+                        and complete_ids in (set(range(count)), set(range(1, count + 1)))):
+                    stats.setdefault('runs', count)
+                records.append({'name': logger['metric'], 'value': metric_number(final['value']),
+                    'unit': 'percent' if final['percent'] else '', 'split': split,
+                    'stage': 'final' if split == 'test' else split,
+                    'source': f'stdout:{line_number}', 'source_quote': line.strip(), **stats})
         previous_end = 0
         summaries = list(_SUMMARY_RE.finditer(line))
         matches = [(match, True) for match in summaries]

@@ -193,6 +193,58 @@ def test_program_summary_fills_unknown_fields_and_report_keeps_std(sources):
     assert '± 0.01' in report and '10 次' in report and '仅供参考' in report
 
 
+def _confidence_record(records):
+    record = next(row for row in records if row['split'] == 'test')
+    record.update(reported_uncertainty=0.015536, uncertainty_kind='bootstrap_confidence_interval',
+                  confidence_level=95, uncertainty_source={'path': 'train.py',
+                  'source_sha256': 'a' * 64, 'definition_line': 5, 'print_line': 6})
+    return record
+
+
+def test_observed_confidence_half_width_survives_comparison_and_report(sources):
+    fixture, packet, records, payload = sources
+    original = _confidence_record(records)
+    rows, citations = validate_comparisons(payload, packet, fixture['workspace'], records)
+    actual = rows[0]['actual']
+    assert actual['reported_uncertainty'] == original['reported_uncertainty']
+    assert actual['uncertainty_kind'] == 'bootstrap_confidence_interval'
+    assert actual['confidence_level'] == 95
+    assert actual['uncertainty_source'] == original['uncertainty_source']
+    assert actual.get('std') is None
+    report = ReportGeneratorAgent(logger=Mock())._build_report({'execution': {'mode': 'repository'},
+        'validation': {'status': 'author_code_completed', 'is_reproduced': None,
+            'author_claim_comparison': {'comparisons': rows, 'citations': citations}}})
+    assert '± 0.015536' in report and '95% bootstrap 置信区间半宽' in report
+
+
+@pytest.mark.parametrize('field,value', [('reported_uncertainty', 0.1),
+    ('uncertainty_kind', 'standard_deviation'), ('confidence_level', 99),
+    ('uncertainty_source', {'path': 'invented.py'})])
+def test_model_cannot_change_observed_uncertainty_context(sources, field, value):
+    fixture, packet, records, payload = sources
+    _confidence_record(records)
+    payload['comparisons'][0]['actual_context'][field] = value
+    with pytest.raises(ValueError, match='observed'):
+        validate_comparisons(payload, packet, fixture['workspace'], records)
+
+
+def test_model_cannot_invent_unobserved_confidence_context(sources):
+    fixture, packet, records, payload = sources
+    payload['comparisons'][0]['actual_context'].update(reported_uncertainty=0.1,
+        uncertainty_kind='bootstrap_confidence_interval', confidence_level=95)
+    with pytest.raises(ValueError, match='unobserved'):
+        validate_comparisons(payload, packet, fixture['workspace'], records)
+
+
+def test_unpaired_actual_evidence_table_keeps_confidence_half_width(sources):
+    _, _, records, _ = sources
+    _confidence_record(records)
+    report = ReportGeneratorAgent(logger=Mock())._build_report({'execution': {'mode': 'repository'},
+        'validation': {'status': 'author_code_completed', 'is_reproduced': None, 'metric_records': records,
+            'author_claim_comparison': {'status': 'unavailable', 'metric_records': records}}})
+    assert '± 0.015536' in report and '95% bootstrap 置信区间半宽' in report
+
+
 def _two_step_proposal(payload):
     execution = actual_execution()
     execution['steps'].append({'id': 'another', 'success': True, 'exit_code': 0,
@@ -296,6 +348,47 @@ def test_multi_dataset_row_requires_its_exact_identifying_header(sources, header
     fixture, packet, records, payload = _flat_table(sources)
     payload['comparisons'][0]['reference']['column_quote'] = header
     with pytest.raises(ValueError, match='column_quote'):
+        validate_comparisons(payload, packet, fixture['workspace'], records)
+
+
+def _spaced_method_table(sources, label='SIG NAL LIN EAR', first='100.0 ±0.1'):
+    import hashlib
+    fixture, packet, records, payload = _flat_table(sources)
+    paper = next(ref for ref in payload['citations'] if ref['id'] == 'paper_results')
+    page = next(page for page in packet['pdf']['pages'] if page['page'] == paper['page'])
+    header = 'Type Model Non-linearity PDE-solver Input-G SignGrid OtherGrid'
+    row = f'{label} - - - {first} 98.0 ±0.2'
+    text = 'Test accuracy (%)\n' + header + '\n' + row
+    page['text'] += '\n' + text
+    page['sha256'] = hashlib.sha256(page['text'].encode()).hexdigest()
+    paper['quote'] = text
+    payload['comparisons'][0]['reference'].update(value_quote=row, column_quote=header, std=0.1)
+    return fixture, packet, records, payload
+
+
+def test_pdf_method_kerning_and_metadata_placeholders_keep_exact_column_evidence(sources):
+    fixture, packet, records, payload = _spaced_method_table(sources)
+    rows, _ = validate_comparisons(payload, packet, fixture['workspace'], records)
+    ref = rows[0]['reference']
+    assert ref['method'] == 'SIG NAL LIN EAR' and ref['proposed_method_label'] == 'Signal Linear'
+    assert ref['column_verified'] is True and ref['value'] == 100 and ref['std'] == 0.1
+    assert payload['comparisons'][0]['reference']['method'] == 'Signal Linear'
+    payload['comparisons'][0]['reference']['std'] = 0.2
+    with pytest.raises(ValueError, match='standard deviation.*dataset column'):
+        validate_comparisons(payload, packet, fixture['workspace'], records)
+
+
+@pytest.mark.parametrize('label', ['SIG NAL LIN EAR (PPR)', 'SIG NAL LIN EAR-s', 'OTHER METHOD'])
+def test_pdf_typography_does_not_drop_variant_suffixes_or_change_methods(sources, label):
+    fixture, packet, records, payload = _spaced_method_table(sources, label=label)
+    with pytest.raises(ValueError, match='method row'):
+        validate_comparisons(payload, packet, fixture['workspace'], records)
+
+
+def test_dataset_column_placeholder_is_not_a_neighboring_dataset_result(sources):
+    fixture, packet, records, payload = _spaced_method_table(sources, first='-')
+    payload['comparisons'][0]['reference'].update(value=98.0, std=0.2)
+    with pytest.raises(ValueError, match='column.*(?:value|reported)'):
         validate_comparisons(payload, packet, fixture['workspace'], records)
 
 

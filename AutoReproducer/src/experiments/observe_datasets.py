@@ -3,10 +3,27 @@ import hashlib
 import importlib
 import inspect
 from pathlib import Path
+import stat
+
+if __package__:
+    from .observe_dgl_datasets import capture_dgl
+else:
+    from observe_dgl_datasets import capture_dgl
+
+
+def real_dataset_path(path):
+    """Reject link indirection before resolving an observed input's identity."""
+    path = Path(path).absolute()
+    for component in (path, *path.parents):
+        metadata = component.lstat()
+        if (stat.S_ISLNK(metadata.st_mode) or getattr(metadata, 'st_file_attributes', 0)
+                & getattr(stat, 'FILE_ATTRIBUTE_REPARSE_POINT', 0)):
+            raise ValueError('Original dataset path contains a symlink or junction')
+    return path.resolve(strict=True)
 
 
 def file_record(path, role):
-    path = Path(path).resolve(strict=True)
+    path = real_dataset_path(path)
     if not path.is_file() or not path.stat().st_size:
         raise ValueError('Original framework dataset is missing a complete real file')
     digest = hashlib.sha256()
@@ -17,18 +34,31 @@ def file_record(path, role):
 
 
 class DatasetObserver:
-    def __init__(self, declarations, workspace, update_count):
+    def __init__(self, declarations, workspace, update_count, *, strict=True):
         self.records, self.patches = [], []
+        self.strict = strict
         self.workspace, self.update_count = Path(workspace).resolve(), update_count
         self.declarations = declarations
         if declarations:
-            framework = importlib.import_module('torch_geometric.datasets')
-            for name in dict.fromkeys(item['dataset_class'] for item in declarations):
-                cls = getattr(framework, name)
-                if not cls.__module__.startswith('torch_geometric.datasets.'):
-                    raise ValueError('Native dataset class differs from the fixed framework')
+            for module_name, name in dict.fromkeys((item.get('framework', 'torch_geometric.datasets'),
+                                                   item['dataset_class']) for item in declarations):
+                try:
+                    framework = importlib.import_module(module_name)
+                    if module_name == 'dgl.data' and importlib.import_module('dgl').__version__ != '1.1.2':
+                        raise ValueError('DGL dataset observation requires the reviewed DGL 1.1.2 runtime')
+                    cls = getattr(framework, name)
+                    if not cls.__module__.startswith(module_name + '.'):
+                        raise ValueError('Native dataset class differs from the fixed framework')
+                except Exception as exc:
+                    if self.strict:
+                        raise
+                    for declaration in declarations:
+                        if declaration['dataset_class'] == name and declaration.get('framework', 'torch_geometric.datasets') == module_name:
+                            self._unknown(declaration, exc, False)
+                    continue
                 original = cls.__init__
-                def observed(instance, *args, __original=original, __name=name, **kwargs):
+                def observed(instance, *args, __original=original, __name=name, __module=module_name,
+                             __class=cls, **kwargs):
                     frame = inspect.currentframe().f_back
                     declarations = []
                     while frame is not None:
@@ -36,18 +66,33 @@ class DatasetObserver:
                         if filename.is_relative_to(self.workspace):
                             declarations.extend(item for item in self.declarations
                                 if item['dataset_class'] == __name and filename == self.workspace / item['path']
+                                and item.get('framework', 'torch_geometric.datasets') == __module
                                 and frame.f_code.co_name == item['function'])
                             break
                         frame = frame.f_back
                     before_training = self.update_count() == 0
                     __original(instance, *args, **kwargs)
                     for declaration in declarations:
-                        self.capture(instance, declaration, before_training)
+                        try:
+                            if __module == 'dgl.data' and type(instance) is not __class:
+                                raise ValueError('DGL data observation does not accept an author subclass')
+                            self.capture(instance, declaration, before_training)
+                        except Exception as exc:
+                            if self.strict:
+                                raise
+                            self._unknown(declaration, exc, before_training)
                 self.patches.append((cls, original))
                 cls.__init__ = observed
 
+    def _unknown(self, declaration, error, before_training):
+        self.records.append({'declaration': declaration, 'verified': False,
+                             'loaded_before_training': before_training, 'verification_error': str(error)})
+
     def capture(self, dataset, declaration, before_training):
-        root = Path(dataset.root).resolve(strict=True)
+        if declaration.get('framework') == 'dgl.data':
+            self.records.append(capture_dgl(dataset, declaration, before_training, file_record, real_dataset_path))
+            return
+        root = real_dataset_path(dataset.root)
         files = {}
         for role, paths in [('raw', dataset.raw_paths), ('processed', dataset.processed_paths)]:
             for path in paths:
@@ -73,13 +118,25 @@ class DatasetObserver:
 
     def finish(self):
         for record in self.records:
-            for name, expected in record['files'].items():
-                _, actual = file_record(name, expected['role'])
-                if actual != expected:
-                    raise ValueError('Real framework dataset changed during author training')
+            if record.get('verified') is not True:
+                continue
+            try:
+                for name, expected in record['files'].items():
+                    _, actual = file_record(name, expected['role'])
+                    if actual != expected:
+                        raise ValueError('Real framework dataset changed during author training')
+            except Exception as exc:
+                if self.strict:
+                    raise
+                record.update(verified=False, verification_error=str(exc))
         for declaration in self.declarations:
-            if not any(record['declaration'] == declaration and record['loaded_before_training'] for record in self.records):
-                raise ValueError('The reviewed native dataset was not constructed before actual training')
+            if not any(record['declaration'] == declaration and record.get('loaded_before_training')
+                       and record.get('verified') for record in self.records):
+                error = ValueError('The reviewed native dataset was not constructed before actual training')
+                if self.strict:
+                    raise error
+                if not any(record['declaration'] == declaration and record.get('verified') is False for record in self.records):
+                    self._unknown(declaration, error, False)
         return self.records
 
     def close(self):

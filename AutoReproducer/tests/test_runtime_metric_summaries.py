@@ -115,3 +115,63 @@ def test_structured_summary_remains_authoritative_and_keeps_provenance():
     assert not errors
     assert records[0]['value'] == 0.9 and records[0]['runs'] == 20
     assert records[0]['source'] == 'stdout:1'
+
+
+def logger_output(ids=(1, 2, 3, 4, 5), metric='acc', total=5):
+    lines = [f"Namespace(metric='{metric}', runs={total})"]
+    for run in ids:
+        lines += [f'Run {run:02d}:', 'Highest Test: 99.99', 'Final Train: 100.00', 'Final Test: 89.66']
+    lines += ['All runs:', 'Highest Test: 99.99 ± 0.10',
+              '  Final Train: 100.00 ± 0.00', '   Final Test: 89.48 ± 0.40']
+    return '\n'.join(lines)
+
+
+def test_typed_logger_final_test_summary_beats_last_trial_and_highest_test():
+    text = logger_output()
+    records, errors = parse_runtime_metrics(text, preserve_contexts=True)
+    assert not errors
+    row = next(row for row in records if row['split'] == 'test')
+    assert row['name'] == 'accuracy' and row['value'] == 89.48
+    assert row['aggregation'] == 'mean' and row['std'] == 0.40 and row['runs'] == 5
+    assert row['unit'] == ''  # Printed logger source, not magnitude, supplies units later.
+    assert row['source_quote'] == 'Final Test: 89.48 ± 0.40'
+    assert row['source'] == f'stdout:{len(text.splitlines())}'
+    assert next(row for row in records if row['split'] == 'train')['value'] == 100
+
+
+@pytest.mark.parametrize('ids', [(), (1,), (1, 2, 4, 5), (1, 2, 2, 3, 4, 5)])
+def test_declared_runs_alone_or_incomplete_logger_blocks_do_not_prove_a_count(ids):
+    records, _ = parse_runtime_metrics(logger_output(ids), preserve_contexts=True)
+    test = next(row for row in records if row['split'] == 'test')
+    assert test['value'] == 89.48 and test['aggregation'] == 'mean'
+    assert 'runs' not in test
+
+
+@pytest.mark.parametrize('metric,expected', [('rocauc', 'roc_auc'), ('f1', 'f1_score')])
+def test_logger_uses_the_explicit_metric_name_instead_of_assuming_accuracy(metric, expected):
+    records, errors = parse_runtime_metrics(logger_output(metric=metric), preserve_contexts=True)
+    assert not errors and {record['name'] for record in records} == {expected}
+
+
+def test_ambiguous_bare_logger_labels_do_not_invent_a_metric_identity():
+    records, _ = parse_runtime_metrics('All runs:\nFinal Test: 89.48 ± 0.40', preserve_contexts=True)
+    assert not records
+
+
+def test_per_run_final_logger_output_is_not_a_five_run_mean():
+    records, errors = parse_runtime_metrics("Namespace(metric='acc', runs=5)\nRun 05:\nFinal Test: 89.66", preserve_contexts=True)
+    assert not errors
+    assert records[0]['aggregation'] == 'single' and records[0]['runs'] == 1
+
+
+def test_logger_explicit_ci_and_paper_reference_never_become_standard_deviation_or_measurement():
+    text = "Namespace(metric='acc', runs=5)\nAll runs:\nFinal Test: 89.48 ± 0.40 (95% CI)\nPaper Final Test: 99.99 ± 0.01"
+    records, errors = parse_runtime_metrics(text, preserve_contexts=True)
+    assert not errors and len(records) == 1
+    assert records[0]['value'] == 89.48 and 'std' not in records[0]
+
+
+def test_explicit_structured_measurement_still_wins_over_typed_logger():
+    records, _ = parse_runtime_metrics(logger_output(), structured=[{
+        'name': 'accuracy', 'value': 0.7, 'unit': 'fraction', 'split': 'test'}])
+    assert records[0]['value'] == 0.7 and records[0]['unit'] == 'fraction'

@@ -1,0 +1,53 @@
+{
+  "kind": "legacy_numpy_ragged_summary_native_regression",
+  "source_commit": "fe2a30e1b262a019056f33fdda864cbfd02fb1ca",
+  "full_regression": {
+    "passed": 3381,
+    "skipped": 26,
+    "failed": 0,
+    "seconds": 1339.966
+  },
+  "cases": [
+    {
+      "name": "test_scalar_and_vector_means_and_variances_preserve_legacy_statistics",
+      "passed": true,
+      "seconds": 0.026
+    },
+    {
+      "name": "test_changed_source_cannot_receive_the_recorded_summary_repair",
+      "passed": true,
+      "seconds": 0.018
+    },
+    {
+      "name": "test_inconsistent_vector_shapes_remain_an_original_error",
+      "passed": true,
+      "seconds": 0.016
+    },
+    {
+      "name": "test_other_reduction_axis_is_not_automatically_changed",
+      "passed": true,
+      "seconds": 0.02
+    },
+    {
+      "name": "test_structure_change_between_recorded_reductions_is_rejected",
+      "passed": true,
+      "seconds": 0.021
+    },
+    {
+      "name": "test_explicit_dtype_and_other_keywords_are_not_overridden",
+      "passed": true,
+      "seconds": 0.02
+    },
+    {
+      "name": "test_same_named_function_argument_keeps_its_original_regular_reduction",
+      "passed": true,
+      "seconds": 0.022
+    },
+    {
+      "name": "test_full_service_can_repair_post_training_summary_and_complete_original_command",
+      "passed": true,
+      "seconds": 28.096
+    }
+  ],
+  "scope": "Mechanics tests preserve scalar/vector mean and variance, vector columns, original source and exact author command. Real paper browser run is separate."
+}

@@ -1,0 +1,40 @@
+{
+  "url": "https://github.com/CUAI/CorrectAndSmooth",
+  "resolved_sha": "b910314a59270984f5e249462ee3faa815fc9a0c",
+  "archive_sha256": "86168d981c076b0f3ec0c66391c3c320a0b0273ff661e1c874e4da44c9de1f25",
+  "files": {
+    ".gitignore": "c096c7ba25c094d1b3d3e944896e944080ba1b2b183f205c50c30cf89c3acf89",
+    "README.md": "ae5228d590f65baa528a75061a731652f9bb49ad7fb3bce3206b1112ab1f7c51",
+    "diffusion_feature.py": "c4e8cd9fd757f2e7320794484fdfb6c65fbcb9399412c3d70a031c0e7853885b",
+    "gat/gat.py": "f0b1ffaca12f25b5537b9788616c8a7ef6ba5b5d0cbc765014fda52576ab85d4",
+    "gat/logger.py": "11faddd376c766a1c26316e593b07dacde134d7a2bc1e524c73e0225ca197065",
+    "gat/models.py": "4322a393fb32a513543c511dc9a2ce11230edea6aa7cfe1239b8a31a0a1246a1",
+    "gat/outcome_correlation.py": "b34528d8a571beb16385035c99c7957e351e0a6ed201ba463d03f5415eefa22e",
+    "gen_models.py": "75246b2a017ca7b9cf78809ad678e57bdc57eb6123fe85c91d00e9d7c2ac2a6d",
+    "logger.py": "11faddd376c766a1c26316e593b07dacde134d7a2bc1e524c73e0225ca197065",
+    "norm_spec.jl": "01d5d03df2e71f3d4388a53f4f9601e916f80102c65aff77d42d4b3e3d92b106",
+    "outcome_correlation.py": "b34528d8a571beb16385035c99c7957e351e0a6ed201ba463d03f5415eefa22e",
+    "run_experiments.py": "4481263edf1fca0ebc0c5d5bdb6665c6995b99c332583b817c7607ccf52d4f52"
+  },
+  "file_aliases": [
+    {
+      "path": "gat/logger.py",
+      "link_target": "../logger.py",
+      "resolved_target": "logger.py",
+      "materialization": "committed_file_copy",
+      "target_sha256": "11faddd376c766a1c26316e593b07dacde134d7a2bc1e524c73e0225ca197065"
+    },
+    {
+      "path": "gat/outcome_correlation.py",
+      "link_target": "../outcome_correlation.py",
+      "resolved_target": "outcome_correlation.py",
+      "materialization": "committed_file_copy",
+      "target_sha256": "b34528d8a571beb16385035c99c7957e351e0a6ed201ba463d03f5415eefa22e"
+    }
+  ],
+  "status": "original_fixed_repository_exported",
+  "all_aliases_equal_committed_target_bytes": true,
+  "os_symlinks_created": false,
+  "training_executed": false,
+  "paper_acceptance": false
+}

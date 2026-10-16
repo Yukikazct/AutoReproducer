@@ -122,6 +122,29 @@ def test_repair_budget_is_shared_by_preflight_and_training(tmp_path):
     assert len(data['dependency_repair_attempts']) == MAX_DEPENDENCY_REPAIRS
 
 
+def test_pyg_retries_share_the_same_eight_error_budget(tmp_path):
+    data = {'pyg_repair_attempts': [{} for _ in range(MAX_DEPENDENCY_REPAIRS)]}
+    runner = FailingRunner(['RuntimeError: older version of PyG'])
+    repair = Mock(return_value={'kind': 'pyg_legacy_data_state'})
+    result = run_with_dependency_repair(runner, tmp_path, [], {}, plan(), {'file_inventory': {}},
+        tmp_path, data, lambda event: None, lambda: None, repair_pyg=repair)
+    assert not result['success'] and len(runner.calls) == 1
+    repair.assert_not_called()
+
+
+def test_pyg_repair_retries_unchanged_author_command_and_keeps_failure(tmp_path):
+    runner = FailingRunner(['RuntimeError: older version of PyG', ''])
+    steps = [{'argv': ['python', 'train.py', '--epochs', '1000'], 'timeout_s': None}]
+    repair = Mock(return_value={'kind': 'pyg_legacy_data_state'})
+    data = {}
+    result = run_with_dependency_repair(runner, tmp_path, steps, {}, plan(), {'file_inventory': {}},
+        tmp_path, data, lambda event: None, lambda: None, repair_pyg=repair)
+    assert result['success'] and len(runner.calls) == 2
+    assert all(call[0] == steps for call in runner.calls)
+    assert len(data['pyg_repair_attempts']) == 1
+    assert data['pyg_repair_attempts'][0]['failed_execution_dir'] == '/retained/1'
+
+
 def test_more_than_three_distinct_missing_modules_can_be_repaired(tmp_path):
     modules = ['einops', 'yaml', 'tqdm', 'pandas', 'seaborn']
     runner = FailingRunner(["ModuleNotFoundError: No module named '" + module + "'" for module in modules] + [''])

@@ -1,0 +1,762 @@
+{
+  "kind": "real_browser_author_regression",
+  "tag": "regression_chebnetii_20261016_04",
+  "sample_role": "retired_regression",
+  "source_commit": "fe2a30e1b262a019056f33fdda864cbfd02fb1ca",
+  "source_sha256": "d083733ad86bbd516f50722f651cc314f0d905f826969feb14c57ee32225fc5b",
+  "source_unchanged": true,
+  "pdf_sha256": "c32e1ebcd886611ff66293f211e7f1b9e1ffebc6668a4b853de3bc0d2f357e37",
+  "state": "COMPLETED",
+  "error": null,
+  "author_steps": [
+    {
+      "id": "train",
+      "argv": [
+        "python",
+        "training.py",
+        "--net",
+        "ChebNetII",
+        "--dataset",
+        "Chameleon",
+        "--full",
+        "True",
+        "--lr",
+        "0.05",
+        "--weight_decay",
+        "0.0",
+        "--prop_wd",
+        "0.0",
+        "--dprate",
+        "0.6"
+      ],
+      "cwd": "main",
+      "timeout_s": null
+    }
+  ],
+  "validation": {
+    "status": "author_code_completed",
+    "training_observed": true,
+    "paper_metrics_verified": false,
+    "is_reproduced": null,
+    "metric_records": [
+      {
+        "name": "epochs",
+        "value": 1000.0,
+        "unit": "",
+        "split": "",
+        "stage": "",
+        "source": "train:stdout:1",
+        "source_quote": "Namespace(seed=42, epochs=1000, lr=0.05, weight_decay=0.0, early_stopping=200, hidden=64, dropout=0.5, train_rate=0.6, val_rate=0.2, K=10, alpha=0.1, dprate=0.6, dataset='Chameleon', device=0, runs=10, net='ChebNetII', prop_lr=0.01, prop_wd=0.0, q=0, full=True, semi_rnd=False, semi_fix=False)",
+        "id": "train:stdout:0",
+        "step_id": "train"
+      },
+      {
+        "name": "lr",
+        "value": 0.05,
+        "unit": "",
+        "split": "",
+        "stage": "",
+        "source": "train:stdout:1",
+        "source_quote": "Namespace(seed=42, epochs=1000, lr=0.05, weight_decay=0.0, early_stopping=200, hidden=64, dropout=0.5, train_rate=0.6, val_rate=0.2, K=10, alpha=0.1, dprate=0.6, dataset='Chameleon', device=0, runs=10, net='ChebNetII', prop_lr=0.01, prop_wd=0.0, q=0, full=True, semi_rnd=False, semi_fix=False)",
+        "id": "train:stdout:1",
+        "step_id": "train"
+      },
+      {
+        "name": "weight_decay",
+        "value": 0.0,
+        "unit": "",
+        "split": "",
+        "stage": "",
+        "source": "train:stdout:1",
+        "source_quote": "Namespace(seed=42, epochs=1000, lr=0.05, weight_decay=0.0, early_stopping=200, hidden=64, dropout=0.5, train_rate=0.6, val_rate=0.2, K=10, alpha=0.1, dprate=0.6, dataset='Chameleon', device=0, runs=10, net='ChebNetII', prop_lr=0.01, prop_wd=0.0, q=0, full=True, semi_rnd=False, semi_fix=False)",
+        "id": "train:stdout:2",
+        "step_id": "train"
+      },
+      {
+        "name": "early_stopping",
+        "value": 200.0,
+        "unit": "",
+        "split": "",
+        "stage": "",
+        "source": "train:stdout:1",
+        "source_quote": "Namespace(seed=42, epochs=1000, lr=0.05, weight_decay=0.0, early_stopping=200, hidden=64, dropout=0.5, train_rate=0.6, val_rate=0.2, K=10, alpha=0.1, dprate=0.6, dataset='Chameleon', device=0, runs=10, net='ChebNetII', prop_lr=0.01, prop_wd=0.0, q=0, full=True, semi_rnd=False, semi_fix=False)",
+        "id": "train:stdout:3",
+        "step_id": "train"
+      },
+      {
+        "name": "hidden",
+        "value": 64.0,
+        "unit": "",
+        "split": "",
+        "stage": "",
+        "source": "train:stdout:1",
+        "source_quote": "Namespace(seed=42, epochs=1000, lr=0.05, weight_decay=0.0, early_stopping=200, hidden=64, dropout=0.5, train_rate=0.6, val_rate=0.2, K=10, alpha=0.1, dprate=0.6, dataset='Chameleon', device=0, runs=10, net='ChebNetII', prop_lr=0.01, prop_wd=0.0, q=0, full=True, semi_rnd=False, semi_fix=False)",
+        "id": "train:stdout:4",
+        "step_id": "train"
+      },
+      {
+        "name": "dropout",
+        "value": 0.5,
+        "unit": "",
+        "split": "",
+        "stage": "",
+        "source": "train:stdout:1",
+        "source_quote": "Namespace(seed=42, epochs=1000, lr=0.05, weight_decay=0.0, early_stopping=200, hidden=64, dropout=0.5, train_rate=0.6, val_rate=0.2, K=10, alpha=0.1, dprate=0.6, dataset='Chameleon', device=0, runs=10, net='ChebNetII', prop_lr=0.01, prop_wd=0.0, q=0, full=True, semi_rnd=False, semi_fix=False)",
+        "id": "train:stdout:5",
+        "step_id": "train"
+      },
+      {
+        "name": "rate",
+        "value": 0.6,
+        "unit": "",
+        "split": "train",
+        "stage": "train",
+        "source": "train:stdout:1",
+        "source_quote": "Namespace(seed=42, epochs=1000, lr=0.05, weight_decay=0.0, early_stopping=200, hidden=64, dropout=0.5, train_rate=0.6, val_rate=0.2, K=10, alpha=0.1, dprate=0.6, dataset='Chameleon', device=0, runs=10, net='ChebNetII', prop_lr=0.01, prop_wd=0.0, q=0, full=True, semi_rnd=False, semi_fix=False)",
+        "id": "train:stdout:6",
+        "step_id": "train"
+      },
+      {
+        "name": "rate",
+        "value": 0.2,
+        "unit": "",
+        "split": "validation",
+        "stage": "validation",
+        "source": "train:stdout:1",
+        "source_quote": "Namespace(seed=42, epochs=1000, lr=0.05, weight_decay=0.0, early_stopping=200, hidden=64, dropout=0.5, train_rate=0.6, val_rate=0.2, K=10, alpha=0.1, dprate=0.6, dataset='Chameleon', device=0, runs=10, net='ChebNetII', prop_lr=0.01, prop_wd=0.0, q=0, full=True, semi_rnd=False, semi_fix=False)",
+        "id": "train:stdout:7",
+        "step_id": "train"
+      },
+      {
+        "name": "k",
+        "value": 10.0,
+        "unit": "",
+        "split": "",
+        "stage": "",
+        "source": "train:stdout:1",
+        "source_quote": "Namespace(seed=42, epochs=1000, lr=0.05, weight_decay=0.0, early_stopping=200, hidden=64, dropout=0.5, train_rate=0.6, val_rate=0.2, K=10, alpha=0.1, dprate=0.6, dataset='Chameleon', device=0, runs=10, net='ChebNetII', prop_lr=0.01, prop_wd=0.0, q=0, full=True, semi_rnd=False, semi_fix=False)",
+        "id": "train:stdout:8",
+        "step_id": "train"
+      },
+      {
+        "name": "alpha",
+        "value": 0.1,
+        "unit": "",
+        "split": "",
+        "stage": "",
+        "source": "train:stdout:1",
+        "source_quote": "Namespace(seed=42, epochs=1000, lr=0.05, weight_decay=0.0, early_stopping=200, hidden=64, dropout=0.5, train_rate=0.6, val_rate=0.2, K=10, alpha=0.1, dprate=0.6, dataset='Chameleon', device=0, runs=10, net='ChebNetII', prop_lr=0.01, prop_wd=0.0, q=0, full=True, semi_rnd=False, semi_fix=False)",
+        "id": "train:stdout:9",
+        "step_id": "train"
+      },
+      {
+        "name": "dprate",
+        "value": 0.6,
+        "unit": "",
+        "split": "",
+        "stage": "",
+        "source": "train:stdout:1",
+        "source_quote": "Namespace(seed=42, epochs=1000, lr=0.05, weight_decay=0.0, early_stopping=200, hidden=64, dropout=0.5, train_rate=0.6, val_rate=0.2, K=10, alpha=0.1, dprate=0.6, dataset='Chameleon', device=0, runs=10, net='ChebNetII', prop_lr=0.01, prop_wd=0.0, q=0, full=True, semi_rnd=False, semi_fix=False)",
+        "id": "train:stdout:10",
+        "step_id": "train"
+      },
+      {
+        "name": "device",
+        "value": 0.0,
+        "unit": "",
+        "split": "",
+        "stage": "",
+        "source": "train:stdout:1",
+        "source_quote": "Namespace(seed=42, epochs=1000, lr=0.05, weight_decay=0.0, early_stopping=200, hidden=64, dropout=0.5, train_rate=0.6, val_rate=0.2, K=10, alpha=0.1, dprate=0.6, dataset='Chameleon', device=0, runs=10, net='ChebNetII', prop_lr=0.01, prop_wd=0.0, q=0, full=True, semi_rnd=False, semi_fix=False)",
+        "runs": 10,
+        "id": "train:stdout:11",
+        "step_id": "train"
+      },
+      {
+        "name": "prop_lr",
+        "value": 0.01,
+        "unit": "",
+        "split": "",
+        "stage": "",
+        "source": "train:stdout:1",
+        "source_quote": "Namespace(seed=42, epochs=1000, lr=0.05, weight_decay=0.0, early_stopping=200, hidden=64, dropout=0.5, train_rate=0.6, val_rate=0.2, K=10, alpha=0.1, dprate=0.6, dataset='Chameleon', device=0, runs=10, net='ChebNetII', prop_lr=0.01, prop_wd=0.0, q=0, full=True, semi_rnd=False, semi_fix=False)",
+        "id": "train:stdout:12",
+        "step_id": "train"
+      },
+      {
+        "name": "prop_wd",
+        "value": 0.0,
+        "unit": "",
+        "split": "",
+        "stage": "",
+        "source": "train:stdout:1",
+        "source_quote": "Namespace(seed=42, epochs=1000, lr=0.05, weight_decay=0.0, early_stopping=200, hidden=64, dropout=0.5, train_rate=0.6, val_rate=0.2, K=10, alpha=0.1, dprate=0.6, dataset='Chameleon', device=0, runs=10, net='ChebNetII', prop_lr=0.01, prop_wd=0.0, q=0, full=True, semi_rnd=False, semi_fix=False)",
+        "id": "train:stdout:13",
+        "step_id": "train"
+      },
+      {
+        "name": "q",
+        "value": 0.0,
+        "unit": "",
+        "split": "",
+        "stage": "",
+        "source": "train:stdout:1",
+        "source_quote": "Namespace(seed=42, epochs=1000, lr=0.05, weight_decay=0.0, early_stopping=200, hidden=64, dropout=0.5, train_rate=0.6, val_rate=0.2, K=10, alpha=0.1, dprate=0.6, dataset='Chameleon', device=0, runs=10, net='ChebNetII', prop_lr=0.01, prop_wd=0.0, q=0, full=True, semi_rnd=False, semi_fix=False)",
+        "id": "train:stdout:14",
+        "step_id": "train"
+      },
+      {
+        "name": "accuracy",
+        "value": 71.5974,
+        "unit": "",
+        "split": "test",
+        "stage": "final",
+        "source": "train:stdout:26",
+        "source_quote": "test acc mean = 71.5974 ± 1.5536  \t val acc mean = 71.3407",
+        "aggregation": "mean",
+        "std": 1.5536,
+        "id": "train:stdout:15",
+        "step_id": "train"
+      },
+      {
+        "name": "accuracy",
+        "value": 71.3407,
+        "unit": "",
+        "split": "validation",
+        "stage": "validation",
+        "source": "train:stdout:26",
+        "source_quote": "test acc mean = 71.5974 ± 1.5536  \t val acc mean = 71.3407",
+        "aggregation": "mean",
+        "id": "train:stdout:16",
+        "step_id": "train"
+      }
+    ],
+    "author_claim_comparison": {
+      "status": "unavailable",
+      "basis": "author_output",
+      "relative_tolerance": 0.05,
+      "metric_records": [
+        {
+          "name": "epochs",
+          "value": 1000.0,
+          "unit": "",
+          "split": "",
+          "stage": "",
+          "source": "train:stdout:1",
+          "source_quote": "Namespace(seed=42, epochs=1000, lr=0.05, weight_decay=0.0, early_stopping=200, hidden=64, dropout=0.5, train_rate=0.6, val_rate=0.2, K=10, alpha=0.1, dprate=0.6, dataset='Chameleon', device=0, runs=10, net='ChebNetII', prop_lr=0.01, prop_wd=0.0, q=0, full=True, semi_rnd=False, semi_fix=False)",
+          "id": "train:stdout:0",
+          "step_id": "train"
+        },
+        {
+          "name": "lr",
+          "value": 0.05,
+          "unit": "",
+          "split": "",
+          "stage": "",
+          "source": "train:stdout:1",
+          "source_quote": "Namespace(seed=42, epochs=1000, lr=0.05, weight_decay=0.0, early_stopping=200, hidden=64, dropout=0.5, train_rate=0.6, val_rate=0.2, K=10, alpha=0.1, dprate=0.6, dataset='Chameleon', device=0, runs=10, net='ChebNetII', prop_lr=0.01, prop_wd=0.0, q=0, full=True, semi_rnd=False, semi_fix=False)",
+          "id": "train:stdout:1",
+          "step_id": "train"
+        },
+        {
+          "name": "weight_decay",
+          "value": 0.0,
+          "unit": "",
+          "split": "",
+          "stage": "",
+          "source": "train:stdout:1",
+          "source_quote": "Namespace(seed=42, epochs=1000, lr=0.05, weight_decay=0.0, early_stopping=200, hidden=64, dropout=0.5, train_rate=0.6, val_rate=0.2, K=10, alpha=0.1, dprate=0.6, dataset='Chameleon', device=0, runs=10, net='ChebNetII', prop_lr=0.01, prop_wd=0.0, q=0, full=True, semi_rnd=False, semi_fix=False)",
+          "id": "train:stdout:2",
+          "step_id": "train"
+        },
+        {
+          "name": "early_stopping",
+          "value": 200.0,
+          "unit": "",
+          "split": "",
+          "stage": "",
+          "source": "train:stdout:1",
+          "source_quote": "Namespace(seed=42, epochs=1000, lr=0.05, weight_decay=0.0, early_stopping=200, hidden=64, dropout=0.5, train_rate=0.6, val_rate=0.2, K=10, alpha=0.1, dprate=0.6, dataset='Chameleon', device=0, runs=10, net='ChebNetII', prop_lr=0.01, prop_wd=0.0, q=0, full=True, semi_rnd=False, semi_fix=False)",
+          "id": "train:stdout:3",
+          "step_id": "train"
+        },
+        {
+          "name": "hidden",
+          "value": 64.0,
+          "unit": "",
+          "split": "",
+          "stage": "",
+          "source": "train:stdout:1",
+          "source_quote": "Namespace(seed=42, epochs=1000, lr=0.05, weight_decay=0.0, early_stopping=200, hidden=64, dropout=0.5, train_rate=0.6, val_rate=0.2, K=10, alpha=0.1, dprate=0.6, dataset='Chameleon', device=0, runs=10, net='ChebNetII', prop_lr=0.01, prop_wd=0.0, q=0, full=True, semi_rnd=False, semi_fix=False)",
+          "id": "train:stdout:4",
+          "step_id": "train"
+        },
+        {
+          "name": "dropout",
+          "value": 0.5,
+          "unit": "",
+          "split": "",
+          "stage": "",
+          "source": "train:stdout:1",
+          "source_quote": "Namespace(seed=42, epochs=1000, lr=0.05, weight_decay=0.0, early_stopping=200, hidden=64, dropout=0.5, train_rate=0.6, val_rate=0.2, K=10, alpha=0.1, dprate=0.6, dataset='Chameleon', device=0, runs=10, net='ChebNetII', prop_lr=0.01, prop_wd=0.0, q=0, full=True, semi_rnd=False, semi_fix=False)",
+          "id": "train:stdout:5",
+          "step_id": "train"
+        },
+        {
+          "name": "rate",
+          "value": 0.6,
+          "unit": "",
+          "split": "train",
+          "stage": "train",
+          "source": "train:stdout:1",
+          "source_quote": "Namespace(seed=42, epochs=1000, lr=0.05, weight_decay=0.0, early_stopping=200, hidden=64, dropout=0.5, train_rate=0.6, val_rate=0.2, K=10, alpha=0.1, dprate=0.6, dataset='Chameleon', device=0, runs=10, net='ChebNetII', prop_lr=0.01, prop_wd=0.0, q=0, full=True, semi_rnd=False, semi_fix=False)",
+          "id": "train:stdout:6",
+          "step_id": "train"
+        },
+        {
+          "name": "rate",
+          "value": 0.2,
+          "unit": "",
+          "split": "validation",
+          "stage": "validation",
+          "source": "train:stdout:1",
+          "source_quote": "Namespace(seed=42, epochs=1000, lr=0.05, weight_decay=0.0, early_stopping=200, hidden=64, dropout=0.5, train_rate=0.6, val_rate=0.2, K=10, alpha=0.1, dprate=0.6, dataset='Chameleon', device=0, runs=10, net='ChebNetII', prop_lr=0.01, prop_wd=0.0, q=0, full=True, semi_rnd=False, semi_fix=False)",
+          "id": "train:stdout:7",
+          "step_id": "train"
+        },
+        {
+          "name": "k",
+          "value": 10.0,
+          "unit": "",
+          "split": "",
+          "stage": "",
+          "source": "train:stdout:1",
+          "source_quote": "Namespace(seed=42, epochs=1000, lr=0.05, weight_decay=0.0, early_stopping=200, hidden=64, dropout=0.5, train_rate=0.6, val_rate=0.2, K=10, alpha=0.1, dprate=0.6, dataset='Chameleon', device=0, runs=10, net='ChebNetII', prop_lr=0.01, prop_wd=0.0, q=0, full=True, semi_rnd=False, semi_fix=False)",
+          "id": "train:stdout:8",
+          "step_id": "train"
+        },
+        {
+          "name": "alpha",
+          "value": 0.1,
+          "unit": "",
+          "split": "",
+          "stage": "",
+          "source": "train:stdout:1",
+          "source_quote": "Namespace(seed=42, epochs=1000, lr=0.05, weight_decay=0.0, early_stopping=200, hidden=64, dropout=0.5, train_rate=0.6, val_rate=0.2, K=10, alpha=0.1, dprate=0.6, dataset='Chameleon', device=0, runs=10, net='ChebNetII', prop_lr=0.01, prop_wd=0.0, q=0, full=True, semi_rnd=False, semi_fix=False)",
+          "id": "train:stdout:9",
+          "step_id": "train"
+        },
+        {
+          "name": "dprate",
+          "value": 0.6,
+          "unit": "",
+          "split": "",
+          "stage": "",
+          "source": "train:stdout:1",
+          "source_quote": "Namespace(seed=42, epochs=1000, lr=0.05, weight_decay=0.0, early_stopping=200, hidden=64, dropout=0.5, train_rate=0.6, val_rate=0.2, K=10, alpha=0.1, dprate=0.6, dataset='Chameleon', device=0, runs=10, net='ChebNetII', prop_lr=0.01, prop_wd=0.0, q=0, full=True, semi_rnd=False, semi_fix=False)",
+          "id": "train:stdout:10",
+          "step_id": "train"
+        },
+        {
+          "name": "device",
+          "value": 0.0,
+          "unit": "",
+          "split": "",
+          "stage": "",
+          "source": "train:stdout:1",
+          "source_quote": "Namespace(seed=42, epochs=1000, lr=0.05, weight_decay=0.0, early_stopping=200, hidden=64, dropout=0.5, train_rate=0.6, val_rate=0.2, K=10, alpha=0.1, dprate=0.6, dataset='Chameleon', device=0, runs=10, net='ChebNetII', prop_lr=0.01, prop_wd=0.0, q=0, full=True, semi_rnd=False, semi_fix=False)",
+          "runs": 10,
+          "id": "train:stdout:11",
+          "step_id": "train"
+        },
+        {
+          "name": "prop_lr",
+          "value": 0.01,
+          "unit": "",
+          "split": "",
+          "stage": "",
+          "source": "train:stdout:1",
+          "source_quote": "Namespace(seed=42, epochs=1000, lr=0.05, weight_decay=0.0, early_stopping=200, hidden=64, dropout=0.5, train_rate=0.6, val_rate=0.2, K=10, alpha=0.1, dprate=0.6, dataset='Chameleon', device=0, runs=10, net='ChebNetII', prop_lr=0.01, prop_wd=0.0, q=0, full=True, semi_rnd=False, semi_fix=False)",
+          "id": "train:stdout:12",
+          "step_id": "train"
+        },
+        {
+          "name": "prop_wd",
+          "value": 0.0,
+          "unit": "",
+          "split": "",
+          "stage": "",
+          "source": "train:stdout:1",
+          "source_quote": "Namespace(seed=42, epochs=1000, lr=0.05, weight_decay=0.0, early_stopping=200, hidden=64, dropout=0.5, train_rate=0.6, val_rate=0.2, K=10, alpha=0.1, dprate=0.6, dataset='Chameleon', device=0, runs=10, net='ChebNetII', prop_lr=0.01, prop_wd=0.0, q=0, full=True, semi_rnd=False, semi_fix=False)",
+          "id": "train:stdout:13",
+          "step_id": "train"
+        },
+        {
+          "name": "q",
+          "value": 0.0,
+          "unit": "",
+          "split": "",
+          "stage": "",
+          "source": "train:stdout:1",
+          "source_quote": "Namespace(seed=42, epochs=1000, lr=0.05, weight_decay=0.0, early_stopping=200, hidden=64, dropout=0.5, train_rate=0.6, val_rate=0.2, K=10, alpha=0.1, dprate=0.6, dataset='Chameleon', device=0, runs=10, net='ChebNetII', prop_lr=0.01, prop_wd=0.0, q=0, full=True, semi_rnd=False, semi_fix=False)",
+          "id": "train:stdout:14",
+          "step_id": "train"
+        },
+        {
+          "name": "accuracy",
+          "value": 71.5974,
+          "unit": "",
+          "split": "test",
+          "stage": "final",
+          "source": "train:stdout:26",
+          "source_quote": "test acc mean = 71.5974 ± 1.5536  \t val acc mean = 71.3407",
+          "aggregation": "mean",
+          "std": 1.5536,
+          "id": "train:stdout:15",
+          "step_id": "train"
+        },
+        {
+          "name": "accuracy",
+          "value": 71.3407,
+          "unit": "",
+          "split": "validation",
+          "stage": "validation",
+          "source": "train:stdout:26",
+          "source_quote": "test acc mean = 71.5974 ± 1.5536  \t val acc mean = 71.3407",
+          "aggregation": "mean",
+          "id": "train:stdout:16",
+          "step_id": "train"
+        }
+      ],
+      "parse_errors": [],
+      "comparisons": [],
+      "citations": [],
+      "reason": "论文指标配对未通过来源校验；保留实际指标，代码运行已完成。",
+      "validation_errors": [
+        {
+          "index": 0,
+          "actual_id": "train:stdout:15",
+          "error": "A multi-dataset reference row needs an exact same-page column_quote identifying the dataset"
+        }
+      ],
+      "extraction_attempts": [
+        {
+          "proposal": {
+            "citations": [
+              {
+                "id": "pdf_p8_0",
+                "evidence_id": "pdf_p8_0"
+              },
+              {
+                "id": "pdf_p19_0",
+                "evidence_id": "pdf_p19_0"
+              },
+              {
+                "id": "repo_259004de21a7_4911",
+                "evidence_id": "repo_259004de21a7_4911"
+              },
+              {
+                "id": "repo_84bfee0aafce_0",
+                "evidence_id": "repo_84bfee0aafce_0"
+              },
+              {
+                "id": "repo_2fda929525d4_0",
+                "evidence_id": "repo_2fda929525d4_0"
+              },
+              {
+                "id": "repo_dcdfc8e85700_0",
+                "evidence_id": "repo_dcdfc8e85700_0"
+              },
+              {
+                "id": "repo_808c0bea714a_0",
+                "evidence_id": "repo_808c0bea714a_0"
+              }
+            ],
+            "comparisons": [
+              {
+                "actual_id": "train:stdout:15",
+                "reference": {
+                  "name": "accuracy",
+                  "value": 71.37,
+                  "std": 1.01,
+                  "unit": "percent",
+                  "dataset": "Chameleon",
+                  "method": "ChebNetII",
+                  "split": "test",
+                  "aggregation": "mean",
+                  "runs": 10,
+                  "value_quote": "ChebNetII 71.37 ±1.01 57.72 ±0.59 93.28 ±1.47 92.30 ±1.48 41.75 ±1.07 88.71 ±0.93 80.53 ±0.79 88.93 ±0.29",
+                  "column_quote": "Method Cham. Squi. Texas Corn. Actor Cora Cite. Pubm.",
+                  "citations": [
+                    "pdf_p8_0"
+                  ]
+                },
+                "actual_context": {
+                  "unit": "percent",
+                  "dataset": "Chameleon",
+                  "method": "ChebNetII",
+                  "split": "test",
+                  "aggregation": "mean",
+                  "runs": 10,
+                  "std": 1.5536,
+                  "citations": [
+                    "repo_259004de21a7_4911",
+                    "repo_84bfee0aafce_0",
+                    "repo_2fda929525d4_0",
+                    "repo_dcdfc8e85700_0",
+                    "repo_808c0bea714a_0"
+                  ]
+                },
+                "settings": {
+                  "status": "matched",
+                  "reason": "两侧均为 ChebNetII 在 Chameleon 上的全监督随机划分测试准确率，10 次重复取均值。仓库命令 full.sh 使用 --full True --lr 0.05 --weight_decay 0.0 --prop_wd 0.0 --dprate 0.6，与论文 Table 14 中 Chameleon 全监督超参（lr_l=0.05, L2_l=0.0, dropout_l=0.5, lr_p=0.01, L2_p=0.0, dropout_p=0.6）一致；训练脚本默认 hidden=64、K=10、epochs=1000、early_stopping=200，随机划分 60%/20%/20%，与论文全监督设置一致。",
+                  "citations": [
+                    "pdf_p8_0",
+                    "pdf_p19_0",
+                    "repo_259004de21a7_4911",
+                    "repo_84bfee0aafce_0",
+                    "repo_2fda929525d4_0",
+                    "repo_dcdfc8e85700_0",
+                    "repo_808c0bea714a_0"
+                  ]
+                },
+                "direction": "higher"
+              }
+            ],
+            "reason": "仓库实际执行输出 train:stdout:15 为 Chameleon 全监督测试准确率均值 71.5974（±1.5536，10 次重复），对应论文 Table 7（全监督随机划分）中 ChebNetII 行 Chameleon 列 71.37 ±1.01。两者数据集、方法、划分（test）、聚合方式（10 次均值）与超参设置一致，故列为 matched。注意：论文 Table 6 为半监督随机划分结果（Chameleon 43.42），Table 13 为半监督固定划分结果（Chameleon 46.45），均不应与本全监督结果配对；仓库 train:stdout:16 为验证集准确率 71.3407，也不应与测试结果配对。实际运行标准差 1.5536 与论文 1.01 不同，但观测记录中的 std 为权威值，未作修改。"
+          },
+          "validation_errors": [
+            {
+              "index": 0,
+              "actual_id": "train:stdout:15",
+              "error": "A multi-dataset reference row needs an exact same-page column_quote identifying the dataset"
+            }
+          ]
+        },
+        {
+          "proposal": {
+            "citations": [
+              {
+                "id": "pdf_p8_0",
+                "evidence_id": "pdf_p8_0"
+              },
+              {
+                "id": "pdf_p19_0",
+                "evidence_id": "pdf_p19_0"
+              },
+              {
+                "id": "repo_259004de21a7_4911",
+                "evidence_id": "repo_259004de21a7_4911"
+              },
+              {
+                "id": "repo_84bfee0aafce_0",
+                "evidence_id": "repo_84bfee0aafce_0"
+              },
+              {
+                "id": "repo_2fda929525d4_0",
+                "evidence_id": "repo_2fda929525d4_0"
+              },
+              {
+                "id": "repo_dcdfc8e85700_0",
+                "evidence_id": "repo_dcdfc8e85700_0"
+              },
+              {
+                "id": "repo_808c0bea714a_0",
+                "evidence_id": "repo_808c0bea714a_0"
+              }
+            ],
+            "comparisons": [
+              {
+                "actual_id": "train:stdout:15",
+                "reference": {
+                  "name": "accuracy",
+                  "value": 71.37,
+                  "std": 1.01,
+                  "unit": "percent",
+                  "dataset": "Chameleon",
+                  "method": "ChebNetII",
+                  "split": "test",
+                  "aggregation": "mean",
+                  "runs": 10,
+                  "value_quote": "ChebNetII 71.37 ±1.01 57.72 ±0.59 93.28 ±1.47 92.30 ±1.48 41.75 ±1.07 88.71 ±0.93 80.53 ±0.79 88.93 ±0.29",
+                  "column_quote": "Method Cham. Squi. Texas Corn. Actor Cora Cite. Pubm.",
+                  "citations": [
+                    "pdf_p8_0"
+                  ]
+                },
+                "actual_context": {
+                  "unit": "percent",
+                  "dataset": "Chameleon",
+                  "method": "ChebNetII",
+                  "split": "test",
+                  "aggregation": "mean",
+                  "runs": 10,
+                  "std": 1.5536,
+                  "citations": [
+                    "repo_259004de21a7_4911",
+                    "repo_84bfee0aafce_0",
+                    "repo_2fda929525d4_0",
+                    "repo_dcdfc8e85700_0",
+                    "repo_808c0bea714a_0"
+                  ]
+                },
+                "settings": {
+                  "status": "matched",
+                  "reason": "两侧均为 ChebNetII 在 Chameleon 上的全监督随机划分测试准确率，10 次重复取均值。仓库命令 full.sh 使用 --full True --lr 0.05 --weight_decay 0.0 --prop_wd 0.0 --dprate 0.6，与论文 Table 14 中 Chameleon 全监督超参（lr_l=0.05, L2_l=0.0, dropout_l=0.5, lr_p=0.01, L2_p=0.0, dropout_p=0.6）一致；训练脚本默认 hidden=64、K=10、epochs=1000、early_stopping=200，随机划分 60%/20%/20%，与论文全监督设置一致。注意：论文 Table 6 为半监督随机划分结果（Chameleon 43.42），Table 13 为半监督固定划分结果（Chameleon 46.45），均不应与本全监督结果配对；仓库 train:stdout:16 为验证集准确率 71.3407，也不应与测试结果配对。实际运行标准差 1.5536 与论文 1.01 不同，但观测记录中的 std 为权威值，未作修改。",
+                  "citations": [
+                    "pdf_p8_0",
+                    "pdf_p19_0",
+                    "repo_259004de21a7_4911",
+                    "repo_84bfee0aafce_0",
+                    "repo_2fda929525d4_0",
+                    "repo_dcdfc8e85700_0",
+                    "repo_808c0bea714a_0"
+                  ]
+                },
+                "direction": "higher"
+              }
+            ],
+            "reason": "仓库实际执行输出 train:stdout:15 为 Chameleon 全监督测试准确率均值 71.5974（±1.5536，10 次重复），对应论文 Table 7（全监督随机划分）中 ChebNetII 行 Chameleon 列 71.37 ±1.01。两者数据集、方法、划分（test）、聚合方式（10 次均值）与超参设置一致，故列为 matched。已按校验要求补充与论文方法行同页的精确列头 column_quote（'Method Cham. Squi. Texas Corn. Actor Cora Cite. Pubm.'），用于标识 Chameleon 列。"
+          },
+          "validation_errors": [
+            {
+              "index": 0,
+              "actual_id": "train:stdout:15",
+              "error": "A multi-dataset reference row needs an exact same-page column_quote identifying the dataset"
+            }
+          ]
+        }
+      ],
+      "diagnostic": "A multi-dataset reference row needs an exact same-page column_quote identifying the dataset"
+    },
+    "warnings": [
+      "执行包含实际报错后记录的旧 NumPy 不规则结果表汇总兼容修复；原仓库文件未改写。",
+      "执行包含实际报错后的旧 PyG 容器兼容；原数据文件、张量值与划分未改写。"
+    ]
+  },
+  "author_receipts": [
+    {
+      "natural_return": true,
+      "optimizer_steps": 2097,
+      "torch_version": "2.5.1+cpu"
+    }
+  ],
+  "pyg_repairs": [
+    {
+      "kind": "pyg_legacy_data_state",
+      "pyg_version": "2.6.1",
+      "caller_path": "main/training.py",
+      "caller_line": 152,
+      "caller_sha256": "5b5a3a9785922429526586bc2c33b8bd3235b81a2ff4f94d319c9c710d70118b",
+      "dataset_path": "main/dataset_loader.py",
+      "dataset_sha256": "7edcbfa3f959cd900bde3cd5a2f0d02a3e3b2ff86510b7917bbacd0affa9fb5c",
+      "data_path": "main/data/chameleon/processed/data.pt",
+      "data_sha256": "9566a2ac885e1ac1baada6f007644a9fa08c268a7605814a9a8b67fa32a0b5aa",
+      "state_schema": {
+        "x": {
+          "type": "tensor",
+          "shape": [
+            2277,
+            2325
+          ],
+          "dtype": "torch.float32",
+          "device": "cpu"
+        },
+        "edge_index": {
+          "type": "tensor",
+          "shape": [
+            2,
+            62792
+          ],
+          "dtype": "torch.int64",
+          "device": "cpu"
+        },
+        "edge_attr": {
+          "type": "none"
+        },
+        "y": {
+          "type": "tensor",
+          "shape": [
+            2277
+          ],
+          "dtype": "torch.int64",
+          "device": "cpu"
+        },
+        "pos": {
+          "type": "none"
+        },
+        "norm": {
+          "type": "none"
+        },
+        "face": {
+          "type": "none"
+        },
+        "train_percent": {
+          "type": "float",
+          "value": 0.01
+        }
+      },
+      "failed_execution_dir": "D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\maintenance_browser_20261016\\data\\runs\\repository_1774a1c7d5004e79bb34d22e53a6a2e0\\.autorepro_repository_runs\\0a048715fad44e9fba343efe263927b1",
+      "attempt": 1
+    }
+  ],
+  "numeric_repairs": [
+    {
+      "kind": "numpy_ragged_summary",
+      "path": "main/training.py",
+      "source_sha256": "5b5a3a9785922429526586bc2c33b8bd3235b81a2ff4f94d319c9c710d70118b",
+      "variable": "results",
+      "numpy_alias": "np",
+      "schema": {
+        "rows": 10,
+        "columns": [
+          {
+            "kind": "scalar"
+          },
+          {
+            "kind": "scalar"
+          },
+          {
+            "kind": "array",
+            "shape": [
+              11
+            ],
+            "dtype": "float32"
+          }
+        ]
+      },
+      "calls": [
+        {
+          "line": 181,
+          "column": 37,
+          "operation": "mean",
+          "original_expression": "np.mean(results, axis=0)"
+        },
+        {
+          "line": 182,
+          "column": 27,
+          "operation": "var",
+          "original_expression": "np.var(results, axis=0)"
+        }
+      ],
+      "error": "setting an array element with a sequence. The requested array has an inhomogeneous shape after 2 dimensions. The detected shape was (10, 3) + inhomogeneous part.",
+      "failed_execution_dir": "D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\maintenance_browser_20261016\\data\\runs\\repository_1774a1c7d5004e79bb34d22e53a6a2e0\\.autorepro_repository_runs\\1c8983ff99c14340a3265b8f9c23adae",
+      "attempt": 2
+    }
+  ],
+  "cleanup": {
+    "status": "released",
+    "freed_bytes": 1565918886,
+    "errors": [],
+    "remaining": []
+  },
+  "active_runs": 0,
+  "active_workers": 0,
+  "active_executions": 0,
+  "browser_checks": {
+    "live_page_completed": null,
+    "report_checks": null,
+    "installation_checks": null
+  },
+  "limitations": "Chameleon regression; does not validate issue30 Cora protocol or final independent new-PDF acceptance. Author comparison is not independent model/metric verification."
+}

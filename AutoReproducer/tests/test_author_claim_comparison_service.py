@@ -4,6 +4,7 @@ The native test also runs an unchanged author fixture when its exact dependency
 cache is available. Invented documents never constitute paper acceptance.
 """
 import json
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
@@ -185,7 +186,7 @@ def test_unexpected_comparison_error_is_informational(tmp_path, monkeypatch):
     from src import author_claim_comparison
     _, runner, request = comparison_service(tmp_path, monkeypatch)
 
-    def fail_comparison(*args):
+    def fail_comparison(*args, **kwargs):
         raise RuntimeError('comparison boundary unavailable')
 
     monkeypatch.setattr(author_claim_comparison, 'compare_author_claims', fail_comparison)
@@ -260,3 +261,59 @@ def test_native_author_output_reaches_comparison_without_retraining(
     assert comparison['comparisons'][0]['actual']['value'] == 1.0
     assert result['data']['validation']['author_execution'][0]['optimizer_steps'] == 40
     assert len(result['data']['execution']['steps']) == 1
+
+
+@pytest.mark.parametrize('state', ['complete', 'unobserved', 'changed'])
+def test_runtime_input_observation_is_persisted_without_independent_acceptance(tmp_path, monkeypatch, state):
+    from src.method_adapters import digest
+    fixture, runner, request = comparison_service(tmp_path, monkeypatch)
+    script = fixture['workspace'] / 'train.py'
+    source = ('from torch_geometric.datasets import WikiCS\n'
+              'def original_loader(path):\n    return WikiCS(root=path)\n' + script.read_text('utf-8'))
+    script.write_bytes(source.encode())
+    fixture['snapshot']['files']['train.py'] = digest(script)
+    next(c for c in fixture['proposal']['citations'] if c['id'] == 'script')['quote'] = source
+    fixture['proposal']['datasets'] = [{'kind': 'author_runtime', 'path': 'train.py',
+        'function': 'original_loader', 'dataset_class': 'WikiCS', 'dataset_name': 'WikiCS', 'citations': ['script']}]
+    runner.llm.proposal = deepcopy(fixture['proposal'])
+    original = runner.runner.run
+    def runtime(workspace, steps, environment, **kwargs):
+        result = original(workspace, steps, environment, **kwargs)
+        if not isinstance(steps, dict):
+            return result
+        workspace = Path(workspace)
+        config = read_json(workspace / CAPTURE_DIR / 'config.json')
+        assert len(config['runtime_datasets']) == 1
+        if state != 'unobserved':
+            root = workspace / 'invented_native_data'
+            root.mkdir()
+            files = {}
+            for name, role in [('raw.bin', 'raw'), ('processed.bin', 'processed')]:
+                path = root / name
+                path.write_bytes(b'invented service wiring fixture')
+                files[str(path)] = {'sha256': digest(path), 'bytes': path.stat().st_size, 'role': role}
+            receipt = read_json(workspace / CAPTURE_DIR / 'author_train.json')
+            receipt['native_datasets'] = [{'declaration': config['runtime_datasets'][0], 'verified': True,
+                'dataset_name': 'WikiCS', 'root': str(root), 'files': files,
+                'loaded_before_training': True, 'sample_count': 1}]
+            service.write_json(workspace / CAPTURE_DIR / 'author_train.json', receipt)
+            if state == 'changed':
+                (root / 'raw.bin').write_bytes(b'changed after construction')
+        return result
+    monkeypatch.setattr(runner.runner, 'run', runtime)
+    result = runner.run(request)
+    assert_code_completed(result)
+    data, validation = result['data'], result['data']['validation']
+    evidence = validation['runtime_dataset_evidence']
+    assert validation['dataset_observation_verified'] is (state == 'complete')
+    assert validation['dataset_provenance_verified'] is False
+    assert evidence['independent_reference_verified'] is False
+    assert data['runtime_dataset_evidence'] == evidence
+    run_dir = Path(data['run_dir'])
+    assert read_json(run_dir / 'runtime_dataset_evidence.json') == evidence
+    assert read_json(run_dir / 'dataset.json')['runtime_observation'] == evidence
+    assert '原作者数据加载观测' in data['report'] and '尚未独立核对' in data['report']
+    if state == 'complete':
+        assert 'raw.bin' in data['report'] and next(iter(evidence['sources'][0]['observations'][0]['files'].values()))['sha256'] in data['report']
+    else:
+        assert evidence['errors'] and validation['warnings']
