@@ -121,3 +121,9 @@ C&S 新 PDF 的真实网页任务发现原作者 `CUAI/CorrectAndSmooth` 后，�
 `d9ff662` 的最终完整原生回归为 **3412 passed、26 skipped、0 failed**（1135.41 秒），包含置信区间源码上下文、最终异常边界测试签名修正，以及内部文件链接导出的全部用例。日志/JUnit 为 `.tmp/maintenance_aliases_native_20261016.*`，精选证据为 [file_aliases_uncertainty_native_20261016.json](evidence/file_aliases_uncertainty_native_20261016.json)。
 
 新的独立 NodeFormer PDF 已核对标题及原作者仓库链接，SHA-256 为 `d714e7b797a6e5d2855d51c50cc6c8423b3bf1639d36c5918a2a84f8d8bd14bf`。网页任务 `independent_nodeformer_20261016_02` 使用冻结产品 `d9ff662` / `e07ff3c7ba918c3c4a0aaaca62ff5e940f357d77c3e1edb2182f8e2df837087d`；已选择原作者 `qitianwu/NodeFormer@5390b6908326905b2eb840f65a70b0f4082aef43` 的 Cora / NodeFormer 原命令，保留 5 次运行、每次 1000 轮及原超参，并使用作者支持的 `--cpu`。当前仅到环境准备，未认定作者完成或论文比较通过。此前误填 arXiv 编号下载到无关 hydrides PDF 的候选在预检就被排除，未进入网页执行，不作为本论文证据。
+
+## Windows CI：超时日志测试等待实际启动证据
+
+主分支 [CI 38864337951](https://github.com/Yukikazct/AutoReproducer/actions/runs/38864337951) 唯一失败为超时用例要求 stdout 包含 `PARTIAL`，但其 300ms 预算可能在 Windows Python 启动完毕前耗尽。受控加入 600ms 启动延迟确认：300ms 时确实没有输出，1500ms 时保留输出，两者均正确超时并返回 124，见 [timeout_partial_log_startup_20261016.json](evidence/timeout_partial_log_startup_20261016.json)。
+
+该测试现在给冷启动留出预算，并先取得孙进程实际启动的 PID 证据，再检查真实超时、部分日志、时限和进程退出；孙进程只有在持有者清理结束后收到释放信号才会写逃逸标记，因此保留了后代清理的实质断言。Windows 另核对原生进程句柄已结束。没有修改产品超时策略。Runner 与进程生命周期专项 **62 passed、1 skipped**（38.30 秒），跳过项为 POSIX 信号语义。
