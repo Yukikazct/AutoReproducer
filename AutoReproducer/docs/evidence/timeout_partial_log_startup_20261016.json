@@ -1,0 +1,22 @@
+{
+  "scope": "Controlled slow-start standard-library subprocess; no paper training",
+  "current_product_timeout_is_correct": true,
+  "failure_is_a_test_readiness_assumption": true,
+  "observations": [
+    {
+      "timeout_s": 0.3,
+      "startup_delay_s": 0.6,
+      "timed_out": true,
+      "exit_code": 124,
+      "stdout": ""
+    },
+    {
+      "timeout_s": 1.5,
+      "startup_delay_s": 0.6,
+      "timed_out": true,
+      "exit_code": 124,
+      "stdout": "PARTIAL\n"
+    }
+  ],
+  "ci_failure_run": 38864337951
+}

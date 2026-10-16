@@ -1,0 +1,35 @@
+{
+  "scope": "Actual PyPI googledrivedownloader0.4 package import health; no dataset download or paper training",
+  "requirements": "googledrivedownloader==0.4\nrequests==2.32.3",
+  "distribution_name": "googledrivedownloader",
+  "actual_import": "google_drive_downloader",
+  "missing_alias_probe_failed": true,
+  "fixed_alias_probe_passed": true,
+  "package_source_bytes_unchanged": true,
+  "package_source_sha256": {
+    "google_drive_downloader/google_drive_downloader.py": "0078380cce1abcce035467ff8d7bcab9864a1e0da1c5b204c4baf61beca9b5b2",
+    "google_drive_downloader/__init__.py": "f9f85525650b4161be2e38d48a10b4ed814771079b9dc12263abb746ba92bff6"
+  },
+  "health_checks": [
+    {
+      "phase": "original_missing_alias",
+      "path": "D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\google_drive_native_probe_20261016\\target",
+      "runtime": "cpython-312-win32-AMD64",
+      "success": false,
+      "exit_code": 1,
+      "timed_out": false,
+      "duration_s": 0.172,
+      "diagnostic": "Traceback (most recent call last):\n  File \"<string>\", line 55, in <module>\n  File \"C:\\Users\\24886\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\importlib\\__init__.py\", line 90, in import_module\n    return _bootstrap._gcd_import(name[level:], package, level)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"<frozen importlib._bootstrap>\", line 1387, in _gcd_import\n  File \"<frozen importlib._bootstrap>\", line 1360, in _find_and_load\n  File \"<frozen importlib._bootstrap>\", line 1324, in _find_and_load_unlocked\nModuleNotFoundError: No module named 'googledrivedownloader'"
+    },
+    {
+      "phase": "fixed_public_alias",
+      "path": "D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\google_drive_native_probe_20261016\\target",
+      "runtime": "cpython-312-win32-AMD64",
+      "success": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "duration_s": 0.641,
+      "diagnostic": "{\"versions\": {\"google_drive_downloader\": \"0.4\", \"requests\": \"2.32.3\"}}"
+    }
+  ]
+}

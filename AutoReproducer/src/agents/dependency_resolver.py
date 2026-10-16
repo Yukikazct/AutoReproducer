@@ -61,6 +61,7 @@ MODULE_TO_PYPI = {
     "absl": "absl-py",
     "dotenv": "python-dotenv",
     "huggingface_hub": "huggingface-hub",
+    "google_drive_downloader": "googledrivedownloader",
     "tensorflow_hub": "tensorflow-hub",
     "tensorflow_datasets": "tensorflow-datasets",
     "tensorboardX": "tensorboardX",

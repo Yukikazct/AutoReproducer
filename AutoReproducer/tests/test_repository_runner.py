@@ -193,20 +193,29 @@ def test_new_symlink_from_first_step_blocks_later_execution(runner, tmp_path, re
 
 
 def test_timeout_keeps_partial_logs_and_stops_descendants(runner, tmp_path):
-    # The grandchild would write after its parent's deadline if only the direct
-    # Python child were killed by the standalone supervisor.
-    descendant = "import time;from pathlib import Path;time.sleep(1);Path('escaped_child').touch()"
-    code = ("import subprocess,sys,time;"
+    # Cold Windows interpreter startup can exceed 300ms. First prove that the
+    # grandchild actually started; release its write only after owner cleanup.
+    descendant = ("import os,time\nfrom pathlib import Path\n"
+                  "Path('descendant_pid').write_text(str(os.getpid()))\n"
+                  "while not Path('release_child').exists(): time.sleep(.01)\n"
+                  "Path('escaped_child').touch()\n")
+    code = ("import subprocess,sys,time;from pathlib import Path;time.sleep(.6);"
             f"subprocess.Popen([sys.executable,'-c',{descendant!r}]);"
-            "print('PARTIAL',flush=True);time.sleep(5)")
+            "\nwhile not Path('descendant_pid').exists(): time.sleep(.01)\n"
+            "print('PARTIAL',flush=True);time.sleep(60)")
     started = time.monotonic()
-    result = runner.run(tmp_path, [step("timeout", "-c", code, timeout=0.3)], {})
+    result = runner.run(tmp_path, [step("timeout", "-c", code, timeout=5)], {})
     assert result["success"] is False
     assert result["final"]["timed_out"] is True
     assert result["final"]["exit_code"] == 124
     assert "PARTIAL" in result["final"]["stdout"]
     assert "timed out" in result["final"]["stderr"]
-    assert time.monotonic() - started < 3
+    assert time.monotonic() - started < 10
+    pid = int((tmp_path / 'descendant_pid').read_text())
+    (tmp_path / 'release_child').touch()
+    if os.name == 'nt':
+        from test_process_lifecycle import wait_stopped
+        wait_stopped(pid, timeout=3)
     time.sleep(1)
     assert not (tmp_path / "escaped_child").exists()
 
