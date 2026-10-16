@@ -31,6 +31,7 @@ class PatchTransaction:
         self.committed = False
         self.restored = []
         self.removed = []
+        self.rollback_error = None
         if not isinstance(patches, list) or not 1 <= len(patches) <= MAX_PATCH_FILES_PER_CANDIDATE:
             raise ValueError(f"a candidate requires 1-{MAX_PATCH_FILES_PER_CANDIDATE} patches")
         seen = set()
@@ -114,8 +115,10 @@ class PatchTransaction:
             for file in self.files:
                 self._invalidate_bytecode(file["path"])
         except BaseException as exc:
+            self.rollback_error = f"{type(exc).__name__}: {exc}"
             if original_error is not None:
-                exc.add_note(f"Original candidate failure: {type(original_error).__name__}")
+                original_error.add_note("Candidate rollback failed: " + self.rollback_error)
+                return  # __enter__/__exit__ propagate the original exception.
             raise
 
     def _invalidate_bytecode(self, relative):

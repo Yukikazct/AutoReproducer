@@ -10,6 +10,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.safety.patch_policy import PatchPolicy
+from src.safety.paths import relative_path
 from src.safety.workspace_snapshot import (
     snapshot_workspace,
     restore_snapshot,
@@ -80,6 +81,30 @@ def test_patch_policy_protects_secret_files():
         assert policy.classify(path) == "protected", path
     # 正常文件不受影响
     assert policy.classify("run.py") == "editable"
+
+
+@pytest.mark.parametrize("path", [
+    ".git./config", "src/.git /config", "model.py.", "src/model.py ",
+    "aux.py", "NUL", "src/CON.txt", "COM1.py", "LPT9.txt", "COM¹.py", ".. /outside.py",
+])
+def test_portable_paths_reject_windows_aliases_and_device_names(path):
+    with pytest.raises(ValueError):
+        relative_path(path, "source")
+
+
+def test_patch_policy_cannot_access_git_metadata_through_windows_alias(tmp_path):
+    metadata = tmp_path / "src" / ".git"
+    metadata.mkdir(parents=True)
+    config = metadata / "config"
+    config.write_bytes(b"protected git metadata\n")
+    decision = PatchPolicy(workspace=str(tmp_path)).decide("src/.git./config")
+    assert not decision.allowed
+    assert config.read_bytes() == b"protected git metadata\n"
+
+
+@pytest.mark.parametrize("path", [".", "src/conv.py", "models/auxiliary.py", "runs/my result.py", "模型/网络.py"])
+def test_portable_paths_keep_regular_names_and_working_directory(path):
+    assert relative_path(path).as_posix() == path
 
 
 # ---------------- WorkspaceSnapshot 快照与回滚 ----------------

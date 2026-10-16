@@ -274,3 +274,36 @@ def test_failed_rollback_stops_before_another_candidate(runner, workspace, monke
     assert result["repair_llm_calls"] == 1
     assert len(result["repair_attempts"]) == 1
     assert "rollback_failed" in Path(result["repair_report"]).read_text(encoding="utf-8")
+
+
+def test_bytecode_cleanup_failure_stops_even_after_sources_were_restored(runner, workspace, monkeypatch):
+    llm = RepairLLM(valid_proposal)
+    before = snapshot_workspace(workspace)
+    original_run, original_unlink = runner.run, Path.unlink
+    calls, candidate_ran = 0, False
+
+    def run(*args, **kwargs):
+        nonlocal calls, candidate_ran
+        calls += 1
+        if calls == 2:
+            cache = workspace / "__pycache__"
+            cache.mkdir(exist_ok=True)
+            (cache / "model.locked.pyc").write_bytes(b"locked cache")
+            candidate_ran = True
+            return {"success": False, "executed": True,
+                    "final": {"exit_code": 1, "stderr": "candidate failed"}}
+        return original_run(*args, **kwargs)
+
+    def locked_unlink(path, *args, **kwargs):
+        if candidate_ran and path.name == "model.locked.pyc":
+            raise PermissionError("bytecode cache is locked")
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(runner, "run", run)
+    monkeypatch.setattr(Path, "unlink", locked_unlink)
+    result = runner.run_with_repairs(workspace, plan(), {}, llm=llm,
+                                    editable=["model.py", "train.py"])
+    assert snapshot_workspace(workspace) == before
+    assert result["repair_status"] == "rollback_failed"
+    assert result["repair_llm_calls"] == 1
+    assert "bytecode cache is locked" in result["repair_attempts"][0]["rollback_error"]

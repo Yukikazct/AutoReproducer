@@ -1,0 +1,36 @@
+{
+  "kind": "browser_pdf_regression_failure",
+  "tag": "regression_chebnetii_20261016_01",
+  "sample_role": "retired_regression",
+  "git_commit": "25b71570f8f02615789bcea13302ac323ead092a",
+  "source_sha256": "010e7d031a7a8c7a25dcd467c2b9478e192a16da9a3369b4b4a584c4964051dd",
+  "source_unchanged": true,
+  "pdf_sha256": "c32e1ebcd886611ff66293f211e7f1b9e1ffebc6668a4b853de3bc0d2f357e37",
+  "repository": {
+    "url": "https://github.com/ivam-he/ChebNetII",
+    "revision": "ded6c18cbe9673234071031767d17826ad632aca"
+  },
+  "author_steps": [],
+  "selected_dataset": "Chameleon",
+  "cora_protocol_validated": false,
+  "state": "ERROR",
+  "training_started": false,
+  "failure": {
+    "stage": "environment_installation",
+    "kind": "windows_max_path",
+    "path_characters": 264,
+    "windows_long_paths_enabled": false,
+    "filename": "libopenblas64__v0.3.23-293-gc2f4bdbb-gcc_10_3_0-2bde3a66a51006b2b53eb373ff767a3f.dll",
+    "summary": "pip failed to unpack the NumPy DLL because its owned temporary filename exceeded MAX_PATH."
+  },
+  "active_runs": 0,
+  "active_workers": 0,
+  "active_executions": 0,
+  "cleanup": {
+    "status": "released",
+    "freed_bytes": 12035895,
+    "remaining": [],
+    "errors": []
+  },
+  "limitations": "No author training or paper metric comparison occurred. Chameleon was selected, so this does not validate the issue30 Cora protocol."
+}

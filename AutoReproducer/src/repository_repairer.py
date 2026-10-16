@@ -188,10 +188,17 @@ class RepositoryRepairer:
                         break
                 except (KeyboardInterrupt, SystemExit):
                     attempt["status"] = status = "interrupted"
+                    if transaction is not None and transaction.rollback_error:
+                        attempt["rollback_error"] = transaction.rollback_error
+                        status = "rollback_failed"
                     raise
                 except Exception as exc:
                     attempt["status"] = "rejected"
                     attempt["error"] = str(exc)
+                    if transaction is not None and transaction.rollback_error:
+                        attempt["rollback_error"] = transaction.rollback_error
+                        attempt["status"] = status = "rollback_failed"
+                        break
                     baseline = transaction.snapshot if transaction is not None else baseline
                     try:
                         restored = baseline is None or snapshot_workspace(root) == baseline
