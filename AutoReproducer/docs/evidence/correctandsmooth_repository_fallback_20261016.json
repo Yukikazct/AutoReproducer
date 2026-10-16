@@ -1,0 +1,61 @@
+{
+  "trial": "independent_cs_20261016_02",
+  "status": "cancelled_before_training",
+  "expected_repository": "https://github.com/CUAI/CorrectAndSmooth",
+  "expected_revision": "b910314a59270984f5e249462ee3faa815fc9a0c",
+  "selected_repository": "https://github.com/xnuohz/CorrectAndSmooth-dgl",
+  "selected_revision": "0bdf0e233f62a30d4ce4947b351e5e1a16fb0392",
+  "reason": "Original archive rejected safe internal file symlinks; alternate implementation is not original-author acceptance. Stopped the verified owned worker launcher; supervisor closed its retained process job and released its environment.",
+  "frozen_commit": "3fb9e79232736e74e0341aa58cc78b58789a1a5f",
+  "source_sha256": "194b69a2f5855922138029c6f6e1801f97234ead50a58f0db099ba7bc8e01a8d",
+  "source_unchanged": true,
+  "done": true,
+  "state": "ERROR",
+  "active_workers": 0,
+  "active_runs": 0,
+  "active_executions": 0,
+  "environment_cleanup": {
+    "status": "released",
+    "removed": [
+      {
+        "path": ".maintenance.json",
+        "bytes": 942
+      },
+      {
+        "path": ".pip-temporary",
+        "bytes": 2632418829
+      },
+      {
+        "path": "repository",
+        "bytes": 0
+      }
+    ],
+    "freed_bytes": 2644454897,
+    "remaining": [],
+    "errors": [],
+    "training_python": {
+      "status": "released",
+      "removed": [
+        {
+          "path": "D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\maintenance_browser_20261016\\data\\training_python",
+          "bytes": 12035126
+        }
+      ],
+      "errors": [],
+      "freed_bytes": 12035126
+    },
+    "docker": {
+      "status": "released",
+      "removed": [],
+      "errors": []
+    },
+    "runtime_downloads": {
+      "status": "released",
+      "removed": [],
+      "freed_bytes": 0,
+      "errors": []
+    }
+  },
+  "independent_acceptance": false,
+  "paper_retired_for_product_repairs": true
+}

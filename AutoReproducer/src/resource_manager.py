@@ -291,6 +291,7 @@ class ResourceManager:
             "revision": info.get("revision", ""),
             "archive_sha256": info.get("archive_sha256", ""),
             "files": info.get("files", {}),
+            "file_aliases": info.get("file_aliases", []),
         }
         _atomic_json(repo_dir / ".autorepro-repo-source.json", marker)
 

@@ -25,6 +25,7 @@ from filelock import FileLock
 
 from src.repository_profiles import get_profile
 from src.repository_adapters import get_adapter
+from src.repository_archive import validated_archive
 from src.execution_plan import build_plan, plan_step_ids
 from src.safety.paths import workspace_path
 from src.preset_downloads import atomic_cache_bytes, download_bytes
@@ -217,6 +218,10 @@ def materialize_submodules(data_root, snapshot, *, offline=False, _ancestors=())
             if qualified in snapshot['files']:
                 raise ValueError('子模块不能覆盖父仓库文件')
             snapshot['files'][qualified] = sha
+        for alias in child.get('file_aliases', []):
+            snapshot.setdefault('file_aliases', []).append({
+                **alias, 'path': f"{name}/{alias['path']}",
+                'resolved_target': f"{name}/{alias['resolved_target']}"})
     snapshot['submodules'] = snapshots
     snapshot['submodules_pending'] = False
     return snapshot
@@ -293,30 +298,26 @@ def export_repository(data_root, profile, destination, *, offline=False, require
         source, archive = _fetch_repository(cache, url, revision)
     files = {}
     with tarfile.open(fileobj=io.BytesIO(archive), mode="r:") as tar:
-        members = tar.getmembers()
         # Validate the entire archive before creating any extracted files.
-        for member in members:
-            try:
-                workspace_path(dest, member.name, "archive", forbid_git=True)
-            except ValueError as exc:
-                raise ValueError("仓库归档包含越界路径") from exc
-            if not (member.isdir() or member.isfile()):
-                raise ValueError(f"仓库归档包含不支持的 symlink 或链接文件: {member.name}")
+        members, file_sources, file_aliases = validated_archive(tar, dest)
         dest.mkdir(parents=True, exist_ok=False)
-        for member in members:
+        for name, member in members.items():
             # Recheck immediately before writing; earlier entries may exist now.
-            target = workspace_path(dest, member.name, "archive", forbid_git=True)
+            target = workspace_path(dest, name, "archive", forbid_git=True)
             if member.isdir():
                 target.mkdir(parents=True, exist_ok=True)
-            elif member.isfile():
+            else:
                 target.parent.mkdir(parents=True, exist_ok=True)
-                payload = tar.extractfile(member).read()
+                payload = tar.extractfile(members[file_sources[name]]).read()
                 target.write_bytes(payload)
-                files[member.name] = hashlib.sha256(payload).hexdigest()
+                files[name] = hashlib.sha256(payload).hexdigest()
+        for alias in file_aliases:
+            alias['target_sha256'] = files[alias['path']]
     snapshot = {"url": url, "revision": revision, "resolved_sha": revision,
             "acquisition": acquisition,
             "path": str(dest.resolve()), "cache_path": str(source.resolve()),
              "archive_sha256": hashlib.sha256(archive).hexdigest(), "files": files,
+             "file_aliases": file_aliases,
              "submodules_pending": (dest / '.gitmodules').is_file(), "submodules": []}
     if include_submodules and snapshot['submodules_pending']:
         materialize_submodules(root, snapshot, offline=offline)
