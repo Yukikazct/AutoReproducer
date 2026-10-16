@@ -14,6 +14,7 @@ from src.safety.workspace_snapshot import (
     changed_files,
     fingerprint_workspace,
     snapshot_workspace,
+    restore_snapshot,
     workspace_fingerprint,
 )
 
@@ -166,3 +167,113 @@ def test_guard_rollback_uses_skip_consistently(tmp_path: Path):
     restored, removed = guard.rollback()
     assert (ws / "cache" / "c.txt").exists()      # skip 目录内不清理
     assert removed == []
+
+
+def test_restore_validates_every_entry_before_changing_any_file(tmp_path):
+    import hashlib
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "model.py"
+    target.write_bytes(b"changed\n")
+    outside = tmp_path / "outside.py"
+    outside.write_bytes(b"outside\n")
+    content = b"original\n"
+    entry = {"sha256": hashlib.sha256(content).hexdigest(), "content": content}
+
+    with pytest.raises(ValueError):
+        restore_snapshot(workspace, {"model.py": entry, "../outside.py": entry})
+
+    assert target.read_bytes() == b"changed\n"
+    assert outside.read_bytes() == b"outside\n"
+
+
+def test_restore_rejects_corrupt_snapshot_before_writing(tmp_path):
+    target = tmp_path / "model.py"
+    target.write_bytes(b"original\n")
+    baseline = snapshot_workspace(tmp_path)
+    target.write_bytes(b"changed\n")
+    baseline["model.py"]["content"] = b"corrupt\n"
+
+    with pytest.raises(ValueError, match="snapshot"):
+        restore_snapshot(tmp_path, baseline)
+
+    assert target.read_bytes() == b"changed\n"
+
+
+def test_snapshot_skip_names_apply_to_relative_directories(tmp_path):
+    workspace = tmp_path / ".git" / "workspace"
+    workspace.mkdir(parents=True)
+    (workspace / "model.py").write_bytes(b"original\n")
+
+    assert set(snapshot_workspace(workspace)) == {"model.py"}
+
+
+def test_snapshot_rejects_file_symlink(tmp_path, require_symlinks):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside = tmp_path / "outside.py"
+    outside.write_bytes(b"outside\n")
+    (workspace / "model.py").symlink_to(outside)
+
+    with pytest.raises(ValueError, match="symlink|junction"):
+        snapshot_workspace(workspace)
+
+
+def test_restore_rejects_swapped_link_before_changing_any_file(tmp_path, require_symlinks):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    model = workspace / "model.py"
+    model.write_bytes(b"original\n")
+    other = workspace / "other.py"
+    other.write_bytes(b"other\n")
+    baseline = snapshot_workspace(workspace)
+    other.write_bytes(b"changed\n")
+    outside = tmp_path / "outside.py"
+    outside.write_bytes(b"outside\n")
+    model.unlink()
+    model.symlink_to(outside)
+
+    with pytest.raises(ValueError, match="symlink|junction"):
+        restore_snapshot(workspace, baseline)
+
+    assert outside.read_bytes() == b"outside\n"
+    assert other.read_bytes() == b"changed\n"
+
+
+def test_restore_does_not_write_through_hardlink(tmp_path):
+    import os
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    model = workspace / "model.py"
+    model.write_bytes(b"original\n")
+    baseline = snapshot_workspace(workspace)
+    outside = tmp_path / "outside.py"
+    outside.write_bytes(b"outside\n")
+    model.unlink()
+    os.link(outside, model)
+
+    restore_snapshot(workspace, baseline)
+
+    assert model.read_bytes() == b"original\n"
+    assert outside.read_bytes() == b"outside\n"
+
+
+def test_restore_empty_snapshot_keeps_workspace_root(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "candidate.py").write_bytes(b"candidate\n")
+    restore_snapshot(workspace, {})
+    assert workspace.is_dir()
+    assert list(workspace.iterdir()) == []
+
+
+def test_restore_rejects_noncanonical_snapshot_keys(tmp_path):
+    target = tmp_path / "model.py"
+    target.write_bytes(b"original\n")
+    entry = snapshot_workspace(tmp_path)["model.py"]
+    target.write_bytes(b"changed\n")
+    with pytest.raises(ValueError):
+        restore_snapshot(tmp_path, {"./model.py": entry})
+    assert target.read_bytes() == b"changed\n"

@@ -1,0 +1,31 @@
+{
+  "at_utc": "2026-10-16T06:02:18.034095+00:00",
+  "kind": "real_cross_interpreter_health_markers",
+  "app_python": "3.12.10",
+  "source_sha256": {
+    "src/agents/code_executor.py": "30697cb2f149ec71e892c546db1872c0710ff3df303cfc37caebf8cd1c74760b",
+    "src/dependency_cache.py": "bc2e15000474baefa1d4d7bd167a5fea28b44133614f5c5f459a8d444605b103"
+  },
+  "training_python": "3.11.9",
+  "checks": [
+    {
+      "requirement": "native-demo>=2; python_full_version < '3.12'",
+      "old_host_marker_active": false,
+      "expected_healthy": false,
+      "healthy": false,
+      "passed": true,
+      "diagnostic": "依赖健康检查失败(exit=1): Traceback (most recent call last):\n  File \"<string>\", line 53, in <module>\nRuntimeError: cached version does not satisfy fixed requirement: native-demo==1.0"
+    },
+    {
+      "requirement": "native-demo>=2; python_full_version >= '3.12'",
+      "old_host_marker_active": true,
+      "expected_healthy": true,
+      "healthy": true,
+      "passed": true,
+      "diagnostic": ""
+    }
+  ],
+  "success": true,
+  "test_runtime_released": true,
+  "product_sources_unchanged": true
+}

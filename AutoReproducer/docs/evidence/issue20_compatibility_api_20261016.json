@@ -1,0 +1,33 @@
+{
+  "at_utc": "2026-10-16T05:55:17.013539+00:00",
+  "kind": "compatibility_api_smoke",
+  "scope": "Real LLM proposals and standard-library subprocesses; no paper training or numerical reproduction.",
+  "model": "deepseek-chat",
+  "success": true,
+  "status": "succeeded",
+  "llm_calls": 1,
+  "usage": {
+    "prompt_tokens": 585,
+    "completion_tokens": 270
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "status": "succeeded",
+      "reason": "Python 3.12 removed the deprecated collections.MutableMapping alias; it now lives in collections.abc. Additionally, train.py uses inspect.getargspec, which was removed in Python 3.11. Both are minimal compatibility fixes that preserve the original behavior.",
+      "error": null
+    }
+  ],
+  "stdout": "COMPAT_REPAIR_OK\n",
+  "exit_code": 0,
+  "source_sha256": {
+    "src/repository_repairer.py": "649d2f0ca9b7a2d4d535a7f2a8b65d1e048fbdee84b1fb0e136f6139f40d0c58",
+    "src/repository_runner.py": "8e61b7b49fd1481ac6581030a20a4b7dde37d2103ce1875fa81020495ab2f00d",
+    "src/safety/patch_transaction.py": "acc6d5a373d8db84ed1204d3e4db881009b05a49389c4edc5c312fc025a30d7b",
+    "src/safety/patch_policy.py": "65837593a235146425d09d31fe6174bf83f7c4291c359272a919f53532e67ffc",
+    "src/safety/workspace_snapshot.py": "530b8c24a079ae2372894370b245c36cd13949340b685b92b0e7d820f42e8561"
+  },
+  "product_sources_unchanged": true,
+  "data_unchanged": true,
+  "report": ".tmp\\issue20_api_d0oygpsh\\.autorepro_repository_repairs\\56aeafd23cef44338ebc4ec676094798\\repair_report.md"
+}

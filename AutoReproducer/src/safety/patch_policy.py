@@ -34,6 +34,8 @@ from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Iterable, List, Optional, Tuple
 
+from src.safety.paths import relative_path, workspace_path
+
 # ---------------------------------------------------------------- 常量
 
 # 默认受保护目录前缀（命中顶层即拒绝修改，保留原语义）
@@ -191,18 +193,13 @@ class PatchPolicy:
     @staticmethod
     def _normalize(path: object) -> str:
         """归一化为相对 POSIX 路径；非法路径(绝对/空/穿越)返回空字符串。"""
-        p = str(path).replace("\\", "/").strip()
-        if not p or p.startswith("//") or p[:1] == "/":
-            return ""          # 空路径或 POSIX 绝对路径
-        if len(p) >= 2 and p[1] == ":" and p[0].isalpha():
-            return ""          # Windows 盘符绝对路径(C:/...)
-        while p.startswith("./"):     # 只剥 ./ 前缀，保留 .git 等点开头目录
-            p = p[2:]
-        if not p or p.startswith("/"):
+        if not isinstance(path, str):
             return ""
-        if ".." in p.split("/"):      # 任何层级的 .. 穿越都拒绝
+        try:
+            value = relative_path(path.strip(), "patch path").as_posix()
+        except (ValueError, TypeError):
             return ""
-        return p
+        return "" if value == "." else value
 
     def _with_workspace(self, workspace: Optional[str]) -> "PatchPolicy":
         """返回绑定工作区根的同策略副本（体积预算校验启用）。"""
@@ -255,7 +252,7 @@ class PatchPolicy:
         parts = [p.lower() for p in rel.parts]
 
         # 2) protected 第一段（原语义）
-        if any(part in self._protected_prefixes for part in parts[:1]):
+        if any(part in self._protected_prefixes for part in parts):
             return PatchDecision(norm, False, "protected",
                                  f"受保护路径(数据/评测/版本控制),禁止修改: {norm}")
 
@@ -285,17 +282,15 @@ class PatchPolicy:
         root = self._workspace or workspace
         if root is not None:
             try:
-                from pathlib import Path
-                target = (Path(root) / norm).resolve()
-                target.relative_to(Path(root).resolve())
+                target = workspace_path(root, norm, "patch path", forbid_git=True)
                 if target.is_file() and \
                         target.stat().st_size > self.max_patchable_file_bytes:
                     return PatchDecision(
                         norm, False, "size_budget",
                         f"文件超过补丁体积预算({self.max_patchable_file_bytes} B),"
                         f"禁止修改: {norm}")
-            except (ValueError, OSError):
-                pass          # 无法解析真实路径时跳过体积校验
+            except (ValueError, OSError) as exc:
+                return PatchDecision(norm, False, "illegal", f"补丁路径无法安全解析: {exc}")
 
         # 8) editable 白名单
         if self._editable:
