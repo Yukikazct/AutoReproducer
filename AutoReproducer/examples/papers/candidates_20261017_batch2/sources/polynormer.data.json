@@ -1,0 +1,19 @@
+{
+  "kind": "static_public_input_not_training",
+  "name": "Amazon Photo",
+  "url": "https://raw.githubusercontent.com/shchur/gnn-benchmark/master/data/npz/amazon_electronics_photo.npz",
+  "local_static_file": "D:\\code\\AutoReproducer\\.tmp\\next-pdf-candidates\\amazon_electronics_photo.npz",
+  "bytes": 17113960,
+  "sha256": "bdb1feb8e6ff42ee44024b04479145029c563fd42fc31bff80af20887ba0439a",
+  "author_split_file": "data/amazon-photo_split.npz",
+  "author_split_sha256": "0609f6ab15ddabfe33a34f10d960d09499e634472f72104abb1f3be858127432",
+  "shape": {
+    "nodes": 7650,
+    "features": 745,
+    "classes": 8,
+    "train": 4590,
+    "validation": 1530,
+    "test": 1530
+  },
+  "author_loader_executed": false
+}

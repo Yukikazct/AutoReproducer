@@ -68,6 +68,17 @@ def test_stale_backend_upgrade_keeps_existing_worker_globals(monkeypatch):
     old_start.assert_not_called()
 
 
+def test_receipt_publication_upgrade_replaces_cached_version_five(monkeypatch):
+    legacy = cached_legacy_backend(monkeypatch)
+    legacy.BACKEND_API_VERSION = 5
+    legacy.ProgressStore = Mock()
+    upgraded = entrypoint.load_backend_pipeline()
+    assert upgraded is not legacy
+    assert upgraded.BACKEND_API_VERSION > 5
+    assert sys.modules['frontend.backend_pipeline'] is legacy
+    assert legacy.run_pipeline_core() is legacy.owner_state
+
+
 def test_concurrent_upgrade_loads_publish_one_complete_module(monkeypatch):
     legacy = cached_legacy_backend(monkeypatch)
     real_spec = importlib.util.spec_from_file_location

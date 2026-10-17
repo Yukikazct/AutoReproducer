@@ -22,6 +22,9 @@
   明确返回证据不足、未运行。合成兜底仅供 Mock 演示。
 """
 import ast
+import csv
+from email.parser import Parser
+import io
 import os
 import re
 import shlex
@@ -196,6 +199,74 @@ def _install_failure_kind(detail: str, timed_out: bool = False, requirements: st
     if 'no matching distribution found' in lowered or 'from versions: none' in lowered:
         return 'wheel_unavailable'
     return 'installation_failed'
+
+
+def _graphbolt_abi_evidence(targets, detail):
+    """Distinguish an absent wheel ABI from a lost file using local RECORDs."""
+    match = re.search(r'(?m)^FileNotFoundError: Cannot find DGL C\+\+ graphbolt library at ([^\r\n]+)$', detail)
+    if not match:
+        return None
+    requested = Path(match[1])
+    library = re.fullmatch(r'graphbolt_pytorch_(\d+\.\d+\.\d+)\.dll', requested.name)
+    if not requested.is_absolute() or not library:
+        return None
+    try:
+        from packaging.version import Version
+        installed = {}
+        for target in targets:
+            local = {}
+            for candidate in Path(target).iterdir():
+                package = re.fullmatch(r'(dgl|torch)-.+\.dist-info', candidate.name, re.I)
+                if not package:
+                    continue
+                name = package[1].lower()
+                metadata_path = workspace_path(target, candidate.name + '/METADATA',
+                    'native ABI metadata', must_exist=True, forbid_git=True)
+                if metadata_path.stat().st_size > 2 * 1024 * 1024:
+                    return None
+                metadata = Parser().parsestr(metadata_path.read_text('utf-8'))
+                if metadata.get('Name', '').lower() != name or name in local or not metadata.get('Version'):
+                    return None
+                local[name] = (Path(target), candidate.name, metadata['Version'])
+            for name, value in local.items():
+                installed.setdefault(name, value)
+        if not {'dgl', 'torch'} <= installed.keys():
+            return None
+        dgl_root, dgl_metadata, dgl_version = installed['dgl']
+        torch_version = installed['torch'][2]
+        if Version(torch_version).base_version != library[1]:
+            return None
+        relative = requested.relative_to(dgl_root)
+        missing = workspace_path(dgl_root, relative, 'GraphBolt ABI target', forbid_git=True)
+        if (len(relative.parts) != 3 or relative.parent != Path('dgl/graphbolt') or missing.exists()):
+            return None
+        record_path = workspace_path(dgl_root, dgl_metadata + '/RECORD', 'native ABI RECORD',
+                                     must_exist=True, forbid_git=True)
+        if record_path.stat().st_size > 4 * 1024 * 1024:
+            return None
+        raw = record_path.read_bytes()
+        rows = list(csv.reader(io.StringIO(raw.decode('utf-8'))))
+        if not rows or len(rows) > 50000:
+            return None
+        available = []
+        for row in rows:
+            if len(row) != 3:
+                return None
+            path = workspace_path(dgl_root, row[0], 'native ABI RECORD entry', forbid_git=True)
+            if path == missing:
+                return None  # A declared but missing binary is still cache damage.
+            name = path.relative_to(dgl_root)
+            if (name.parent == Path('dgl/graphbolt') and path.is_file()
+                    and re.fullmatch(r'graphbolt_pytorch_\d+\.\d+\.\d+\.dll', name.name)):
+                available.append(name.as_posix())
+        if not available:
+            return None
+        return {'package': 'dgl', 'package_version': dgl_version, 'torch_version': torch_version,
+                'missing_library': relative.as_posix(), 'requested_library_recorded': False,
+                'available_libraries': sorted(set(available)),
+                'record_path': dgl_metadata + '/RECORD', 'record_sha256': hashlib.sha256(raw).hexdigest()}
+    except (OSError, ValueError, UnicodeError, csv.Error):
+        return None  # Incomplete, linked or ambiguous metadata cannot establish an ABI mismatch.
 
 
 def _allow_official_pip_fallback(requirements: str) -> bool:
@@ -1976,7 +2047,7 @@ class CodeExecutorAgent(BaseAgent):
         started = time.monotonic()
         self.resource_events.emit("dependency", deps_dir.name, "health_check", "running",
                                   path=str(deps_dir), phase=phase)
-        exit_code, timed_out, detail = None, False, ""
+        exit_code, timed_out, detail, paths = None, False, "", []
         try:
             from packaging.requirements import Requirement
             from packaging.utils import canonicalize_name
@@ -2025,11 +2096,23 @@ class CodeExecutorAgent(BaseAgent):
                       "\n".join(captured)[-1000:])
         except Exception as exc:
             detail = f"依赖健康检查异常: {exc}"
+        abi = _graphbolt_abi_evidence(paths, detail) if exit_code not in (None, 0) and not timed_out else None
         safe_detail = _safe_install_diagnostic(detail)[-1600:]
+        if abi:
+            libraries = abi['available_libraries']
+            summary = (
+                f"native_abi_incompatible: DGL {abi['package_version']} wheel RECORD does not declare "
+                f"{abi['missing_library']} for Torch {abi['torch_version']}; declared GraphBolt libraries: "
+                + ', '.join(libraries[:3]))
+            if len(libraries) > 3:
+                summary += f" (+{len(libraries) - 3} more in native_abi_evidence)"
+            safe_detail = safe_detail[-600:] + '\n' + _safe_install_diagnostic(summary)[:999]
         record = {"phase": phase, "path": str(deps_dir),
                   "runtime": runtime_fingerprint(self._python_executable()),
                   "success": exit_code == 0, "exit_code": exit_code, "timed_out": timed_out,
                   "duration_s": round(time.monotonic() - started, 3), "diagnostic": safe_detail}
+        if abi:
+            record.update(failure_kind='native_abi_incompatible', native_abi_evidence=abi)
         env_config.setdefault("dependency_health_attempts", []).append(record)
         self.resource_events.emit("dependency", deps_dir.name, "health_check",
                                   "succeeded" if exit_code == 0 else "failed", **record)
@@ -2282,12 +2365,22 @@ class CodeExecutorAgent(BaseAgent):
             except (OSError, ValueError) as exc:
                 return f"依赖缓存路径检查失败: {exc}"
             if ready_mark.is_file():
+                health_start = len(env_config.get('dependency_health_attempts', []))
                 health_error = self._check_local_dependency_health(deps_dir, reqs, "cached")
                 if not health_error:
                     self._activate_dependency_environment(deps_dir)
                     _INSTALLED_DEPS[key] = ""
                     touch_deps_meta(deps_dir)
                     return None
+                health_attempts = env_config.get('dependency_health_attempts', [])
+                if (len(health_attempts) > health_start
+                        and health_attempts[-1].get('failure_kind') == 'native_abi_incompatible'
+                        and health_attempts[-1].get('native_abi_evidence')):
+                    env_config['dependency_failure_kind'] = 'native_abi_incompatible'
+                    env_config['dependency_install_attempts'] = []
+                    _INSTALLED_DEPS[key] = health_error
+                    ready_mark.unlink(missing_ok=True)
+                    return health_error
                 if env_config.get("offline"):
                     return f"离线模式下依赖缓存未通过健康检查，不能联网重建：{health_error}"
                 invalid_cache = True
@@ -2422,22 +2515,29 @@ class CodeExecutorAgent(BaseAgent):
                 except Exception as exc:
                     detail = f"依赖安装异常: {exc}"
                 safe_detail = _safe_install_diagnostic(detail)[-1600:]
-                health_error = None
+                health_error, health_failure_kind = None, None
                 if exit_code == 0:
                     if layer:
                         _write_deps_meta(deps_dir, install_kind, requirements=reqs, module=module)
                         meta = read_deps_meta(deps_dir)
                         meta.update({name: value for name, value in layer.items() if name != 'requirements_file'})
                         _deps_meta_path(deps_dir).write_text(json.dumps(meta, ensure_ascii=False, indent=2), 'utf-8')
+                    health_start = len(env_config.get('dependency_health_attempts', []))
                     health_error = self._check_local_dependency_health(
                         deps_dir, reqs, "rebuild" if health_rebuild_used else "installed")
+                    health_attempts = env_config.get('dependency_health_attempts', [])
+                    if (health_error and len(health_attempts) > health_start
+                            and health_attempts[-1].get('native_abi_evidence')):
+                        health_failure_kind = health_attempts[-1].get('failure_kind')
                 attempts.append({"attempt": attempt, "index_url": _safe_install_diagnostic(index),
                                  "success": exit_code == 0 and not health_error, "exit_code": exit_code,
                                  "timed_out": timed_out, "timeout_s": timeout_s, "diagnostic": safe_detail,
                                  "health_diagnostic": health_error or "",
-                                 "failure_kind": _install_failure_kind(health_error or detail, timed_out, reqs)
+                                 "failure_kind": health_failure_kind or _install_failure_kind(health_error or detail, timed_out, reqs)
                                      if exit_code != 0 or health_error else None})
                 if health_error:
+                    if health_failure_kind == 'native_abi_incompatible':
+                        break
                     if not health_rebuild_used:
                         self._record_dependency_repair(deps_dir, health_error)
                         health_rebuild_used = True

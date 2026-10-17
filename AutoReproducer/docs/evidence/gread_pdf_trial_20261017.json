@@ -1,0 +1,307 @@
+{
+  "recorded_at": "2026-10-17T08:02:09.662492+00:00",
+  "paper_id": "gread",
+  "candidate_order": 2,
+  "acceptance": "failed",
+  "failure_phase": "author_execution_plan",
+  "frozen_commit": "9357bd79fea7b5a0ec216ff45a3864785fb8f6e0",
+  "source_sha256": "fccddd17550ae9a9bf80a5c71519efcec7145385b5cc8efde55dd5e44d9946b2",
+  "pdf_sha256": "d346cc029d4db2d1994d2dd73afe31e69bace4f5669b62b78652975578bbab7a",
+  "author_repository": {
+    "url": "https://github.com/jeongwhanchoi/GREAD",
+    "revision": "f97ec01a17bb9cba1da2b89192b83cd7a25a250b"
+  },
+  "error": "No runnable original author command: README/launchers contain no supported literal Python entrypoint. Author entrypoint 'run_GNN.py' is missing under cwd '.'. Matching pinned inventory paths: [\"src/run_GNN.py\"]. Read the relevant original source and choose its working directory; do not invent a root-level script.; Author entrypoint 'run_GNN.py' is missing under cwd '.'. Matching pinned inventory paths: [\"src/run_GNN.py\"]. Read the relevant original source and choose its working directory; do not invent a root-level script.",
+  "model_structural_failures": [
+    "Author entrypoint differs from the original argv",
+    "Author entrypoint differs from the original argv"
+  ],
+  "rejected_original_step": {
+    "id": "train_cora_best",
+    "kind": "train",
+    "argv": [
+      "python",
+      "run_GNN.py",
+      "--dataset=Cora",
+      "--use_best_params"
+    ],
+    "entrypoint": {
+      "kind": "script",
+      "target": "src/run_GNN.py"
+    },
+    "cwd": "src",
+    "timeout_s": null,
+    "citations": [
+      "readme_run",
+      "run_args",
+      "run_args2",
+      "gread_params",
+      "run_main"
+    ]
+  },
+  "diagnosis": "The model supplied cwd=src and a repository-relative entrypoint target src/run_GNN.py; exact token comparison rejected that equivalent representation before resolving the original run_GNN.py argv. Literal fallback then tried the README basename at the repository root.",
+  "training_executed": false,
+  "optimizer_steps": 0,
+  "comparison": null,
+  "paper_metrics_verified": false,
+  "is_reproduced": null,
+  "all_owned_scopes_zero": true,
+  "environment_cleanup": {
+    "status": "released",
+    "removed": [],
+    "freed_bytes": 0,
+    "remaining": [],
+    "errors": [],
+    "training_python": {
+      "status": "released",
+      "removed": [],
+      "errors": [],
+      "freed_bytes": 0
+    },
+    "docker": {
+      "status": "released",
+      "removed": [],
+      "errors": []
+    },
+    "runtime_downloads": {
+      "status": "released",
+      "removed": [],
+      "freed_bytes": 0,
+      "errors": []
+    },
+    "before_run": {
+      "status": "released",
+      "removed": [],
+      "freed_bytes": 0,
+      "remaining": [],
+      "errors": [],
+      "training_python": {
+        "status": "released",
+        "removed": [],
+        "errors": [],
+        "freed_bytes": 0
+      },
+      "docker": {
+        "status": "released",
+        "removed": [],
+        "errors": []
+      },
+      "runtime_downloads": {
+        "status": "released",
+        "removed": [],
+        "freed_bytes": 0,
+        "errors": []
+      }
+    },
+    "replacements": [],
+    "supervisor_cleanup": {
+      "status": "released",
+      "removed": [],
+      "freed_bytes": 0,
+      "remaining": [],
+      "errors": [],
+      "training_python": {
+        "status": "released",
+        "removed": [],
+        "errors": [],
+        "freed_bytes": 0
+      },
+      "docker": {
+        "status": "released",
+        "removed": [],
+        "errors": []
+      },
+      "runtime_downloads": {
+        "status": "released",
+        "removed": [],
+        "freed_bytes": 0,
+        "errors": []
+      }
+    }
+  },
+  "regression_replay": {
+    "recorded_at": "2026-10-17T08:01:27.962302+00:00",
+    "paper_id": "gread",
+    "kind": "original_rejected_proposal_validation_only",
+    "independent": false,
+    "training_executed": false,
+    "original_run_files_unchanged": true,
+    "original_argv_preserved": true,
+    "step": {
+      "id": "train_cora_best",
+      "kind": "train",
+      "argv": [
+        "python",
+        "run_GNN.py",
+        "--dataset=Cora",
+        "--use_best_params"
+      ],
+      "entrypoint": {
+        "kind": "script",
+        "target": "run_GNN.py",
+        "source_path": "src/run_GNN.py"
+      },
+      "cwd": "src",
+      "timeout_s": null,
+      "depends_on": [],
+      "citations": [
+        "readme_run",
+        "run_args",
+        "run_args2",
+        "gread_params",
+        "run_main"
+      ],
+      "required": true
+    },
+    "repository": {
+      "url": "https://github.com/jeongwhanchoi/GREAD",
+      "revision": "f97ec01a17bb9cba1da2b89192b83cd7a25a250b"
+    },
+    "capture_device": "cpu",
+    "limitation": "Planning regression only; dependency installation, complete training, paper comparison and browser export were not verified."
+  },
+  "retirement_reason": "Triggered a product repair of nested original script identity validation; later trials are regression-only.",
+  "next_candidate": "critical-look-heterophily",
+  "remaining_gate": "Repaired commit CI followed by a new source freeze and the third predetermined independent PDF.",
+  "browser_cleanup_audit": {
+    "passed": false,
+    "checks": {
+      "cleanup_released": true,
+      "cleanup_has_no_errors": true,
+      "cleanup_has_no_remaining": true,
+      "training_python_released": true,
+      "docker_released": true,
+      "runtime_downloads_released": true,
+      "dependency_files_removed": true,
+      "training_environments_removed": true,
+      "final_report_retained": true,
+      "report_result_archive_retained": true,
+      "run_report_retained": true,
+      "run_result_retained": true,
+      "cleanup_receipt_retained": true,
+      "source_workspace_retained": false,
+      "application_python_retained": true,
+      "cleanup_receipt_matches": true,
+      "run_result_cleanup_matches": true,
+      "report_result_archive_cleanup_matches": true
+    },
+    "receipt": {
+      "status": "released",
+      "removed": [],
+      "freed_bytes": 0,
+      "remaining": [],
+      "errors": [],
+      "training_python": {
+        "status": "released",
+        "removed": [],
+        "errors": [],
+        "freed_bytes": 0
+      },
+      "docker": {
+        "status": "released",
+        "removed": [],
+        "errors": []
+      },
+      "runtime_downloads": {
+        "status": "released",
+        "removed": [],
+        "freed_bytes": 0,
+        "errors": []
+      },
+      "before_run": {
+        "status": "released",
+        "removed": [],
+        "freed_bytes": 0,
+        "remaining": [],
+        "errors": [],
+        "training_python": {
+          "status": "released",
+          "removed": [],
+          "errors": [],
+          "freed_bytes": 0
+        },
+        "docker": {
+          "status": "released",
+          "removed": [],
+          "errors": []
+        },
+        "runtime_downloads": {
+          "status": "released",
+          "removed": [],
+          "freed_bytes": 0,
+          "errors": []
+        }
+      },
+      "replacements": [],
+      "supervisor_cleanup": {
+        "status": "released",
+        "removed": [],
+        "freed_bytes": 0,
+        "remaining": [],
+        "errors": [],
+        "training_python": {
+          "status": "released",
+          "removed": [],
+          "errors": [],
+          "freed_bytes": 0
+        },
+        "docker": {
+          "status": "released",
+          "removed": [],
+          "errors": []
+        },
+        "runtime_downloads": {
+          "status": "released",
+          "removed": [],
+          "freed_bytes": 0,
+          "errors": []
+        }
+      }
+    },
+    "data_root": "D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\acceptance_pdf_browser_20261017\\data",
+    "deps_root": "D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\acceptance_pdf_browser_20261017\\deps",
+    "remaining_dependencies": [],
+    "remaining_training_roots": [],
+    "retained": {
+      "final_report": "D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\acceptance_pdf_browser_20261017\\data\\reports\\GREAD_Graph_Neural_Reaction-D_20261017_155818.md",
+      "report_result_archive": "D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\acceptance_pdf_browser_20261017\\data\\reports\\GREAD_Graph_Neural_Reaction-D_20261017_155818.result.json",
+      "run_report": "D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\acceptance_pdf_browser_20261017\\data\\runs\\repository_d2ee0335192042018d8b094be8755bc0\\report.md",
+      "run_result": "D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\acceptance_pdf_browser_20261017\\data\\runs\\repository_d2ee0335192042018d8b094be8755bc0\\result.json",
+      "cleanup_receipt": "D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\acceptance_pdf_browser_20261017\\data\\runs\\repository_d2ee0335192042018d8b094be8755bc0\\environment_cleanup.json",
+      "source_workspace": null,
+      "application_python": "D:\\code\\AutoReproducer\\AutoReproducer\\.venv-py312\\Scripts\\python.exe"
+    }
+  },
+  "pinned_repository_files_unchanged": 29,
+  "browser_cleanup_audit_note": "The failed-planning result has no accepted repository metadata, so its successful-run source_workspace_retained audit is false. The pinned workspace remains on disk and all inventory file hashes were independently checked; other cleanup checks passed. This is a failed trial, not an acceptance pass.",
+  "regression_tests": [
+    {
+      "file": "gread_entrypoint_before_20261017.xml",
+      "tests": 5,
+      "passed": 2,
+      "failures": 3,
+      "errors": 0,
+      "skipped": 0,
+      "sha256": "c2cfc46a7153917033d315e43ec474b1c486589f93838cb6c2b86091d84cd511"
+    },
+    {
+      "file": "gread_entrypoint_native_20261017.xml",
+      "tests": 145,
+      "passed": 145,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "sha256": "e879e5fd7a0086c7143924ada6f4201935de499bb7830b38bed4f08e17aecf9b"
+    },
+    {
+      "file": "gread_retirement_gates_20261017.xml",
+      "tests": 60,
+      "passed": 60,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "sha256": "63c71a231d51ffd408b4621774c3f98db595d28932cb8d80858881a25df3173a"
+    }
+  ],
+  "archive_sha256": "e70bd638615830f15ec832ced0e13f4df4510f6e2f5b62202979f53932bf6c54"
+}

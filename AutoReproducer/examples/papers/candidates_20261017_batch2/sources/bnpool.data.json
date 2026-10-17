@@ -1,0 +1,21 @@
+{
+  "kind": "static_public_input_not_training",
+  "name": "MUTAG cleaned",
+  "url": "https://raw.githubusercontent.com/nd7141/graph_datasets/master/datasets/MUTAG.zip",
+  "local_static_file": "D:\\code\\AutoReproducer\\.tmp\\next-pdf-candidates\\MUTAG_cleaned.zip",
+  "bytes": 17653,
+  "sha256": "ea3576783c61cd2b3a942e9e3bab821cd4b359f5409fd53b31192c721207f6fa",
+  "graphs": 135,
+  "graph_labels": [
+    -1,
+    1
+  ],
+  "fold0_expected_counts": {
+    "train": 102,
+    "validation": 19,
+    "test": 14
+  },
+  "paper_graphs": 188,
+  "data_version_matches_paper": false,
+  "author_loader_executed": false
+}

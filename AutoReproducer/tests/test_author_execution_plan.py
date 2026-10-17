@@ -222,6 +222,136 @@ def test_subdirectory_launcher_expands_first_literal_loop_value_and_preserves_co
     assert plan['command_source']['quote'].endswith(variable)
 
 
+def prose_command_fixture(tmp_path, instruction, *, directories=('src',), root_script=False,
+                         command='python train.py --epochs 40 --seed 7 --cpu'):
+    fixture = make_experiment(tmp_path)
+    workspace = fixture['workspace']
+    source = (workspace / 'train.py').read_bytes()
+    if not root_script:
+        (workspace / 'train.py').unlink()
+        fixture['snapshot']['files'].pop('train.py')
+    for directory in directories:
+        path = workspace / directory / 'train.py'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(source)
+        fixture['snapshot']['files'][path.relative_to(workspace).as_posix()] = hashlib.sha256(source).hexdigest()
+    readme = workspace / 'README.md'
+    readme.write_text(instruction + '\n```text\n' + command + '\n```\n', encoding='utf-8')
+    fixture['snapshot']['files']['README.md'] = hashlib.sha256(readme.read_bytes()).hexdigest()
+    packet = build_evidence_packet(fixture['pdf'], workspace, fixture['snapshot'])
+    packet['author_execution_only'] = True
+    return fixture, packet
+
+
+@pytest.mark.parametrize('instruction', [
+    'To run each experiment, navigate into `src`. Then, run the following command:',
+    'Change directory to `src` before running this experiment.',
+    'From the repository root, navigate to `src`. Then run:',
+])
+@pytest.mark.parametrize('command', ['python train.py --epochs 40 --seed 7 --cpu',
+                                    'python3 -u train.py --epochs 40 --seed 7 --cpu'])
+def test_readme_prose_directory_preserves_the_original_command(tmp_path, instruction, command):
+    fixture, packet = prose_command_fixture(tmp_path, instruction, command=command)
+    plan = author.plan_from_author_commands(packet, fixture['workspace'])
+    step = plan['steps'][0]
+    assert step['cwd'] == 'src'
+    assert step['argv'] == command.split()
+    assert step['entrypoint']['source_path'] == 'src/train.py'
+    assert plan['command_source']['quote'] == command
+    assert plan['command_source']['cwd_quote'] == instruction
+    assert step['timeout_s'] is None
+
+
+def test_readme_prose_directory_does_not_select_a_root_level_decoy(tmp_path):
+    fixture, packet = prose_command_fixture(tmp_path, 'Navigate into `src`. Then run:', root_script=True)
+    plan = author.plan_from_author_commands(packet, fixture['workspace'])
+    assert plan['steps'][0]['cwd'] == 'src'
+    assert plan['steps'][0]['entrypoint']['source_path'] == 'src/train.py'
+
+
+@pytest.mark.parametrize('directory', ['./src', 'src/nested'])
+def test_readme_prose_directory_retains_a_safe_relative_path(tmp_path, directory):
+    fixture, packet = prose_command_fixture(tmp_path, f'Navigate into `{directory}`. Then run:',
+                                           directories=(directory,))
+    plan = author.plan_from_author_commands(packet, fixture['workspace'])
+    assert plan['steps'][0]['cwd'] == Path(directory).as_posix()
+    assert plan['steps'][0]['entrypoint']['source_path'] == (Path(directory) / 'train.py').as_posix()
+
+
+@pytest.mark.parametrize('kind', ['directory', 'script'])
+def test_readme_prose_directory_rejects_links_without_reading_external_sources(tmp_path, require_symlinks, kind):
+    fixture, packet = prose_command_fixture(tmp_path, 'Navigate into `src`. Then run:', root_script=True)
+    original = fixture['workspace'] / 'src'
+    if kind == 'script':
+        original /= 'train.py'
+    target = tmp_path / ('outside_' + kind)
+    original.rename(target)
+    original.symlink_to(target, target_is_directory=kind == 'directory')
+    source = target / 'train.py' if kind == 'directory' else target
+    expected = hashlib.sha256(source.read_bytes()).hexdigest()
+    with pytest.raises(PlanEvidenceError, match='symlink or junction'):
+        author.plan_from_author_commands(packet, fixture['workspace'])
+    assert hashlib.sha256(source.read_bytes()).hexdigest() == expected
+
+
+@pytest.mark.parametrize('directory', ['missing', '../outside', '/outside', 'C:/outside', '.git',
+                                      'src/../../outside', 'src:stream'])
+def test_readme_prose_directory_never_falls_back_across_an_invalid_boundary(tmp_path, directory):
+    fixture, packet = prose_command_fixture(tmp_path, f'Navigate into `{directory}`. Then run:', root_script=True)
+    with pytest.raises(PlanEvidenceError):
+        author.plan_from_author_commands(packet, fixture['workspace'])
+
+
+@pytest.mark.parametrize('directories', [('src',), ('src', 'other')])
+def test_readme_missing_directory_evidence_does_not_guess_among_pinned_scripts(tmp_path, directories):
+    fixture, packet = prose_command_fixture(tmp_path, 'Run the complete original experiment:', directories=directories)
+    with pytest.raises(PlanEvidenceError, match='entrypoint'):
+        author.plan_from_author_commands(packet, fixture['workspace'])
+
+
+def test_readme_prose_directory_requires_a_pinned_script(tmp_path):
+    fixture, packet = prose_command_fixture(tmp_path, 'Navigate into `src`. Then run:')
+    packet['file_inventory'].pop('src/train.py')
+    with pytest.raises(PlanEvidenceError, match='pinned repository inventory'):
+        author.plan_from_author_commands(packet, fixture['workspace'])
+
+
+@pytest.mark.parametrize('declared_in', [None, 'entrypoint', 'unrelated'])
+def test_readme_kwargs_placeholder_requires_an_original_argument_declaration(tmp_path, declared_in):
+    command = 'python train.py --epochs 40 --seed 7 --cpu'
+    fixture, _ = prose_command_fixture(tmp_path, 'Navigate into `src`. Then run:', command=command)
+    workspace = fixture['workspace']
+    readme = workspace / 'README.md'
+    readme.write_text('Navigate into `src`.\n```text\npython train.py --kwargs\n```\n'
+                      'where `kwargs` are specified in the training script.\n'
+                      f'The complete example is:\n```text\n{command}\n```\n', encoding='utf-8')
+    if declared_in == 'entrypoint':
+        script = workspace / 'src/train.py'
+        script.write_text(script.read_text('utf-8').replace(
+            'args = parser.parse_args()', "parser.add_argument('--kwargs', action='store_true')\nargs = parser.parse_args()"),
+            encoding='utf-8')
+        fixture['snapshot']['files']['src/train.py'] = hashlib.sha256(script.read_bytes()).hexdigest()
+    elif declared_in == 'unrelated':
+        unrelated = workspace / 'unrelated.py'
+        unrelated.write_text('import argparse\nparser = argparse.ArgumentParser()\n'
+                             "parser.add_argument('--kwargs', action='store_true')\n", encoding='utf-8')
+        fixture['snapshot']['files']['unrelated.py'] = hashlib.sha256(unrelated.read_bytes()).hexdigest()
+    fixture['snapshot']['files']['README.md'] = hashlib.sha256(readme.read_bytes()).hexdigest()
+    packet = build_evidence_packet(fixture['pdf'], workspace, fixture['snapshot'])
+    packet['author_execution_only'] = True
+    plan = author.plan_from_author_commands(packet, workspace)
+    assert plan['steps'][0]['argv'] == (['python', 'train.py', '--kwargs']
+                                      if declared_in == 'entrypoint' else command.split())
+    assert plan['steps'][0]['cwd'] == 'src'
+
+
+def test_literal_cd_keeps_its_author_directory_when_the_script_is_missing(tmp_path):
+    fixture, packet = prose_command_fixture(tmp_path, 'cd src', root_script=True)
+    (fixture['workspace'] / 'src/train.py').unlink()
+    with pytest.raises(PlanEvidenceError):
+        author.plan_from_author_commands(packet, fixture['workspace'])
+
+
 @pytest.mark.parametrize('directory,allowed', [('../logs', True), ('../../outside', False)])
 def test_subdirectory_author_logs_are_resolved_against_repository_boundary(tmp_path, directory, allowed):
     fixture, _ = fixture_packet(tmp_path)

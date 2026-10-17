@@ -1,0 +1,1570 @@
+{
+  "version": 1,
+  "updated_on": "2026-10-17",
+  "policy": "Paper identity spans aliases and PDF versions. Trial outcomes never imply independent numerical verification.",
+  "papers": [
+    {
+      "id": "adaptive-universal-generalized-pagerank-graph-neural-network",
+      "title": "Adaptive Universal Generalized PageRank Graph Neural Network",
+      "aliases": [],
+      "source_ids": [
+        "arxiv:2006.07988"
+      ],
+      "pdf_sha256": [
+        "ce84494f19fd6d74d1c2d19a9c4b5acfa5542a297cbcdd3755e5270bfcd2a942"
+      ],
+      "status": "regression",
+      "retirement_reason": "Previously used for development or regression; excluded by the historical freeze policy.",
+      "history": [
+        {
+          "outcome": "historically_excluded",
+          "frozen_commit": null,
+          "evidence": "git:0f3fd59:AutoReproducer/scripts/freeze_holdout_source.py"
+        },
+        {
+          "outcome": "regression_or_candidate",
+          "frozen_commit": null,
+          "evidence": "examples/papers/manifest.json#pdf/gprgnn_2006.07988_holdout_03.pdf"
+        }
+      ]
+    },
+    {
+      "id": "bernnet-learning-arbitrary-graph-spectral-filters-via-bernstein-approximation",
+      "title": "BernNet: Learning Arbitrary Graph Spectral Filters via Bernstein Approximation",
+      "aliases": [
+        "bernnet"
+      ],
+      "source_ids": [
+        "arxiv:2106.10994"
+      ],
+      "pdf_sha256": [
+        "312117c42030fc4712c8b792398b340f24f43714ad22b489d5b69b07fcb2e342"
+      ],
+      "status": "regression",
+      "retirement_reason": "Previously used for development or regression; excluded by the historical freeze policy.",
+      "history": [
+        {
+          "outcome": "historically_excluded",
+          "frozen_commit": null,
+          "evidence": "git:0f3fd59:AutoReproducer/scripts/freeze_holdout_source.py"
+        },
+        {
+          "outcome": "retired_after_ui_repair",
+          "frozen_commit": null,
+          "evidence": "examples/papers/candidates_20261012/manifest.json#bernnet.pdf"
+        }
+      ],
+      "repository_url": "https://github.com/ivam-he/BernNet"
+    },
+    {
+      "id": "beyond-homophily-in-graph-neural-networks-current-limitations-and-effective-designs",
+      "title": "Beyond Homophily in Graph Neural Networks: Current Limitations and Effective Designs",
+      "aliases": [
+        "h2gcn"
+      ],
+      "source_ids": [
+        "arxiv:2006.11468"
+      ],
+      "pdf_sha256": [
+        "fe708a4529447a900ff2a40b15904268ab36587e2ef4ebaa1572ee7eb0171af3"
+      ],
+      "status": "candidate",
+      "history": [
+        {
+          "outcome": "candidate_not_executed",
+          "frozen_commit": null,
+          "evidence": "examples/papers/candidates_20261012/manifest.json#h2gcn.pdf"
+        }
+      ],
+      "repository_url": "https://github.com/GemsLab/H2GCN"
+    },
+    {
+      "id": "beyond-low-frequency-information-in-graph-convolutional-networks",
+      "title": "Beyond Low-frequency Information in Graph Convolutional Networks",
+      "aliases": [
+        "fagcn"
+      ],
+      "source_ids": [
+        "arxiv:2101.00797"
+      ],
+      "pdf_sha256": [
+        "ff7e7fe4cc8a12d935c8181c86012a2129cf837c64a0e93ce3807d1a90518974"
+      ],
+      "status": "regression",
+      "retirement_reason": "Previously used for development or regression; excluded by the historical freeze policy.",
+      "history": [
+        {
+          "outcome": "historically_excluded",
+          "frozen_commit": null,
+          "evidence": "git:0f3fd59:AutoReproducer/scripts/freeze_holdout_source.py"
+        },
+        {
+          "outcome": "retired_after_identity_schema_rejection",
+          "frozen_commit": null,
+          "evidence": "examples/papers/candidates_20261012/manifest.json#fagcn.pdf"
+        }
+      ],
+      "repository_url": "https://github.com/bdy9527/FAGCN"
+    },
+    {
+      "id": "combining-label-propagation-and-simple-models-out-performs-graph-neural-networks",
+      "title": "Combining Label Propagation and Simple Models Out-performs Graph Neural Networks",
+      "aliases": [
+        "correctandsmooth"
+      ],
+      "source_ids": [
+        "arxiv:2010.13993"
+      ],
+      "pdf_sha256": [],
+      "status": "regression",
+      "retirement_reason": "Trial precedes later product repairs; retained as a regression, not an unused candidate.",
+      "history": [
+        {
+          "outcome": "historically_excluded",
+          "frozen_commit": null,
+          "evidence": "git:0f3fd59:AutoReproducer/scripts/freeze_holdout_source.py"
+        },
+        {
+          "outcome": "trial_before_product_repair",
+          "frozen_commit": null,
+          "evidence": "docs/evidence/correctandsmooth_repository_fallback_20261016.json"
+        }
+      ],
+      "repository_url": "https://github.com/CUAI/CorrectAndSmooth"
+    },
+    {
+      "id": "contrastive-multi-view-representation-learning-on-graphs",
+      "title": "Contrastive Multi-View Representation Learning on Graphs",
+      "aliases": [
+        "mvgrl"
+      ],
+      "source_ids": [
+        "arxiv:2006.05582"
+      ],
+      "pdf_sha256": [
+        "e88eb0a373b93300e9a2ef08dd14842a2294cc5e369d263eafd2c4ecc770c6be"
+      ],
+      "status": "regression",
+      "retirement_reason": "Previously used for development or regression; excluded by the historical freeze policy.",
+      "history": [
+        {
+          "outcome": "historically_excluded",
+          "frozen_commit": null,
+          "evidence": "git:0f3fd59:AutoReproducer/scripts/freeze_holdout_source.py"
+        },
+        {
+          "outcome": "retired_after_readme_command_parsing_rejection",
+          "frozen_commit": null,
+          "evidence": "examples/papers/candidates_20261012/manifest.json#mvgrl.pdf"
+        }
+      ],
+      "repository_url": "https://github.com/kavehhassani/mvgrl"
+    },
+    {
+      "id": "convolutional-neural-networks-on-graphs-with-chebyshev-approximation-revisited",
+      "title": "Convolutional Neural Networks on Graphs with Chebyshev Approximation, Revisited",
+      "aliases": [],
+      "source_ids": [
+        "arxiv:2202.03580"
+      ],
+      "pdf_sha256": [
+        "c32e1ebcd886611ff66293f211e7f1b9e1ffebc6668a4b853de3bc0d2f357e37"
+      ],
+      "status": "regression",
+      "retirement_reason": "Previously used for development or regression; excluded by the historical freeze policy.",
+      "history": [
+        {
+          "outcome": "historically_excluded",
+          "frozen_commit": null,
+          "evidence": "git:0f3fd59:AutoReproducer/scripts/freeze_holdout_source.py"
+        },
+        {
+          "outcome": "regression_or_candidate",
+          "frozen_commit": null,
+          "evidence": "examples/papers/manifest.json#pdf/chebnetii_independent_20261011_function.pdf"
+        }
+      ]
+    },
+    {
+      "id": "critical-look-heterophily",
+      "title": "A Critical Look at the Evaluation of GNNs under Heterophily: Are We Really Making Progress?",
+      "aliases": [
+        "Critical Look Heterophily"
+      ],
+      "source_ids": [
+        "arxiv:2302.11640"
+      ],
+      "pdf_sha256": [
+        "9025d1a5a4258bc77dadc31528a68f7abbe6c08c3b9abf82ecb644e00811bd14"
+      ],
+      "repository_url": "https://github.com/yandex-research/heterophilous-graphs",
+      "repository_revision": "a431395582e929d88271309716bea4fe24ce6318",
+      "status": "regression",
+      "candidate_order": 3,
+      "history": [
+        {
+          "outcome": "preflight_verified",
+          "frozen_commit": null,
+          "evidence": "docs/evidence/pdf_candidates_preflight_20261017.json#critical-look-heterophily",
+          "scope": "Static eligibility review only; no training or candidate-specific product repair."
+        },
+        {
+          "date": "2026-10-17",
+          "product_commit": "37d8fd64b213e42fb127207ac7b80440207e0b0d",
+          "outcome": "retired_after_pdf_uri_ranking_repair",
+          "evidence": "docs/evidence/critical_look_pdf_trial_20261017.json",
+          "details": "The real PDF upload preview ranked a truncated text URL ahead of its complete same-page author URI. The browser stopped before task submission; no installation, training or comparison occurred. Later preview-only validation is regression evidence."
+        }
+      ],
+      "retirement_reason": "Triggered a product repair of internally split PDF repository links; subsequent uses are regression-only. All three predetermined candidates have now failed independent acceptance."
+    },
+    {
+      "id": "deep-graph-contrastive-representation-learning",
+      "title": "Deep Graph Contrastive Representation Learning",
+      "aliases": [
+        "grace"
+      ],
+      "source_ids": [
+        "arxiv:2006.04131"
+      ],
+      "pdf_sha256": [
+        "ae30ee1c450b978a13145c46042d1f4fdb7f48694cf3dd203fb3c29671464f33"
+      ],
+      "status": "regression",
+      "retirement_reason": "Previously used for development or regression; excluded by the historical freeze policy.",
+      "history": [
+        {
+          "outcome": "historically_excluded",
+          "frozen_commit": null,
+          "evidence": "git:0f3fd59:AutoReproducer/scripts/freeze_holdout_source.py"
+        },
+        {
+          "outcome": "retired_after_conditional_function_repair",
+          "frozen_commit": null,
+          "evidence": "examples/papers/candidates_20261012/manifest.json#grace.pdf"
+        }
+      ],
+      "repository_url": "https://github.com/CRIPAC-DIG/GRACE"
+    },
+    {
+      "id": "deep-graph-infomax",
+      "title": "Deep Graph Infomax",
+      "aliases": [
+        "dgi"
+      ],
+      "source_ids": [
+        "arxiv:1809.10341"
+      ],
+      "pdf_sha256": [
+        "f21afabaa0cc9f27f00c2c15c881ff06b5f6c79b5677e6e6695d2b767168fb4b"
+      ],
+      "status": "regression",
+      "retirement_reason": "Previously used for development or regression; excluded by the historical freeze policy.",
+      "history": [
+        {
+          "outcome": "historically_excluded",
+          "frozen_commit": null,
+          "evidence": "git:0f3fd59:AutoReproducer/scripts/freeze_holdout_source.py"
+        },
+        {
+          "outcome": "retired_after_reading_error_repair",
+          "frozen_commit": null,
+          "evidence": "examples/papers/candidates_20261012/manifest.json#dgi.pdf"
+        }
+      ],
+      "repository_url": "https://github.com/PetarV-/DGI"
+    },
+    {
+      "id": "deepxde",
+      "title": "DeepXDE",
+      "aliases": [],
+      "source_ids": [
+        "arxiv:1907.04502"
+      ],
+      "pdf_sha256": [
+        "d17f9bf6b8f346baaa52b6ec81223c53dd3da6899324114c72c7e8c3432d9368"
+      ],
+      "status": "regression",
+      "retirement_reason": "Previously used for development or regression; excluded by the historical freeze policy.",
+      "history": [
+        {
+          "outcome": "historically_excluded",
+          "frozen_commit": null,
+          "evidence": "git:0f3fd59:AutoReproducer/scripts/freeze_holdout_source.py"
+        },
+        {
+          "outcome": "regression_or_candidate",
+          "frozen_commit": null,
+          "evidence": "examples/papers/manifest.json#pdf/deepxde_1907.04502.pdf"
+        }
+      ]
+    },
+    {
+      "id": "difformer-scalable-graph-transformers-induced-by-energy-constrained-diffusion",
+      "title": "DIFFormer: Scalable (Graph) Transformers Induced by Energy Constrained Diffusion",
+      "aliases": [
+        "difformer"
+      ],
+      "source_ids": [
+        "arxiv:2301.09474"
+      ],
+      "pdf_sha256": [
+        "3993e06305e68a7555f5322c69304f2f9ad31fc21f1bb2667a7643f76eae8255"
+      ],
+      "status": "regression",
+      "retirement_reason": "Trial precedes later product repairs; retained as a regression, not an unused candidate.",
+      "history": [
+        {
+          "outcome": "trial_before_product_repair",
+          "frozen_commit": "710e151",
+          "evidence": "docs/evidence/difformer_execution_20261016_01.json"
+        }
+      ],
+      "repository_url": "https://github.com/qitianwu/DIFFormer"
+    },
+    {
+      "id": "diffusion-improves-graph-learning",
+      "title": "Diffusion Improves Graph Learning",
+      "aliases": [],
+      "source_ids": [
+        "arxiv:1911.05485"
+      ],
+      "pdf_sha256": [
+        "317bcc011b22e74cf8943ad97c7a3539379cb6f0021b6144f38e3aae323ceb87"
+      ],
+      "status": "regression",
+      "retirement_reason": "Previously used for development or regression; excluded by the historical freeze policy.",
+      "history": [
+        {
+          "outcome": "historically_excluded",
+          "frozen_commit": null,
+          "evidence": "git:0f3fd59:AutoReproducer/scripts/freeze_holdout_source.py"
+        },
+        {
+          "outcome": "regression_or_candidate",
+          "frozen_commit": null,
+          "evidence": "examples/papers/manifest.json#pdf/gdc_independent_20261011_ec4b097.pdf"
+        }
+      ]
+    },
+    {
+      "id": "digraph-inception-convolutional-networks",
+      "title": "Digraph Inception Convolutional Networks",
+      "aliases": [
+        "digcn"
+      ],
+      "source_ids": [
+        "arxiv:2008.12472",
+        "https://papers.nips.cc/paper/2020/file/cffb6e2288a630c2a787a64ccc67097c-paper.pdf"
+      ],
+      "pdf_sha256": [
+        "1fd2ec4b7b04b7735f53c5ddf5f438fb88ea6bbb7a5817d8da7605ecbb967eff"
+      ],
+      "status": "regression",
+      "retirement_reason": "Trial precedes later product repairs; retained as a regression, not an unused candidate.",
+      "history": [
+        {
+          "outcome": "trial_before_product_repair",
+          "frozen_commit": "17248a3",
+          "evidence": "docs/evidence/digcn_holdout_20261013_05.json"
+        },
+        {
+          "outcome": "historical_pdf_provenance_merged",
+          "frozen_commit": null,
+          "evidence": "docs/evidence/historical_pdf_provenance_20261017.json#digcn_holdout_20261013_05.provenance.json"
+        }
+      ],
+      "repository_url": "https://github.com/flyingtango/DiGCN"
+    },
+    {
+      "id": "dissecting-the-diffusion-process-in-linear-graph-convolutional-networks",
+      "title": "Dissecting the Diffusion Process in Linear Graph Convolutional Networks",
+      "aliases": [],
+      "source_ids": [
+        "arxiv:2102.10739"
+      ],
+      "pdf_sha256": [
+        "295dae352e820b0db6817ca5b6ec5f338bb27c74c39960f4eb519aec2842307e"
+      ],
+      "status": "regression",
+      "retirement_reason": "Previously used for development or regression; excluded by the historical freeze policy.",
+      "history": [
+        {
+          "outcome": "historically_excluded",
+          "frozen_commit": null,
+          "evidence": "git:0f3fd59:AutoReproducer/scripts/freeze_holdout_source.py"
+        },
+        {
+          "outcome": "historical_pdf_provenance_merged",
+          "frozen_commit": null,
+          "evidence": "docs/evidence/historical_pdf_provenance_20261017.json#dgc_holdout_20261013_02.provenance.json"
+        }
+      ]
+    },
+    {
+      "id": "dlinear",
+      "title": "DLinear",
+      "aliases": [],
+      "source_ids": [
+        "arxiv:2205.13504"
+      ],
+      "pdf_sha256": [
+        "97abddd1821cc72942c8d7ddde7e99466bb91f1bddc37c2b54e0e97be7b5be1b"
+      ],
+      "status": "regression",
+      "retirement_reason": "Previously used for development or regression; excluded by the historical freeze policy.",
+      "history": [
+        {
+          "outcome": "historically_excluded",
+          "frozen_commit": null,
+          "evidence": "git:0f3fd59:AutoReproducer/scripts/freeze_holdout_source.py"
+        },
+        {
+          "outcome": "regression_or_candidate",
+          "frozen_commit": null,
+          "evidence": "examples/papers/manifest.json#pdf/dlinear_2205.13504v3_finaltest_20261011.pdf"
+        }
+      ]
+    },
+    {
+      "id": "dropedge-towards-deep-graph-convolutional-networks-on-node-classification",
+      "title": "DropEdge: Towards Deep Graph Convolutional Networks on Node Classification",
+      "aliases": [],
+      "source_ids": [
+        "arxiv:1907.10903"
+      ],
+      "pdf_sha256": [
+        "0855a55c3d125dd50705f3f36b03083a468ace85a3a9ec8425f8b2362debe3f7"
+      ],
+      "status": "regression",
+      "retirement_reason": "Previously used for development or regression; excluded by the historical freeze policy.",
+      "history": [
+        {
+          "outcome": "historically_excluded",
+          "frozen_commit": null,
+          "evidence": "git:0f3fd59:AutoReproducer/scripts/freeze_holdout_source.py"
+        },
+        {
+          "outcome": "regression_or_candidate",
+          "frozen_commit": null,
+          "evidence": "examples/papers/manifest.json#pdf/dropedge_1907.10903_holdout_07_20261011.pdf"
+        }
+      ]
+    },
+    {
+      "id": "elastic-graph-neural-networks",
+      "title": "Elastic Graph Neural Networks",
+      "aliases": [
+        "elasticgnn"
+      ],
+      "source_ids": [
+        "https://proceedings.mlr.press/v139/liu21k/liu21k.pdf"
+      ],
+      "pdf_sha256": [
+        "ea07251e70cc27d74bd4320b0d5193f232bc5c0667c7f729d09afdcfbb59c7b6"
+      ],
+      "status": "regression",
+      "retirement_reason": "Previously used for development or regression; excluded by the historical freeze policy.",
+      "history": [
+        {
+          "outcome": "historically_excluded",
+          "frozen_commit": null,
+          "evidence": "git:0f3fd59:AutoReproducer/scripts/freeze_holdout_source.py"
+        },
+        {
+          "outcome": "retired_after_dependency_timeout",
+          "frozen_commit": null,
+          "evidence": "examples/papers/candidates_20261012/manifest.json#elasticgnn.pdf"
+        }
+      ],
+      "repository_url": "https://github.com/lxiaorui/ElasticGNN"
+    },
+    {
+      "id": "evennet-ignoring-odd-hop-neighbors-improves-robustness-of-graph-neural-networks",
+      "title": "EvenNet: Ignoring Odd-Hop Neighbors Improves Robustness of Graph Neural Networks",
+      "aliases": [],
+      "source_ids": [
+        "arxiv:2205.13892"
+      ],
+      "pdf_sha256": [
+        "ec48177104be6a7140ea812a32222518a8c0e5bdf54a2fe999bf56cf8dd5ce76"
+      ],
+      "status": "regression",
+      "retirement_reason": "Previously used for development or regression; excluded by the historical freeze policy.",
+      "history": [
+        {
+          "outcome": "historically_excluded",
+          "frozen_commit": null,
+          "evidence": "git:0f3fd59:AutoReproducer/scripts/freeze_holdout_source.py"
+        },
+        {
+          "outcome": "historical_pdf_provenance_merged",
+          "frozen_commit": null,
+          "evidence": "docs/evidence/historical_pdf_provenance_20261017.json#evennet_holdout_20261013_03.provenance.json"
+        }
+      ]
+    },
+    {
+      "id": "finding-global-homophily-in-graph-neural-networks-when-meeting-heterophily",
+      "title": "Finding Global Homophily in Graph Neural Networks When Meeting Heterophily",
+      "aliases": [
+        "glognn"
+      ],
+      "source_ids": [
+        "arxiv:2205.07308",
+        "https://proceedings.mlr.press/v162/li22ad/li22ad.pdf"
+      ],
+      "pdf_sha256": [
+        "0eba6207e064e6c87ccc1a921321cf061aa0589dc2d6e995ba73fa87a8c94b0a",
+        "d1a742d12b988f1e4d0bf9fc2840793b5b4b911d9d25043f497cbed2727d0a58"
+      ],
+      "status": "regression",
+      "retirement_reason": "Previously used for development or regression; excluded by the historical freeze policy.",
+      "history": [
+        {
+          "outcome": "historically_excluded",
+          "frozen_commit": null,
+          "evidence": "git:0f3fd59:AutoReproducer/scripts/freeze_holdout_source.py"
+        },
+        {
+          "outcome": "retired_after_platform_reciprocal_repair",
+          "frozen_commit": null,
+          "evidence": "examples/papers/candidates_20261012/manifest.json#glognn.pdf"
+        },
+        {
+          "outcome": "historical_pdf_provenance_merged",
+          "frozen_commit": null,
+          "evidence": "docs/evidence/historical_pdf_provenance_20261017.json#issue27_glognn_20261015_01.provenance.json"
+        }
+      ],
+      "repository_url": "https://github.com/RecklessRonan/GloGNN"
+    },
+    {
+      "id": "from-canonical-correlation-analysis-to-self-supervised-graph-neural-networks",
+      "title": "From Canonical Correlation Analysis to Self-supervised Graph Neural Networks",
+      "aliases": [
+        "ccassg"
+      ],
+      "source_ids": [
+        "arxiv:2106.12484"
+      ],
+      "pdf_sha256": [
+        "be3dfcecb83ac87ca01131895b08385383a9f428d6b5dafb318788d864e99855"
+      ],
+      "status": "regression",
+      "retirement_reason": "Original execution completed, followed by product changes; regression only.",
+      "history": [
+        {
+          "outcome": "author_code_completed",
+          "frozen_commit": null,
+          "evidence": "examples/papers/candidates_20261012/manifest.json#ccassg.pdf"
+        },
+        {
+          "outcome": "source_bound_input_observed_not_independent_reference",
+          "frozen_commit": "f6cf0b9",
+          "evidence": "docs/evidence/ccassg_dgl_dataset_regression_20261016.json"
+        }
+      ],
+      "repository_url": "https://github.com/hengruizhang98/CCA-SSG"
+    },
+    {
+      "id": "gcnh",
+      "title": "GCNH: A Simple Method For Representation Learning On Heterophilous Graphs",
+      "aliases": [],
+      "source_ids": [
+        "arxiv:2304.10896"
+      ],
+      "pdf_sha256": [
+        "a5d0c0e93c3613bfd4200a69b573c5390c50f8cb0374630c8cadf1381189a283"
+      ],
+      "repository_url": "https://github.com/SmartData-Polito/GCNH",
+      "repository_revision": "311ebe34d4cd58fdc6279d803e212f4c1ea5aaf0",
+      "status": "regression",
+      "candidate_order": 1,
+      "history": [
+        {
+          "outcome": "preflight_verified",
+          "frozen_commit": null,
+          "evidence": "docs/evidence/pdf_candidates_preflight_20261017.json#gcnh",
+          "scope": "Static eligibility review only; no training or candidate-specific product repair."
+        },
+        {
+          "date": "2026-10-17",
+          "product_commit": "5ef21fe1c0ae876442891d2444986564f46a47d6",
+          "outcome": "retired_after_report_publication_repair",
+          "evidence": "docs/evidence/gcnh_pdf_trial_20261017.json",
+          "details": "All ten Cornell splits and 6000 optimizer updates completed; valid reference_only comparison and cleanup passed. Independent acceptance failed at report-copy consistency; browser reconnect was not reached."
+        }
+      ],
+      "retirement_reason": "Triggered a product repair after the frozen 2026-10-17 PDF trial: final web reports and run-directory reports differed. Later runs are regression-only."
+    },
+    {
+      "id": "gmnn-graph-markov-neural-networks",
+      "title": "GMNN: Graph Markov Neural Networks",
+      "aliases": [
+        "gmnn_arxiv",
+        "gmnn_pmlr"
+      ],
+      "source_ids": [
+        "arxiv:1905.06214",
+        "https://proceedings.mlr.press/v97/qu19a/qu19a.pdf"
+      ],
+      "pdf_sha256": [
+        "705fc0af7b846b12b6b19d2aece4751251ce40523125eb9f6932a3e1ae648363",
+        "de914534f60a62ade79541ae215adad5a3081885afbaf36e79857eaa31c2cc35"
+      ],
+      "status": "regression",
+      "retirement_reason": "Previously used for development or regression; excluded by the historical freeze policy.",
+      "history": [
+        {
+          "outcome": "historically_excluded",
+          "frozen_commit": null,
+          "evidence": "git:0f3fd59:AutoReproducer/scripts/freeze_holdout_source.py"
+        },
+        {
+          "outcome": "retired_after_pdf_link_gate_rejection",
+          "frozen_commit": null,
+          "evidence": "examples/papers/candidates_20261012/manifest.json#gmnn_arxiv.pdf"
+        },
+        {
+          "outcome": "retired_after_pdf_link_gate_rejection",
+          "frozen_commit": null,
+          "evidence": "examples/papers/candidates_20261012/manifest.json#gmnn_pmlr.pdf"
+        }
+      ],
+      "repository_url": "https://github.com/DeepGraphLearning/GMNN"
+    },
+    {
+      "id": "graph-attention-networks",
+      "title": "Graph Attention Networks",
+      "aliases": [
+        "gat"
+      ],
+      "source_ids": [
+        "arxiv:1710.10903"
+      ],
+      "pdf_sha256": [
+        "a7d811a44e1c65bf27da3a01859f23a8edbe33b8f96114b4b5066aedb078f284"
+      ],
+      "status": "candidate",
+      "history": [
+        {
+          "outcome": "candidate_not_executed",
+          "frozen_commit": null,
+          "evidence": "examples/papers/candidates_20261012/manifest.json#gat.pdf"
+        }
+      ],
+      "repository_url": "https://github.com/PetarV-/GAT"
+    },
+    {
+      "id": "graph-contrastive-learning-with-adaptive-augmentation",
+      "title": "Graph Contrastive Learning with Adaptive Augmentation",
+      "aliases": [
+        "gca"
+      ],
+      "source_ids": [
+        "arxiv:2010.14945"
+      ],
+      "pdf_sha256": [
+        "c52ab3f122631a1835d5e912f253711aeb4b20d3940cbe41842ac9e3147361f8"
+      ],
+      "status": "regression",
+      "retirement_reason": "Previously used for development or regression; excluded by the historical freeze policy.",
+      "history": [
+        {
+          "outcome": "historically_excluded",
+          "frozen_commit": null,
+          "evidence": "git:0f3fd59:AutoReproducer/scripts/freeze_holdout_source.py"
+        },
+        {
+          "outcome": "retired_after_native_dataset_repair",
+          "frozen_commit": null,
+          "evidence": "examples/papers/candidates_20261012/manifest.json#gca.pdf"
+        }
+      ],
+      "repository_url": "https://github.com/CRIPAC-DIG/GCA"
+    },
+    {
+      "id": "graph-coupled-oscillator-networks",
+      "title": "Graph-Coupled Oscillator Networks",
+      "aliases": [
+        "GraphCON"
+      ],
+      "source_ids": [
+        "arxiv:2202.02296",
+        "https://proceedings.mlr.press/v162/rusch22a/rusch22a.pdf"
+      ],
+      "pdf_sha256": [
+        "a81e551ffc611520376c40c2e74614db5afd681a5f9503d03ae655176d717619"
+      ],
+      "repository_url": "https://github.com/tk-rusch/GraphCON",
+      "status": "regression",
+      "retirement_reason": "Already attempted through the browser; author subdirectory planning failed and a reference fallback was stopped. Historical trial cannot be reused as an independent sample.",
+      "history": [
+        {
+          "outcome": "historical_trial_stopped",
+          "frozen_commit": null,
+          "evidence": "docs/issue27_progress_20261015.md#保存日志回归与-dgc-浏览器运行",
+          "runtime_evidence": "data/runtime/issue27_graphcon_20261015_01_request.json",
+          "pdf_provenance": "data/papers/issue27_graphcon_20261015_01.provenance.json"
+        }
+      ]
+    },
+    {
+      "id": "graph-neural-networks-with-adaptive-frequency-response-filter",
+      "title": "Graph Neural Networks with Adaptive Frequency Response Filter",
+      "aliases": [
+        "adagnn"
+      ],
+      "source_ids": [
+        "https://raw.githubusercontent.com/yushundong/adagnn/main/graph%20neural%20networks%20with%20adaptive%20frequency%20response%20filter.pdf"
+      ],
+      "pdf_sha256": [
+        "ad4780e85914beaec0be6f7233eaa2126bbbf2160d0e18c16a8f55770ccc1ab5"
+      ],
+      "status": "regression",
+      "retirement_reason": "Previously used for development or regression; excluded by the historical freeze policy.",
+      "history": [
+        {
+          "outcome": "historically_excluded",
+          "frozen_commit": null,
+          "evidence": "git:0f3fd59:AutoReproducer/scripts/freeze_holdout_source.py"
+        },
+        {
+          "outcome": "retired_after_namespace_import_rejection",
+          "frozen_commit": null,
+          "evidence": "examples/papers/candidates_20261012/manifest.json#adagnn.pdf"
+        }
+      ],
+      "repository_url": "https://github.com/yushundong/AdaGNN"
+    },
+    {
+      "id": "graph-neural-networks-with-adaptive-residual",
+      "title": "Graph Neural Networks with Adaptive Residual",
+      "aliases": [
+        "airgnn"
+      ],
+      "source_ids": [
+        "https://proceedings.neurips.cc/paper_files/paper/2021/file/50abc3e730e36b387ca8e02c26dc0a22-paper.pdf"
+      ],
+      "pdf_sha256": [
+        "394cb32a33e4e84e554649fc6728d918d836e02ad5dd7f218627ef235c432311"
+      ],
+      "status": "regression",
+      "retirement_reason": "Previously used for development or regression; excluded by the historical freeze policy.",
+      "history": [
+        {
+          "outcome": "historically_excluded",
+          "frozen_commit": null,
+          "evidence": "git:0f3fd59:AutoReproducer/scripts/freeze_holdout_source.py"
+        },
+        {
+          "outcome": "retired_after_constructor_scope_repair",
+          "frozen_commit": null,
+          "evidence": "examples/papers/candidates_20261012/manifest.json#airgnn.pdf"
+        }
+      ],
+      "repository_url": "https://github.com/lxiaorui/AirGNN"
+    },
+    {
+      "id": "graph-random-neural-networks-for-semi-supervised-learning-on-graphs",
+      "title": "Graph Random Neural Networks for Semi-Supervised Learning on Graphs",
+      "aliases": [
+        "grand"
+      ],
+      "source_ids": [
+        "arxiv:2005.11079"
+      ],
+      "pdf_sha256": [
+        "3ad1228263fab18871c403f1e5fc41751d03fe8e6de209e4828e9f3b6e781a06"
+      ],
+      "status": "regression",
+      "retirement_reason": "Previously used for development or regression; excluded by the historical freeze policy.",
+      "history": [
+        {
+          "outcome": "historically_excluded",
+          "frozen_commit": null,
+          "evidence": "git:0f3fd59:AutoReproducer/scripts/freeze_holdout_source.py"
+        },
+        {
+          "outcome": "retired_after_device_placement_repair",
+          "frozen_commit": null,
+          "evidence": "examples/papers/candidates_20261012/manifest.json#grand.pdf"
+        }
+      ],
+      "repository_url": "https://github.com/Grand20/grand"
+    },
+    {
+      "id": "graph-structure-learning-for-robust-graph-neural-networks",
+      "title": "Graph Structure Learning for Robust Graph Neural Networks",
+      "aliases": [],
+      "source_ids": [
+        "arxiv:2005.10203"
+      ],
+      "pdf_sha256": [
+        "32191b55ab5fd8fbafc5db5591233f44ca256181fb79d825b33a4c24a1367657"
+      ],
+      "status": "regression",
+      "retirement_reason": "Previously used for development or regression; excluded by the historical freeze policy.",
+      "history": [
+        {
+          "outcome": "historically_excluded",
+          "frozen_commit": null,
+          "evidence": "git:0f3fd59:AutoReproducer/scripts/freeze_holdout_source.py"
+        },
+        {
+          "outcome": "historical_pdf_provenance_merged",
+          "frozen_commit": null,
+          "evidence": "docs/evidence/historical_pdf_provenance_20261017.json#prognn_2005.10203_holdout_20261013_01.provenance.json"
+        }
+      ]
+    },
+    {
+      "id": "graph-u-nets",
+      "title": "Graph U-Nets",
+      "aliases": [
+        "graph_unets"
+      ],
+      "source_ids": [
+        "https://proceedings.mlr.press/v97/gao19a/gao19a.pdf"
+      ],
+      "pdf_sha256": [
+        "cd6888ecebfcc732c7cc02dfd6b60225d92688b97057c24bbc86de6c3d8013ad"
+      ],
+      "status": "regression",
+      "retirement_reason": "Previously used for development or regression; excluded by the historical freeze policy.",
+      "history": [
+        {
+          "outcome": "historically_excluded",
+          "frozen_commit": null,
+          "evidence": "git:0f3fd59:AutoReproducer/scripts/freeze_holdout_source.py"
+        },
+        {
+          "outcome": "retired_after_identity_json_rejection",
+          "frozen_commit": null,
+          "evidence": "examples/papers/candidates_20261012/manifest.json#graph_unets.pdf"
+        }
+      ],
+      "repository_url": "https://github.com/HongyangGao/Graph-U-Nets"
+    },
+    {
+      "id": "gread",
+      "title": "GREAD: Graph Neural Reaction-Diffusion Networks",
+      "aliases": [],
+      "source_ids": [
+        "arxiv:2211.14208"
+      ],
+      "pdf_sha256": [
+        "d346cc029d4db2d1994d2dd73afe31e69bace4f5669b62b78652975578bbab7a"
+      ],
+      "repository_url": "https://github.com/jeongwhanchoi/GREAD",
+      "repository_revision": "f97ec01a17bb9cba1da2b89192b83cd7a25a250b",
+      "status": "regression",
+      "candidate_order": 2,
+      "history": [
+        {
+          "outcome": "preflight_verified",
+          "frozen_commit": null,
+          "evidence": "docs/evidence/pdf_candidates_preflight_20261017.json#gread",
+          "scope": "Static eligibility review only; no training or candidate-specific product repair."
+        },
+        {
+          "date": "2026-10-17",
+          "product_commit": "9357bd79fea7b5a0ec216ff45a3864785fb8f6e0",
+          "outcome": "retired_after_nested_entrypoint_identity_repair",
+          "evidence": "docs/evidence/gread_pdf_trial_20261017.json",
+          "details": "Original source was found; both LLM proposals were rejected because the explicit repository-relative entrypoint did not equal the cwd-relative argv token. No training or comparison occurred; owned scopes were zero after cleanup."
+        }
+      ],
+      "retirement_reason": "Triggered a product repair of nested original script identity validation; later trials are regression-only."
+    },
+    {
+      "id": "how-attentive-are-graph-attention-networks",
+      "title": "How Attentive are Graph Attention Networks?",
+      "aliases": [
+        "gatv2"
+      ],
+      "source_ids": [
+        "arxiv:2105.14491"
+      ],
+      "pdf_sha256": [
+        "d316a7d23d735becf0c31d2b73c3426bb2aa5ec592705ce559d79a740abf53ec"
+      ],
+      "status": "regression",
+      "retirement_reason": "Previously used for development or regression; excluded by the historical freeze policy.",
+      "history": [
+        {
+          "outcome": "historically_excluded",
+          "frozen_commit": null,
+          "evidence": "git:0f3fd59:AutoReproducer/scripts/freeze_holdout_source.py"
+        },
+        {
+          "outcome": "retired_after_wrapped_uri_repair",
+          "frozen_commit": null,
+          "evidence": "examples/papers/candidates_20261012/manifest.json#gatv2.pdf"
+        }
+      ],
+      "repository_url": "https://github.com/tech-srl/how_attentive_are_gats"
+    },
+    {
+      "id": "how-powerful-are-graph-neural-networks",
+      "title": "How Powerful Are Graph Neural Networks?",
+      "aliases": [
+        "gin"
+      ],
+      "source_ids": [
+        "arxiv:1810.00826"
+      ],
+      "pdf_sha256": [
+        "a6ebf80c2790b8bac1fa378902993eae26020cc6d0d95e3964eea42b0c66a974"
+      ],
+      "status": "regression",
+      "retirement_reason": "Previously used for development or regression; excluded by the historical freeze policy.",
+      "history": [
+        {
+          "outcome": "historically_excluded",
+          "frozen_commit": null,
+          "evidence": "git:0f3fd59:AutoReproducer/scripts/freeze_holdout_source.py"
+        },
+        {
+          "outcome": "retired_after_planning_repair",
+          "frozen_commit": null,
+          "evidence": "examples/papers/candidates_20261012/manifest.json#gin.pdf"
+        }
+      ],
+      "repository_url": "https://github.com/weihua916/powerful-gnns"
+    },
+    {
+      "id": "how-powerful-are-spectral-graph-neural-networks",
+      "title": "How Powerful are Spectral Graph Neural Networks",
+      "aliases": [],
+      "source_ids": [
+        "arxiv:2205.11172"
+      ],
+      "pdf_sha256": [
+        "16bd503a1fcf2efe4344e9c55ce74b309511e3aca30c6248cd0d51aea4ccd42f",
+        "8a2020af117fd55687eb70c427baf5cd3ebf02ba9458836f7e6b3e120a2d3ba7"
+      ],
+      "status": "regression",
+      "retirement_reason": "Previously used for development or regression; excluded by the historical freeze policy.",
+      "history": [
+        {
+          "outcome": "historically_excluded",
+          "frozen_commit": null,
+          "evidence": "git:0f3fd59:AutoReproducer/scripts/freeze_holdout_source.py"
+        },
+        {
+          "outcome": "regression_or_candidate",
+          "frozen_commit": null,
+          "evidence": "examples/papers/manifest.json#pdf/jacobi_independent_20261011_0b2a771.pdf"
+        },
+        {
+          "outcome": "regression_or_candidate",
+          "frozen_commit": null,
+          "evidence": "examples/papers/manifest.json#pdf/jacobi_v2_independent_20261011_0b2a771.pdf"
+        }
+      ]
+    },
+    {
+      "id": "hyperbolic-graph-convolutional-neural-networks",
+      "title": "Hyperbolic Graph Convolutional Neural Networks",
+      "aliases": [],
+      "source_ids": [
+        "arxiv:1910.12933"
+      ],
+      "pdf_sha256": [
+        "b5ca6d85e2e2b63d46fe7216fcff9317a574dea1678d4405725c6157442b1956"
+      ],
+      "status": "regression",
+      "retirement_reason": "Previously used for development or regression; excluded by the historical freeze policy.",
+      "history": [
+        {
+          "outcome": "historically_excluded",
+          "frozen_commit": null,
+          "evidence": "git:0f3fd59:AutoReproducer/scripts/freeze_holdout_source.py"
+        },
+        {
+          "outcome": "historical_pdf_provenance_merged",
+          "frozen_commit": null,
+          "evidence": "docs/evidence/historical_pdf_provenance_20261017.json#hgcn_holdout_20261013_04.provenance.json"
+        }
+      ]
+    },
+    {
+      "id": "improving-graph-neural-networks-with-simple-architecture-design",
+      "title": "Improving Graph Neural Networks with Simple Architecture Design",
+      "aliases": [],
+      "source_ids": [
+        "arxiv:2105.07634"
+      ],
+      "pdf_sha256": [
+        "0485a517bd4359d844c6dcad74bd8186ae1ebcdeb23110ca1b1191a29c7bd6dc"
+      ],
+      "status": "regression",
+      "retirement_reason": "Previously used for development or regression; excluded by the historical freeze policy.",
+      "history": [
+        {
+          "outcome": "historically_excluded",
+          "frozen_commit": null,
+          "evidence": "git:0f3fd59:AutoReproducer/scripts/freeze_holdout_source.py"
+        },
+        {
+          "outcome": "regression_or_candidate",
+          "frozen_commit": null,
+          "evidence": "examples/papers/manifest.json#pdf/fsgnn_2105.07634_holdout_04.pdf"
+        }
+      ]
+    },
+    {
+      "id": "interpreting-and-unifying-graph-neural-networks-with-an-optimization-framework",
+      "title": "Interpreting and Unifying Graph Neural Networks with An Optimization Framework",
+      "aliases": [],
+      "source_ids": [
+        "https://raw.githubusercontent.com/zhumeiqibupt/gnn-lf-hf/master/resources/paper.pdf"
+      ],
+      "pdf_sha256": [
+        "862f95d01b672cbbe41f0455f70196438c18b1dbfb29206016351b35c49fda05"
+      ],
+      "status": "regression",
+      "retirement_reason": "Previously used for development or regression; excluded by the historical freeze policy.",
+      "history": [
+        {
+          "outcome": "historically_excluded",
+          "frozen_commit": null,
+          "evidence": "git:0f3fd59:AutoReproducer/scripts/freeze_holdout_source.py"
+        },
+        {
+          "outcome": "regression_or_candidate",
+          "frozen_commit": null,
+          "evidence": "examples/papers/manifest.json#pdf/gnn_lfhf_holdout_06_20261011.pdf"
+        }
+      ]
+    },
+    {
+      "id": "large-scale-representation-learning-on-graphs-via-bootstrapping",
+      "title": "Large-Scale Representation Learning on Graphs via Bootstrapping",
+      "aliases": [
+        "bgrl"
+      ],
+      "source_ids": [
+        "arxiv:2102.06514"
+      ],
+      "pdf_sha256": [
+        "e5dad781d9591d20f665b2bce39f35218b0fa8dc53ad6b5c7153711961c82eb0"
+      ],
+      "status": "regression",
+      "retirement_reason": "Previously used for development or regression; excluded by the historical freeze policy.",
+      "history": [
+        {
+          "outcome": "historically_excluded",
+          "frozen_commit": null,
+          "evidence": "git:0f3fd59:AutoReproducer/scripts/freeze_holdout_source.py"
+        },
+        {
+          "outcome": "retired_after_native_factory_repair",
+          "frozen_commit": null,
+          "evidence": "examples/papers/candidates_20261012/manifest.json#bgrl.pdf"
+        }
+      ],
+      "repository_url": "https://github.com/nerdslab/bgrl"
+    },
+    {
+      "id": "launching-into-clinical-space-with-medspacy-a-new-clinical-text-processing-toolkit-in-python",
+      "title": "Launching into clinical space with medspaCy: a new clinical text processing toolkit in Python",
+      "aliases": [],
+      "source_ids": [
+        "arxiv:2106.07799"
+      ],
+      "pdf_sha256": [
+        "597662cc916e1a33307e61f4d9c5586618cf8a9480f239a89e9d2a991f5d0bfe"
+      ],
+      "status": "regression",
+      "retirement_reason": "Previously investigated sample; new independent eligibility is not established.",
+      "history": [
+        {
+          "outcome": "rejected_wrong_paper",
+          "frozen_commit": null,
+          "evidence": "examples/papers/manifest.json#rejected/medspacy_2106.07799_wrong_airgnn_candidate.pdf"
+        }
+      ]
+    },
+    {
+      "id": "neural-ordinary-differential-equations",
+      "title": "Neural Ordinary Differential Equations",
+      "aliases": [],
+      "source_ids": [
+        "arxiv:1806.07366"
+      ],
+      "pdf_sha256": [
+        "435299cc42b75f9ad43d9aa246c96d3d7bdcc3297aa57f419bdc571b9c25137c"
+      ],
+      "status": "regression",
+      "retirement_reason": "Previously used for development or regression; excluded by the historical freeze policy.",
+      "history": [
+        {
+          "outcome": "historically_excluded",
+          "frozen_commit": null,
+          "evidence": "git:0f3fd59:AutoReproducer/scripts/freeze_holdout_source.py"
+        },
+        {
+          "outcome": "regression_or_candidate",
+          "frozen_commit": null,
+          "evidence": "examples/papers/manifest.json#pdf/neural_ode_input_1806.07366.pdf"
+        }
+      ]
+    },
+    {
+      "id": "nodeformer-a-scalable-graph-structure-learning-transformer-for-node-classification",
+      "title": "NodeFormer: A Scalable Graph Structure Learning Transformer for Node Classification",
+      "aliases": [
+        "nodeformer"
+      ],
+      "source_ids": [
+        "arxiv:2306.08385"
+      ],
+      "pdf_sha256": [
+        "d714e7b797a6e5d2855d51c50cc6c8423b3bf1639d36c5918a2a84f8d8bd14bf"
+      ],
+      "status": "regression",
+      "retirement_reason": "Trial precedes later product repairs; retained as a regression, not an unused candidate.",
+      "history": [
+        {
+          "outcome": "historically_excluded",
+          "frozen_commit": null,
+          "evidence": "git:0f3fd59:AutoReproducer/scripts/freeze_holdout_source.py"
+        },
+        {
+          "outcome": "trial_before_product_repair",
+          "frozen_commit": "2d9b199",
+          "evidence": "docs/evidence/nodeformer_regression_20261016_03.json"
+        }
+      ],
+      "repository_url": "https://github.com/qitianwu/NodeFormer"
+    },
+    {
+      "id": "pairnorm-tackling-oversmoothing-in-gnns",
+      "title": "PairNorm: Tackling Oversmoothing in GNNs",
+      "aliases": [
+        "pairnorm"
+      ],
+      "source_ids": [
+        "arxiv:1909.12223"
+      ],
+      "pdf_sha256": [
+        "e5bbdc19fcc02a3dc502a49abda3b116d3988565ff3290dc1c4a0b0dff35ceff"
+      ],
+      "status": "regression",
+      "retirement_reason": "Previously used for development or regression; excluded by the historical freeze policy.",
+      "history": [
+        {
+          "outcome": "historically_excluded",
+          "frozen_commit": null,
+          "evidence": "git:0f3fd59:AutoReproducer/scripts/freeze_holdout_source.py"
+        },
+        {
+          "outcome": "failed_api_authentication",
+          "frozen_commit": null,
+          "evidence": "examples/papers/candidates_20261012/manifest.json#pairnorm.pdf"
+        }
+      ],
+      "repository_url": "https://github.com/LingxiaoShawn/PairNorm"
+    },
+    {
+      "id": "predict-then-propagate-graph-neural-networks-meet-personalized-pagerank",
+      "title": "Predict then Propagate: Graph Neural Networks meet Personalized PageRank",
+      "aliases": [
+        "appnp"
+      ],
+      "source_ids": [
+        "arxiv:1810.05997"
+      ],
+      "pdf_sha256": [
+        "317cf7bff134966af889c6eca6aff606a03d5857363f0b8221892a26151f1ecd"
+      ],
+      "status": "regression",
+      "retirement_reason": "Previously used for development or regression; excluded by the historical freeze policy.",
+      "history": [
+        {
+          "outcome": "historically_excluded",
+          "frozen_commit": null,
+          "evidence": "git:0f3fd59:AutoReproducer/scripts/freeze_holdout_source.py"
+        },
+        {
+          "outcome": "retired_after_reader_gate_rejection",
+          "frozen_commit": null,
+          "evidence": "examples/papers/candidates_20261012/manifest.json#appnp.pdf"
+        }
+      ],
+      "repository_url": "https://github.com/klicperajo/ppnp"
+    },
+    {
+      "id": "quarantined-arxiv-2206-04971-hydrides",
+      "title": "Prediction of quaternary hydrides based on densest ternary sphere packings",
+      "aliases": [],
+      "source_ids": [
+        "arxiv:2206.04971"
+      ],
+      "pdf_sha256": [
+        "4cbd288470211bd362651e6b9b2b25b16344dea4c0a78c5d68ae44763beb4613"
+      ],
+      "status": "regression",
+      "retirement_reason": "PDF title preflight rejected this unrelated hydrides paper when it was downloaded as NodeFormer. Quarantined by its actual title, source identity and hash; never claim NodeFormer execution evidence.",
+      "history": [
+        {
+          "outcome": "rejected_wrong_paper_pdf",
+          "frozen_commit": null,
+          "evidence": "docs/evidence/historical_pdf_provenance_20261017.json#independent_nodeformer_20261016_01.provenance.json"
+        }
+      ]
+    },
+    {
+      "id": "r-fcn-object-detection-via-region-based-fully-convolutional-networks",
+      "title": "R-FCN: Object Detection via Region-based Fully Convolutional Networks",
+      "aliases": [
+        "rfcn"
+      ],
+      "source_ids": [
+        "arxiv:1605.06409"
+      ],
+      "pdf_sha256": [
+        "374eb111e85610c20646b165aa6ed37ba7fa8bfcc6df0f068c086ba58ef11d2a"
+      ],
+      "status": "regression",
+      "retirement_reason": "Trial precedes later product repairs; retained as a regression, not an unused candidate.",
+      "history": [
+        {
+          "outcome": "trial_before_product_repair",
+          "frozen_commit": "32c79ea",
+          "evidence": "docs/evidence/issue27_rfcn_browser_20261015_02.json"
+        }
+      ],
+      "repository_url": "https://github.com/daijifeng001/R-FCN"
+    },
+    {
+      "id": "revisiting-heterophily-for-graph-neural-networks",
+      "title": "Revisiting Heterophily for Graph Neural Networks",
+      "aliases": [],
+      "source_ids": [
+        "https://raw.githubusercontent.com/sitaoluan/acm-gnn/main/revisiting_heterophily_for_graph_neural_networks_updated.pdf"
+      ],
+      "pdf_sha256": [
+        "448ceb4d95e2755d6a6f2f280a5e92ed52ef6fd3973d024402f3e21e533ed491"
+      ],
+      "status": "regression",
+      "retirement_reason": "Previously used for development or regression; excluded by the historical freeze policy.",
+      "history": [
+        {
+          "outcome": "historically_excluded",
+          "frozen_commit": null,
+          "evidence": "git:0f3fd59:AutoReproducer/scripts/freeze_holdout_source.py"
+        },
+        {
+          "outcome": "regression_or_candidate",
+          "frozen_commit": null,
+          "evidence": "examples/papers/manifest.json#pdf/acm_gnn_holdout_08_20261011.pdf"
+        }
+      ]
+    },
+    {
+      "id": "rezero",
+      "title": "ReZero",
+      "aliases": [],
+      "source_ids": [
+        "arxiv:2003.04887",
+        "https://proceedings.mlr.press/v161/bachlechner21a/bachlechner21a.pdf"
+      ],
+      "pdf_sha256": [
+        "54eea1741fad2e7a20e52f55c64b34977f1206c5e3c8e14804ea5385c299c070",
+        "bf2b6024e163804142fac25ecbe0d22efe6f07e6f1feea81912a25be40090977"
+      ],
+      "status": "regression",
+      "retirement_reason": "Previously used for development or regression; excluded by the historical freeze policy.",
+      "history": [
+        {
+          "outcome": "historically_excluded",
+          "frozen_commit": null,
+          "evidence": "git:0f3fd59:AutoReproducer/scripts/freeze_holdout_source.py"
+        },
+        {
+          "outcome": "regression_or_candidate",
+          "frozen_commit": null,
+          "evidence": "examples/papers/manifest.json#pdf/rezero_2003.04887.pdf"
+        },
+        {
+          "outcome": "regression_or_candidate",
+          "frozen_commit": null,
+          "evidence": "examples/papers/manifest.json#pdf/rezero_published_2021_protocol.pdf"
+        }
+      ]
+    },
+    {
+      "id": "sgformer-simplifying-and-empowering-transformers-for-large-graph-representations",
+      "title": "SGFormer: Simplifying and Empowering Transformers for Large-Graph Representations",
+      "aliases": [
+        "sgformer"
+      ],
+      "source_ids": [
+        "arxiv:2306.10759"
+      ],
+      "pdf_sha256": [
+        "4da8826ec385f9f0b0315492e1547615ec4a858dd8ab2f4c945e68337440261e"
+      ],
+      "status": "regression",
+      "retirement_reason": "Previously used for development or regression; excluded by the historical freeze policy.",
+      "history": [
+        {
+          "outcome": "historically_excluded",
+          "frozen_commit": null,
+          "evidence": "git:0f3fd59:AutoReproducer/scripts/freeze_holdout_source.py"
+        },
+        {
+          "outcome": "retired_after_advisory_gate_rejection",
+          "frozen_commit": null,
+          "evidence": "examples/papers/candidates_20261012/manifest.json#sgformer.pdf"
+        }
+      ],
+      "repository_url": "https://github.com/qitianwu/SGFormer"
+    },
+    {
+      "id": "simple-and-deep-graph-convolutional-networks",
+      "title": "Simple and Deep Graph Convolutional Networks",
+      "aliases": [],
+      "source_ids": [
+        "arxiv:2007.02133"
+      ],
+      "pdf_sha256": [
+        "fda616230e48642bbda2218f82af71fa7e3de5e14e98dfa8c8a065cf451287a4"
+      ],
+      "status": "regression",
+      "retirement_reason": "Previously used for development or regression; excluded by the historical freeze policy.",
+      "history": [
+        {
+          "outcome": "historically_excluded",
+          "frozen_commit": null,
+          "evidence": "git:0f3fd59:AutoReproducer/scripts/freeze_holdout_source.py"
+        },
+        {
+          "outcome": "regression_or_candidate",
+          "frozen_commit": null,
+          "evidence": "examples/papers/manifest.json#pdf/gcnii_2007.02133_holdout_05.pdf"
+        }
+      ]
+    },
+    {
+      "id": "simple-spectral-graph-convolution",
+      "title": "Simple Spectral Graph Convolution",
+      "aliases": [],
+      "source_ids": [
+        "https://unsworks.unsw.edu.au/bitstreams/98ccc499-d878-4cd0-b6e9-b626d133a788/download"
+      ],
+      "pdf_sha256": [
+        "d00c9f89f873b11e7201bf249bb76ad698f0a2f1a6046a43a96064d8188d04a0"
+      ],
+      "status": "regression",
+      "retirement_reason": "Previously used for development or regression; excluded by the historical freeze policy.",
+      "history": [
+        {
+          "outcome": "historically_excluded",
+          "frozen_commit": null,
+          "evidence": "git:0f3fd59:AutoReproducer/scripts/freeze_holdout_source.py"
+        },
+        {
+          "outcome": "regression_or_candidate",
+          "frozen_commit": null,
+          "evidence": "examples/papers/manifest.json#pdf/ssgc_holdout_02.pdf"
+        }
+      ]
+    },
+    {
+      "id": "simplifying-graph-convolutional-networks",
+      "title": "Simplifying Graph Convolutional Networks",
+      "aliases": [],
+      "source_ids": [
+        "arxiv:1902.07153"
+      ],
+      "pdf_sha256": [
+        "1151ecd729ecbc9fe51e09d0a5ece2ae2f326bb03cd64f6a2158ec43c083af2e"
+      ],
+      "status": "regression",
+      "retirement_reason": "Previously used for development or regression; excluded by the historical freeze policy.",
+      "history": [
+        {
+          "outcome": "historically_excluded",
+          "frozen_commit": null,
+          "evidence": "git:0f3fd59:AutoReproducer/scripts/freeze_holdout_source.py"
+        },
+        {
+          "outcome": "regression_or_candidate",
+          "frozen_commit": null,
+          "evidence": "examples/papers/manifest.json#pdf/sgc_1902.07153_holdout_01.pdf"
+        }
+      ]
+    },
+    {
+      "id": "siren",
+      "title": "SIREN",
+      "aliases": [],
+      "source_ids": [],
+      "pdf_sha256": [],
+      "status": "regression",
+      "retirement_reason": "Previously used for development or regression; excluded by the historical freeze policy.",
+      "history": [
+        {
+          "outcome": "historically_excluded",
+          "frozen_commit": null,
+          "evidence": "git:0f3fd59:AutoReproducer/scripts/freeze_holdout_source.py"
+        }
+      ]
+    },
+    {
+      "id": "towards-deeper-graph-neural-networks",
+      "title": "Towards Deeper Graph Neural Networks",
+      "aliases": [],
+      "source_ids": [
+        "arxiv:2007.09296"
+      ],
+      "pdf_sha256": [
+        "221f0885de41ffc6732da7b540d1bfbca8972da04a125ff0c8f6b16a3604c81b"
+      ],
+      "status": "regression",
+      "retirement_reason": "Previously used for development or regression; excluded by the historical freeze policy.",
+      "history": [
+        {
+          "outcome": "historically_excluded",
+          "frozen_commit": null,
+          "evidence": "git:0f3fd59:AutoReproducer/scripts/freeze_holdout_source.py"
+        },
+        {
+          "outcome": "regression_or_candidate",
+          "frozen_commit": null,
+          "evidence": "examples/papers/manifest.json#pdf/dagnn_independent_20261011_b9d5219.pdf"
+        }
+      ]
+    },
+    {
+      "id": "two-sides-of-the-same-coin-heterophily-and-oversmoothing-in-graph-convolutional-neural-networks",
+      "title": "Two Sides of the Same Coin: Heterophily and Oversmoothing in Graph Convolutional Neural Networks",
+      "aliases": [],
+      "source_ids": [
+        "arxiv:2102.06462"
+      ],
+      "pdf_sha256": [
+        "e9e78e0ba131c39a0143e73114bad846d21224586f444534ba84cf1737dbb177"
+      ],
+      "status": "regression",
+      "retirement_reason": "Previously used for development or regression; excluded by the historical freeze policy.",
+      "history": [
+        {
+          "outcome": "historically_excluded",
+          "frozen_commit": null,
+          "evidence": "git:0f3fd59:AutoReproducer/scripts/freeze_holdout_source.py"
+        },
+        {
+          "outcome": "regression_or_candidate",
+          "frozen_commit": null,
+          "evidence": "examples/papers/manifest.json#pdf/ggcn_independent_20261011_bc20605.pdf"
+        }
+      ]
+    },
+    {
+      "id": "pygsd",
+      "title": "PyTorch Geometric Signed Directed: A Software Package on Graph Neural Networks for Signed and Directed Graphs",
+      "aliases": [
+        "PyGSD",
+        "PyTorch Geometric Signed Directed",
+        "PyTorch Geometric Signed and Directed",
+        "pytorch_geometric_signed_directed"
+      ],
+      "source_ids": [
+        "arxiv:2202.10793"
+      ],
+      "pdf_sha256": [
+        "3902ece975f46934320629ecdcf5b85c5bdd32a9f3bd9b864c3737bcba997fbc"
+      ],
+      "status": "candidate",
+      "repository_url": "https://github.com/SherylHYX/pytorch_geometric_signed_directed",
+      "repository_revision": "2968b55b3378a01ade9f391e194f0077e2c6ee3b",
+      "history": [
+        {
+          "outcome": "candidate_not_executed",
+          "frozen_commit": null,
+          "evidence": "examples/papers/candidates_20261017_batch2/evidence/pygsd.json",
+          "note": "Static screening only; staged proposal, not live registration. No author training or product-specific repair."
+        },
+        {
+          "outcome": "registered_unused_candidate",
+          "frozen_commit": null,
+          "registered_at": "2026-10-17T12:29:39.605518+00:00",
+          "evidence": "examples/papers/candidates_20261017_batch2/registration_receipt.json",
+          "note": "Incrementally registered after the previous frozen run ended. Original static-screening history retained. No author training, dependency installation or product-specific repair for this candidate."
+        }
+      ]
+    },
+    {
+      "id": "polynormer",
+      "title": "Polynormer: Polynomial-Expressive Graph Transformer in Linear Time",
+      "aliases": [
+        "Polynormer",
+        "Polynormer-r"
+      ],
+      "source_ids": [
+        "arxiv:2403.01232"
+      ],
+      "pdf_sha256": [
+        "b48d05ad91bc923b4406b3cc4d29295ccc3ea23ffebfb82fc5fcdaa0af48bb7c"
+      ],
+      "status": "candidate",
+      "repository_url": "https://github.com/cornell-zhang/Polynormer",
+      "repository_revision": "fc8c276c9c5dfbd616d83f65338a3392188a5e08",
+      "history": [
+        {
+          "outcome": "candidate_not_executed",
+          "frozen_commit": null,
+          "evidence": "examples/papers/candidates_20261017_batch2/evidence/polynormer.json",
+          "note": "Static screening only; staged proposal, not live registration. No author training or product-specific repair."
+        },
+        {
+          "outcome": "registered_unused_candidate",
+          "frozen_commit": null,
+          "registered_at": "2026-10-17T12:29:39.605518+00:00",
+          "evidence": "examples/papers/candidates_20261017_batch2/registration_receipt.json",
+          "note": "Incrementally registered after the previous frozen run ended. Original static-screening history retained. No author training, dependency installation or product-specific repair for this candidate."
+        }
+      ]
+    },
+    {
+      "id": "bnpool",
+      "title": "BN-Pool: Bayesian Nonparametric Pooling for Graphs",
+      "aliases": [
+        "BN-Pool",
+        "BNPool",
+        "BNPool: Bayesian Nonparametric Pooling for Graph Neural Networks",
+        "Bayesian Nonparametric Graph Pooling"
+      ],
+      "source_ids": [
+        "arxiv:2501.09821"
+      ],
+      "pdf_sha256": [
+        "35c416b0b1927db60cd936cd430da1dded1e9794799ed13adfecce0f4c3fa316"
+      ],
+      "status": "candidate",
+      "repository_url": "https://github.com/NGMLGroup/Bayesian-Nonparametric-Graph-Pooling",
+      "repository_revision": "206bcb4c642468ba4c51f79812ff1e220756937f",
+      "history": [
+        {
+          "outcome": "candidate_not_executed",
+          "frozen_commit": null,
+          "evidence": "examples/papers/candidates_20261017_batch2/evidence/bnpool.json",
+          "note": "Static screening only; staged proposal, not live registration. No author training or product-specific repair."
+        },
+        {
+          "outcome": "registered_unused_candidate",
+          "frozen_commit": null,
+          "registered_at": "2026-10-17T12:29:39.605518+00:00",
+          "evidence": "examples/papers/candidates_20261017_batch2/registration_receipt.json",
+          "note": "Incrementally registered after the previous frozen run ended. Original static-screening history retained. No author training, dependency installation or product-specific repair for this candidate."
+        }
+      ]
+    }
+  ]
+}

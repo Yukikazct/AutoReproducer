@@ -1,0 +1,139 @@
+{
+  "rule": "Historical runtime acquisition receipts are merged only after checking the actual first-page title. Original files and claims remain untouched. Wrong-paper inputs have separate quarantined identities and cannot be borrowed as evidence for the requested paper. Historical trials do not become independent candidates.",
+  "receipts": [
+    {
+      "file": "dgc_holdout_20261013_02.provenance.json",
+      "paper_id": "dissecting-the-diffusion-process-in-linear-graph-convolutional-networks",
+      "title": "Dissecting the Diffusion Process in Linear Graph Convolutional Networks",
+      "pdf_sha256": "295dae352e820b0db6817ca5b6ec5f338bb27c74c39960f4eb519aec2842307e",
+      "source_ids": [
+        "arxiv:2102.10739"
+      ],
+      "status": "regression",
+      "pdf_title_verified": true,
+      "original_preflight_rejected": false
+    },
+    {
+      "file": "digcn_holdout_20261013_05.provenance.json",
+      "paper_id": "digraph-inception-convolutional-networks",
+      "title": "Digraph Inception Convolutional Networks",
+      "pdf_sha256": "1fd2ec4b7b04b7735f53c5ddf5f438fb88ea6bbb7a5817d8da7605ecbb967eff",
+      "source_ids": [
+        "https://papers.nips.cc/paper/2020/file/cffb6e2288a630c2a787a64ccc67097c-paper.pdf"
+      ],
+      "status": "regression",
+      "pdf_title_verified": true,
+      "original_preflight_rejected": false
+    },
+    {
+      "file": "evennet_holdout_20261013_03.provenance.json",
+      "paper_id": "evennet-ignoring-odd-hop-neighbors-improves-robustness-of-graph-neural-networks",
+      "title": "EvenNet: Ignoring Odd-Hop Neighbors Improves Robustness of Graph Neural Networks",
+      "pdf_sha256": "ec48177104be6a7140ea812a32222518a8c0e5bdf54a2fe999bf56cf8dd5ce76",
+      "source_ids": [
+        "arxiv:2205.13892"
+      ],
+      "status": "regression",
+      "pdf_title_verified": true,
+      "original_preflight_rejected": false
+    },
+    {
+      "file": "hgcn_holdout_20261013_04.provenance.json",
+      "paper_id": "hyperbolic-graph-convolutional-neural-networks",
+      "title": "Hyperbolic Graph Convolutional Neural Networks",
+      "pdf_sha256": "b5ca6d85e2e2b63d46fe7216fcff9317a574dea1678d4405725c6157442b1956",
+      "source_ids": [
+        "arxiv:1910.12933"
+      ],
+      "status": "regression",
+      "pdf_title_verified": true,
+      "original_preflight_rejected": false
+    },
+    {
+      "file": "independent_difformer_20261016_01.provenance.json",
+      "paper_id": "difformer-scalable-graph-transformers-induced-by-energy-constrained-diffusion",
+      "title": "DIFFormer: Scalable (Graph) Transformers Induced by Energy Constrained Diffusion",
+      "pdf_sha256": "3993e06305e68a7555f5322c69304f2f9ad31fc21f1bb2667a7643f76eae8255",
+      "source_ids": [
+        "arxiv:2301.09474"
+      ],
+      "status": "regression",
+      "pdf_title_verified": true,
+      "original_preflight_rejected": false
+    },
+    {
+      "file": "independent_nodeformer_20261016_01.provenance.json",
+      "paper_id": "quarantined-arxiv-2206-04971-hydrides",
+      "title": "Prediction of quaternary hydrides based on densest ternary sphere packings",
+      "pdf_sha256": "4cbd288470211bd362651e6b9b2b25b16344dea4c0a78c5d68ae44763beb4613",
+      "source_ids": [
+        "arxiv:2206.04971"
+      ],
+      "status": "regression",
+      "pdf_title_verified": true,
+      "original_preflight_rejected": true
+    },
+    {
+      "file": "independent_nodeformer_20261016_02.provenance.json",
+      "paper_id": "nodeformer-a-scalable-graph-structure-learning-transformer-for-node-classification",
+      "title": "NodeFormer: A Scalable Graph Structure Learning Transformer for Node Classification",
+      "pdf_sha256": "d714e7b797a6e5d2855d51c50cc6c8423b3bf1639d36c5918a2a84f8d8bd14bf",
+      "source_ids": [
+        "arxiv:2306.08385"
+      ],
+      "status": "regression",
+      "pdf_title_verified": true,
+      "original_preflight_rejected": false
+    },
+    {
+      "file": "issue27_glognn_20261015_01.provenance.json",
+      "paper_id": "finding-global-homophily-in-graph-neural-networks-when-meeting-heterophily",
+      "title": "Finding Global Homophily in Graph Neural Networks When Meeting Heterophily",
+      "pdf_sha256": "d1a742d12b988f1e4d0bf9fc2840793b5b4b911d9d25043f497cbed2727d0a58",
+      "source_ids": [
+        "https://proceedings.mlr.press/v162/li22ad/li22ad.pdf"
+      ],
+      "status": "regression",
+      "pdf_title_verified": true,
+      "original_preflight_rejected": false
+    },
+    {
+      "file": "issue27_graphcon_20261015_01.provenance.json",
+      "paper_id": "graph-coupled-oscillator-networks",
+      "title": "Graph-Coupled Oscillator Networks",
+      "pdf_sha256": "a81e551ffc611520376c40c2e74614db5afd681a5f9503d03ae655176d717619",
+      "source_ids": [
+        "https://proceedings.mlr.press/v162/rusch22a/rusch22a.pdf",
+        "arxiv:2202.02296"
+      ],
+      "status": "regression",
+      "pdf_title_verified": true,
+      "original_preflight_rejected": false
+    },
+    {
+      "file": "issue27_graphcon_20261015_02.provenance.json",
+      "paper_id": "graph-coupled-oscillator-networks",
+      "title": "Graph-Coupled Oscillator Networks",
+      "pdf_sha256": "a81e551ffc611520376c40c2e74614db5afd681a5f9503d03ae655176d717619",
+      "source_ids": [
+        "https://proceedings.mlr.press/v162/rusch22a/rusch22a.pdf",
+        "arxiv:2202.02296"
+      ],
+      "status": "regression",
+      "pdf_title_verified": true,
+      "original_preflight_rejected": false
+    },
+    {
+      "file": "prognn_2005.10203_holdout_20261013_01.provenance.json",
+      "paper_id": "graph-structure-learning-for-robust-graph-neural-networks",
+      "title": "Graph Structure Learning for Robust Graph Neural Networks",
+      "pdf_sha256": "32191b55ab5fd8fbafc5db5591233f44ca256181fb79d825b33a4c24a1367657",
+      "source_ids": [
+        "arxiv:2005.10203"
+      ],
+      "status": "regression",
+      "pdf_title_verified": true,
+      "original_preflight_rejected": false
+    }
+  ]
+}

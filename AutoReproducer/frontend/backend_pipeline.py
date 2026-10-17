@@ -34,7 +34,7 @@ from src.project_paths import get_data_root
 
 
 # Contract checked by the web loader before starting a new background thread.
-BACKEND_API_VERSION = 5
+BACKEND_API_VERSION = 6
 
 
 def __getattr__(name):
@@ -92,9 +92,50 @@ class ProgressStore:
                 f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
     @staticmethod
-    def read_snapshot(path: str) -> Dict[str, Any]:
+    def read_snapshot(path: str, *, include_pending_result: bool = False) -> Dict[str, Any]:
         from frontend.progress_state import read_progress_snapshot
-        return read_progress_snapshot(path)
+        return read_progress_snapshot(path, include_pending_result=include_pending_result)
+
+
+def _write_report_copy(path: Path, raw: bytes) -> None:
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile("wb", dir=path.parent, delete=False) as output:
+            temporary = Path(output.name)
+            output.write(raw)
+        os.replace(temporary, path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
+def _sync_run_report(result: dict) -> None:
+    """Publish the final web report and its portable files beside the run evidence."""
+    data = result["data"]
+    if not data.get("run_dir"):
+        return
+    from src.execution_artifacts import verified_report_image_bytes
+    from src.report_revisions import sanitize_report_result
+    from src.safety.paths import workspace_path
+
+    run_dir = Path(data["run_dir"])
+    report = Path(result["report_path"])
+    assets = report.with_name(report.stem + "_assets")
+    if assets.exists():
+        for image in assets.iterdir():
+            relative = assets.name + "/" + image.name
+            raw = verified_report_image_bytes(relative, report)
+            if raw is None:
+                raise ValueError("报告图片已改变或无法验证: " + image.name)
+            target = workspace_path(run_dir, relative, "run report image")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            _write_report_copy(target, raw)
+    attachment = report.with_name(report.stem + "_execution.txt")
+    _write_report_copy(workspace_path(run_dir, attachment.name, "run output attachment"),
+                       attachment.read_bytes())
+    _write_report_copy(workspace_path(run_dir, "report.md", "run report"), report.read_bytes())
+    _write_report_copy(workspace_path(run_dir, "result.json", "run result"),
+                       json.dumps(sanitize_report_result(result), ensure_ascii=False, indent=2).encode("utf-8"))
 
 
 # ---------------- 后台流水线执行 ----------------
@@ -338,21 +379,15 @@ def run_pipeline_core(progress_path: str,
                 report_text += (f"\n\n---\n\n> 📎 **完整执行输出附件**: "
                                 f"`{attach_file.name}`（同一目录下，未被截断）\n")
                 report_file.write_text(report_text, encoding="utf-8")
-                data["report"] = report_text
-            except Exception:
-                pass  # 落盘失败不阻断主流程
+                data.update(report=report_text, report_length=len(report_text))
+            except Exception as exc:
+                reason = "最终报告保存失败: " + str(exc)
+                error_msg = "; ".join(filter(None, [error_msg, reason]))
+                data["report_publication"] = {"status": "error", "reason": reason}
+                _set_current("ERROR")
+                logger.log("ReportGenerator", "publish_report", "ERROR", reason)
 
-        # 终态落盘：无论 COMPLETED 还是 ERROR，都在 ledger 末条写终态信息，
-        # 供历史列表回填 state / duration_sec / llm_calls。
         stats = logger.get_stats()
-        logger.log_experiment(
-            "FINISH", "流水线终止",
-            inputs={"paper_title": paper_title},
-            outputs={"title": (data.get("paper_info") or {}).get("title") or paper_title},
-            result={"state": _current(),
-                    "duration_sec": stats["duration_sec"],
-                    "llm_calls": stats["llm_calls"]})
-
         result = {
             "state": _current(),
             "error": error_msg,
@@ -365,6 +400,18 @@ def run_pipeline_core(progress_path: str,
         if report_path:
             # Progress files are disposable; retain the structured inputs alongside
             # the report so history can regenerate it without rerunning the paper.
+            def publication_error(exc):
+                reason = "最终报告与运行归档未完整保存: " + str(exc)
+                result["state"] = "ERROR"
+                result["error"] = "; ".join(filter(None, [result.get("error"), reason]))
+                data["report_publication"] = {"status": "error", "reason": reason}
+                _set_current("ERROR")
+                store.emit({"type": "report_archive", "status": "error", "reason": reason})
+
+            try:
+                _sync_run_report(result)
+            except (OSError, TypeError, ValueError) as exc:
+                publication_error(exc)
             temporary = None
             try:
                 from src.report_revisions import sanitize_report_result
@@ -374,12 +421,20 @@ def run_pipeline_core(progress_path: str,
                     temporary = Path(output.name)
                     json.dump(sanitize_report_result(result), output, ensure_ascii=False, indent=2)
                 os.replace(temporary, archive)
-            except (OSError, TypeError, ValueError):
-                store.emit({"type": "report_archive", "status": "warning",
-                            "reason": "结构化报告归档未保存，请保留本次进度记录以便重新生成报告。"})
+            except (OSError, TypeError, ValueError) as exc:
+                publication_error(exc)
             finally:
                 if temporary is not None:
                     temporary.unlink(missing_ok=True)
+        # Publish history's terminal state only after report persistence succeeds
+        # or records its failure; completed training alone is not a saved report.
+        logger.log_experiment(
+            "FINISH", "流水线终止",
+            inputs={"paper_title": paper_title},
+            outputs={"title": (data.get("paper_info") or {}).get("title") or paper_title},
+            result={"state": _current(),
+                    "duration_sec": stats["duration_sec"],
+                    "llm_calls": stats["llm_calls"]})
         _emit_state(store, _current(), "", "success")
         return _mark_result(result)
 
@@ -421,7 +476,7 @@ def _run_prepared_pipeline(store: ProgressStore, request: dict, reason: str) -> 
         nonlocal worker_cleaned
         worker_cleaned = True
 
-    def finish_worker(status):
+    def finish_worker(status, error_message=None):
         nonlocal worker_finished, supervisor_cleanup
         if not worker_started or worker_finished:
             return
@@ -443,9 +498,40 @@ def _run_prepared_pipeline(store: ProgressStore, request: dict, reason: str) -> 
                             "phase_id": run.get("phase_id", ""), "status": "interrupted",
                             "cleanup_confirmed": True,
                             "reason": "持有者进程已退出并清理，但未返回本轮执行终态"})
-        store.emit({"type": "pipeline_worker", "worker_id": worker_id,
-                    "status": status, "cleanup_confirmed": worker_cleaned})
-        worker_finished = worker_cleaned
+        try:
+            if worker_cleaned:
+                snapshot = ProgressStore.read_snapshot(str(store.path), include_pending_result=True)
+                result = snapshot.get("pending_result")
+                if isinstance(result, dict):
+                    # Keep the owned scope open until every saved copy includes
+                    # the supervisor receipt. Closing it first publishes the
+                    # child's earlier done while these files are still changing.
+                    from src.environment_lifecycle import record_environment_cleanup
+                    if error_message:
+                        result["state"] = "ERROR"
+                        result["error"] = "; ".join(filter(None, [result.get("error"), error_message]))
+                    elif status != "success" and result.get("state") != "ERROR":
+                        result.update(state="ERROR", error="后台工作进程未正常结束，不能确认流水线成功")
+                    receipt = result.setdefault("data", {}).get("environment_cleanup")
+                    if receipt is None:
+                        receipt = supervisor_cleanup
+                    else:
+                        receipt["supervisor_cleanup"] = supervisor_cleanup
+                        if supervisor_cleanup.get("errors"):
+                            receipt["status"] = "error"
+                            receipt.setdefault("errors", []).extend(supervisor_cleanup["errors"])
+                    record_environment_cleanup(result, receipt)
+                    store.emit({"type": "done", "result": result})
+        except Exception as exc:
+            status = "error"
+            # Invalidate the child's pending completion before closing its
+            # scope, even when publishing the final receipts itself fails.
+            store.emit({"type": "error", "error": safe_runtime_diagnostic(exc)})
+            raise
+        finally:
+            store.emit({"type": "pipeline_worker", "worker_id": worker_id,
+                        "status": status, "cleanup_confirmed": worker_cleaned})
+            worker_finished = worker_cleaned
 
     effective_key = request.get("api_key") or os.environ.get("LLM_API_KEY", "")
     try:
@@ -475,29 +561,24 @@ def _run_prepared_pipeline(store: ProgressStore, request: dict, reason: str) -> 
         finish_worker("success" if completed.returncode == 0 else "error")
         snapshot = ProgressStore.read_snapshot(str(store.path))
         if snapshot.get("done") and isinstance(snapshot.get("result"), dict):
-            result = snapshot["result"]
-            if supervisor_cleanup is not None:
-                from src.environment_lifecycle import record_environment_cleanup
-                receipt = result.setdefault("data", {}).get("environment_cleanup")
-                if receipt is None:
-                    receipt = supervisor_cleanup
-                else:
-                    receipt["supervisor_cleanup"] = supervisor_cleanup
-                    if supervisor_cleanup.get("errors"):
-                        receipt["status"] = "error"
-                        receipt["errors"].extend(supervisor_cleanup["errors"])
-                record_environment_cleanup(result, receipt)
-                store.emit({"type": "done", "result": result})
-            return result
+            return snapshot["result"]
         if snapshot.get("error"):
             raise RuntimeError(snapshot["error"])
         diagnostic = safe_runtime_diagnostic(completed.stderr or completed.stdout)
         raise RuntimeError(f"安全运行环境进程未返回完整结果（退出码 {completed.returncode}）：{diagnostic[-1600:]}")
     except (Exception, KeyboardInterrupt) as exc:
-        finish_worker("interrupted" if isinstance(exc, KeyboardInterrupt) else "error")
         message = safe_runtime_diagnostic(exc)
         if effective_key:
             message = message.replace(effective_key, "[REDACTED]")
+        finish_worker("interrupted" if isinstance(exc, KeyboardInterrupt) else "error", message)
+        snapshot = ProgressStore.read_snapshot(str(store.path))
+        if snapshot.get("done") and isinstance(snapshot.get("result"), dict):
+            # A child may have already saved its report before its owner was
+            # interrupted. Its final receipt and retained evidence still belong
+            # to this failed run; do not replace them with a bootstrap stub.
+            if isinstance(exc, KeyboardInterrupt):
+                raise
+            return snapshot["result"]
         if metadata is None:
             state("error", message)
         else:

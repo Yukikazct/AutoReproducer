@@ -1,0 +1,11 @@
+# Reviewed CPU-only test runtime; installed outside application/production caches.
+torch==2.5.1+cpu
+numpy==1.26.4
+scipy==1.14.1
+scikit-learn==1.5.2
+networkx==2.8.8
+requests==2.32.3
+tqdm==4.67.1
+psutil==6.1.0
+setuptools==69.5.1
+packaging==24.2

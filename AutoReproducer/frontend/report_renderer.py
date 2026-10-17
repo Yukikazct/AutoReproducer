@@ -78,6 +78,20 @@ def render_report(report, report_path=None, *, st_module=None):
 def build_report_bundle(report, report_path):
     """Package a report and its verified companion assets for offline viewing."""
     report_file = Path(report_path)
+    if not report_file.is_absolute():
+        report_file = PROJECT_ROOT / report_file
+    attachment = None
+    attachment_name = report_file.stem + "_execution.txt"
+    footer = f"> 📎 **完整执行输出附件**: `{attachment_name}`（同一目录下，未被截断）"
+    if report.rstrip().endswith(footer):
+        from src.safety.paths import workspace_path
+        try:
+            attachment = workspace_path(report_file.parent, attachment_name,
+                                        "execution output attachment", must_exist=True)
+            if not attachment.is_file():
+                raise ValueError("attachment is not a regular file")
+        except (OSError, ValueError) as exc:
+            raise ValueError("完整执行输出附件缺失或无法读取") from exc
     figures = {}
     for part in report_parts(report):
         if part["type"] != "image" or part["target"].startswith("data:"):
@@ -92,6 +106,8 @@ def build_report_bundle(report, report_path):
         archive.writestr(report_file.name, report)
         for target, raw in figures.items():
             archive.writestr(target, raw)
+        if attachment is not None:
+            archive.write(attachment, attachment_name)
     return buffer.getvalue()
 
 

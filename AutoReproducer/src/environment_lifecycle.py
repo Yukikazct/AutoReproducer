@@ -184,8 +184,8 @@ class _EnvironmentRun:
                 saved["data"]["environment_cleanup"] = receipt
                 if result is not None:
                     saved["error"] = result.get("error")
-                    if receipt["status"] == "error":
-                        saved["state"] = "ERROR"
+                    if result.get("state") is not None:
+                        saved["state"] = result["state"]
                 elif receipt["status"] == "error":
                     saved["state"] = "ERROR"
                 _write_json(path, saved)

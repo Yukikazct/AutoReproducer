@@ -1,0 +1,42 @@
+{
+  "kind": "static_source_provenance",
+  "paper_id": "bnpool",
+  "source_id": "arxiv:2501.09821",
+  "requested_pdf_url": "https://arxiv.org/pdf/2501.09821",
+  "version_identified_from_pdf_page1": "v2",
+  "versioned_pdf_url": "https://arxiv.org/pdf/2501.09821v2",
+  "pdf": {
+    "file": "examples/papers/candidates_20261017_batch2/bnpool.pdf",
+    "bytes": 3234331,
+    "pages": 32,
+    "sha256": "35c416b0b1927db60cd936cd430da1dded1e9794799ed13adfecce0f4c3fa316"
+  },
+  "downloaded_at_utc": null,
+  "download_time_note": "Original download HTTP timestamp/final redirect was not recorded; do not substitute this staging timestamp.",
+  "author_repository_from_pdf": {
+    "page": 1,
+    "url": "https://github.com/NGMLGroup/Bayesian-Nonparametric-Graph-Pooling"
+  },
+  "repository": {
+    "url": "https://github.com/NGMLGroup/Bayesian-Nonparametric-Graph-Pooling",
+    "revision": "206bcb4c642468ba4c51f79812ff1e220756937f",
+    "commit_url": "https://github.com/NGMLGroup/Bayesian-Nonparametric-Graph-Pooling/commit/206bcb4c642468ba4c51f79812ff1e220756937f",
+    "checkout_read_only": "D:\\code\\AutoReproducer\\.tmp\\next-pdf-candidates\\BNPool",
+    "clean_worktree_observed": true
+  },
+  "author_source_file_sha256": {
+    "README.md": "2b9804d87fb03e5db06a450cb5865e4303adfc2311c880b4505a4fe4dd7705b7",
+    "pyproject.toml": "fba89c330cc19fb065b6c0e47de735011b08a7cba7c8640306240ee411250304",
+    "run_classification.py": "f3f955fc51bc95fb731bc09d23e5dd732a1e0a63facf081474d9735f28e6d227",
+    "config/default.yaml": "733bc88fd9c461fef96a7446a2f89292bb67488bb235efc4ac768bae5834c45e",
+    "config/run_classification.yaml": "f3e5ccd2c8b1572da0988bebafd9bea8c8d1357a4af318cf1e5e0a9a1ef7da10",
+    "config/dataset/mutag.yaml": "9fd40d0446919e34c11022cfa0bd3506a8f7b34da089b2d1ebf8228d2702a98f",
+    "config/pooler/bnpool.yaml": "a97295e815750e566400ac9b835ce3c08c1bcb0cac7ebc8c97b19f995d257a1e",
+    "source/data/data_modules.py": "73bd6bd99a1066de9dafedd2406c70e352b105ddf74ad96efd23773b6f95fcf0",
+    "source/utils/data.py": "2a1838e906f34aacda730135e783df757092f8c1707e677214a6ef702f483690",
+    "source/pl_modules/classification_module.py": "5aa8c9d0bd56fe4d4475eff47d9cb3844eae532b4de976c76bc6389768c5df50"
+  },
+  "staged_at": "2026-10-17T09:52:42.166886+00:00",
+  "training_started": false,
+  "product_specific_repair_performed": false
+}

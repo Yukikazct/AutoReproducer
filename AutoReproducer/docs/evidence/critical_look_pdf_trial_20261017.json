@@ -1,0 +1,184 @@
+{
+  "recorded_at": "2026-10-17T08:37:47.125744+00:00",
+  "paper_id": "critical-look-heterophily",
+  "candidate_order": 3,
+  "acceptance": "failed",
+  "failure_phase": "pdf_repository_preview",
+  "failure": {
+    "error": "Locator.wait_for: Timeout 60000ms exceeded.\nCall log:\n  - waiting for get_by_text(re.compile(r\"PDF (?:原文代码声明|仓库候选)链接：https:/\\/github\\.com\\/yandex\\-research\\/heterophilous\\-graphs\", re.IGNORECASE)) to be visible\n",
+    "type": "TimeoutError"
+  },
+  "frozen_commit": "37d8fd64b213e42fb127207ac7b80440207e0b0d",
+  "source_sha256": "14664b048b7f23a371d524ee8d9a37c202de8a2227638b63438da2bda5ca8d1c",
+  "frozen_source_verified_after_failure": {
+    "independent": true,
+    "paper_id": "critical-look-heterophily",
+    "pdf_sha256": "9025d1a5a4258bc77dadc31528a68f7abbe6c08c3b9abf82ecb644e00811bd14",
+    "source_sha256": "14664b048b7f23a371d524ee8d9a37c202de8a2227638b63438da2bda5ca8d1c",
+    "registry_sha256": "1a16c73d486844ba5604c3992aeb0c9f38ca638cc6a722e5d4c7f5cdc157b2c6"
+  },
+  "pdf_sha256": "9025d1a5a4258bc77dadc31528a68f7abbe6c08c3b9abf82ecb644e00811bd14",
+  "repository_links_before_fix": [
+    {
+      "url": "https://github.com/yandex-research/heterophilous-gr",
+      "raw_url": "https://github.com/yandex-research/heterophilous-gr",
+      "page": 1,
+      "source": "pdf_text",
+      "context": "ter benchmark for evaluatin g the performance of GNNs under heterophily. We show that standard GNNs achiev e strong results on these heterophilous graphs, almost always outpe rforming specialized models. Our datasets and the code for reproducing our experi ments are available at https://github.com/yandex-research/heterophilous-gr aphs . 1 I NTRODUCTION The ﬁeld of machine learning on graph-structured data has re cently attracted a lot of attention, with Graph Neural Networks (GNNs) achi",
+      "evidence_type": "author_code_statement",
+      "is_author_code": true
+    },
+    {
+      "url": "https://github.com/yandex-research/heterophilous-graphs",
+      "raw_url": "https://github.com/yandex-research/heterophilous-graphs",
+      "page": 1,
+      "source": "pdf_annotation",
+      "context": "of GNNs under heterophily. We show that standard GNNs achiev e strong results on these heterophilous graphs, almost always outpe rforming specialized models. Our datasets and the code for reproducing our experi ments are available at arXiv:2302.11640v2 [cs.LG] 2 Mar 2024 https://github.com/yandex-research/heterophilous-gr aphs .",
+      "evidence_type": "author_code_statement",
+      "is_author_code": true
+    },
+    {
+      "url": "https://github.com/Toloka/TolokerGraph",
+      "raw_url": "https://github.com/Toloka/TolokerGraph",
+      "page": 11,
+      "source": "pdf_text",
+      "context": "in graph neural networks when meet ing heterophily. In International Conference on Machine Learning , pp. 13242–13256. PMLR, 2022. Daniil Likhobaba, Nikita Pavlichenko, and Dmitry Ustalov. Toloker Graph: In- teraction of Crowd Annotators. 2023. doi: 10.5281/zenodo. 7620795. URL https://github.com/Toloka/TolokerGraph . Derek Lim, Felix Hohne, Xiuyu Li, Sijia Linda Huang, Vaishna vi Gupta, Omkar Bhalerao, and Ser Nam Lim. Large scale learning on non-homophilous graphs : New",
+      "evidence_type": "reference",
+      "is_author_code": false
+    },
+    {
+      "url": "https://github.com/Toloka/TolokerGraph",
+      "raw_url": "https://github.com/Toloka/TolokerGraph",
+      "page": 11,
+      "source": "pdf_annotation",
+      "context": "in graph neural networks when meet ing heterophily. In International Conference on Machine Learning , pp. 13242–13256. PMLR, 2022. Daniil Likhobaba, Nikita Pavlichenko, and Dmitry Ustalov. Toloker Graph: In- teraction of Crowd Annotators. 2023. doi: 10.5281/zenodo. 7620795. URL https://github.com/Toloka/TolokerGraph . Derek Lim, Felix Hohne, Xiuyu Li, Sijia Linda Huang, Vaishna vi Gupta, Omkar Bhalerao, and Ser Nam Lim. Large scale learning on non-homophilous graphs : New",
+      "evidence_type": "reference",
+      "is_author_code": false
+    }
+  ],
+  "expected_repository": "https://github.com/yandex-research/heterophilous-graphs",
+  "author_revision": "a431395582e929d88271309716bea4fe24ce6318",
+  "task_submitted": false,
+  "training_executed": false,
+  "optimizer_steps": 0,
+  "comparison": null,
+  "paper_metrics_verified": false,
+  "is_reproduced": null,
+  "active_worker_run_execution_counts": [
+    0,
+    0,
+    0
+  ],
+  "diagnosis": "PyPDF2 inserted an internal space into the visible repository name. Both truncated text and complete same-page URI had author-code status, but the truncated text record ranked first. The real browser timed out before submitting a task.",
+  "retirement_reason": "Triggered a PDF repository evidence ranking repair; subsequent uses of this paper are regression-only.",
+  "next_independent_candidate": null,
+  "remaining_gate": "All three predetermined papers failed. Keep #27 open and deliver failure stages and blockers; a future independent acceptance needs a new unused paper and another tested source freeze.",
+  "regression_tests": [
+    {
+      "file": "critical_pdf_links_before_20261017.xml",
+      "tests": 7,
+      "passed": 5,
+      "failures": 2,
+      "errors": 0,
+      "skipped": 0,
+      "sha256": "feac746913f47638ea8860e130bdc4b869249305b084eae4165d16d2bc447d92"
+    },
+    {
+      "file": "critical_pdf_links_after_20261017.xml",
+      "tests": 176,
+      "passed": 176,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "sha256": "91e5c5622dee84cb065e4341e6a16ebf1254a0c757cfc60b36cfea264c999abb"
+    },
+    {
+      "file": "critical_registry_browser_gates_20261017.xml",
+      "tests": 60,
+      "passed": 60,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "sha256": "73c62741057a5e23b5def0f02a0c703dd16d74c10a0b8fa5b45e6b2b6c6d0fa9"
+    }
+  ],
+  "regression_browser": {
+    "recorded_at": "2026-10-17T08:47:43.006768+00:00",
+    "kind": "real_browser_preview_regression",
+    "paper_id": "critical-look-heterophily",
+    "product_commit": "37d8fd64b213e42fb127207ac7b80440207e0b0d",
+    "working_diff_sha256": "4075cdfcb3c8828f08cf323464fd364d59b49447d58dabf52fdd4096992e7d58",
+    "independent_claim": false,
+    "task_submitted": false,
+    "training_executed": false,
+    "preview": "PDF 原文代码声明链接：https://github.com/yandex-research/heterophilous-graphs",
+    "no_new_task_created": true,
+    "existing_progress_unchanged": true,
+    "pdf_sha256": "9025d1a5a4258bc77dadc31528a68f7abbe6c08c3b9abf82ecb644e00811bd14",
+    "pdf_unchanged": true,
+    "owned_scopes": [
+      {
+        "progress_file": "progress_1792219716114.jsonl",
+        "state": "COMPLETED",
+        "counts": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "progress_file": "progress_1792223891795.jsonl",
+        "state": "ERROR",
+        "counts": [
+          0,
+          0,
+          0
+        ]
+      }
+    ],
+    "repository_links_after_fix": [
+      {
+        "url": "https://github.com/yandex-research/heterophilous-graphs",
+        "raw_url": "https://github.com/yandex-research/heterophilous-graphs",
+        "page": 1,
+        "source": "pdf_annotation",
+        "context": "of GNNs under heterophily. We show that standard GNNs achiev e strong results on these heterophilous graphs, almost always outpe rforming specialized models. Our datasets and the code for reproducing our experi ments are available at arXiv:2302.11640v2 [cs.LG] 2 Mar 2024 https://github.com/yandex-research/heterophilous-gr aphs .",
+        "evidence_type": "author_code_statement",
+        "is_author_code": true
+      },
+      {
+        "url": "https://github.com/yandex-research/heterophilous-gr",
+        "raw_url": "https://github.com/yandex-research/heterophilous-gr",
+        "page": 1,
+        "source": "pdf_text",
+        "context": "ter benchmark for evaluatin g the performance of GNNs under heterophily. We show that standard GNNs achiev e strong results on these heterophilous graphs, almost always outpe rforming specialized models. Our datasets and the code for reproducing our experi ments are available at https://github.com/yandex-research/heterophilous-gr aphs . 1 I NTRODUCTION The ﬁeld of machine learning on graph-structured data has re cently attracted a lot of attention, with Graph Neural Networks (GNNs) achi",
+        "evidence_type": "author_code_statement",
+        "is_author_code": true
+      },
+      {
+        "url": "https://github.com/Toloka/TolokerGraph",
+        "raw_url": "https://github.com/Toloka/TolokerGraph",
+        "page": 11,
+        "source": "pdf_text",
+        "context": "in graph neural networks when meet ing heterophily. In International Conference on Machine Learning , pp. 13242–13256. PMLR, 2022. Daniil Likhobaba, Nikita Pavlichenko, and Dmitry Ustalov. Toloker Graph: In- teraction of Crowd Annotators. 2023. doi: 10.5281/zenodo. 7620795. URL https://github.com/Toloka/TolokerGraph . Derek Lim, Felix Hohne, Xiuyu Li, Sijia Linda Huang, Vaishna vi Gupta, Omkar Bhalerao, and Ser Nam Lim. Large scale learning on non-homophilous graphs : New",
+        "evidence_type": "reference",
+        "is_author_code": false
+      },
+      {
+        "url": "https://github.com/Toloka/TolokerGraph",
+        "raw_url": "https://github.com/Toloka/TolokerGraph",
+        "page": 11,
+        "source": "pdf_annotation",
+        "context": "in graph neural networks when meet ing heterophily. In International Conference on Machine Learning , pp. 13242–13256. PMLR, 2022. Daniil Likhobaba, Nikita Pavlichenko, and Dmitry Ustalov. Toloker Graph: In- teraction of Crowd Annotators. 2023. doi: 10.5281/zenodo. 7620795. URL https://github.com/Toloka/TolokerGraph . Derek Lim, Felix Hohne, Xiuyu Li, Sijia Linda Huang, Vaishna vi Gupta, Omkar Bhalerao, and Ser Nam Lim. Large scale learning on non-homophilous graphs : New",
+        "evidence_type": "reference",
+        "is_author_code": false
+      }
+    ]
+  },
+  "regression_service_note": "Preview-only checks against the still-running pre-fix Streamlit service saw its cached truncated result. The dedicated service was restarted to load the repair; a real Chrome PDF upload then showed the complete same-page author URI, retained the original text evidence and created no task. This is regression-only.",
+  "archive": {
+    "file": "critical_look_pdf_trial_20261017_logs.zip",
+    "entries": 17,
+    "sha256": "6539a8b6babfe76e5964887261b463079c62a55bea16fc4bbc9d97aabdbc60f0"
+  }
+}

@@ -1,0 +1,100 @@
+{
+  "reviewed_at": "2026-10-17T06:03:31.271984+00:00",
+  "order_fixed_at": "2026-10-17T06:01:10.413934+00:00",
+  "selection_basis": "Paper identity, source/table, public data, supported PyTorch classification and source-backed CPU route. No accuracy was measured or used for selection. Complete environments are validated by the product during each trial.",
+  "candidates": [
+    {
+      "order": 1,
+      "paper_id": "gcnh",
+      "title": "GCNH: A Simple Method For Representation Learning On Heterophilous Graphs",
+      "file": "examples/papers/candidates_20261017/gcnh.pdf",
+      "source_url": "https://arxiv.org/pdf/2304.10896",
+      "source_id": "arxiv:2304.10896",
+      "sha256": "a5d0c0e93c3613bfd4200a69b573c5390c50f8cb0374630c8cadf1381189a283",
+      "bytes": 531646,
+      "repository_url": "https://github.com/SmartData-Polito/GCNH",
+      "revision": "311ebe34d4cd58fdc6279d803e212f4c1ea5aaf0",
+      "screening": "Static source and PDF review only. No candidate training or product-specific repair has occurred.",
+      "pdf_repository_page": 4,
+      "result_table": "Table I, PDF page 4: node-classification accuracy mean and standard deviation over ten fixed splits",
+      "cpu_evidence": "main.py uses torch.cuda.is_available() and moves tensors/models to CUDA only in the true branch; layers.py has a CPU torch.matmul/scatter path.",
+      "data_evidence": "Git tree contains complete data/cornell/out1_*.txt and all ten data/cornell/splits/*.npz; eight datasets including Cora are bundled.",
+      "command_evidence": "experiments/main_table.sh lists complete dataset commands; main.py uses tot_splits=10, author early stopping and validation model selection.",
+      "runtime_limits": "Original README requests Python 3.9; torch-scatter CPU dependency is required. Exact old package pins may require product runtime reconciliation. No trial run yet.",
+      "reviewed_source_sha256": {
+        "dataset.py": "781d9c0335604ee0c6855355098279659e725ec2949d41f47134149dd60bc873",
+        "layers.py": "e9ebae70175d08d63adf988fc2b44988dcbfe1c2de07eb1a3c6a85c9258f41fe",
+        "main.py": "d1591906d093743b2e814a6683fc3b0c1f09113c6b7d51d71002d4aa7ffdafd6",
+        "models.py": "210fa8dfdfd5a0ee4191347aff3669eb02784e63f11f9733ab9c0ffb68d06494",
+        "README.md": "a36e4381475af757f3f43662ccb1dd1e7fcf31117f66e2f39d8d1ad934dfa718",
+        "requirements.txt": "25f676bc14041aab5c7ffb9bd539981c4ec14c2a73a746909dd1c8640c1bce1d",
+        "tree.json": "6f6de1ceae17ce0016c924ed71bb6d86f1c75752ebeb5a3abde11a1f4621897e",
+        "utils.py": "e87d962a90cf3fc0b8a64a9bc6820c7d82b93731977bcb1f86ac4c359ebcbfea",
+        "experiments/main_table.sh": "5c32ce5ee1678e952143a43bc334dcddd693f74d73066c714564b184eb6728dd"
+      }
+    },
+    {
+      "order": 2,
+      "paper_id": "gread",
+      "title": "GREAD: Graph Neural Reaction-Diffusion Networks",
+      "file": "examples/papers/candidates_20261017/gread.pdf",
+      "source_url": "https://arxiv.org/pdf/2211.14208",
+      "source_id": "arxiv:2211.14208",
+      "sha256": "d346cc029d4db2d1994d2dd73afe31e69bace4f5669b62b78652975578bbab7a",
+      "bytes": 4050184,
+      "repository_url": "https://github.com/jeongwhanchoi/GREAD",
+      "revision": "f97ec01a17bb9cba1da2b89192b83cd7a25a250b",
+      "screening": "Static source and PDF review only. No candidate training or product-specific repair has occurred.",
+      "pdf_repository_page": 5,
+      "result_table": "Table 4, PDF page 6: mean and standard deviation accuracy over ten splits, GREAD variants",
+      "cpu_evidence": "src/run_GNN.py:224 selects torch.device(cuda if available else cpu); wandb defaults to disabled without --wandb.",
+      "data_evidence": "src/data.py uses original public PyG Planetoid/Amazon/Coauthor loaders and repository heterophilic loaders; README documents automatic downloads.",
+      "command_evidence": "README lists src/run_GNN.py --dataset=Squirrel --use_best_params; defaults and best parameter dictionary preserved for automatic planning.",
+      "runtime_limits": "Python 3.9, torchdiffeq, ogb, deeprobust and pykeops required. pykeops may require a native CPU compiler on Windows. Static CPU path is present; complete installation remains part of the trial.",
+      "reviewed_source_sha256": {
+        "environment.yml": "2446fe63f5420dc292bd06d5aa35aef95e6aaa60b9bcd7e5a989bf5c1007dbb4",
+        "README.md": "00bd062c8427711120714fa5634ac4b32d1e8dfea0b5b542a524711209c40e33",
+        "tree.json": "51b1b938942d43cb83ee455e2586e27a7d69a6e574ce4a1ace907d011a572f37",
+        "src/data.py": "a29b9882722e102e11c842d0aef0bf442d019b52de8c0aac6d57d5ad2e3ca1fd",
+        "src/graph_rewiring.py": "ffa31d434bdb676c810f86f0247bd065480a450a63c4561c4fde2673250cec89",
+        "src/gread_params.py": "04aaf5682ffae189c86dafcff6de92461b8a22f3d0f1ebe51f0ebd243b82ae4e",
+        "src/run_GNN.py": "114387bb376761c7b1cb92dc5f0aaa8716ad59b1bbd0e316b6faedd26a2a529e"
+      }
+    },
+    {
+      "order": 3,
+      "paper_id": "critical-look-heterophily",
+      "title": "A Critical Look at the Evaluation of GNNs under Heterophily: Are We Really Making Progress?",
+      "file": "examples/papers/candidates_20261017/critical-look-heterophily.pdf",
+      "source_url": "https://arxiv.org/pdf/2302.11640",
+      "source_id": "arxiv:2302.11640",
+      "sha256": "9025d1a5a4258bc77dadc31528a68f7abbe6c08c3b9abf82ecb644e00811bd14",
+      "bytes": 232418,
+      "repository_url": "https://github.com/yandex-research/heterophilous-graphs",
+      "revision": "a431395582e929d88271309716bea4fe24ce6318",
+      "screening": "Static source and PDF review only. No candidate training or product-specific repair has occurred.",
+      "pdf_repository_page": 1,
+      "result_table": "Table 4, PDF page 9: accuracy on roman-empire/amazon-ratings and ROC AUC on other datasets; metric meanings must remain separate.",
+      "cpu_evidence": "train.py accepts --device and propagates it to model and dataset; datasets.py defaults device=cpu. CPU choice changes device only, leaving num_steps=1000 and num_runs=10.",
+      "data_evidence": "Fixed Git tree contains data/roman_empire.npz (20401489 bytes), data/cornell.npz and other complete input archives.",
+      "command_evidence": "scripts/run_all_experiments.sh documents complete model/dataset commands; train.py keeps the ten runs, 1000 steps, seed zero and validation-based logger.",
+      "runtime_limits": "Author environment names CUDA DGL but Python code accepts CPU. Current DGL1.1.2/CPython3.11 native capability was separately validated; actual author dependency selection remains part of browser trial.",
+      "reviewed_source_sha256": {
+        "datasets.py": "dabcf7a9e9620a01fcd81065f819434f88081742ef6bd809336c2e09fd945008",
+        "environment.yml": "d475f24fa42fc9433a4a524096202a93cd79334dcae0d0a056db65b8d4e8d373",
+        "model.py": "e03a07ab287e39514a25b4399d2cb3c9196b2cb7b1404b8460e8158116e0ecf1",
+        "modules.py": "ab865b4d527f5bb5755a6fe12548234c625e50a9c348be603302a4bca6fa5cfc",
+        "README.md": "ab26d589f40b64233818942e35cc36997abdc81c90c23f7d3413d7f22cf53991",
+        "train.py": "43427b6db955761691dc377bef3a5f957f6239bb42b515fa97dd14e7d9cb5b54",
+        "tree.json": "4a7bec0b96c929c5626a8663e125f4dcac0c8fd2b2ae48723d59ff378554195f",
+        "scripts/run_all_experiments.sh": "04fd6b4611d09c0d17b07a9b1dd0b76ca29ebf3f0a67f33b8717005f21e7227a"
+      }
+    }
+  ],
+  "not_selected": [
+    {
+      "paper": "DropGNN",
+      "reason": "Original Python 3.8 / old PyG / test_tube environment outside currently declared interpreter support; rejected statically before any training."
+    }
+  ]
+}

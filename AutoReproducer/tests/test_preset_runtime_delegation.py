@@ -138,12 +138,103 @@ def test_owned_worker_early_done_waits_for_owner_cleanup(recover, tmp_path, monk
         live = ProgressStore.read_snapshot(str(path))
         assert live['running'] and not live['done'] and live['finalization_pending']
         assert len(live['active_workers']) == 1
+        assert live['result'] is None and 'pending_result' not in live
+        unpublished = ProgressStore.read_snapshot(str(path), include_pending_result=True)
+        assert unpublished['pending_result']['state'] == 'COMPLETED'
+        assert unpublished['result'] is None and not unpublished['done']
         kwargs['on_cleanup']()
         return subprocess.CompletedProcess(argv, 0, '', '')
     monkeypatch.setattr(runtime, 'run_owned_process', execute)
     result = run_pipeline_core(str(path), experiment_profile='neural_ode_spiral')
     assert result['state'] == 'COMPLETED'
     assert not ProgressStore.read_snapshot(str(path))['active_workers']
+
+
+@pytest.mark.parametrize('worker_state,exit_code,cleanup_status', [
+    ('COMPLETED', 0, 'released'),
+    ('ERROR', 1, 'released'),
+    ('COMPLETED', 1, 'released'),
+    ('COMPLETED', 0, 'error'),
+    ('COMPLETED', 'timeout', 'released'),
+    ('COMPLETED', 'cancel', 'released'),
+])
+def test_visible_completion_already_has_matching_supervisor_receipts(
+        recover, tmp_path, monkeypatch, worker_state, exit_code, cleanup_status):
+    """Polling at any publication boundary must never expose the child result."""
+    import src.environment_lifecycle as lifecycle
+
+    path = tmp_path / 'publication.jsonl'
+    run = tmp_path / 'run'
+    run.mkdir()
+    report = tmp_path / 'report.md'
+    report.write_text('# Author report', encoding='utf-8')
+    files = [run / 'environment_cleanup.json', run / 'result.json',
+             report.with_suffix('.result.json')]
+    observations = []
+    supervisor = {'status': cleanup_status, 'removed': [], 'remaining': [],
+                  'errors': ([{'path': 'dependencies', 'reason': 'still open'}]
+                             if cleanup_status == 'error' else [])}
+    monkeypatch.setattr(runtime, 'release_worker_environment', lambda prepared: supervisor)
+
+    def observe():
+        view = ProgressStore.read_snapshot(str(path))
+        if view['done']:
+            saved = [json.loads(filename.read_text('utf-8')) for filename in files]
+            observations.append((view, [saved[0], saved[1]['data']['environment_cleanup'],
+                                        saved[2]['data']['environment_cleanup']]))
+
+    original_emit, original_write = ProgressStore.emit, lifecycle._write_json
+
+    def emit(store, event):
+        original_emit(store, event)
+        observe()
+
+    def write(filename, value):
+        original_write(filename, value)
+        observe()
+
+    monkeypatch.setattr(ProgressStore, 'emit', emit)
+    monkeypatch.setattr(lifecycle, '_write_json', write)
+
+    def execute(argv, **kwargs):
+        child = ProgressStore(json.loads(kwargs['input'])['progress_path'], reset=False)
+        receipt = {'status': 'released', 'removed': [{'path': 'author-env', 'bytes': 42}],
+                   'remaining': [], 'errors': []}
+        result = {'state': worker_state,
+                  'error': 'author command failed' if worker_state == 'ERROR' else None,
+                  'data': {'run_dir': str(run), 'report': '# Author report',
+                           'environment_cleanup': receipt}, 'report_path': str(report)}
+        for filename, value in zip(files, (receipt, result, result)):
+            filename.write_text(json.dumps(value), encoding='utf-8')
+        child.emit({'type': 'done', 'result': result})
+        kwargs['on_cleanup']()
+        if exit_code == 'timeout':
+            raise runtime.RuntimePreparationTimeout('owner interrupted after child result')
+        if exit_code == 'cancel':
+            raise KeyboardInterrupt('owner cancelled after child result')
+        return subprocess.CompletedProcess(argv, exit_code, '', '')
+
+    monkeypatch.setattr(runtime, 'run_owned_process', execute)
+    if exit_code == 'cancel':
+        with pytest.raises(KeyboardInterrupt):
+            run_pipeline_core(str(path), experiment_profile='neural_ode_spiral')
+        result = ProgressStore.read_snapshot(str(path))['result']
+    else:
+        result = run_pipeline_core(str(path), experiment_profile='neural_ode_spiral')
+    assert observations
+    for view, receipts in observations:
+        expected = view['result']['data']['environment_cleanup']
+        assert expected.get('supervisor_cleanup') == supervisor
+        assert receipts == [expected] * 3
+        assert not view['active_workers'] and not view['active_runs']
+    expected_state = ('COMPLETED' if worker_state == 'COMPLETED' and exit_code == 0
+                      and cleanup_status == 'released' else 'ERROR')
+    assert result['state'] == expected_state
+    assert json.loads(files[1].read_text('utf-8'))['state'] == expected_state
+    assert json.loads(files[2].read_text('utf-8'))['state'] == expected_state
+    if exit_code in {'timeout', 'cancel'}:
+        assert 'after child result' in result['error']
+        assert result['data']['report'] == '# Author report'
 
 
 @pytest.mark.parametrize('confirmed', [True, False])

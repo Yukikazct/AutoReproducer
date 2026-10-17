@@ -1,0 +1,40 @@
+{
+  "kind": "static_source_provenance",
+  "paper_id": "pygsd",
+  "source_id": "arxiv:2202.10793",
+  "requested_pdf_url": "https://arxiv.org/pdf/2202.10793",
+  "version_identified_from_pdf_page1": "v6",
+  "versioned_pdf_url": "https://arxiv.org/pdf/2202.10793v6",
+  "pdf": {
+    "file": "examples/papers/candidates_20261017_batch2/pygsigneddirected.pdf",
+    "bytes": 1189266,
+    "pages": 27,
+    "sha256": "3902ece975f46934320629ecdcf5b85c5bdd32a9f3bd9b864c3737bcba997fbc"
+  },
+  "downloaded_at_utc": null,
+  "download_time_note": "Original download HTTP timestamp/final redirect was not recorded; do not substitute this staging timestamp.",
+  "author_repository_from_pdf": {
+    "page": 1,
+    "url": "https://github.com/SherylHYX/pytorch_geometric_signed_directed"
+  },
+  "repository": {
+    "url": "https://github.com/SherylHYX/pytorch_geometric_signed_directed",
+    "revision": "2968b55b3378a01ade9f391e194f0077e2c6ee3b",
+    "commit_url": "https://github.com/SherylHYX/pytorch_geometric_signed_directed/commit/2968b55b3378a01ade9f391e194f0077e2c6ee3b",
+    "checkout_read_only": "D:\\code\\AutoReproducer\\.tmp\\next-pdf-candidates\\PyGSignedDirected",
+    "clean_worktree_observed": true
+  },
+  "author_source_file_sha256": {
+    "setup.py": "be2c3f7d9e8db892ce8251ca2f16e7b27a8714ccdf1f4deefe7c170b14bc2862",
+    "README.md": "289a465aeeb9a1425f543418d7576c39ae8ba31014a6430b7c1e0776e1599cf5",
+    "docs/source/notes/installation.rst": "a49aaadedbe63411773edd53aa72150836e062f0cab1e1ecafa46cb20dbb0392",
+    "examples/magnet_node.py": "0f57c8bc86cf1dfe01a0b331fc93d8ad9214ee66f4fa826ef81b49fc57338fb6",
+    "torch_geometric_signed_directed/data/directed/load_directed_real_data.py": "39daa3369aa9ba1ee0fa6b5dbd6d536510558747ce101a736000088db7ac2413",
+    "torch_geometric_signed_directed/nn/directed/MagNet_node_classification.py": "4ac8a5e88e9d355e75f48e4ce0a94e41feb42d2c03fa3620649f21e15a03d3db",
+    "torch_geometric_signed_directed/nn/directed/MagNetConv.py": "6f1d7ac2218ddbdff18aa464757c97ac754e0b8c53dd064ba04c9ce9499e28bd",
+    "torch_geometric_signed_directed/utils/directed/get_magnetic_Laplacian.py": "64c4f863518239fa75c2e6f3c1569bd7f028b9aaeab03e1a911b332e1a4f7161"
+  },
+  "staged_at": "2026-10-17T09:52:42.166886+00:00",
+  "training_started": false,
+  "product_specific_repair_performed": false
+}

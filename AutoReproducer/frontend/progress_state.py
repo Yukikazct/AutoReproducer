@@ -4,7 +4,7 @@ import math
 from pathlib import Path
 from typing import Any, Dict, List
 
-PROGRESS_VIEW_VERSION = 3
+PROGRESS_VIEW_VERSION = 4
 INSTALLATION_HISTORY_LIMIT = 40
 INSTALLATION_LIMIT = 10
 
@@ -30,7 +30,7 @@ def completion_rule(identifier):
     return COMPLETION_RULES.get(identifier, "负责人已返回本阶段结果，全部所属执行已退出并清理")
 
 
-def read_progress_snapshot(path: str) -> Dict[str, Any]:
+def read_progress_snapshot(path: str, *, include_pending_result: bool = False) -> Dict[str, Any]:
     """读取并聚合进度文件为前端渲染视图（不可用时返回空视图）。"""
     p = Path(path)
     view: Dict[str, Any] = {
@@ -481,6 +481,12 @@ def read_progress_snapshot(path: str) -> Dict[str, Any]:
     view["active_runs"] = [run for run in runs.values() if run["status"] == "running"]
     view["active_workers"] = [worker for worker in workers.values() if worker["status"] == "running"]
     view["completion_blockers"] = blockers() if view["finalization_pending"] else []
+    if include_pending_result:
+        # Only the supervisor uses this unpublished result while its worker
+        # scope still blocks completion and final receipts are being saved.
+        view["pending_result"] = (terminal_request.get("result")
+                                  if terminal_request is not None
+                                  and terminal_request["type"] == "done" else None)
     for row in view["pipeline_stages"]:
         reported = row["status"]
         end_sequence = row.pop("_end_sequence", None)

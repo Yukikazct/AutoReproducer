@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "fixed_at": "2026-10-17T06:01:10.413934+00:00",
+  "rule": "Order fixed before all candidate training. No selection by measured accuracy. Stop at first complete independent pass; at most three distinct papers. Product repairs retire the paper, then re-freeze for the next candidate.",
+  "papers": [
+    {
+      "order": 1,
+      "paper_id": "gcnh",
+      "title": "GCNH: A Simple Method For Representation Learning On Heterophilous Graphs",
+      "file": "examples/papers/candidates_20261017/gcnh.pdf",
+      "source_url": "https://arxiv.org/pdf/2304.10896",
+      "source_id": "arxiv:2304.10896",
+      "sha256": "a5d0c0e93c3613bfd4200a69b573c5390c50f8cb0374630c8cadf1381189a283",
+      "bytes": 531646,
+      "repository_url": "https://github.com/SmartData-Polito/GCNH",
+      "revision": "311ebe34d4cd58fdc6279d803e212f4c1ea5aaf0",
+      "screening": "Static source and PDF review only. No candidate training or product-specific repair has occurred."
+    },
+    {
+      "order": 2,
+      "paper_id": "gread",
+      "title": "GREAD: Graph Neural Reaction-Diffusion Networks",
+      "file": "examples/papers/candidates_20261017/gread.pdf",
+      "source_url": "https://arxiv.org/pdf/2211.14208",
+      "source_id": "arxiv:2211.14208",
+      "sha256": "d346cc029d4db2d1994d2dd73afe31e69bace4f5669b62b78652975578bbab7a",
+      "bytes": 4050184,
+      "repository_url": "https://github.com/jeongwhanchoi/GREAD",
+      "revision": "f97ec01a17bb9cba1da2b89192b83cd7a25a250b",
+      "screening": "Static source and PDF review only. No candidate training or product-specific repair has occurred."
+    },
+    {
+      "order": 3,
+      "paper_id": "critical-look-heterophily",
+      "title": "A Critical Look at the Evaluation of GNNs under Heterophily: Are We Really Making Progress?",
+      "file": "examples/papers/candidates_20261017/critical-look-heterophily.pdf",
+      "source_url": "https://arxiv.org/pdf/2302.11640",
+      "source_id": "arxiv:2302.11640",
+      "sha256": "9025d1a5a4258bc77dadc31528a68f7abbe6c08c3b9abf82ecb644e00811bd14",
+      "bytes": 232418,
+      "repository_url": "https://github.com/yandex-research/heterophilous-graphs",
+      "revision": "a431395582e929d88271309716bea4fe24ce6318",
+      "screening": "Static source and PDF review only. No candidate training or product-specific repair has occurred."
+    }
+  ]
+}

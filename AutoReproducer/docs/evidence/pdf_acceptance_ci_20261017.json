@@ -1,0 +1,344 @@
+{
+  "recorded_at": "2026-10-17T06:51:02.064195+00:00",
+  "head_sha": "5ef21fe1c0ae876442891d2444986564f46a47d6",
+  "ordinary": {
+    "url": "https://github.com/Yukikazct/AutoReproducer/actions/runs/39009944558",
+    "status": "success",
+    "suites": [
+      {
+        "artifact": "tests-ubuntu-latest-python-3.11",
+        "suite": "test-results-locale.xml",
+        "tests": 3530,
+        "passed": 3415,
+        "skipped": 115,
+        "failure": 0,
+        "error": 0,
+        "sha256": "685805e1c795d85adf80c5356d02ea711d5ac8abf6c24ae8a4f357f67e458bb1"
+      },
+      {
+        "artifact": "tests-ubuntu-latest-python-3.11",
+        "suite": "test-results-management-locale.xml",
+        "tests": 294,
+        "passed": 288,
+        "skipped": 6,
+        "failure": 0,
+        "error": 0,
+        "sha256": "46c1d469efdf66e1fbc4dceee789dcbfa5d6f392d968533d08a94101e2a96e23"
+      },
+      {
+        "artifact": "tests-ubuntu-latest-python-3.12",
+        "suite": "test-results-locale.xml",
+        "tests": 3530,
+        "passed": 3415,
+        "skipped": 115,
+        "failure": 0,
+        "error": 0,
+        "sha256": "f5caa361cebb55ff7d152a29c0c8992ce2c098616ffa1346c157565578d5c965"
+      },
+      {
+        "artifact": "tests-ubuntu-latest-python-3.12",
+        "suite": "test-results-management-locale.xml",
+        "tests": 294,
+        "passed": 288,
+        "skipped": 6,
+        "failure": 0,
+        "error": 0,
+        "sha256": "1f3cb0c1e09cfa7b9e9e62e2c4ef3875cd3a1e905b50bcab79a5351081d0e25d"
+      },
+      {
+        "artifact": "tests-windows-latest-python-3.11",
+        "suite": "test-results-locale.xml",
+        "tests": 3530,
+        "passed": 3430,
+        "skipped": 100,
+        "failure": 0,
+        "error": 0,
+        "sha256": "5e0c6325fb20ce236acbce3aab045d8d719199520da089aae65817552e9a5327"
+      },
+      {
+        "artifact": "tests-windows-latest-python-3.11",
+        "suite": "test-results-management-locale.xml",
+        "tests": 294,
+        "passed": 294,
+        "skipped": 0,
+        "failure": 0,
+        "error": 0,
+        "sha256": "1bd63a41d5f7a9d94963e90656db71655168afdcdf7e5f08791a1d069789f33f"
+      },
+      {
+        "artifact": "tests-windows-latest-python-3.11",
+        "suite": "test-results-management-utf8.xml",
+        "tests": 294,
+        "passed": 294,
+        "skipped": 0,
+        "failure": 0,
+        "error": 0,
+        "sha256": "4495676175dd2a33dce347cc4dc07faa0f3c0b6dc0e0be4f6f052dc28a4592d1"
+      },
+      {
+        "artifact": "tests-windows-latest-python-3.11",
+        "suite": "test-results-utf8.xml",
+        "tests": 3530,
+        "passed": 3430,
+        "skipped": 100,
+        "failure": 0,
+        "error": 0,
+        "sha256": "5fcece0d1b99193ebe0b7e5cb137a562742665ea37c6f5576c70da345d3af2d9"
+      },
+      {
+        "artifact": "tests-windows-latest-python-3.12",
+        "suite": "test-results-locale.xml",
+        "tests": 3530,
+        "passed": 3430,
+        "skipped": 100,
+        "failure": 0,
+        "error": 0,
+        "sha256": "b7939acb66eb75efed2296f3064f72aaf766c567e2596561127f4abd6dd60df3"
+      },
+      {
+        "artifact": "tests-windows-latest-python-3.12",
+        "suite": "test-results-management-locale.xml",
+        "tests": 294,
+        "passed": 294,
+        "skipped": 0,
+        "failure": 0,
+        "error": 0,
+        "sha256": "9dcabb49b77c6e36d8cfa262f607d168b1f43392894b588ef7d8094ab72a254b"
+      },
+      {
+        "artifact": "tests-windows-latest-python-3.12",
+        "suite": "test-results-management-utf8.xml",
+        "tests": 294,
+        "passed": 294,
+        "skipped": 0,
+        "failure": 0,
+        "error": 0,
+        "sha256": "de78b576a63f201cc9d38cd6e7086512b2a4547824ce051e3c6daf022d1acbe4"
+      },
+      {
+        "artifact": "tests-windows-latest-python-3.12",
+        "suite": "test-results-utf8.xml",
+        "tests": 3530,
+        "passed": 3430,
+        "skipped": 100,
+        "failure": 0,
+        "error": 0,
+        "sha256": "7465850998af9870f5fe4ccd2e772a5ed506f975ac6cf344d34ec70e28adbb5c"
+      }
+    ]
+  },
+  "native": {
+    "recorded_at": "2026-10-17T06:34:30.954487+00:00",
+    "head_sha": "5ef21fe1c0ae876442891d2444986564f46a47d6",
+    "run_url": "https://github.com/Yukikazct/AutoReproducer/actions/runs/39009944559",
+    "status": "success",
+    "jobs": [
+      {
+        "artifact": "native-ubuntu-latest-dgl",
+        "tests": 14,
+        "skipped": 0,
+        "health": {
+          "family": "dgl",
+          "python": "3.11.17 (main, Oct  1 2026, 14:32:31) [GCC 13.3.0]",
+          "deps": "/home/runner/work/_temp/autoreproducer-native/deps/repository/cpython-311-linux-x86_64/reviewed",
+          "versions": {
+            "threadpoolctl": "3.7.0",
+            "torch": "2.5.1+cpu",
+            "dgl": "1.1.2",
+            "scikit-learn": "1.5.2",
+            "Jinja2": "3.1.6",
+            "numpy": "1.26.4",
+            "idna": "3.20",
+            "requests": "2.32.3",
+            "psutil": "6.1.0",
+            "certifi": "2026.7.22",
+            "MarkupSafe": "3.0.4",
+            "charset-normalizer": "3.5.2",
+            "scipy": "1.14.1",
+            "typing_extensions": "4.16.0",
+            "setuptools": "69.5.1",
+            "cloudpickle": "3.1.2",
+            "packaging": "24.2",
+            "mpmath": "1.3.0",
+            "networkx": "2.8.8",
+            "filelock": "4.2.0",
+            "fsspec": "2026.9.0",
+            "tqdm": "4.67.1",
+            "sympy": "1.13.1",
+            "urllib3": "2.8.0",
+            "joblib": "1.6.0"
+          },
+          "native_operations_passed": true
+        },
+        "files": {
+          "native/native-ubuntu-latest-dgl/native-health.json": "dea174f330e548ed26580ebfebe60ef34b5eeb19d7acaf1862a47761e03b5432",
+          "native/native-ubuntu-latest-dgl/native-install.json": "b4af7a5e5afcbf280db504866a70b159f2bea820175de242d9d4d1c7e0a35fa0",
+          "native/native-ubuntu-latest-dgl/native-tests.xml": "cda1ad02a5995de47a32a48ecaf5968153dbc0193140a9e9fcd51fc2ea37d692"
+        }
+      },
+      {
+        "artifact": "native-ubuntu-latest-pyg",
+        "tests": 51,
+        "skipped": 0,
+        "health": {
+          "family": "pyg",
+          "python": "3.12.15 (main, Oct  1 2026, 02:35:59) [GCC 13.3.0]",
+          "deps": "/home/runner/work/_temp/autoreproducer-native/deps/repository/cpython-312-linux-x86_64/reviewed",
+          "versions": {
+            "threadpoolctl": "3.7.0",
+            "torch": "2.5.1+cpu",
+            "scikit-learn": "1.5.2",
+            "aiosignal": "1.4.0",
+            "frozenlist": "1.8.0",
+            "Jinja2": "3.1.6",
+            "yarl": "1.25.1",
+            "numpy": "1.26.4",
+            "idna": "3.20",
+            "torch_scatter": "2.1.2+pt25cpu",
+            "requests": "2.32.3",
+            "psutil": "6.1.0",
+            "pyparsing": "3.2.0",
+            "certifi": "2026.7.22",
+            "MarkupSafe": "3.0.4",
+            "propcache": "0.5.4",
+            "charset-normalizer": "3.5.2",
+            "attrs": "26.1.0",
+            "multidict": "6.9.1",
+            "scipy": "1.14.1",
+            "typing_extensions": "4.16.0",
+            "setuptools": "69.5.1",
+            "cloudpickle": "3.1.2",
+            "packaging": "24.2",
+            "mpmath": "1.3.0",
+            "networkx": "2.8.8",
+            "filelock": "4.2.0",
+            "fsspec": "2024.10.0",
+            "aiohappyeyeballs": "2.7.1",
+            "tqdm": "4.67.1",
+            "sympy": "1.13.1",
+            "torch-geometric": "2.6.1",
+            "urllib3": "2.8.0",
+            "aiohttp": "3.10.10",
+            "joblib": "1.6.0",
+            "torch_sparse": "0.6.18+pt25cpu"
+          },
+          "native_operations_passed": true
+        },
+        "files": {
+          "native/native-ubuntu-latest-pyg/native-health.json": "c61b060bbbdb4c977a42f55f2d333e9943fcab3c84f5ecbb93ce3c52311ac5ad",
+          "native/native-ubuntu-latest-pyg/native-install.json": "46c50dfb9f56668fd42598847d08c4017025f7e56133a0ad5d06763109386a0a",
+          "native/native-ubuntu-latest-pyg/native-tests.xml": "8666b0aa3467d11f6dc9baee1695f2a4d1253ecf2f3ad19add429296990d7a72"
+        }
+      },
+      {
+        "artifact": "native-windows-latest-dgl",
+        "tests": 14,
+        "skipped": 0,
+        "health": {
+          "family": "dgl",
+          "python": "3.11.9 (tags/v3.11.9:de54cf5, Apr  2 2024, 10:12:12) [MSC v.1938 64 bit (AMD64)]",
+          "deps": "D:\\a\\_temp\\autoreproducer-native\\deps\\repository\\cpython-311-win32-AMD64\\reviewed",
+          "versions": {
+            "certifi": "2026.7.22",
+            "charset-normalizer": "3.5.2",
+            "cloudpickle": "3.1.2",
+            "colorama": "0.4.6",
+            "dgl": "1.1.2",
+            "filelock": "4.2.0",
+            "fsspec": "2026.9.0",
+            "idna": "3.20",
+            "Jinja2": "3.1.6",
+            "joblib": "1.6.0",
+            "MarkupSafe": "3.0.4",
+            "mpmath": "1.3.0",
+            "networkx": "2.8.8",
+            "numpy": "1.26.4",
+            "packaging": "24.2",
+            "psutil": "6.1.0",
+            "requests": "2.32.3",
+            "scikit-learn": "1.5.2",
+            "scipy": "1.14.1",
+            "setuptools": "69.5.1",
+            "sympy": "1.13.1",
+            "threadpoolctl": "3.7.0",
+            "torch": "2.5.1+cpu",
+            "tqdm": "4.67.1",
+            "typing_extensions": "4.16.0",
+            "urllib3": "2.8.0"
+          },
+          "native_operations_passed": true
+        },
+        "files": {
+          "native/native-windows-latest-dgl/native-health.json": "a8f9aabef895d6a47a7b72d4c25a99d3643591a139d1892f50877058d3a20b27",
+          "native/native-windows-latest-dgl/native-install.json": "ef090c2f0b1b86fa3e8b442f549618276c8e007c70fc0e185b337568db4d12f7",
+          "native/native-windows-latest-dgl/native-tests.xml": "80aa2f5d397ed59d8854fedb832ff23e0fe03840c81358b0c9c8c3f65e65d28a"
+        }
+      },
+      {
+        "artifact": "native-windows-latest-pyg",
+        "tests": 51,
+        "skipped": 0,
+        "health": {
+          "family": "pyg",
+          "python": "3.12.10 (tags/v3.12.10:0cc8128, Apr  8 2025, 12:21:36) [MSC v.1943 64 bit (AMD64)]",
+          "deps": "D:\\a\\_temp\\autoreproducer-native\\deps\\repository\\cpython-312-win32-AMD64\\reviewed",
+          "versions": {
+            "aiohappyeyeballs": "2.7.1",
+            "aiohttp": "3.10.10",
+            "aiosignal": "1.4.0",
+            "attrs": "26.1.0",
+            "certifi": "2026.7.22",
+            "charset-normalizer": "3.5.2",
+            "cloudpickle": "3.1.2",
+            "colorama": "0.4.6",
+            "filelock": "4.2.0",
+            "frozenlist": "1.8.0",
+            "fsspec": "2024.10.0",
+            "idna": "3.20",
+            "Jinja2": "3.1.6",
+            "joblib": "1.6.0",
+            "MarkupSafe": "3.0.4",
+            "mpmath": "1.3.0",
+            "multidict": "6.9.1",
+            "networkx": "2.8.8",
+            "numpy": "1.26.4",
+            "packaging": "24.2",
+            "propcache": "0.5.4",
+            "psutil": "6.1.0",
+            "pyparsing": "3.2.0",
+            "requests": "2.32.3",
+            "scikit-learn": "1.5.2",
+            "scipy": "1.14.1",
+            "setuptools": "69.5.1",
+            "sympy": "1.13.1",
+            "threadpoolctl": "3.7.0",
+            "torch": "2.5.1+cpu",
+            "torch-geometric": "2.6.1",
+            "torch_scatter": "2.1.2+pt25cpu",
+            "torch_sparse": "0.6.18+pt25cpu",
+            "tqdm": "4.67.1",
+            "typing_extensions": "4.16.0",
+            "urllib3": "2.8.0",
+            "yarl": "1.25.1"
+          },
+          "native_operations_passed": true
+        },
+        "files": {
+          "native/native-windows-latest-pyg/native-health.json": "cfe082c9538714241751baa2d60499f58f251767e3dba921e651c8e26a2e3136",
+          "native/native-windows-latest-pyg/native-install.json": "154d143c9a6f69726cd8c77f753efed8c2748ec46eff328a289803bc1cb8b20f",
+          "native/native-windows-latest-pyg/native-tests.xml": "f96f83a5b23f83be7a39c1e638312e17fd07658c796dca959faaaeed900d113f"
+        }
+      }
+    ]
+  },
+  "local_execution_comparison_cleanup": {
+    "passed": 186,
+    "skipped": 0,
+    "junit": "AutoReproducer/.tmp/acceptance_execution_comparison_native_20261017.xml",
+    "sha256": "4f81a118b512571c23e0007c0913005a3d0ace14bbb9193b544ce1f1897a55af"
+  },
+  "focused_registry_browser_native_gate": {
+    "passed": 63,
+    "skipped": 0
+  }
+}

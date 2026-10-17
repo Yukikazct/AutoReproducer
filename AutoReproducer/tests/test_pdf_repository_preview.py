@@ -1,7 +1,7 @@
 """Uploaded bytes expose repository evidence before any model or search call."""
 import sys
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -85,4 +85,77 @@ def test_binary_upload_preview_displays_later_page_author_link_without_model(mon
     assert any("第 2 页" in item.value for item in app.caption)
     assert any("代码公开声明" in item.value for item in app.markdown)
     assert not app.session_state["running"] and app.session_state["progress_file"] is None
+    LLMClient.chat.assert_not_called()
+
+
+def test_same_pdf_preview_refreshes_for_new_source_generation_without_restarting(monkeypatch, tmp_path):
+    """A cached upload must not hide an extraction repair on a running host."""
+    import hashlib
+    import frontend.repository_entrypoint as repository_entrypoint
+
+    paper = write_repository_pdf(tmp_path / "generation.pdf", [
+        ["Independent cache generation paper", "Abstract", "Our code is available at " + URL],
+    ])
+    payload = paper.read_bytes()
+    old_url = "https://github.com/independent-lab/truncated"
+    new_url = "https://github.com/independent-lab/complete-repository"
+
+    def generation(name, url):
+        module = ModuleType(name)
+        module.PDF_SOURCE_FINGERPRINT = name
+        module.PDFInputError = current_pdf.PDFInputError
+        module.PDFParserUnavailable = current_pdf.PDFParserUnavailable
+        module.owner = {"running": True, "calls": 0}
+        module.Path, module.payload = Path, payload
+        module.document = SimpleNamespace(
+            sha256=hashlib.sha256(payload).hexdigest(), page_count=1,
+            repository_links=({"url": url, "page": 1, "is_author_code": True,
+                               "evidence_type": "author_code_statement",
+                               "context": "Our code is available at " + url},))
+        exec("def extract_pdf_input(path):\n"
+             "    assert Path(path).read_bytes() == payload\n"
+             "    owner['calls'] += 1\n"
+             "    return document\n", vars(module))
+        module.resolve_pdf_request = Mock(return_value={})
+        return module
+
+    old_parser = generation("preview-old-source-generation", old_url)
+    new_parser = generation("preview-new-source-generation", new_url)
+    old_extract = old_parser.extract_pdf_input
+    selected = {"module": old_parser}
+    monkeypatch.setattr(repository_entrypoint, "load_pdf_input", lambda: selected["module"])
+    upload = UploadedFile(UploadedFileRec("source-generation-preview", "generation.pdf",
+                                         "application/pdf", payload), FileURLs())
+
+    def uploaded_file(*args, **kwargs):
+        st.session_state[kwargs["key"]] = upload
+        return upload
+
+    monkeypatch.setattr(st, "file_uploader", uploaded_file)
+    monkeypatch.setattr(settings, "load_local_llm_settings", Mock())
+    monkeypatch.setattr(LLMClient, "chat", Mock(side_effect=AssertionError("Preview must not call a model")))
+    monkeypatch.setattr(history, "get_project_data_dir", lambda: tmp_path)
+    monkeypatch.delenv("AUTOREPRO_RESUME_PROGRESS", raising=False)
+    app = AppTest.from_file(str(APP), default_timeout=30)
+    app.session_state["input_mode"] = "上传PDF"
+    app.session_state["mock_mode"] = False
+    app.session_state["docker_probe"] = (False, "preview source generation test")
+    app.run()
+    assert not app.exception
+    assert any("PDF 原文代码声明链接" in item.value and old_url in item.value for item in app.success)
+
+    app.run()
+    assert not app.exception
+    assert old_parser.owner == {"running": True, "calls": 1}
+
+    selected["module"] = new_parser
+    app.run()
+    assert not app.exception
+    assert any("PDF 原文代码声明链接" in item.value and new_url in item.value for item in app.success)
+    assert not any("PDF 原文代码声明链接" in item.value and old_url in item.value for item in app.success)
+    assert new_parser.owner["calls"] == 1
+    assert old_extract.__globals__ is vars(old_parser)
+    assert old_parser.owner == {"running": True, "calls": 1}
+    assert not app.session_state["running"] and app.session_state["progress_file"] is None
+    assert not list(tmp_path.rglob("progress_*.jsonl"))
     LLMClient.chat.assert_not_called()

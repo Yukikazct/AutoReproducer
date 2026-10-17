@@ -49,3 +49,13 @@ def compatibility_pins(device="cpu", *, platform_name=None):
     if host == "darwin":
         pins.update(_MACOS_CPU_PINS)
     return pins
+
+
+def reviewed_python_requirement(requirements, device="cpu", *, platform_name=None):
+    """State the tested native combination, separately from upstream metadata."""
+    host = sys.platform if platform_name is None else platform_name
+    if (host in {"win32", "linux"} and device == "cpu"
+            and any(line.strip().lower() == "dgl==1.1.2" for line in requirements)):
+        return {"required_python": "==3.11.*",
+                "required_python_source": "reviewed_native_cpu:dgl==1.1.2"}
+    return {}

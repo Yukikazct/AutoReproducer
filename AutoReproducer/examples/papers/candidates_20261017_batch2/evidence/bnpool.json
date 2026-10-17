@@ -1,0 +1,38 @@
+{
+  "paper_id": "bnpool",
+  "batch_id": "pdf_acceptance_20261017_batch2",
+  "fixed_order": 3,
+  "screened_at": "2026-10-17T09:52:42.166886+00:00",
+  "status": "static_screened_not_trained_not_repaired",
+  "selection_basis": "Last by static risk despite modern Windows CPU packaging: cleaned135 versus paper188 graphs plus onefold and selection-setting differences pose the largest valid-comparison risk. No configuration override to force a match.",
+  "dataset": {
+    "name": "MUTAG",
+    "version": "cleaned",
+    "graphs": 135,
+    "classes": 2,
+    "train": 102,
+    "validation": 19,
+    "test": 14,
+    "paper_graphs": 188,
+    "static_data_receipt": "examples/papers/candidates_20261017_batch2/sources/bnpool.data.json"
+  },
+  "cpu_support": "run_classification.py:139-150 chooses CPU devices1. pyproject.toml explicitly supports Python>=3.11,<3.13 and Windows CPU Torch/PyG wheel sources.",
+  "author_training_started": false,
+  "dependency_installation_performed": false,
+  "product_specific_repair_performed": false,
+  "real_browser_api_trial_performed": false,
+  "paper_metrics_verified": false,
+  "is_reproduced": null,
+  "source_record": "examples/papers/candidates_20261017_batch2/sources/bnpool.json",
+  "command_record": "examples/papers/candidates_20261017_batch2/commands/bnpool.json",
+  "comparison_record": "examples/papers/candidates_20261017_batch2/comparisons/bnpool.json",
+  "unverified_gates": [
+    "Actual dependency/native operation preflight",
+    "Real browser PDF upload and author repository discovery",
+    "Unmodified generated plan and all authored commands naturally complete",
+    "Valid traced comparison",
+    "Refresh/history/Markdown/ZIP/structured consistency",
+    "Owned-process zero and environment cleanup",
+    "Current product freeze and CI"
+  ]
+}

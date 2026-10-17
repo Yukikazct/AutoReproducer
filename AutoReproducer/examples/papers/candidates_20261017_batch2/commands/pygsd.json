@@ -1,0 +1,22 @@
+{
+  "paper_id": "pygsd",
+  "cwd": ".",
+  "argv": [
+    "python",
+    "examples/magnet_node.py"
+  ],
+  "display_command": "python examples/magnet_node.py",
+  "basis": "Complete authored examples/magnet_node.py entrypoint with its unchanged defaults. The README does not spell out this exact command; planner selection is unverified.",
+  "cpu_basis": "examples/magnet_node.py:50 selects CPU when CUDA is unavailable; README249-251 declares CPU Python3.11/3.12; setup.py requires Python>=3.10, Torch>=2.4, PyG>=2.6.",
+  "training_budget": {
+    "splits": 10,
+    "epochs_per_split": 200,
+    "early_stopping": false,
+    "model_selection": "Last epoch for each split",
+    "seed": null,
+    "seed_note": "Author script does not set a seed; do not add one."
+  },
+  "executed": false,
+  "argv_or_plan_manually_rewritten": false,
+  "rule": "Evidence of authored command only. Real PDF/API planner output must stand on its own; do not inject this command to create an acceptance pass."
+}

@@ -1,0 +1,210 @@
+{
+  "recorded_at": "2026-10-17T07:21:08.610337+00:00",
+  "paper_id": "gcnh",
+  "candidate_order": 1,
+  "acceptance": "failed",
+  "failure_phase": "report_persistence_consistency",
+  "failure": "Run report differs from downloaded report",
+  "frozen_commit": "5ef21fe1c0ae876442891d2444986564f46a47d6",
+  "source_sha256": "7e7b896c43123dc3526eb3674048c4a7c16a70e0ca0ecd5125b874cf3bc4fed3",
+  "author_repository": {
+    "url": "https://github.com/SmartData-Polito/GCNH",
+    "revision": "311ebe34d4cd58fdc6279d803e212f4c1ea5aaf0"
+  },
+  "pdf_sha256": "a5d0c0e93c3613bfd4200a69b573c5390c50f8cb0374630c8cadf1381189a283",
+  "author_command": [
+    "python",
+    "main.py",
+    "--dataset",
+    "cornell",
+    "--epochs",
+    "300",
+    "--nlayers",
+    "1",
+    "--verbose",
+    "False",
+    "--model",
+    "GCNH",
+    "--dropout",
+    "0.25",
+    "--nhid",
+    "16",
+    "--batch_size",
+    "50"
+  ],
+  "observed_splits": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9
+  ],
+  "optimizer_steps": 6000,
+  "author_exit_code": 0,
+  "mean_accuracy": 0.8648648648648649,
+  "reported_std": null,
+  "comparison": [
+    {
+      "metric": "accuracy",
+      "reference": {
+        "name": "accuracy",
+        "value": 86.49,
+        "std": 6.98,
+        "unit": "percent",
+        "dataset": "Cornell",
+        "method": "GCNH",
+        "split": "test",
+        "aggregation": "mean",
+        "runs": 10,
+        "value_quote": "GCNH 86.49±6.98 87.84±3.87 87.65±3.59 36.89±1.50 71.56±1.86 61.85±1.54 86.88±1.04 75.81±1.14",
+        "column_quote": "Benchmark Cornell Texas Wisconsin Film Chameleon Squirrel Cora Citeseer",
+        "citations": [
+          "pdf_p4",
+          "pdf_p8"
+        ],
+        "column_verified": false
+      },
+      "actual": {
+        "unit": "fraction",
+        "dataset": "cornell",
+        "method": "GCNH",
+        "split": "test",
+        "aggregation": "mean",
+        "runs": 10,
+        "std": null,
+        "citations": [
+          "repo_main",
+          "repo_utils",
+          "repo_table"
+        ],
+        "value": 0.8648648648648649,
+        "source": "train_cornell:stdout:75",
+        "id": "train_cornell:stdout:0",
+        "source_quote": "Average acc:  0.8648648648648649"
+      },
+      "settings": {
+        "status": "different",
+        "reason": "数据集、方法、测试划分与聚合方式一致：均为 Cornell 上的 GCNH，测试集准确率，10 个划分取均值（论文报告均值±标准差，代码打印 split_acc.mean()）。但实验设置存在差异：论文 Table VI 显示 Cornell 的最优超参数是在 {1,2,3} 层、batch {50,|V|}、epochs {100,200,300}、hidden {16,32,64}、dropout {0.0,0.25,0.5} 网格中按验证集选出的，而本次执行固定使用 nlayers=1、nhid=16、dropout=0.25、batch_size=50、epochs=300（来自 experiments/main_table.sh），未做网格搜索；此外论文使用作者原始环境（torch 2.0.0），本次使用兼容环境（torch 2.5.1+cu121 等）。因此数值接近（0.8649 vs 0.8649）但属于不同设置下的结果，不能视为完全复现。",
+        "citations": [
+          "pdf_p4",
+          "pdf_p8",
+          "repo_main",
+          "repo_table"
+        ]
+      },
+      "direction": "higher",
+      "status": "reference_only",
+      "limitations": [
+        "论文表格列位置未完整核对，差值仅供参考",
+        "实验设置不同，数值差值仅供参考：数据集、方法、测试划分与聚合方式一致：均为 Cornell 上的 GCNH，测试集准确率，10 个划分取均值（论文报告均值±标准差，代码打印 split_acc.mean()）。但实验设置存在差异：论文 Table VI 显示 Cornell 的最优超参数是在 {1,2,3} 层、batch {50,|V|}、epochs {100,200,300}、hidden {16,32,64}、dropout {0.0,0.25,0.5} 网格中按验证集选出的，而本次执行固定使用 nlayers=1、nhid=16、dropout=0.25、batch_size=50、epochs=300（来自 experiments/main_table.sh），未做网格搜索；此外论文使用作者原始环境（torch 2.0.0），本次使用兼容环境（torch 2.5.1+cu121 等）。因此数值接近（0.8649 vs 0.8649）但属于不同设置下的结果，不能视为完全复现。"
+      ],
+      "difference": -0.0035135135135089257,
+      "relative_difference": -4.0623349676366354e-05,
+      "difference_unit": "percentage_points",
+      "within_tolerance": null,
+      "meets_reference": null
+    }
+  ],
+  "comparison_status": "partial",
+  "comparison_citations_preserved_in": "gcnh_pdf_trial_20261017_logs.zip/browser/issue27_independent_gcnh_20261017_01_full_result.json",
+  "paper_metrics_verified": false,
+  "is_reproduced": null,
+  "input_files_unchanged": 24,
+  "all_owned_scopes_zero": true,
+  "cleanup_checks": {
+    "cleanup_released": true,
+    "cleanup_has_no_errors": true,
+    "cleanup_has_no_remaining": true,
+    "training_python_released": true,
+    "docker_released": true,
+    "runtime_downloads_released": true,
+    "dependency_files_removed": true,
+    "training_environments_removed": true,
+    "final_report_retained": true,
+    "report_result_archive_retained": true,
+    "run_report_retained": true,
+    "run_result_retained": true,
+    "cleanup_receipt_retained": true,
+    "source_workspace_retained": true,
+    "application_python_retained": true,
+    "cleanup_receipt_matches": true,
+    "run_result_cleanup_matches": true,
+    "report_result_archive_cleanup_matches": true
+  },
+  "report_hashes_before_fix": {
+    "D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\acceptance_pdf_browser_20261017\\data\\runs\\repository_f2e29d91dcf24b43a930b1579cd22fcf\\report.md": "ed7efdb6e714a487e3cd1bb29bc9abf4a5745093341e163cc47f44e157cbbdea",
+    "D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\acceptance_pdf_browser_20261017\\data\\runs\\repository_f2e29d91dcf24b43a930b1579cd22fcf\\result.json": "85925cb7efb2b8e6af2d6df99c662b6481a9f38dee09edc6cfc59d741af9fed3",
+    "D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\acceptance_pdf_browser_20261017\\data\\reports\\GCNH_A_Simple_Method_For_Repr_20261017_144840.md": "9e9231655ab7c80b7a169148eb7808f749d76d1000330e9a00e20993c235246e",
+    "D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\acceptance_pdf_browser_20261017\\data\\reports\\GCNH_A_Simple_Method_For_Repr_20261017_144840.result.json": "11345c0d671fd093e2ee07b21abfc423cec2da8343713582fbfae5384246ff4e"
+  },
+  "report_difference": [
+    "--- run/report.md\n",
+    "+++ downloaded/report.md\n",
+    "@@ -70,6 +70,7 @@\n",
+    " ",
+    " ### 自动环境恢复",
+    " ",
+    "+- **运行环境**: 使用兼容的标准 Python 运行预设",
+    " - **实际依赖检查**: 2/2 次通过（导入、版本与原生运算）",
+    " - **磁盘统计**: 未测量（安装与执行后读取实际大小，不展示模型估值）",
+    " ",
+    "@@ -382,3 +383,7 @@\n",
+    " ",
+    " ---",
+    " *报告由 AutoReproducer 自动生成*",
+    "+",
+    "+---",
+    "+",
+    "+> 📎 **完整执行输出附件**: `GCNH_A_Simple_Method_For_Repr_20261017_144840_execution.txt`（同一目录下，未被截断）"
+  ],
+  "regression_replay": {
+    "recorded_at": "2026-10-17T07:30:38.905688+00:00",
+    "paper_id": "gcnh",
+    "kind": "saved_result_regression_only",
+    "independent": false,
+    "training_rerun": false,
+    "checks": {
+      "saved_reports_identical": true,
+      "structured_records_identical": true,
+      "markdown_zip_identical": true,
+      "full_output_attachment_identical": true
+    },
+    "original_reports_unchanged": true,
+    "original_report_sha256": "9e9231655ab7c80b7a169148eb7808f749d76d1000330e9a00e20993c235246e"
+  },
+  "retirement_reason": "Triggered final web report publication and structured-record synchronization repair; only regression use is permitted.",
+  "next_candidate": "gread",
+  "remaining_gate": "New candidate on a re-frozen tested commit, including browser reconnect and export consistency.",
+  "regression_test_selection": {
+    "passed": 167,
+    "skipped": 4,
+    "skips": "Optional matplotlib figure cases; not native capability evidence."
+  },
+  "real_history_ui_regression": {
+    "recorded_at": "2026-10-17T08:09:17.609072+00:00",
+    "kind": "real_history_ui_restore",
+    "session_id": "20261017_144840",
+    "original_state": "COMPLETED",
+    "product_commit": "37d8fd64b213e42fb127207ac7b80440207e0b0d",
+    "independent_claim": false,
+    "eligibility": null,
+    "history_view_report": true,
+    "comparison_table": "指标 / 数据集 / 方法\t论文宣称\t作者运行输出\t差值（实际 − 论文）\t结论\naccuracy / Cornell / GCNH\t86.49 ± 6.98%；均值，10 次\t0.8648648648648649（比例）；均值，10 次\t-0.003514 个百分点；相对差异 -0.00%\t仅供参考，尚未验收",
+    "markdown_matches_saved_result": true,
+    "markdown_zip_identical": true,
+    "execution_attachment_identical": true,
+    "no_new_task_created": true,
+    "original_result_and_report_unchanged": true
+  },
+  "history_archive": {
+    "file": "gcnh_history_restore_20261017_logs.zip",
+    "entries": 6,
+    "sha256": "dbeb7a27ffe91e871735688b5104cd56e4a3b1bbb6676f2e41684f3123f3cd0f"
+  },
+  "archive_sha256": "84b2db1aa64962a2b1716561dd22bde90104c33fbbaaf202d1b2d3e1ba8b91fb"
+}

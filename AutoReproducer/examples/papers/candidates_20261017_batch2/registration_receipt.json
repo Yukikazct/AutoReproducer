@@ -1,0 +1,58 @@
+{
+  "kind": "registered_unused_candidate_batch",
+  "registered_at": "2026-10-17T12:29:39.605518+00:00",
+  "batch_id": "pdf_acceptance_20261017_batch2",
+  "fixed_at": "2026-10-17T09:52:42.166886+00:00",
+  "fixed_order": [
+    "pygsd",
+    "polynormer",
+    "bnpool"
+  ],
+  "previous_batch_order": [
+    "gcnh",
+    "gread",
+    "critical-look-heterophily"
+  ],
+  "previous_batch_manifest_sha256": "2b8b758d3bc37eee88e8c88d092db409e4274728d607321a1f231d765ec97408",
+  "previous_batch_manifest_bytes_unchanged": true,
+  "previous_registry_record_count": 55,
+  "registered_registry_record_count": 58,
+  "all_previous_records_and_histories_exactly_unchanged": true,
+  "previous_registry_serialized_prefix_preserved": true,
+  "registry_sha256_before": "e1c33afcac856f2531ab3a121ef06ec796f588b84893219bb3e9fcd52fd650e4",
+  "registry_sha256_after": "6736b1fb7ed56222ce7e0b093e41896717bc43bf7b942ea042521da5c7a2f22c",
+  "production_load_registry_passed": true,
+  "all_new_independent_identity_checks_passed": true,
+  "original_staged_candidate_history_retained": true,
+  "new_unused_registration_history_appended": true,
+  "manifest_pdf_hashes_bytes_repositories_and_revisions_checked": [
+    {
+      "paper_id": "pygsd",
+      "pdf_sha256": "3902ece975f46934320629ecdcf5b85c5bdd32a9f3bd9b864c3737bcba997fbc",
+      "bytes": 1189266,
+      "repository_revision": "2968b55b3378a01ade9f391e194f0077e2c6ee3b"
+    },
+    {
+      "paper_id": "polynormer",
+      "pdf_sha256": "b48d05ad91bc923b4406b3cc4d29295ccc3ea23ffebfb82fc5fcdaa0af48bb7c",
+      "bytes": 1144011,
+      "repository_revision": "fc8c276c9c5dfbd616d83f65338a3392188a5e08"
+    },
+    {
+      "paper_id": "bnpool",
+      "pdf_sha256": "35c416b0b1927db60cd936cd430da1dded1e9794799ed13adfecce0f4c3fa316",
+      "bytes": 3234331,
+      "repository_revision": "206bcb4c642468ba4c51f79812ff1e220756937f"
+    }
+  ],
+  "author_training_started": false,
+  "dependency_installation_performed": false,
+  "product_specific_repair_performed": false,
+  "browser_api_trial_performed": false,
+  "paper_metrics_verified": false,
+  "is_reproduced": null,
+  "source_freeze_created": false,
+  "committed": false,
+  "pushed": false,
+  "conclusion": "Three candidate identities are registered, unexecuted and unaccepted. A new actual freeze and full browser/API gates are required. No future pass is promised."
+}

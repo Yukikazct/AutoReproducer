@@ -323,28 +323,38 @@ def extract_repository_links(pages, annotations=()):
         records.append(record)
 
     unique = []
+    preferred_annotations = set()
     seen = set()
     for record in records:
         # An underscore URL wrap may look like a complete (but nonexistent)
         # repository to the text parser. Prefer the actual same-page URI only
         # when the visible continuation confirms its exact remaining name.
         # Keep genuinely different prefix repositories and ambiguous targets.
-        if record['source'] == 'pdf_text' and record['url'].endswith('_'):
-            confirmed = {candidate['url'].lower() for candidate in records
+        if record['source'] == 'pdf_text':
+            candidates = [candidate for candidate in records
                          if candidate['source'] == 'pdf_annotation'
                          and candidate['page'] == record['page']
                          and candidate['evidence_type'] == record['evidence_type']
                          and candidate['url'].lower().startswith(record['url'].lower())
-                         and len(candidate['url']) > len(record['url'])
-                         and re.search(re.escape(record['raw_url']) + r'\s+'
+                         and len(candidate['url']) > len(record['url'])]
+            confirmed = {candidate['url'].lower() for candidate in candidates
+                         if re.search(re.escape(record['raw_url']) + r'\s+'
                                        + re.escape(candidate['url'][len(record['url']):])
                                        + r'(?=[\s.,;:!?]|$)', record['context'], re.I)}
             if len(confirmed) == 1:
-                continue
+                if record['url'].endswith('_'):
+                    continue
+                # Kerning extraction can insert a space inside an ordinary
+                # repository word. Prefer its unique, visibly confirmed URI,
+                # retaining the literal text candidate and its provenance.
+                if record['is_author_code'] and len({item['url'].lower() for item in candidates}) == 1:
+                    preferred_annotations.add((record['page'], next(iter(confirmed))))
         key = (record["url"].lower(), record["page"], record["source"],
                record["raw_url"], record["context"])
         if key not in seen:
             unique.append(record)
             seen.add(key)
     ranks = {"author_code_statement": 0, "repository_link": 1, "reference": 2}
-    return sorted(unique, key=lambda record: (ranks[record["evidence_type"]], record["page"]))
+    return sorted(unique, key=lambda record: (ranks[record["evidence_type"]], record["page"],
+        0 if record['source'] == 'pdf_annotation' and
+        (record['page'], record['url'].lower()) in preferred_annotations else 1))

@@ -38,7 +38,7 @@ from frontend.live_progress import (elapsed_seconds, progress_signature,
                                     recent_progress_runs, render_activity, render_dependency_progress,
                                     resolve_progress_run)
 from frontend import progress_state
-if getattr(progress_state, "PROGRESS_VIEW_VERSION", 0) != 3:
+if getattr(progress_state, "PROGRESS_VIEW_VERSION", 0) != 4:
     progress_state = importlib.reload(progress_state)
 from frontend.report_renderer import render_report, report_downloads
 from src.report_revisions import (can_regenerate_report, needs_report_upgrade,
@@ -59,7 +59,7 @@ PROFILE_LABELS = repository_entrypoint.profile_labels()
 get_profile = repository_entrypoint.get_profile
 
 # Only refresh the small loader. Older active pipeline modules keep their globals.
-if pipeline_entrypoint.BACKEND_API_VERSION != 5:
+if pipeline_entrypoint.BACKEND_API_VERSION != 6:
     pipeline_entrypoint = importlib.reload(pipeline_entrypoint)
 
 _pipeline_backend = pipeline_entrypoint.load_backend_pipeline()
@@ -228,10 +228,17 @@ def render_llm_settings():
                        "（输入留空时回退环境变量）")
 
 
-@st.cache_data(show_spinner=False, max_entries=8)
 def _preview_pdf_input(payload: bytes, mock_mode: bool):
-    """Inspect uploaded bytes once; the backend independently verifies its file."""
+    """Bind preview caching to the parser currently loaded by the frontend."""
     pdf_module = repository_entrypoint.load_pdf_input()
+    return _cached_preview_pdf_input(
+        payload, mock_mode, pdf_module.PDF_SOURCE_FINGERPRINT, _pdf_module=pdf_module)
+
+
+@st.cache_data(show_spinner=False, max_entries=8)
+def _cached_preview_pdf_input(payload: bytes, mock_mode: bool, source_fingerprint: str, _pdf_module):
+    """Inspect bytes once per source generation without hashing module objects."""
+    pdf_module = _pdf_module
     temporary = ""
     try:
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as handle:
