@@ -34,7 +34,7 @@ from src.project_paths import get_data_root
 
 
 # Contract checked by the web loader before starting a new background thread.
-BACKEND_API_VERSION = 5
+BACKEND_API_VERSION = 6
 
 
 def __getattr__(name):
@@ -92,9 +92,9 @@ class ProgressStore:
                 f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
     @staticmethod
-    def read_snapshot(path: str) -> Dict[str, Any]:
+    def read_snapshot(path: str, *, include_pending_result: bool = False) -> Dict[str, Any]:
         from frontend.progress_state import read_progress_snapshot
-        return read_progress_snapshot(path)
+        return read_progress_snapshot(path, include_pending_result=include_pending_result)
 
 
 def _write_report_copy(path: Path, raw: bytes) -> None:
@@ -476,7 +476,7 @@ def _run_prepared_pipeline(store: ProgressStore, request: dict, reason: str) -> 
         nonlocal worker_cleaned
         worker_cleaned = True
 
-    def finish_worker(status):
+    def finish_worker(status, error_message=None):
         nonlocal worker_finished, supervisor_cleanup
         if not worker_started or worker_finished:
             return
@@ -498,9 +498,40 @@ def _run_prepared_pipeline(store: ProgressStore, request: dict, reason: str) -> 
                             "phase_id": run.get("phase_id", ""), "status": "interrupted",
                             "cleanup_confirmed": True,
                             "reason": "持有者进程已退出并清理，但未返回本轮执行终态"})
-        store.emit({"type": "pipeline_worker", "worker_id": worker_id,
-                    "status": status, "cleanup_confirmed": worker_cleaned})
-        worker_finished = worker_cleaned
+        try:
+            if worker_cleaned:
+                snapshot = ProgressStore.read_snapshot(str(store.path), include_pending_result=True)
+                result = snapshot.get("pending_result")
+                if isinstance(result, dict):
+                    # Keep the owned scope open until every saved copy includes
+                    # the supervisor receipt. Closing it first publishes the
+                    # child's earlier done while these files are still changing.
+                    from src.environment_lifecycle import record_environment_cleanup
+                    if error_message:
+                        result["state"] = "ERROR"
+                        result["error"] = "; ".join(filter(None, [result.get("error"), error_message]))
+                    elif status != "success" and result.get("state") != "ERROR":
+                        result.update(state="ERROR", error="后台工作进程未正常结束，不能确认流水线成功")
+                    receipt = result.setdefault("data", {}).get("environment_cleanup")
+                    if receipt is None:
+                        receipt = supervisor_cleanup
+                    else:
+                        receipt["supervisor_cleanup"] = supervisor_cleanup
+                        if supervisor_cleanup.get("errors"):
+                            receipt["status"] = "error"
+                            receipt.setdefault("errors", []).extend(supervisor_cleanup["errors"])
+                    record_environment_cleanup(result, receipt)
+                    store.emit({"type": "done", "result": result})
+        except Exception as exc:
+            status = "error"
+            # Invalidate the child's pending completion before closing its
+            # scope, even when publishing the final receipts itself fails.
+            store.emit({"type": "error", "error": safe_runtime_diagnostic(exc)})
+            raise
+        finally:
+            store.emit({"type": "pipeline_worker", "worker_id": worker_id,
+                        "status": status, "cleanup_confirmed": worker_cleaned})
+            worker_finished = worker_cleaned
 
     effective_key = request.get("api_key") or os.environ.get("LLM_API_KEY", "")
     try:
@@ -530,29 +561,24 @@ def _run_prepared_pipeline(store: ProgressStore, request: dict, reason: str) -> 
         finish_worker("success" if completed.returncode == 0 else "error")
         snapshot = ProgressStore.read_snapshot(str(store.path))
         if snapshot.get("done") and isinstance(snapshot.get("result"), dict):
-            result = snapshot["result"]
-            if supervisor_cleanup is not None:
-                from src.environment_lifecycle import record_environment_cleanup
-                receipt = result.setdefault("data", {}).get("environment_cleanup")
-                if receipt is None:
-                    receipt = supervisor_cleanup
-                else:
-                    receipt["supervisor_cleanup"] = supervisor_cleanup
-                    if supervisor_cleanup.get("errors"):
-                        receipt["status"] = "error"
-                        receipt["errors"].extend(supervisor_cleanup["errors"])
-                record_environment_cleanup(result, receipt)
-                store.emit({"type": "done", "result": result})
-            return result
+            return snapshot["result"]
         if snapshot.get("error"):
             raise RuntimeError(snapshot["error"])
         diagnostic = safe_runtime_diagnostic(completed.stderr or completed.stdout)
         raise RuntimeError(f"安全运行环境进程未返回完整结果（退出码 {completed.returncode}）：{diagnostic[-1600:]}")
     except (Exception, KeyboardInterrupt) as exc:
-        finish_worker("interrupted" if isinstance(exc, KeyboardInterrupt) else "error")
         message = safe_runtime_diagnostic(exc)
         if effective_key:
             message = message.replace(effective_key, "[REDACTED]")
+        finish_worker("interrupted" if isinstance(exc, KeyboardInterrupt) else "error", message)
+        snapshot = ProgressStore.read_snapshot(str(store.path))
+        if snapshot.get("done") and isinstance(snapshot.get("result"), dict):
+            # A child may have already saved its report before its owner was
+            # interrupted. Its final receipt and retained evidence still belong
+            # to this failed run; do not replace them with a bootstrap stub.
+            if isinstance(exc, KeyboardInterrupt):
+                raise
+            return snapshot["result"]
         if metadata is None:
             state("error", message)
         else:

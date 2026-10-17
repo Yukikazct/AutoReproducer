@@ -122,6 +122,16 @@ GREAD 的原模型提案已修复，但模型不可用时的回退仍只识别�
 
 最终新增检查 **25 passed / 0 skipped**，包括目录/脚本 symlink、越界目录、重复脚本、完整参数、无默认训练截止及原文件不变；相邻规划、解释器和环境检查在 CPU fixture 中 **93 passed / 0 skipped**。另一次应用环境综合检查 **222 passed / 15 skipped**，缺原生依赖的跳过不作为能力证明，各组不相加。[JUnit 归档](evidence/readme_author_command_regression_20261017_logs.zip)保留失败和修复后的记录。原 GREAD 来源包只读回放已从 README 选中完整作者命令；真实网页训练继续另行验证。
 
+### 继续修复：原生依赖、解释器与终态回执
+
+`68a125e` 的[常规及原生 CI](evidence/pdf_acceptance_readme_fix_ci_20261017.json)全部通过，原生四项零跳过。随后冻结该提交，从真实 Chrome 上传 Critical Look，真实 API 完成发现、规划并执行作者 ResNet/roman-empire 原命令。主机实际有可用 NVIDIA GPU，自动选择作者支持的 `--device cuda:0` 有硬件及源码依据；没有手工改计划。作者入口首先报告缺少 DGL，依赖修复安装 DGL 2.2.1 后，健康检查缺少对应 Torch 2.5.1 的 GraphBolt DLL。相同 wheel 干净重装一次仍失败，**训练更新为零**，不能声称作者训练或比较完成。[原始失败证据](evidence/critical_look_gpu_regression_20261017_logs.zip)已保存，终态后重新核对冻结源码一致，全部所属作用域归零，依赖和训练解释器实际释放。
+
+据此补齐两项修复。CPU 精确 `dgl==1.1.2` 使用本阶段已验证的 CPython 3.11，并与作者 Python 声明取交集；运行时才发现 DGL 时也先释放旧环境，再选择兼容解释器重试完整原命令。该约束标记为项目已验证组合，不能当作 DGL 上游 Requires-Python。冲突声明在下载和安装前失败；保留 patch 版本约束，不对 CUDA 或其他 DGL 版本套用。失败先行及修复后 **100 passed / 0 skipped**，相邻 CPU 原生服务检查 **95 passed / 0 skipped**，见[解释器修复证据](evidence/dgl_native_python_repair_20261017_logs.zip)。
+
+GraphBolt 的缺库错误仅在安装元数据、Torch 版本、安全 CSV RECORD 和实际其他版本 DLL 共同证明目标 ABI 未包含时分类为 `native_abi_incompatible`，停止重复下载相同环境。目标已声明却文件遗失、RECORD 缺失或证据不足仍保留原有一次损坏缓存重建。依赖安装与健康检查 **102 passed / 0 skipped**，见[ABI 分类证据](evidence/graphbolt_native_abi_repair_20261017_logs.zip)。此修复不会自动换作者设备或声称 Windows CUDA DGL 已支持。
+
+本次浏览器还捕获到清理回执发布竞态：child 已发出 done，supervisor 先关闭 worker，再写最终清理回执，短暂向网页公开了旧回执。实际清理成功，但两项一致性检查失败，原结果保持原样。修复先持久化全部最终回执再关闭 worker；取消、异常退出也保留报告和一致回执，并同步热加载接口版本。四项竞态、一项缓存升级、两项中断回归均先复现失败；最终相邻检查 **175 passed / 0 skipped**，见[清理发布证据](evidence/cleanup_publication_repair_20261017_logs.zip)。三项修复整合后的六文件检查 **192 passed / 0 skipped**，各组覆盖重叠，不相加。完整 CPU 网页回归及新的独立 PDF 验收仍需实际执行。
+
 | 固定顺序 | 作者执行 | 有效比较 | 独立验收失败阶段 | 修复后的证据范围 |
 | --- | --- | --- | --- | --- |
 | 1. GCNH | 十份划分、6000 次更新、自然退出 0 | reference_only，含 PDF 引用与设置差异 | 运行目录与发布报告不一致，正式刷新检查尚未到达 | 保存结果副本回放、真实历史页恢复与下载一致性；回归 |
