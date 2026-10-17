@@ -97,6 +97,47 @@ class ProgressStore:
         return read_progress_snapshot(path)
 
 
+def _write_report_copy(path: Path, raw: bytes) -> None:
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile("wb", dir=path.parent, delete=False) as output:
+            temporary = Path(output.name)
+            output.write(raw)
+        os.replace(temporary, path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
+def _sync_run_report(result: dict) -> None:
+    """Publish the final web report and its portable files beside the run evidence."""
+    data = result["data"]
+    if not data.get("run_dir"):
+        return
+    from src.execution_artifacts import verified_report_image_bytes
+    from src.report_revisions import sanitize_report_result
+    from src.safety.paths import workspace_path
+
+    run_dir = Path(data["run_dir"])
+    report = Path(result["report_path"])
+    assets = report.with_name(report.stem + "_assets")
+    if assets.exists():
+        for image in assets.iterdir():
+            relative = assets.name + "/" + image.name
+            raw = verified_report_image_bytes(relative, report)
+            if raw is None:
+                raise ValueError("报告图片已改变或无法验证: " + image.name)
+            target = workspace_path(run_dir, relative, "run report image")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            _write_report_copy(target, raw)
+    attachment = report.with_name(report.stem + "_execution.txt")
+    _write_report_copy(workspace_path(run_dir, attachment.name, "run output attachment"),
+                       attachment.read_bytes())
+    _write_report_copy(workspace_path(run_dir, "report.md", "run report"), report.read_bytes())
+    _write_report_copy(workspace_path(run_dir, "result.json", "run result"),
+                       json.dumps(sanitize_report_result(result), ensure_ascii=False, indent=2).encode("utf-8"))
+
+
 # ---------------- 后台流水线执行 ----------------
 
 def _emit_state(store: ProgressStore, state: str, agent: str,
@@ -338,21 +379,15 @@ def run_pipeline_core(progress_path: str,
                 report_text += (f"\n\n---\n\n> 📎 **完整执行输出附件**: "
                                 f"`{attach_file.name}`（同一目录下，未被截断）\n")
                 report_file.write_text(report_text, encoding="utf-8")
-                data["report"] = report_text
-            except Exception:
-                pass  # 落盘失败不阻断主流程
+                data.update(report=report_text, report_length=len(report_text))
+            except Exception as exc:
+                reason = "最终报告保存失败: " + str(exc)
+                error_msg = "; ".join(filter(None, [error_msg, reason]))
+                data["report_publication"] = {"status": "error", "reason": reason}
+                _set_current("ERROR")
+                logger.log("ReportGenerator", "publish_report", "ERROR", reason)
 
-        # 终态落盘：无论 COMPLETED 还是 ERROR，都在 ledger 末条写终态信息，
-        # 供历史列表回填 state / duration_sec / llm_calls。
         stats = logger.get_stats()
-        logger.log_experiment(
-            "FINISH", "流水线终止",
-            inputs={"paper_title": paper_title},
-            outputs={"title": (data.get("paper_info") or {}).get("title") or paper_title},
-            result={"state": _current(),
-                    "duration_sec": stats["duration_sec"],
-                    "llm_calls": stats["llm_calls"]})
-
         result = {
             "state": _current(),
             "error": error_msg,
@@ -365,6 +400,18 @@ def run_pipeline_core(progress_path: str,
         if report_path:
             # Progress files are disposable; retain the structured inputs alongside
             # the report so history can regenerate it without rerunning the paper.
+            def publication_error(exc):
+                reason = "最终报告与运行归档未完整保存: " + str(exc)
+                result["state"] = "ERROR"
+                result["error"] = "; ".join(filter(None, [result.get("error"), reason]))
+                data["report_publication"] = {"status": "error", "reason": reason}
+                _set_current("ERROR")
+                store.emit({"type": "report_archive", "status": "error", "reason": reason})
+
+            try:
+                _sync_run_report(result)
+            except (OSError, TypeError, ValueError) as exc:
+                publication_error(exc)
             temporary = None
             try:
                 from src.report_revisions import sanitize_report_result
@@ -374,12 +421,20 @@ def run_pipeline_core(progress_path: str,
                     temporary = Path(output.name)
                     json.dump(sanitize_report_result(result), output, ensure_ascii=False, indent=2)
                 os.replace(temporary, archive)
-            except (OSError, TypeError, ValueError):
-                store.emit({"type": "report_archive", "status": "warning",
-                            "reason": "结构化报告归档未保存，请保留本次进度记录以便重新生成报告。"})
+            except (OSError, TypeError, ValueError) as exc:
+                publication_error(exc)
             finally:
                 if temporary is not None:
                     temporary.unlink(missing_ok=True)
+        # Publish history's terminal state only after report persistence succeeds
+        # or records its failure; completed training alone is not a saved report.
+        logger.log_experiment(
+            "FINISH", "流水线终止",
+            inputs={"paper_title": paper_title},
+            outputs={"title": (data.get("paper_info") or {}).get("title") or paper_title},
+            result={"state": _current(),
+                    "duration_sec": stats["duration_sec"],
+                    "llm_calls": stats["llm_calls"]})
         _emit_state(store, _current(), "", "success")
         return _mark_result(result)
 

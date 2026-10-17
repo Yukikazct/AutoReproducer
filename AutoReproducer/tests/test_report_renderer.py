@@ -141,3 +141,28 @@ def test_report_display_removes_decorations_without_altering_evidence_or_downloa
         assert evidence in displayed
     with zipfile.ZipFile(io.BytesIO(build_report_bundle(report, path))) as archive:
         assert archive.read("report.md").decode("utf-8") == report
+
+
+@pytest.mark.parametrize("kind", ["missing", "directory"])
+def test_bundle_rejects_unreadable_declared_execution_attachment(tmp_path, kind):
+    report = tmp_path / "report.md"
+    attachment = tmp_path / "report_execution.txt"
+    text = "> 📎 **完整执行输出附件**: `report_execution.txt`（同一目录下，未被截断）\n"
+    if kind == "directory":
+        attachment.mkdir()
+    with pytest.raises(ValueError, match="完整执行输出附件缺失或无法读取"):
+        build_report_bundle(text, report)
+
+
+def test_bundle_resolves_relative_report_and_includes_full_execution_output(tmp_path, monkeypatch):
+    from frontend import report_renderer
+
+    monkeypatch.setattr(report_renderer, "PROJECT_ROOT", tmp_path)
+    directory = tmp_path / "reports"
+    directory.mkdir()
+    raw = "unabridged author output\n准确率: 0.845\n".encode("utf-8")
+    (directory / "report_execution.txt").write_bytes(raw)
+    text = "> 📎 **完整执行输出附件**: `report_execution.txt`（同一目录下，未被截断）\n"
+    with zipfile.ZipFile(io.BytesIO(build_report_bundle(text, Path("reports/report.md")))) as archive:
+        assert archive.read("report_execution.txt") == raw
+        assert archive.read("report.md").decode("utf-8") == text

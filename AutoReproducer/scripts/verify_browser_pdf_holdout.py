@@ -269,7 +269,8 @@ def verify_saved_report(result, downloaded):
     for path in (run_dir / 'result.json', report.with_suffix('.result.json')):
         saved = json.loads(path.read_text('utf-8'))
         assert saved.get('state') == result.get('state'), 'Saved terminal state differs'
-        for key in ('validation', 'execution', 'pdf_input', 'spec_sha256'):
+        for key in ('validation', 'execution', 'pdf_input', 'spec_sha256',
+                    'report', 'report_length', 'runtime_preparation'):
             assert saved.get('data', {}).get(key) == result['data'].get(key), 'Saved result differs: ' + key
     return {'saved_reports_identical': True, 'structured_records_identical': True}
 
@@ -292,6 +293,10 @@ def verify_report_reconnect(page, args, progress, runtime, result):
     with zipfile.ZipFile(io.BytesIO(content[1])) as archive:
         names = [name for name in archive.namelist() if name.endswith('.md')]
         assert len(names) == 1 and archive.read(names[0]) == content[0]
+        report_path = Path(result['report_path'])
+        attachment = report_path.with_name(report_path.stem + '_execution.txt')
+        assert archive.read(attachment.name) == attachment.read_bytes()
+        assert (Path(result['data']['run_dir']) / attachment.name).read_bytes() == attachment.read_bytes()
     assert '作者输出与论文宣称对比' in content[0].decode('utf-8')
     saved = verify_saved_report(result, content[0])
     before = set(runtime.glob('progress_*.jsonl'))
@@ -299,6 +304,7 @@ def verify_report_reconnect(page, args, progress, runtime, result):
     assert show_report() == displayed
     assert set(runtime.glob('progress_*.jsonl')) == before
     return {'comparison_table': displayed, 'markdown_zip_identical': True,
+            'full_output_attachment_identical': True,
             'report_sha256': hashlib.sha256(content[0]).hexdigest(), 'reconnect_preserved_comparison': True,
             **saved}
 

@@ -64,6 +64,20 @@ python training.py --net ChebNetII --dataset Cora --K 10 --prop_lr 0.001 --prop_
 
 结束后所属作者进程为零；移除本次额外测试依赖 **205,986,665 字节**，标准应用 CPython 和专用原生测试 fixture 保留。完整命令、规划、全部 stdout/stderr、逐次结果、mask 摘要和清理回执见[结构化证据](evidence/chebnetii_cora_regression_20261017.json)及[完整日志归档](evidence/chebnetii_cora_regression_20261017_logs.zip)。这次固定命令回归没有重新做自动 PDF 规划或独立数值验收；`paper_metrics_verified=false`、`is_reproduced=null`。
 
-执行、比较、环境清理及进程完成契约检查另有 **173 passed / 13 skipped**；这些原生用例由专用环境继续实测，不能把跳过当作原生能力通过。
+执行、比较、环境清理及进程完成契约检查在专用原生环境实测为 **186 passed / 0 skipped**（此前普通环境为 173 passed / 13 skipped）。冻结提交 `5ef21fe` 的普通 CI [39009944558](https://github.com/Yukikazct/AutoReproducer/actions/runs/39009944558) 和原生 CI [39009944559](https://github.com/Yukikazct/AutoReproducer/actions/runs/39009944559) 全部通过，见[冻结前 CI 记录](evidence/pdf_acceptance_ci_20261017.json)。
+
+## 第一篇：GCNH 因报告一致性缺陷退役
+
+在 `5ef21fe` 上从网页上传 GCNH，使用真实 API，冻结摘要 `7e7b896c43123dc3526eb3674048c4a7c16a70e0ca0ecd5125b874cf3bc4fed3`。自动发现并固定作者 `311ebe34d4cd58fdc6279d803e212f4c1ea5aaf0`，原样执行 `experiments/main_table.sh` 的 Cornell 命令：
+
+```text
+python main.py --dataset cornell --epochs 300 --nlayers 1 --verbose False --model GCNH --dropout 0.25 --nhid 16 --batch_size 50
+```
+
+全部十份划分自然结束，**6000 次优化器更新**，原始平均准确率 **0.8648648648648649**；作者未打印标准差，保持缺失。24 个 Cornell 输入文件前后大小和摘要一致。与 PDF 第 4 页 Table I 的 86.49% 得到有效 `reference_only` 比较，差值约 **−0.003514 个百分点**，同时展示环境与实验设置差异；不代表独立数值复现。依赖首轮安装成功，结束后完整释放，活动 worker/run/execution 全为零。
+
+**正式验收未通过。** Markdown 与 ZIP 已一致，但下载内容比运行目录的 `report.md` 多了最后补入的运行环境说明和完整输出附件；刷新检查尚未到达。因此不能关闭 #27，GCNH 已登记为回归样本。原始失败报告、结果和输入保持不变，见[失败记录](evidence/gcnh_pdf_trial_20261017.json)及[完整证据归档](evidence/gcnh_pdf_trial_20261017_logs.zip)。
+
+修复将最终网页报告、附件、已校验图片和结构化结果同步到运行目录；保存失败明确返回错误，并使历史终态一致，保留作者训练完成的原始事实。ZIP 同时携带报告声明的完整输出附件。新增无图/有图及 ZIP 附件回归先复现失败，修复后相关检查 **167 passed / 4 skipped**；跳过的是缺少可选 matplotlib 的绘图用例，不作为原生能力证据。真实 GCNH 保存结果的副本回放已确认报告、结构化记录及 ZIP 完整输出附件一致，未重训且没有修改原始证据；该回放仍只是回归。修复提交并通过 CI 后重新冻结，按既定顺序进入 **GREAD**。
 
 新 PDF 验收结果随实际完成追加；本文件不是 #27 完成声明。

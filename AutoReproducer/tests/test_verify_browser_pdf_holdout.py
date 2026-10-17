@@ -253,7 +253,7 @@ def test_current_completion_allows_no_observed_optimizer_updates(completed_run):
     assert evidence["receipt"]["training_python"]["removed"]
 
 
-@pytest.mark.parametrize('changed', [None, 'download', 'comparison', 'run_report'])
+@pytest.mark.parametrize('changed', [None, 'download', 'comparison', 'run_report', 'stored_report', 'runtime'])
 def test_browser_download_must_match_saved_reports_and_structured_comparison(completed_run, changed):
     result, _, _ = completed_run
     report = Path(result['report_path'])
@@ -269,6 +269,11 @@ def test_browser_download_must_match_saved_reports_and_structured_comparison(com
         path.write_text(json.dumps(saved), encoding='utf-8')
     elif changed == 'run_report':
         (run_dir / 'report.md').write_text('another report', encoding='utf-8')
+    elif changed in {'stored_report', 'runtime'}:
+        path = report.with_suffix('.result.json')
+        saved = json.loads(path.read_text('utf-8'))
+        saved['data']['report' if changed == 'stored_report' else 'runtime_preparation'] = 'stale rendering'
+        path.write_text(json.dumps(saved), encoding='utf-8')
     if changed:
         with pytest.raises(AssertionError):
             audit.verify_saved_report(result, downloaded)

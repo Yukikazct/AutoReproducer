@@ -571,7 +571,7 @@
       ],
       "repository_url": "https://github.com/SmartData-Polito/GCNH",
       "repository_revision": "311ebe34d4cd58fdc6279d803e212f4c1ea5aaf0",
-      "status": "candidate",
+      "status": "regression",
       "candidate_order": 1,
       "history": [
         {
@@ -579,8 +579,16 @@
           "frozen_commit": null,
           "evidence": "docs/evidence/pdf_candidates_preflight_20261017.json#gcnh",
           "scope": "Static eligibility review only; no training or candidate-specific product repair."
+        },
+        {
+          "date": "2026-10-17",
+          "product_commit": "5ef21fe1c0ae876442891d2444986564f46a47d6",
+          "outcome": "retired_after_report_publication_repair",
+          "evidence": "docs/evidence/gcnh_pdf_trial_20261017.json",
+          "details": "All ten Cornell splits and 6000 optimizer updates completed; valid reference_only comparison and cleanup passed. Independent acceptance failed at report-copy consistency; browser reconnect was not reached."
         }
-      ]
+      ],
+      "retirement_reason": "Triggered a product repair after the frozen 2026-10-17 PDF trial: final web reports and run-directory reports differed. Later runs are regression-only."
     },
     {
       "id": "gmnn-graph-markov-neural-networks",
