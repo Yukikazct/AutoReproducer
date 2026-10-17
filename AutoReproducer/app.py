@@ -228,10 +228,17 @@ def render_llm_settings():
                        "（输入留空时回退环境变量）")
 
 
-@st.cache_data(show_spinner=False, max_entries=8)
 def _preview_pdf_input(payload: bytes, mock_mode: bool):
-    """Inspect uploaded bytes once; the backend independently verifies its file."""
+    """Bind preview caching to the parser currently loaded by the frontend."""
     pdf_module = repository_entrypoint.load_pdf_input()
+    return _cached_preview_pdf_input(
+        payload, mock_mode, pdf_module.PDF_SOURCE_FINGERPRINT, _pdf_module=pdf_module)
+
+
+@st.cache_data(show_spinner=False, max_entries=8)
+def _cached_preview_pdf_input(payload: bytes, mock_mode: bool, source_fingerprint: str, _pdf_module):
+    """Inspect bytes once per source generation without hashing module objects."""
+    pdf_module = _pdf_module
     temporary = ""
     try:
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as handle:
