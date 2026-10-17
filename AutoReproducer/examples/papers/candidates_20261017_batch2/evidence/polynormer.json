@@ -1,0 +1,38 @@
+{
+  "paper_id": "polynormer",
+  "batch_id": "pdf_acceptance_20261017_batch2",
+  "fixed_order": 2,
+  "screened_at": "2026-10-17T09:52:42.166886+00:00",
+  "status": "static_screened_not_trained_not_repaired",
+  "selection_basis": "Second by static risk: small public Amazon data and explicit CPU fallback, but1200 full epochs/seven8-head layers may be substantial and older author dependency recommendations require validated modern Python preflight.",
+  "dataset": {
+    "name": "Amazon Photo",
+    "nodes": 7650,
+    "features": 745,
+    "classes": 8,
+    "train": 4590,
+    "validation": 1530,
+    "test": 1530,
+    "author_split_file": "data/amazon-photo_split.npz",
+    "static_data_receipt": "examples/papers/candidates_20261017_batch2/sources/polynormer.data.json"
+  },
+  "cpu_support": "parse.py --cpu and main.py:35-38 explicit CPU/automatic fallback. Narrow Python3.11 dependency choice; author recommended3.9 is a displayed version difference, not a claimed matching environment.",
+  "author_training_started": false,
+  "dependency_installation_performed": false,
+  "product_specific_repair_performed": false,
+  "real_browser_api_trial_performed": false,
+  "paper_metrics_verified": false,
+  "is_reproduced": null,
+  "source_record": "examples/papers/candidates_20261017_batch2/sources/polynormer.json",
+  "command_record": "examples/papers/candidates_20261017_batch2/commands/polynormer.json",
+  "comparison_record": "examples/papers/candidates_20261017_batch2/comparisons/polynormer.json",
+  "unverified_gates": [
+    "Actual dependency/native operation preflight",
+    "Real browser PDF upload and author repository discovery",
+    "Unmodified generated plan and all authored commands naturally complete",
+    "Valid traced comparison",
+    "Refresh/history/Markdown/ZIP/structured consistency",
+    "Owned-process zero and environment cleanup",
+    "Current product freeze and CI"
+  ]
+}

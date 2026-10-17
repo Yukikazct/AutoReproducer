@@ -1,0 +1,38 @@
+{
+  "paper_id": "pygsd",
+  "batch_id": "pdf_acceptance_20261017_batch2",
+  "fixed_order": 1,
+  "screened_at": "2026-10-17T09:52:42.166886+00:00",
+  "status": "static_screened_not_trained_not_repaired",
+  "selection_basis": "First by static cost/risk: very small public Cornell data, complete native PyG CPU author example, declared Python3.11/3.12. Exact README command discovery and traceable aggregate remain unverified gates.",
+  "dataset": {
+    "name": "WebKB/Cornell",
+    "nodes": 183,
+    "features": 1703,
+    "classes": 5,
+    "splits": 10,
+    "train_per_split": 87,
+    "validation_per_split": 59,
+    "test_per_split": 37,
+    "static_data_receipt": "examples/papers/candidates_20261017_batch2/sources/pygsd.data.json"
+  },
+  "cpu_support": "examples/magnet_node.py:50 selects CPU when CUDA is unavailable; README249-251 declares CPU Python3.11/3.12; setup.py requires Python>=3.10, Torch>=2.4, PyG>=2.6.",
+  "author_training_started": false,
+  "dependency_installation_performed": false,
+  "product_specific_repair_performed": false,
+  "real_browser_api_trial_performed": false,
+  "paper_metrics_verified": false,
+  "is_reproduced": null,
+  "source_record": "examples/papers/candidates_20261017_batch2/sources/pygsd.json",
+  "command_record": "examples/papers/candidates_20261017_batch2/commands/pygsd.json",
+  "comparison_record": "examples/papers/candidates_20261017_batch2/comparisons/pygsd.json",
+  "unverified_gates": [
+    "Actual dependency/native operation preflight",
+    "Real browser PDF upload and author repository discovery",
+    "Unmodified generated plan and all authored commands naturally complete",
+    "Valid traced comparison",
+    "Refresh/history/Markdown/ZIP/structured consistency",
+    "Owned-process zero and environment cleanup",
+    "Current product freeze and CI"
+  ]
+}

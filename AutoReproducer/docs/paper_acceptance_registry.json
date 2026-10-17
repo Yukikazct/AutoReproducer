@@ -1465,6 +1465,106 @@
           "evidence": "examples/papers/manifest.json#pdf/ggcn_independent_20261011_bc20605.pdf"
         }
       ]
+    },
+    {
+      "id": "pygsd",
+      "title": "PyTorch Geometric Signed Directed: A Software Package on Graph Neural Networks for Signed and Directed Graphs",
+      "aliases": [
+        "PyGSD",
+        "PyTorch Geometric Signed Directed",
+        "PyTorch Geometric Signed and Directed",
+        "pytorch_geometric_signed_directed"
+      ],
+      "source_ids": [
+        "arxiv:2202.10793"
+      ],
+      "pdf_sha256": [
+        "3902ece975f46934320629ecdcf5b85c5bdd32a9f3bd9b864c3737bcba997fbc"
+      ],
+      "status": "candidate",
+      "repository_url": "https://github.com/SherylHYX/pytorch_geometric_signed_directed",
+      "repository_revision": "2968b55b3378a01ade9f391e194f0077e2c6ee3b",
+      "history": [
+        {
+          "outcome": "candidate_not_executed",
+          "frozen_commit": null,
+          "evidence": "examples/papers/candidates_20261017_batch2/evidence/pygsd.json",
+          "note": "Static screening only; staged proposal, not live registration. No author training or product-specific repair."
+        },
+        {
+          "outcome": "registered_unused_candidate",
+          "frozen_commit": null,
+          "registered_at": "2026-10-17T12:29:39.605518+00:00",
+          "evidence": "examples/papers/candidates_20261017_batch2/registration_receipt.json",
+          "note": "Incrementally registered after the previous frozen run ended. Original static-screening history retained. No author training, dependency installation or product-specific repair for this candidate."
+        }
+      ]
+    },
+    {
+      "id": "polynormer",
+      "title": "Polynormer: Polynomial-Expressive Graph Transformer in Linear Time",
+      "aliases": [
+        "Polynormer",
+        "Polynormer-r"
+      ],
+      "source_ids": [
+        "arxiv:2403.01232"
+      ],
+      "pdf_sha256": [
+        "b48d05ad91bc923b4406b3cc4d29295ccc3ea23ffebfb82fc5fcdaa0af48bb7c"
+      ],
+      "status": "candidate",
+      "repository_url": "https://github.com/cornell-zhang/Polynormer",
+      "repository_revision": "fc8c276c9c5dfbd616d83f65338a3392188a5e08",
+      "history": [
+        {
+          "outcome": "candidate_not_executed",
+          "frozen_commit": null,
+          "evidence": "examples/papers/candidates_20261017_batch2/evidence/polynormer.json",
+          "note": "Static screening only; staged proposal, not live registration. No author training or product-specific repair."
+        },
+        {
+          "outcome": "registered_unused_candidate",
+          "frozen_commit": null,
+          "registered_at": "2026-10-17T12:29:39.605518+00:00",
+          "evidence": "examples/papers/candidates_20261017_batch2/registration_receipt.json",
+          "note": "Incrementally registered after the previous frozen run ended. Original static-screening history retained. No author training, dependency installation or product-specific repair for this candidate."
+        }
+      ]
+    },
+    {
+      "id": "bnpool",
+      "title": "BN-Pool: Bayesian Nonparametric Pooling for Graphs",
+      "aliases": [
+        "BN-Pool",
+        "BNPool",
+        "BNPool: Bayesian Nonparametric Pooling for Graph Neural Networks",
+        "Bayesian Nonparametric Graph Pooling"
+      ],
+      "source_ids": [
+        "arxiv:2501.09821"
+      ],
+      "pdf_sha256": [
+        "35c416b0b1927db60cd936cd430da1dded1e9794799ed13adfecce0f4c3fa316"
+      ],
+      "status": "candidate",
+      "repository_url": "https://github.com/NGMLGroup/Bayesian-Nonparametric-Graph-Pooling",
+      "repository_revision": "206bcb4c642468ba4c51f79812ff1e220756937f",
+      "history": [
+        {
+          "outcome": "candidate_not_executed",
+          "frozen_commit": null,
+          "evidence": "examples/papers/candidates_20261017_batch2/evidence/bnpool.json",
+          "note": "Static screening only; staged proposal, not live registration. No author training or product-specific repair."
+        },
+        {
+          "outcome": "registered_unused_candidate",
+          "frozen_commit": null,
+          "registered_at": "2026-10-17T12:29:39.605518+00:00",
+          "evidence": "examples/papers/candidates_20261017_batch2/registration_receipt.json",
+          "note": "Incrementally registered after the previous frozen run ended. Original static-screening history retained. No author training, dependency installation or product-specific repair for this candidate."
+        }
+      ]
     }
   ]
 }

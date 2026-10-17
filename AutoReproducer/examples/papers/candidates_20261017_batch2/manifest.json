@@ -1,0 +1,85 @@
+{
+  "version": 1,
+  "batch_id": "pdf_acceptance_20261017_batch2",
+  "fixed_at": "2026-10-17T09:52:42.166886+00:00",
+  "activation_status": "registered_not_executed",
+  "rule": "New batch, fixed before any of these candidate author-training runs. Static-risk order PyGSD -> Polynormer -> BN-Pool; no selection by measured accuracy. Stop at first complete independent pass; at most these three papers. A product repair retires its paper; re-freeze before the next unused candidate. No candidate is promised to pass.",
+  "order_basis": "Small native PyG Cornell first, more costly Polynormer second, BN-Pool cleaned-data/protocol comparison risk last. Preset by parent instruction, no training scores exist.",
+  "previous_batch": {
+    "file": "examples/papers/candidates_20261017/manifest.json",
+    "sha256": "2b8b758d3bc37eee88e8c88d092db409e4274728d607321a1f231d765ec97408",
+    "order_preserved": [
+      "gcnh",
+      "gread",
+      "critical-look-heterophily"
+    ],
+    "results_unchanged": true,
+    "separate_new_batch": true
+  },
+  "papers": [
+    {
+      "order": 1,
+      "paper_id": "pygsd",
+      "title": "PyTorch Geometric Signed Directed: A Software Package on Graph Neural Networks for Signed and Directed Graphs",
+      "file": "examples/papers/candidates_20261017_batch2/pygsigneddirected.pdf",
+      "source_url": "https://arxiv.org/pdf/2202.10793",
+      "source_id": "arxiv:2202.10793",
+      "sha256": "3902ece975f46934320629ecdcf5b85c5bdd32a9f3bd9b864c3737bcba997fbc",
+      "bytes": 1189266,
+      "repository_url": "https://github.com/SherylHYX/pytorch_geometric_signed_directed",
+      "revision": "2968b55b3378a01ade9f391e194f0077e2c6ee3b",
+      "screening": "First by static cost/risk: very small public Cornell data, complete native PyG CPU author example, declared Python3.11/3.12. Exact README command discovery and traceable aggregate remain unverified gates. Static screening only; not trained, not installed, not repaired, not accepted.",
+      "source_record": "examples/papers/candidates_20261017_batch2/sources/pygsd.json",
+      "command_record": "examples/papers/candidates_20261017_batch2/commands/pygsd.json",
+      "comparison_record": "examples/papers/candidates_20261017_batch2/comparisons/pygsd.json",
+      "screening_record": "examples/papers/candidates_20261017_batch2/evidence/pygsd.json"
+    },
+    {
+      "order": 2,
+      "paper_id": "polynormer",
+      "title": "Polynormer: Polynomial-Expressive Graph Transformer in Linear Time",
+      "file": "examples/papers/candidates_20261017_batch2/polynormer.pdf",
+      "source_url": "https://arxiv.org/pdf/2403.01232",
+      "source_id": "arxiv:2403.01232",
+      "sha256": "b48d05ad91bc923b4406b3cc4d29295ccc3ea23ffebfb82fc5fcdaa0af48bb7c",
+      "bytes": 1144011,
+      "repository_url": "https://github.com/cornell-zhang/Polynormer",
+      "revision": "fc8c276c9c5dfbd616d83f65338a3392188a5e08",
+      "screening": "Second by static risk: small public Amazon data and explicit CPU fallback, but1200 full epochs/seven8-head layers may be substantial and older author dependency recommendations require validated modern Python preflight. Static screening only; not trained, not installed, not repaired, not accepted.",
+      "source_record": "examples/papers/candidates_20261017_batch2/sources/polynormer.json",
+      "command_record": "examples/papers/candidates_20261017_batch2/commands/polynormer.json",
+      "comparison_record": "examples/papers/candidates_20261017_batch2/comparisons/polynormer.json",
+      "screening_record": "examples/papers/candidates_20261017_batch2/evidence/polynormer.json"
+    },
+    {
+      "order": 3,
+      "paper_id": "bnpool",
+      "title": "BN-Pool: Bayesian Nonparametric Pooling for Graphs",
+      "file": "examples/papers/candidates_20261017_batch2/bnpool.pdf",
+      "source_url": "https://arxiv.org/pdf/2501.09821",
+      "source_id": "arxiv:2501.09821",
+      "sha256": "35c416b0b1927db60cd936cd430da1dded1e9794799ed13adfecce0f4c3fa316",
+      "bytes": 3234331,
+      "repository_url": "https://github.com/NGMLGroup/Bayesian-Nonparametric-Graph-Pooling",
+      "revision": "206bcb4c642468ba4c51f79812ff1e220756937f",
+      "screening": "Last by static risk despite modern Windows CPU packaging: cleaned135 versus paper188 graphs plus onefold and selection-setting differences pose the largest valid-comparison risk. No configuration override to force a match. Static screening only; not trained, not installed, not repaired, not accepted.",
+      "source_record": "examples/papers/candidates_20261017_batch2/sources/bnpool.json",
+      "command_record": "examples/papers/candidates_20261017_batch2/commands/bnpool.json",
+      "comparison_record": "examples/papers/candidates_20261017_batch2/comparisons/bnpool.json",
+      "screening_record": "examples/papers/candidates_20261017_batch2/evidence/bnpool.json"
+    }
+  ],
+  "activation_history": [
+    {
+      "at": "2026-10-17T09:52:42.166886+00:00",
+      "status": "staged_not_registered",
+      "note": "Original staged manifest is retained unchanged in .tmp/batch2_registration_20261017."
+    },
+    {
+      "at": "2026-10-17T12:29:39.605518+00:00",
+      "status": "registered_not_executed",
+      "note": "Parent explicitly authorized activation after the previous frozen run reached terminal state and passed verify_freeze. No candidate has been trained or repaired."
+    }
+  ],
+  "registered_at": "2026-10-17T12:29:39.605518+00:00"
+}

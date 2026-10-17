@@ -1,0 +1,187 @@
+{
+  "kind": "static_public_data_probe_not_training",
+  "nodes": 183,
+  "features": 1703,
+  "classes": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
+  "raw_edge_rows": 298,
+  "files": [
+    {
+      "name": "out1_node_feature_label.txt",
+      "url": "https://raw.githubusercontent.com/graphdml-uiuc-jlu/geom-gcn/master/new_data/cornell/out1_node_feature_label.txt",
+      "bytes": 624308,
+      "sha256": "38561ad44e29199a826ccef7f94f469b94a912076f83fbc453a69b8ac2b4b858"
+    },
+    {
+      "name": "out1_graph_edges.txt",
+      "url": "https://raw.githubusercontent.com/graphdml-uiuc-jlu/geom-gcn/master/new_data/cornell/out1_graph_edges.txt",
+      "bytes": 1989,
+      "sha256": "12dc60defc4f8a1f18499e3695bfd62ef0421f9b722297276e7f02dec7ae3dca"
+    },
+    {
+      "name": "cornell_split_0.6_0.2_0.npz",
+      "url": "https://raw.githubusercontent.com/graphdml-uiuc-jlu/geom-gcn/master/splits/cornell_split_0.6_0.2_0.npz",
+      "bytes": 704,
+      "sha256": "14022a1e19ec7fc0a07a2c06a785a2f9dc52809dbcd1c14fc318f7800675d73f",
+      "counts": {
+        "train_mask": 87,
+        "val_mask": 59,
+        "test_mask": 37
+      },
+      "shape": [
+        183
+      ],
+      "disjoint": true,
+      "covers_all": true
+    },
+    {
+      "name": "cornell_split_0.6_0.2_1.npz",
+      "url": "https://raw.githubusercontent.com/graphdml-uiuc-jlu/geom-gcn/master/splits/cornell_split_0.6_0.2_1.npz",
+      "bytes": 700,
+      "sha256": "5568fa27e968a724c92211bf97026a36a08893cf94b218043e49b4c973c35cfb",
+      "counts": {
+        "train_mask": 87,
+        "val_mask": 59,
+        "test_mask": 37
+      },
+      "shape": [
+        183
+      ],
+      "disjoint": true,
+      "covers_all": true
+    },
+    {
+      "name": "cornell_split_0.6_0.2_2.npz",
+      "url": "https://raw.githubusercontent.com/graphdml-uiuc-jlu/geom-gcn/master/splits/cornell_split_0.6_0.2_2.npz",
+      "bytes": 695,
+      "sha256": "763fc1f423395e4172617fa5b6bc0d7adad2241e5fedd1a4f0a098a67f9dc8e9",
+      "counts": {
+        "train_mask": 87,
+        "val_mask": 59,
+        "test_mask": 37
+      },
+      "shape": [
+        183
+      ],
+      "disjoint": true,
+      "covers_all": true
+    },
+    {
+      "name": "cornell_split_0.6_0.2_3.npz",
+      "url": "https://raw.githubusercontent.com/graphdml-uiuc-jlu/geom-gcn/master/splits/cornell_split_0.6_0.2_3.npz",
+      "bytes": 701,
+      "sha256": "4334321cd9ec42de9d51107fb9a6dc310512e0921bc1cff0f390301ee37315fa",
+      "counts": {
+        "train_mask": 87,
+        "val_mask": 59,
+        "test_mask": 37
+      },
+      "shape": [
+        183
+      ],
+      "disjoint": true,
+      "covers_all": true
+    },
+    {
+      "name": "cornell_split_0.6_0.2_4.npz",
+      "url": "https://raw.githubusercontent.com/graphdml-uiuc-jlu/geom-gcn/master/splits/cornell_split_0.6_0.2_4.npz",
+      "bytes": 759,
+      "sha256": "2b6b3ef396f4dc7fcdc276fb16b88bb87409b25879dd672b3a506eca844dd8d7",
+      "counts": {
+        "train_mask": 87,
+        "val_mask": 59,
+        "test_mask": 37
+      },
+      "shape": [
+        183
+      ],
+      "disjoint": true,
+      "covers_all": true
+    },
+    {
+      "name": "cornell_split_0.6_0.2_5.npz",
+      "url": "https://raw.githubusercontent.com/graphdml-uiuc-jlu/geom-gcn/master/splits/cornell_split_0.6_0.2_5.npz",
+      "bytes": 754,
+      "sha256": "1a40ef8b20aa9e1aa850e1abdaba3efac1f66c98ef2c6a59eadefa21136ece6b",
+      "counts": {
+        "train_mask": 87,
+        "val_mask": 59,
+        "test_mask": 37
+      },
+      "shape": [
+        183
+      ],
+      "disjoint": true,
+      "covers_all": true
+    },
+    {
+      "name": "cornell_split_0.6_0.2_6.npz",
+      "url": "https://raw.githubusercontent.com/graphdml-uiuc-jlu/geom-gcn/master/splits/cornell_split_0.6_0.2_6.npz",
+      "bytes": 758,
+      "sha256": "bcddf4ab59eae4c7d47b8a6cec9025a54ec0e6d3f3bdcd7678e201f25ace4642",
+      "counts": {
+        "train_mask": 87,
+        "val_mask": 59,
+        "test_mask": 37
+      },
+      "shape": [
+        183
+      ],
+      "disjoint": true,
+      "covers_all": true
+    },
+    {
+      "name": "cornell_split_0.6_0.2_7.npz",
+      "url": "https://raw.githubusercontent.com/graphdml-uiuc-jlu/geom-gcn/master/splits/cornell_split_0.6_0.2_7.npz",
+      "bytes": 693,
+      "sha256": "2b497e12dfc123d7e7c9bb4fc4a82b5bee18409e109a3e3a04da439cacec964d",
+      "counts": {
+        "train_mask": 87,
+        "val_mask": 59,
+        "test_mask": 37
+      },
+      "shape": [
+        183
+      ],
+      "disjoint": true,
+      "covers_all": true
+    },
+    {
+      "name": "cornell_split_0.6_0.2_8.npz",
+      "url": "https://raw.githubusercontent.com/graphdml-uiuc-jlu/geom-gcn/master/splits/cornell_split_0.6_0.2_8.npz",
+      "bytes": 701,
+      "sha256": "5c4e110d252d7ad156b2e4cd34b6dbd1cecbcc1755f8d72e932cc2a54f2b643c",
+      "counts": {
+        "train_mask": 87,
+        "val_mask": 59,
+        "test_mask": 37
+      },
+      "shape": [
+        183
+      ],
+      "disjoint": true,
+      "covers_all": true
+    },
+    {
+      "name": "cornell_split_0.6_0.2_9.npz",
+      "url": "https://raw.githubusercontent.com/graphdml-uiuc-jlu/geom-gcn/master/splits/cornell_split_0.6_0.2_9.npz",
+      "bytes": 704,
+      "sha256": "80f1531807194d301affbf6f879a4ab4f56a19bdccb62d192e3ecd1b5275f052",
+      "counts": {
+        "train_mask": 87,
+        "val_mask": 59,
+        "test_mask": 37
+      },
+      "shape": [
+        183
+      ],
+      "disjoint": true,
+      "covers_all": true
+    }
+  ]
+}

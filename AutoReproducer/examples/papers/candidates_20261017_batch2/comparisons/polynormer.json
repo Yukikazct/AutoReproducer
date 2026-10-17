@@ -1,0 +1,29 @@
+{
+  "paper_id": "polynormer",
+  "reference": {
+    "pdf_page": 7,
+    "table": "Table 1",
+    "row": "Polynormer-r",
+    "column": "Photo",
+    "metric": "test classification accuracy",
+    "unit": "percent",
+    "mean": 96.46,
+    "runs": 10,
+    "uncertainty": {
+      "kind": "standard_deviation",
+      "value": 0.26
+    }
+  },
+  "anticipated_status_if_evidence_supports_pairing": "reference_only",
+  "setting_differences": [
+    "Author checked-in command executes one run, seed42; paper reports ten-run mean and standard deviation.",
+    "Current source uses ReLU and must pair with Polynormer-r96.46+/-0.26, not plain Polynormer96.11+/-0.23.",
+    "CPU and Python3.11/current dependency choices differ from author's Python3.9/Linux CUDA environment.",
+    "One-run sample SD is unavailable and may be NaN; preserve unavailable uncertainty, do not invent zero or count ten runs."
+  ],
+  "measured_values": [],
+  "comparison_completed": false,
+  "paper_metrics_verified": false,
+  "is_reproduced": null,
+  "rule": "No measured result exists. Missing pairing/source evidence or no finite traced metric means formal comparison fails; do not manufacture values, shrink protocol or promise a pass."
+}

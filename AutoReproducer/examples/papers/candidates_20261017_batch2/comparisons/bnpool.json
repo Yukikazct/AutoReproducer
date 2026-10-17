@@ -1,0 +1,30 @@
+{
+  "paper_id": "bnpool",
+  "reference": {
+    "pdf_page": 18,
+    "table": "Table 3",
+    "row": "BN-Pool",
+    "column": "MUTAG",
+    "metric": "graph classification accuracy",
+    "unit": "percent",
+    "mean": 88.0,
+    "uncertainty": {
+      "kind": "standard_deviation",
+      "value": 7.0
+    },
+    "evaluation": "Ten-fold paper protocol"
+  },
+  "anticipated_status_if_evidence_supports_pairing": "reference_only",
+  "setting_differences": [
+    "Current author defaults use cleaned135 MUTAG graphs; paper p26Table10 lists188 graphs. Pairing may legitimately be declined even for reference_only.",
+    "Author default runs one fold0; paper mean/SD cover ten folds.",
+    "Default LR0.001, val_loss/min, early-stop500, scheduler patience150, prior schedule300 differ from paper LR0.0005, valaccuracy, early-stop100, scheduler30, prior50.",
+    "Default alpha_DP10 differs from paper optimal MUTAG alpha_DP1(Table11p27).",
+    "CPU/current pinned source and dependencies differ from paper experiment environment."
+  ],
+  "measured_values": [],
+  "comparison_completed": false,
+  "paper_metrics_verified": false,
+  "is_reproduced": null,
+  "rule": "No measured result exists. Missing pairing/source evidence or no finite traced metric means formal comparison fails; do not manufacture values, shrink protocol or promise a pass."
+}

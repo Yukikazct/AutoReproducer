@@ -1,0 +1,27 @@
+{
+  "paper_id": "bnpool",
+  "cwd": ".",
+  "argv": [
+    "python",
+    "run_classification.py"
+  ],
+  "display_command": "python run_classification.py",
+  "basis": "README82 full default command from repository root; Hydra defaults unchanged, not minimal_example.py.",
+  "cpu_basis": "run_classification.py:139-150 chooses CPU devices1. pyproject.toml explicitly supports Python>=3.11,<3.13 and Windows CPU Torch/PyG wheel sources.",
+  "training_budget": {
+    "folds_partition": 10,
+    "executed_fold_id": 0,
+    "runs": 1,
+    "seed": 777,
+    "max_epochs": 100000,
+    "early_stopping": true,
+    "patience": 500,
+    "monitor": "val_loss",
+    "mode": "min",
+    "model_selection": "Best validation-loss checkpoint",
+    "note": "A single fold0 command, not all ten folds; no shortened default budget"
+  },
+  "executed": false,
+  "argv_or_plan_manually_rewritten": false,
+  "rule": "Evidence of authored command only. Real PDF/API planner output must stand on its own; do not inject this command to create an acceptance pass."
+}

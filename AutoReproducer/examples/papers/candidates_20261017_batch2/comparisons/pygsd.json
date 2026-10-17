@@ -1,0 +1,30 @@
+{
+  "paper_id": "pygsd",
+  "reference": {
+    "pdf_page": 9,
+    "table": "Table 5",
+    "row": "Node classification / MagNet",
+    "column": "Cornell",
+    "metric": "test classification accuracy",
+    "unit": "percent",
+    "mean": 70.3,
+    "uncertainty": {
+      "kind": "standard_deviation",
+      "value": 5.1
+    },
+    "reported_meaning": "Section8: mean and one standard deviation"
+  },
+  "anticipated_status_if_evidence_supports_pairing": "reference_only",
+  "setting_differences": [
+    "Current author example: 200 epochs and16 hidden features; AppendixE runtime measurement uses10 folds x500 epochs and32 filters. Do not equate the runtime protocol with an explicitly established node-classification accuracy budget.",
+    "Example fixes q0.25 and tests last epoch; paper classification adopts original MagNet settings/hyperparameter search.",
+    "CPU execution and pinned2026 source/current dependencies differ from paper GPU benchmark/source era.",
+    "Script prints ten Split Test_Acc lines but no author aggregate. Any derived mean/SD must retain all values, units, count and SD convention.",
+    "AppendixE's3000 epochs/500 patience applies to link prediction, not this classification command."
+  ],
+  "measured_values": [],
+  "comparison_completed": false,
+  "paper_metrics_verified": false,
+  "is_reproduced": null,
+  "rule": "No measured result exists. Missing pairing/source evidence or no finite traced metric means formal comparison fails; do not manufacture values, shrink protocol or promise a pass."
+}

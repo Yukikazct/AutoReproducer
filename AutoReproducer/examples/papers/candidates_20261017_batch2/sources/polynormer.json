@@ -1,0 +1,39 @@
+{
+  "kind": "static_source_provenance",
+  "paper_id": "polynormer",
+  "source_id": "arxiv:2403.01232",
+  "requested_pdf_url": "https://arxiv.org/pdf/2403.01232",
+  "version_identified_from_pdf_page1": "v3",
+  "versioned_pdf_url": "https://arxiv.org/pdf/2403.01232v3",
+  "pdf": {
+    "file": "examples/papers/candidates_20261017_batch2/polynormer.pdf",
+    "bytes": 1144011,
+    "pages": 26,
+    "sha256": "b48d05ad91bc923b4406b3cc4d29295ccc3ea23ffebfb82fc5fcdaa0af48bb7c"
+  },
+  "downloaded_at_utc": null,
+  "download_time_note": "Original download HTTP timestamp/final redirect was not recorded; do not substitute this staging timestamp.",
+  "author_repository_from_pdf": {
+    "page": 1,
+    "url": "https://github.com/cornell-zhang/Polynormer"
+  },
+  "repository": {
+    "url": "https://github.com/cornell-zhang/Polynormer",
+    "revision": "fc8c276c9c5dfbd616d83f65338a3392188a5e08",
+    "commit_url": "https://github.com/cornell-zhang/Polynormer/commit/fc8c276c9c5dfbd616d83f65338a3392188a5e08",
+    "checkout_read_only": "D:\\code\\AutoReproducer\\.tmp\\next-pdf-candidates\\Polynormer",
+    "clean_worktree_observed": true
+  },
+  "author_source_file_sha256": {
+    "README.md": "e85b3c230c2424fe7e9b418a9cf3d7a747ab3bff0f619a58766103ddae3c0331",
+    "run.sh": "29782466af1e37571dae849a1d355f3099a9fb1893f6d1e216fd7a58b7746c8a",
+    "main.py": "886f55fa67b306721f2e9d4c32b25cda7d7a0d8758a4eaa4a4b3094581ecc500",
+    "parse.py": "e5cd6635b5a8521a1dfe94842090c3231238e853d01cf579d1ef03ed7d4a9075",
+    "dataset.py": "5e209d48413c76be6b5a149b836a7e139e09f160482a39930e59b0b7f1f70f01",
+    "logger.py": "493f03d53f3bf9b71e3926f7adac569995e8385443983296497f3212bbc2e751",
+    "data/amazon-photo_split.npz": "0609f6ab15ddabfe33a34f10d960d09499e634472f72104abb1f3be858127432"
+  },
+  "staged_at": "2026-10-17T09:52:42.166886+00:00",
+  "training_started": false,
+  "product_specific_repair_performed": false
+}

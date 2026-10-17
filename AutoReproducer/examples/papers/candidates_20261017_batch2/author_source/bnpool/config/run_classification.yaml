@@ -1,0 +1,23 @@
+defaults:
+  - default
+  - override dataset: mutag
+  - _self_
+
+#### Training params
+optimizer:
+  hparams:
+    lr: 1e-3
+
+lr_scheduler:
+  hparams:
+    patience: 150
+
+epochs: 100000
+
+callbacks:
+  patience: 500
+  monitor: ${dataset.callbacks.monitor}
+  mode: ${dataset.callbacks.mode}
+  params_scheduling:
+    activate: true
+    epochs: 300
