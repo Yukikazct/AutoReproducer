@@ -1,0 +1,1261 @@
+{
+  "scope": "Exact user-specified retired-paper command regression; not automatic PDF planning or independent numerical acceptance",
+  "producer_commit": "558049c7545eacb0897d30ffcb9e543faa88d345",
+  "producer_source_sha256": "4bb1e7bc769743c5ed245be0d4a594b95127e8656cae1ee57ccf75328e2e76dc",
+  "producer_source_unchanged": true,
+  "repository": {
+    "url": "https://github.com/ivam-he/ChebNetII",
+    "revision": "ded6c18cbe9673234071031767d17826ad632aca"
+  },
+  "archive_sha256": "d080eb4e4e97e0abbccc1d8854ce1147019c92feaea0b10ac1637c797caa3b2c",
+  "argv": [
+    "python",
+    "training.py",
+    "--net",
+    "ChebNetII",
+    "--dataset",
+    "Cora",
+    "--K",
+    "10",
+    "--prop_lr",
+    "0.001",
+    "--prop_wd",
+    "0.05",
+    "--dprate",
+    "0.8",
+    "--semi_rnd",
+    "True"
+  ],
+  "cwd": "main",
+  "timeout_s": null,
+  "original_source_and_bundled_data_unchanged": true,
+  "cora_inputs": {
+    "main/data/cora/.DS_Store": {
+      "sha256": "1c3c661fbf88bf89e3b9dc27698d23b6c41a77d1ba2ac6d0531281f56d0a37a8",
+      "bytes": 6148
+    },
+    "main/data/cora/cora/.DS_Store": {
+      "sha256": "d65165279105ca6773180500688df4bdc69a2c7b771752f0a46ef120b7fd8ec3",
+      "bytes": 6148
+    },
+    "main/data/cora/cora/processed/data.pt": {
+      "sha256": "a703cd242fee898ce244eb7fad2a0e084a4750f76dffcbc48c65491318567939",
+      "bytes": 15723336
+    },
+    "main/data/cora/cora/processed/pre_filter.pt": {
+      "sha256": "d8e85a693a769ec1ab202c65c24be372d509f1d39b15df13aff87ce8cb3b87a9",
+      "bytes": 864
+    },
+    "main/data/cora/cora/processed/pre_transform.pt": {
+      "sha256": "d8e85a693a769ec1ab202c65c24be372d509f1d39b15df13aff87ce8cb3b87a9",
+      "bytes": 864
+    },
+    "main/data/cora/cora/raw/ind.cora.allx": {
+      "sha256": "9419ba2f26f5c35243db64aba110e0f35a04851609e0dc5433450676ca6b8543",
+      "bytes": 257305
+    },
+    "main/data/cora/cora/raw/ind.cora.ally": {
+      "sha256": "2b998f5cc7fedc86e7f97ca2498f47a1ffc1462c29e2d578b23bf3f62b6e7d71",
+      "bytes": 47959
+    },
+    "main/data/cora/cora/raw/ind.cora.graph": {
+      "sha256": "58f13302f39dde8852dad6fe6d15b89b077b6d7f837626bce671ef80344b383d",
+      "bytes": 59847
+    },
+    "main/data/cora/cora/raw/ind.cora.test.index": {
+      "sha256": "297ce89af2b51a6a194181c7dbe1796c6a1cf9cd9349a88383b1b1e227867875",
+      "bytes": 5000
+    },
+    "main/data/cora/cora/raw/ind.cora.tx": {
+      "sha256": "b9afbaa4a400df991f6f02ef677e1e44da55ffc04801fd02f9e673987829226a",
+      "bytes": 148025
+    },
+    "main/data/cora/cora/raw/ind.cora.ty": {
+      "sha256": "41f5ac76596a1699cc33f53084a2419e92961c42bb75f36fc38e616d348532ad",
+      "bytes": 28135
+    },
+    "main/data/cora/cora/raw/ind.cora.x": {
+      "sha256": "23cfa55d91c6f624233f5eb7b6e3f141f1bd2b2ae39608a63cf5d084bb27baab",
+      "bytes": 22119
+    },
+    "main/data/cora/cora/raw/ind.cora.y": {
+      "sha256": "94465c14eb53e04ca262198dcbb2521ee8af60fb3f3d546cd6ca24a511b0e7d1",
+      "bytes": 4054
+    }
+  },
+  "cora_inputs_after": {
+    "main/data/cora/.DS_Store": {
+      "sha256": "1c3c661fbf88bf89e3b9dc27698d23b6c41a77d1ba2ac6d0531281f56d0a37a8",
+      "bytes": 6148
+    },
+    "main/data/cora/cora/.DS_Store": {
+      "sha256": "d65165279105ca6773180500688df4bdc69a2c7b771752f0a46ef120b7fd8ec3",
+      "bytes": 6148
+    },
+    "main/data/cora/cora/processed/data.pt": {
+      "sha256": "a703cd242fee898ce244eb7fad2a0e084a4750f76dffcbc48c65491318567939",
+      "bytes": 15723336
+    },
+    "main/data/cora/cora/processed/pre_filter.pt": {
+      "sha256": "d8e85a693a769ec1ab202c65c24be372d509f1d39b15df13aff87ce8cb3b87a9",
+      "bytes": 864
+    },
+    "main/data/cora/cora/processed/pre_transform.pt": {
+      "sha256": "d8e85a693a769ec1ab202c65c24be372d509f1d39b15df13aff87ce8cb3b87a9",
+      "bytes": 864
+    },
+    "main/data/cora/cora/raw/ind.cora.allx": {
+      "sha256": "9419ba2f26f5c35243db64aba110e0f35a04851609e0dc5433450676ca6b8543",
+      "bytes": 257305
+    },
+    "main/data/cora/cora/raw/ind.cora.ally": {
+      "sha256": "2b998f5cc7fedc86e7f97ca2498f47a1ffc1462c29e2d578b23bf3f62b6e7d71",
+      "bytes": 47959
+    },
+    "main/data/cora/cora/raw/ind.cora.graph": {
+      "sha256": "58f13302f39dde8852dad6fe6d15b89b077b6d7f837626bce671ef80344b383d",
+      "bytes": 59847
+    },
+    "main/data/cora/cora/raw/ind.cora.test.index": {
+      "sha256": "297ce89af2b51a6a194181c7dbe1796c6a1cf9cd9349a88383b1b1e227867875",
+      "bytes": 5000
+    },
+    "main/data/cora/cora/raw/ind.cora.tx": {
+      "sha256": "b9afbaa4a400df991f6f02ef677e1e44da55ffc04801fd02f9e673987829226a",
+      "bytes": 148025
+    },
+    "main/data/cora/cora/raw/ind.cora.ty": {
+      "sha256": "41f5ac76596a1699cc33f53084a2419e92961c42bb75f36fc38e616d348532ad",
+      "bytes": 28135
+    },
+    "main/data/cora/cora/raw/ind.cora.x": {
+      "sha256": "23cfa55d91c6f624233f5eb7b6e3f141f1bd2b2ae39608a63cf5d084bb27baab",
+      "bytes": 22119
+    },
+    "main/data/cora/cora/raw/ind.cora.y": {
+      "sha256": "94465c14eb53e04ca262198dcbb2521ee8af60fb3f3d546cd6ca24a511b0e7d1",
+      "bytes": 4054
+    }
+  },
+  "all_raw_and_processed_inputs_unchanged": true,
+  "runs": [
+    {
+      "seed": 1941488137,
+      "arguments": {
+        "seed": 1941488137,
+        "epochs": 1000,
+        "lr": 0.01,
+        "weight_decay": 0.0005,
+        "early_stopping": 200,
+        "hidden": 64,
+        "dropout": 0.5,
+        "train_rate": 0.025,
+        "val_rate": 0.025,
+        "K": 10,
+        "alpha": 0.1,
+        "dprate": 0.8,
+        "dataset": "Cora",
+        "device": 0,
+        "runs": 10,
+        "net": "ChebNetII",
+        "prop_lr": 0.001,
+        "prop_wd": 0.05,
+        "q": 0,
+        "full": false,
+        "semi_rnd": true,
+        "semi_fix": false
+      },
+      "epochs_completed": 536,
+      "test_accuracy": 0.824,
+      "validation_accuracy": 0.82
+    },
+    {
+      "seed": 4198936517,
+      "arguments": {
+        "seed": 4198936517,
+        "epochs": 1000,
+        "lr": 0.01,
+        "weight_decay": 0.0005,
+        "early_stopping": 200,
+        "hidden": 64,
+        "dropout": 0.5,
+        "train_rate": 0.025,
+        "val_rate": 0.025,
+        "K": 10,
+        "alpha": 0.1,
+        "dprate": 0.8,
+        "dataset": "Cora",
+        "device": 0,
+        "runs": 10,
+        "net": "ChebNetII",
+        "prop_lr": 0.001,
+        "prop_wd": 0.05,
+        "q": 0,
+        "full": false,
+        "semi_rnd": true,
+        "semi_fix": false
+      },
+      "epochs_completed": 584,
+      "test_accuracy": 0.825,
+      "validation_accuracy": 0.82
+    },
+    {
+      "seed": 983997847,
+      "arguments": {
+        "seed": 983997847,
+        "epochs": 1000,
+        "lr": 0.01,
+        "weight_decay": 0.0005,
+        "early_stopping": 200,
+        "hidden": 64,
+        "dropout": 0.5,
+        "train_rate": 0.025,
+        "val_rate": 0.025,
+        "K": 10,
+        "alpha": 0.1,
+        "dprate": 0.8,
+        "dataset": "Cora",
+        "device": 0,
+        "runs": 10,
+        "net": "ChebNetII",
+        "prop_lr": 0.001,
+        "prop_wd": 0.05,
+        "q": 0,
+        "full": false,
+        "semi_rnd": true,
+        "semi_fix": false
+      },
+      "epochs_completed": 497,
+      "test_accuracy": 0.843,
+      "validation_accuracy": 0.848
+    },
+    {
+      "seed": 4023022221,
+      "arguments": {
+        "seed": 4023022221,
+        "epochs": 1000,
+        "lr": 0.01,
+        "weight_decay": 0.0005,
+        "early_stopping": 200,
+        "hidden": 64,
+        "dropout": 0.5,
+        "train_rate": 0.025,
+        "val_rate": 0.025,
+        "K": 10,
+        "alpha": 0.1,
+        "dprate": 0.8,
+        "dataset": "Cora",
+        "device": 0,
+        "runs": 10,
+        "net": "ChebNetII",
+        "prop_lr": 0.001,
+        "prop_wd": 0.05,
+        "q": 0,
+        "full": false,
+        "semi_rnd": true,
+        "semi_fix": false
+      },
+      "epochs_completed": 596,
+      "test_accuracy": 0.804,
+      "validation_accuracy": 0.798
+    },
+    {
+      "seed": 4019585660,
+      "arguments": {
+        "seed": 4019585660,
+        "epochs": 1000,
+        "lr": 0.01,
+        "weight_decay": 0.0005,
+        "early_stopping": 200,
+        "hidden": 64,
+        "dropout": 0.5,
+        "train_rate": 0.025,
+        "val_rate": 0.025,
+        "K": 10,
+        "alpha": 0.1,
+        "dprate": 0.8,
+        "dataset": "Cora",
+        "device": 0,
+        "runs": 10,
+        "net": "ChebNetII",
+        "prop_lr": 0.001,
+        "prop_wd": 0.05,
+        "q": 0,
+        "full": false,
+        "semi_rnd": true,
+        "semi_fix": false
+      },
+      "epochs_completed": 449,
+      "test_accuracy": 0.795,
+      "validation_accuracy": 0.8
+    },
+    {
+      "seed": 2108550661,
+      "arguments": {
+        "seed": 2108550661,
+        "epochs": 1000,
+        "lr": 0.01,
+        "weight_decay": 0.0005,
+        "early_stopping": 200,
+        "hidden": 64,
+        "dropout": 0.5,
+        "train_rate": 0.025,
+        "val_rate": 0.025,
+        "K": 10,
+        "alpha": 0.1,
+        "dprate": 0.8,
+        "dataset": "Cora",
+        "device": 0,
+        "runs": 10,
+        "net": "ChebNetII",
+        "prop_lr": 0.001,
+        "prop_wd": 0.05,
+        "q": 0,
+        "full": false,
+        "semi_rnd": true,
+        "semi_fix": false
+      },
+      "epochs_completed": 561,
+      "test_accuracy": 0.809,
+      "validation_accuracy": 0.834
+    },
+    {
+      "seed": 1648766618,
+      "arguments": {
+        "seed": 1648766618,
+        "epochs": 1000,
+        "lr": 0.01,
+        "weight_decay": 0.0005,
+        "early_stopping": 200,
+        "hidden": 64,
+        "dropout": 0.5,
+        "train_rate": 0.025,
+        "val_rate": 0.025,
+        "K": 10,
+        "alpha": 0.1,
+        "dprate": 0.8,
+        "dataset": "Cora",
+        "device": 0,
+        "runs": 10,
+        "net": "ChebNetII",
+        "prop_lr": 0.001,
+        "prop_wd": 0.05,
+        "q": 0,
+        "full": false,
+        "semi_rnd": true,
+        "semi_fix": false
+      },
+      "epochs_completed": 509,
+      "test_accuracy": 0.857,
+      "validation_accuracy": 0.824
+    },
+    {
+      "seed": 629014539,
+      "arguments": {
+        "seed": 629014539,
+        "epochs": 1000,
+        "lr": 0.01,
+        "weight_decay": 0.0005,
+        "early_stopping": 200,
+        "hidden": 64,
+        "dropout": 0.5,
+        "train_rate": 0.025,
+        "val_rate": 0.025,
+        "K": 10,
+        "alpha": 0.1,
+        "dprate": 0.8,
+        "dataset": "Cora",
+        "device": 0,
+        "runs": 10,
+        "net": "ChebNetII",
+        "prop_lr": 0.001,
+        "prop_wd": 0.05,
+        "q": 0,
+        "full": false,
+        "semi_rnd": true,
+        "semi_fix": false
+      },
+      "epochs_completed": 484,
+      "test_accuracy": 0.816,
+      "validation_accuracy": 0.798
+    },
+    {
+      "seed": 3212139042,
+      "arguments": {
+        "seed": 3212139042,
+        "epochs": 1000,
+        "lr": 0.01,
+        "weight_decay": 0.0005,
+        "early_stopping": 200,
+        "hidden": 64,
+        "dropout": 0.5,
+        "train_rate": 0.025,
+        "val_rate": 0.025,
+        "K": 10,
+        "alpha": 0.1,
+        "dprate": 0.8,
+        "dataset": "Cora",
+        "device": 0,
+        "runs": 10,
+        "net": "ChebNetII",
+        "prop_lr": 0.001,
+        "prop_wd": 0.05,
+        "q": 0,
+        "full": false,
+        "semi_rnd": true,
+        "semi_fix": false
+      },
+      "epochs_completed": 528,
+      "test_accuracy": 0.841,
+      "validation_accuracy": 0.848
+    },
+    {
+      "seed": 2424918363,
+      "arguments": {
+        "seed": 2424918363,
+        "epochs": 1000,
+        "lr": 0.01,
+        "weight_decay": 0.0005,
+        "early_stopping": 200,
+        "hidden": 64,
+        "dropout": 0.5,
+        "train_rate": 0.025,
+        "val_rate": 0.025,
+        "K": 10,
+        "alpha": 0.1,
+        "dprate": 0.8,
+        "dataset": "Cora",
+        "device": 0,
+        "runs": 10,
+        "net": "ChebNetII",
+        "prop_lr": 0.001,
+        "prop_wd": 0.05,
+        "q": 0,
+        "full": false,
+        "semi_rnd": true,
+        "semi_fix": false
+      },
+      "epochs_completed": 572,
+      "test_accuracy": 0.83,
+      "validation_accuracy": 0.852
+    }
+  ],
+  "splits": [
+    {
+      "counts": {
+        "train_mask": 140,
+        "val_mask": 500,
+        "test_mask": 1000
+      },
+      "mask_sha256": {
+        "train_mask": "9733a54cec18742d34d21f54f6ba95790d241828ec52ad0e4bf71fc9508115ac",
+        "val_mask": "b2a82c4eeb39e4368dca756506f2bb04ffce510f899e42cef51f1fe8cff0d012",
+        "test_mask": "3e31a459e9a39ed605d4d7de44c087335f533da0c47acd86be3f316e4b13917a"
+      },
+      "nodes": 2708,
+      "train_per_class": [
+        20,
+        20,
+        20,
+        20,
+        20,
+        20,
+        20
+      ],
+      "disjoint": true,
+      "tensor_sha256": {
+        "x": "1a213087243ca1ee26967d0809d04997d276f0911fe5f8d994f49b3aa873b675",
+        "y": "d0018d7ffd314eb25a4904973f2c7eb1b7be135d668de42d453714724f8e9d03",
+        "edge_index": "299cb541efef8bc7bdf70e07e44b206c5ce6419ab16e878cb585acd5a695b459"
+      }
+    },
+    {
+      "counts": {
+        "train_mask": 140,
+        "val_mask": 500,
+        "test_mask": 1000
+      },
+      "mask_sha256": {
+        "train_mask": "dca310f905ef1427f531ea068859229b776a8b7de6bd73a7875950c65548a289",
+        "val_mask": "539eaaec435e0bd834dff1233b967f181c76924f8e97c1d0e0168d40a728d9d8",
+        "test_mask": "2b02e0524d0d691b1a62785e77b21aa434c5db81c44786168bfbb916755770e0"
+      },
+      "nodes": 2708,
+      "train_per_class": [
+        20,
+        20,
+        20,
+        20,
+        20,
+        20,
+        20
+      ],
+      "disjoint": true,
+      "tensor_sha256": {
+        "x": "1a213087243ca1ee26967d0809d04997d276f0911fe5f8d994f49b3aa873b675",
+        "y": "d0018d7ffd314eb25a4904973f2c7eb1b7be135d668de42d453714724f8e9d03",
+        "edge_index": "299cb541efef8bc7bdf70e07e44b206c5ce6419ab16e878cb585acd5a695b459"
+      }
+    },
+    {
+      "counts": {
+        "train_mask": 140,
+        "val_mask": 500,
+        "test_mask": 1000
+      },
+      "mask_sha256": {
+        "train_mask": "1d5771a430752a9be3b59597744350a5e82579e0c271c1e7a7d526b81b33c3a0",
+        "val_mask": "013cf28100498fc4f1604db391c6da636bf0f8bb035420e3aa0986a96e2a05f1",
+        "test_mask": "7dab1647e96817f28e4fb1b0ad52d29fe2e104e2573a72acc9e87bacdef47fed"
+      },
+      "nodes": 2708,
+      "train_per_class": [
+        20,
+        20,
+        20,
+        20,
+        20,
+        20,
+        20
+      ],
+      "disjoint": true,
+      "tensor_sha256": {
+        "x": "1a213087243ca1ee26967d0809d04997d276f0911fe5f8d994f49b3aa873b675",
+        "y": "d0018d7ffd314eb25a4904973f2c7eb1b7be135d668de42d453714724f8e9d03",
+        "edge_index": "299cb541efef8bc7bdf70e07e44b206c5ce6419ab16e878cb585acd5a695b459"
+      }
+    },
+    {
+      "counts": {
+        "train_mask": 140,
+        "val_mask": 500,
+        "test_mask": 1000
+      },
+      "mask_sha256": {
+        "train_mask": "9abeac86dd242f271f0a3a3d538444301dd393984f6edfe1157cf7b064d97f3e",
+        "val_mask": "d5ce0dc905dcf3ef33cba95972d13b976a22b58e25cc114f24c8725016c1f3f1",
+        "test_mask": "e1e357646db2cab75a5bf39d2cbffcb9f996972f7dc811f1f36efad4bbb7eca2"
+      },
+      "nodes": 2708,
+      "train_per_class": [
+        20,
+        20,
+        20,
+        20,
+        20,
+        20,
+        20
+      ],
+      "disjoint": true,
+      "tensor_sha256": {
+        "x": "1a213087243ca1ee26967d0809d04997d276f0911fe5f8d994f49b3aa873b675",
+        "y": "d0018d7ffd314eb25a4904973f2c7eb1b7be135d668de42d453714724f8e9d03",
+        "edge_index": "299cb541efef8bc7bdf70e07e44b206c5ce6419ab16e878cb585acd5a695b459"
+      }
+    },
+    {
+      "counts": {
+        "train_mask": 140,
+        "val_mask": 500,
+        "test_mask": 1000
+      },
+      "mask_sha256": {
+        "train_mask": "58e10fae6cc129d05a90c5c123f9e049f8876d21e7d5b68426f02c20f84c5b8d",
+        "val_mask": "8a4afc6408497648f9045cd79c826dd65bc7bf76db35029e9b3fb2cd02a20384",
+        "test_mask": "9109ff4d48ef0be6a7ec3a429e41dee092500a081ea7fe4491183ebd180e75e1"
+      },
+      "nodes": 2708,
+      "train_per_class": [
+        20,
+        20,
+        20,
+        20,
+        20,
+        20,
+        20
+      ],
+      "disjoint": true,
+      "tensor_sha256": {
+        "x": "1a213087243ca1ee26967d0809d04997d276f0911fe5f8d994f49b3aa873b675",
+        "y": "d0018d7ffd314eb25a4904973f2c7eb1b7be135d668de42d453714724f8e9d03",
+        "edge_index": "299cb541efef8bc7bdf70e07e44b206c5ce6419ab16e878cb585acd5a695b459"
+      }
+    },
+    {
+      "counts": {
+        "train_mask": 140,
+        "val_mask": 500,
+        "test_mask": 1000
+      },
+      "mask_sha256": {
+        "train_mask": "0a6459b51d86125deb96404cf55c0b7ec27ea49049b87394ba219ca3bb1c5c70",
+        "val_mask": "c406cc942167598550627e29985d7da47a6413f7d6659c8759aaa08c802fa631",
+        "test_mask": "3a51b6ccb522553d44de9511c656a9e3735976f1095742c9beff1958b073e298"
+      },
+      "nodes": 2708,
+      "train_per_class": [
+        20,
+        20,
+        20,
+        20,
+        20,
+        20,
+        20
+      ],
+      "disjoint": true,
+      "tensor_sha256": {
+        "x": "1a213087243ca1ee26967d0809d04997d276f0911fe5f8d994f49b3aa873b675",
+        "y": "d0018d7ffd314eb25a4904973f2c7eb1b7be135d668de42d453714724f8e9d03",
+        "edge_index": "299cb541efef8bc7bdf70e07e44b206c5ce6419ab16e878cb585acd5a695b459"
+      }
+    },
+    {
+      "counts": {
+        "train_mask": 140,
+        "val_mask": 500,
+        "test_mask": 1000
+      },
+      "mask_sha256": {
+        "train_mask": "c7506dc71eadd6adef100683e343991e03e2b37a2ca71bc945075b9a3f6212fc",
+        "val_mask": "31fd50715fc38c5b60ec2572e0d44bba56edf0ac16114a154b611ae13f4ce355",
+        "test_mask": "6f27a35142ff3a31e9cfc4b0497092b972c4622bbadd4835d94f924e083b569a"
+      },
+      "nodes": 2708,
+      "train_per_class": [
+        20,
+        20,
+        20,
+        20,
+        20,
+        20,
+        20
+      ],
+      "disjoint": true,
+      "tensor_sha256": {
+        "x": "1a213087243ca1ee26967d0809d04997d276f0911fe5f8d994f49b3aa873b675",
+        "y": "d0018d7ffd314eb25a4904973f2c7eb1b7be135d668de42d453714724f8e9d03",
+        "edge_index": "299cb541efef8bc7bdf70e07e44b206c5ce6419ab16e878cb585acd5a695b459"
+      }
+    },
+    {
+      "counts": {
+        "train_mask": 140,
+        "val_mask": 500,
+        "test_mask": 1000
+      },
+      "mask_sha256": {
+        "train_mask": "068c1c4b4eec4d93ef46299408004c53237fd9db2f8ab2cfd0ba9e8df61197ac",
+        "val_mask": "ee9c662611e54d3a181bb92cf8de83ca6746730d50e3a1808e53547b54230fe2",
+        "test_mask": "5f3a2ec37745367291b5006902627adece66e220be88ca5c4ccc3e42f89654b3"
+      },
+      "nodes": 2708,
+      "train_per_class": [
+        20,
+        20,
+        20,
+        20,
+        20,
+        20,
+        20
+      ],
+      "disjoint": true,
+      "tensor_sha256": {
+        "x": "1a213087243ca1ee26967d0809d04997d276f0911fe5f8d994f49b3aa873b675",
+        "y": "d0018d7ffd314eb25a4904973f2c7eb1b7be135d668de42d453714724f8e9d03",
+        "edge_index": "299cb541efef8bc7bdf70e07e44b206c5ce6419ab16e878cb585acd5a695b459"
+      }
+    },
+    {
+      "counts": {
+        "train_mask": 140,
+        "val_mask": 500,
+        "test_mask": 1000
+      },
+      "mask_sha256": {
+        "train_mask": "e2510d1532b691ff30fa3c34c27da057dacf7b570b107272e6cc74802d840d96",
+        "val_mask": "80a112df8f36c8df8f90d945a7b734b5b28a0fe81aa71010274b9430cce91eb3",
+        "test_mask": "0a9579bee4a96cde3e9e25e386050ae194176590337c086482cbe4f71fe45b44"
+      },
+      "nodes": 2708,
+      "train_per_class": [
+        20,
+        20,
+        20,
+        20,
+        20,
+        20,
+        20
+      ],
+      "disjoint": true,
+      "tensor_sha256": {
+        "x": "1a213087243ca1ee26967d0809d04997d276f0911fe5f8d994f49b3aa873b675",
+        "y": "d0018d7ffd314eb25a4904973f2c7eb1b7be135d668de42d453714724f8e9d03",
+        "edge_index": "299cb541efef8bc7bdf70e07e44b206c5ce6419ab16e878cb585acd5a695b459"
+      }
+    },
+    {
+      "counts": {
+        "train_mask": 140,
+        "val_mask": 500,
+        "test_mask": 1000
+      },
+      "mask_sha256": {
+        "train_mask": "081910851327ef62f99ba274cb8e5362a34e74937fdf31af10dabc14aa3c7aed",
+        "val_mask": "4115ed8584fd42c82ceba4b28d007e7028fd36e18d8699b4650457a92ebef976",
+        "test_mask": "84bcaeff82fbb587f17472920d23b86c1369d549613e4c58e34474d1dd63a988"
+      },
+      "nodes": 2708,
+      "train_per_class": [
+        20,
+        20,
+        20,
+        20,
+        20,
+        20,
+        20
+      ],
+      "disjoint": true,
+      "tensor_sha256": {
+        "x": "1a213087243ca1ee26967d0809d04997d276f0911fe5f8d994f49b3aa873b675",
+        "y": "d0018d7ffd314eb25a4904973f2c7eb1b7be135d668de42d453714724f8e9d03",
+        "edge_index": "299cb541efef8bc7bdf70e07e44b206c5ce6419ab16e878cb585acd5a695b459"
+      }
+    }
+  ],
+  "optimizer_steps": 5316,
+  "natural_return": true,
+  "exit_code": 0,
+  "metric_records": [
+    {
+      "name": "epochs",
+      "value": 1000.0,
+      "unit": "",
+      "split": "",
+      "stage": "",
+      "source": "train_cora:stdout:1",
+      "source_quote": "Namespace(seed=42, epochs=1000, lr=0.01, weight_decay=0.0005, early_stopping=200, hidden=64, dropout=0.5, train_rate=0.6, val_rate=0.2, K=10, alpha=0.1, dprate=0.8, dataset='Cora', device=0, runs=10, net='ChebNetII', prop_lr=0.001, prop_wd=0.05, q=0, full=False, semi_rnd=True, semi_fix=False)",
+      "id": "train_cora:stdout:0",
+      "step_id": "train_cora"
+    },
+    {
+      "name": "lr",
+      "value": 0.01,
+      "unit": "",
+      "split": "",
+      "stage": "",
+      "source": "train_cora:stdout:1",
+      "source_quote": "Namespace(seed=42, epochs=1000, lr=0.01, weight_decay=0.0005, early_stopping=200, hidden=64, dropout=0.5, train_rate=0.6, val_rate=0.2, K=10, alpha=0.1, dprate=0.8, dataset='Cora', device=0, runs=10, net='ChebNetII', prop_lr=0.001, prop_wd=0.05, q=0, full=False, semi_rnd=True, semi_fix=False)",
+      "id": "train_cora:stdout:1",
+      "step_id": "train_cora"
+    },
+    {
+      "name": "weight_decay",
+      "value": 0.0005,
+      "unit": "",
+      "split": "",
+      "stage": "",
+      "source": "train_cora:stdout:1",
+      "source_quote": "Namespace(seed=42, epochs=1000, lr=0.01, weight_decay=0.0005, early_stopping=200, hidden=64, dropout=0.5, train_rate=0.6, val_rate=0.2, K=10, alpha=0.1, dprate=0.8, dataset='Cora', device=0, runs=10, net='ChebNetII', prop_lr=0.001, prop_wd=0.05, q=0, full=False, semi_rnd=True, semi_fix=False)",
+      "id": "train_cora:stdout:2",
+      "step_id": "train_cora"
+    },
+    {
+      "name": "early_stopping",
+      "value": 200.0,
+      "unit": "",
+      "split": "",
+      "stage": "",
+      "source": "train_cora:stdout:1",
+      "source_quote": "Namespace(seed=42, epochs=1000, lr=0.01, weight_decay=0.0005, early_stopping=200, hidden=64, dropout=0.5, train_rate=0.6, val_rate=0.2, K=10, alpha=0.1, dprate=0.8, dataset='Cora', device=0, runs=10, net='ChebNetII', prop_lr=0.001, prop_wd=0.05, q=0, full=False, semi_rnd=True, semi_fix=False)",
+      "id": "train_cora:stdout:3",
+      "step_id": "train_cora"
+    },
+    {
+      "name": "hidden",
+      "value": 64.0,
+      "unit": "",
+      "split": "",
+      "stage": "",
+      "source": "train_cora:stdout:1",
+      "source_quote": "Namespace(seed=42, epochs=1000, lr=0.01, weight_decay=0.0005, early_stopping=200, hidden=64, dropout=0.5, train_rate=0.6, val_rate=0.2, K=10, alpha=0.1, dprate=0.8, dataset='Cora', device=0, runs=10, net='ChebNetII', prop_lr=0.001, prop_wd=0.05, q=0, full=False, semi_rnd=True, semi_fix=False)",
+      "id": "train_cora:stdout:4",
+      "step_id": "train_cora"
+    },
+    {
+      "name": "dropout",
+      "value": 0.5,
+      "unit": "",
+      "split": "",
+      "stage": "",
+      "source": "train_cora:stdout:1",
+      "source_quote": "Namespace(seed=42, epochs=1000, lr=0.01, weight_decay=0.0005, early_stopping=200, hidden=64, dropout=0.5, train_rate=0.6, val_rate=0.2, K=10, alpha=0.1, dprate=0.8, dataset='Cora', device=0, runs=10, net='ChebNetII', prop_lr=0.001, prop_wd=0.05, q=0, full=False, semi_rnd=True, semi_fix=False)",
+      "id": "train_cora:stdout:5",
+      "step_id": "train_cora"
+    },
+    {
+      "name": "rate",
+      "value": 0.6,
+      "unit": "",
+      "split": "train",
+      "stage": "train",
+      "source": "train_cora:stdout:1",
+      "source_quote": "Namespace(seed=42, epochs=1000, lr=0.01, weight_decay=0.0005, early_stopping=200, hidden=64, dropout=0.5, train_rate=0.6, val_rate=0.2, K=10, alpha=0.1, dprate=0.8, dataset='Cora', device=0, runs=10, net='ChebNetII', prop_lr=0.001, prop_wd=0.05, q=0, full=False, semi_rnd=True, semi_fix=False)",
+      "id": "train_cora:stdout:6",
+      "step_id": "train_cora"
+    },
+    {
+      "name": "rate",
+      "value": 0.2,
+      "unit": "",
+      "split": "validation",
+      "stage": "validation",
+      "source": "train_cora:stdout:1",
+      "source_quote": "Namespace(seed=42, epochs=1000, lr=0.01, weight_decay=0.0005, early_stopping=200, hidden=64, dropout=0.5, train_rate=0.6, val_rate=0.2, K=10, alpha=0.1, dprate=0.8, dataset='Cora', device=0, runs=10, net='ChebNetII', prop_lr=0.001, prop_wd=0.05, q=0, full=False, semi_rnd=True, semi_fix=False)",
+      "id": "train_cora:stdout:7",
+      "step_id": "train_cora"
+    },
+    {
+      "name": "k",
+      "value": 10.0,
+      "unit": "",
+      "split": "",
+      "stage": "",
+      "source": "train_cora:stdout:1",
+      "source_quote": "Namespace(seed=42, epochs=1000, lr=0.01, weight_decay=0.0005, early_stopping=200, hidden=64, dropout=0.5, train_rate=0.6, val_rate=0.2, K=10, alpha=0.1, dprate=0.8, dataset='Cora', device=0, runs=10, net='ChebNetII', prop_lr=0.001, prop_wd=0.05, q=0, full=False, semi_rnd=True, semi_fix=False)",
+      "id": "train_cora:stdout:8",
+      "step_id": "train_cora"
+    },
+    {
+      "name": "alpha",
+      "value": 0.1,
+      "unit": "",
+      "split": "",
+      "stage": "",
+      "source": "train_cora:stdout:1",
+      "source_quote": "Namespace(seed=42, epochs=1000, lr=0.01, weight_decay=0.0005, early_stopping=200, hidden=64, dropout=0.5, train_rate=0.6, val_rate=0.2, K=10, alpha=0.1, dprate=0.8, dataset='Cora', device=0, runs=10, net='ChebNetII', prop_lr=0.001, prop_wd=0.05, q=0, full=False, semi_rnd=True, semi_fix=False)",
+      "id": "train_cora:stdout:9",
+      "step_id": "train_cora"
+    },
+    {
+      "name": "dprate",
+      "value": 0.8,
+      "unit": "",
+      "split": "",
+      "stage": "",
+      "source": "train_cora:stdout:1",
+      "source_quote": "Namespace(seed=42, epochs=1000, lr=0.01, weight_decay=0.0005, early_stopping=200, hidden=64, dropout=0.5, train_rate=0.6, val_rate=0.2, K=10, alpha=0.1, dprate=0.8, dataset='Cora', device=0, runs=10, net='ChebNetII', prop_lr=0.001, prop_wd=0.05, q=0, full=False, semi_rnd=True, semi_fix=False)",
+      "id": "train_cora:stdout:10",
+      "step_id": "train_cora"
+    },
+    {
+      "name": "device",
+      "value": 0.0,
+      "unit": "",
+      "split": "",
+      "stage": "",
+      "source": "train_cora:stdout:1",
+      "source_quote": "Namespace(seed=42, epochs=1000, lr=0.01, weight_decay=0.0005, early_stopping=200, hidden=64, dropout=0.5, train_rate=0.6, val_rate=0.2, K=10, alpha=0.1, dprate=0.8, dataset='Cora', device=0, runs=10, net='ChebNetII', prop_lr=0.001, prop_wd=0.05, q=0, full=False, semi_rnd=True, semi_fix=False)",
+      "runs": 10,
+      "id": "train_cora:stdout:11",
+      "step_id": "train_cora"
+    },
+    {
+      "name": "prop_lr",
+      "value": 0.001,
+      "unit": "",
+      "split": "",
+      "stage": "",
+      "source": "train_cora:stdout:1",
+      "source_quote": "Namespace(seed=42, epochs=1000, lr=0.01, weight_decay=0.0005, early_stopping=200, hidden=64, dropout=0.5, train_rate=0.6, val_rate=0.2, K=10, alpha=0.1, dprate=0.8, dataset='Cora', device=0, runs=10, net='ChebNetII', prop_lr=0.001, prop_wd=0.05, q=0, full=False, semi_rnd=True, semi_fix=False)",
+      "id": "train_cora:stdout:12",
+      "step_id": "train_cora"
+    },
+    {
+      "name": "prop_wd",
+      "value": 0.05,
+      "unit": "",
+      "split": "",
+      "stage": "",
+      "source": "train_cora:stdout:1",
+      "source_quote": "Namespace(seed=42, epochs=1000, lr=0.01, weight_decay=0.0005, early_stopping=200, hidden=64, dropout=0.5, train_rate=0.6, val_rate=0.2, K=10, alpha=0.1, dprate=0.8, dataset='Cora', device=0, runs=10, net='ChebNetII', prop_lr=0.001, prop_wd=0.05, q=0, full=False, semi_rnd=True, semi_fix=False)",
+      "id": "train_cora:stdout:13",
+      "step_id": "train_cora"
+    },
+    {
+      "name": "q",
+      "value": 0.0,
+      "unit": "",
+      "split": "",
+      "stage": "",
+      "source": "train_cora:stdout:1",
+      "source_quote": "Namespace(seed=42, epochs=1000, lr=0.01, weight_decay=0.0005, early_stopping=200, hidden=64, dropout=0.5, train_rate=0.6, val_rate=0.2, K=10, alpha=0.1, dprate=0.8, dataset='Cora', device=0, runs=10, net='ChebNetII', prop_lr=0.001, prop_wd=0.05, q=0, full=False, semi_rnd=True, semi_fix=False)",
+      "id": "train_cora:stdout:14",
+      "step_id": "train_cora"
+    },
+    {
+      "name": "accuracy",
+      "value": 82.44,
+      "unit": "",
+      "split": "test",
+      "stage": "final",
+      "source": "train_cora:stdout:26",
+      "source_quote": "test acc mean = 82.4400 ± 1.1700  \t val acc mean = 82.4200",
+      "aggregation": "mean",
+      "reported_uncertainty": 1.17,
+      "uncertainty_kind": "bootstrap_confidence_interval",
+      "confidence_level": 95,
+      "uncertainty_source": {
+        "path": "main/training.py",
+        "source_sha256": "5b5a3a9785922429526586bc2c33b8bd3235b81a2ff4f94d319c9c710d70118b",
+        "definition_line": 184,
+        "print_line": 186
+      },
+      "id": "train_cora:stdout:15",
+      "step_id": "train_cora"
+    },
+    {
+      "name": "accuracy",
+      "value": 82.42,
+      "unit": "",
+      "split": "validation",
+      "stage": "validation",
+      "source": "train_cora:stdout:26",
+      "source_quote": "test acc mean = 82.4400 ± 1.1700  \t val acc mean = 82.4200",
+      "aggregation": "mean",
+      "id": "train_cora:stdout:16",
+      "step_id": "train_cora"
+    }
+  ],
+  "metric_parse_errors": [],
+  "repair_attempts": [
+    {
+      "attempt": 0,
+      "exit_code": 1
+    },
+    {
+      "attempt": 1,
+      "exit_code": 1,
+      "repair": {
+        "kind": "numpy_ragged_summary",
+        "path": "main/training.py",
+        "source_sha256": "5b5a3a9785922429526586bc2c33b8bd3235b81a2ff4f94d319c9c710d70118b",
+        "variable": "results",
+        "numpy_alias": "np",
+        "schema": {
+          "rows": 10,
+          "columns": [
+            {
+              "kind": "scalar"
+            },
+            {
+              "kind": "scalar"
+            },
+            {
+              "kind": "array",
+              "shape": [
+                11
+              ],
+              "dtype": "float32"
+            }
+          ]
+        },
+        "calls": [
+          {
+            "line": 181,
+            "column": 37,
+            "operation": "mean",
+            "original_expression": "np.mean(results, axis=0)"
+          },
+          {
+            "line": 182,
+            "column": 27,
+            "operation": "var",
+            "original_expression": "np.var(results, axis=0)"
+          }
+        ],
+        "error": "setting an array element with a sequence. The requested array has an inhomogeneous shape after 2 dimensions. The detected shape was (10, 3) + inhomogeneous part."
+      }
+    },
+    {
+      "attempt": 2,
+      "exit_code": 0
+    },
+    {
+      "attempt": 3,
+      "exit_code": 0
+    }
+  ],
+  "paper_metrics_verified": false,
+  "is_reproduced": null,
+  "process_cleanup": "run_owned_process completed its process-group lifetime before returning; no timeout or cancellation",
+  "retained_test_cache": "D:\\code\\AutoReproducer\\.tmp\\maintenance-native-cpu-5dwdv3ia\\deps\\repository\\cpython-312-win32-AMD64\\e0e779fe9fc3a367",
+  "control_root": "D:\\code\\AutoReproducer\\.tmp\\acceptance-chebnetii-cora-8akt_qpe",
+  "stdout_sha256": "91e39fb32442cd38c0f46d1ab122879f56c182358c6228d63883b3625bf13aa9",
+  "input_reload_verification": {
+    "method": "Read-only reload through the unchanged author DataLoader and original NormalizeFeatures transform, after the final complete command. This is input correspondence, not independent model reload or metric evaluation.",
+    "processed_paths": [
+      "data\\cora\\cora\\processed\\data.pt"
+    ],
+    "raw_paths": [
+      "data\\cora\\cora\\raw\\ind.cora.x",
+      "data\\cora\\cora\\raw\\ind.cora.tx",
+      "data\\cora\\cora\\raw\\ind.cora.allx",
+      "data\\cora\\cora\\raw\\ind.cora.y",
+      "data\\cora\\cora\\raw\\ind.cora.ty",
+      "data\\cora\\cora\\raw\\ind.cora.ally",
+      "data\\cora\\cora\\raw\\ind.cora.graph",
+      "data\\cora\\cora\\raw\\ind.cora.test.index"
+    ],
+    "nodes": 2708,
+    "edges": 10556,
+    "features": 1433,
+    "classes": 7,
+    "tensor_sha256": {
+      "x": "1a213087243ca1ee26967d0809d04997d276f0911fe5f8d994f49b3aa873b675",
+      "y": "d0018d7ffd314eb25a4904973f2c7eb1b7be135d668de42d453714724f8e9d03",
+      "edge_index": "299cb541efef8bc7bdf70e07e44b206c5ce6419ab16e878cb585acd5a695b459"
+    },
+    "all_ten_run_inputs_match_author_loader": true,
+    "all_raw_and_processed_digests_unchanged": true,
+    "processed_origin": "Generated by the original PyG author loader from the bundled raw Cora files during the initial full attempt; already existed before final attempt 3."
+  },
+  "cleanup": {
+    "finished_at": "2026-10-17T06:23:29.729065+00:00",
+    "owned_processes_remaining": [],
+    "temporary_author_dependencies_removed": true,
+    "removed_path": "D:\\code\\AutoReproducer\\.tmp\\acceptance-chebnetii-cora-8akt_qpe\\extras",
+    "freed_bytes": 205986665,
+    "training_interpreter": "Reused standard application CPython; no additional training interpreter was created.",
+    "native_fixture_retained_for_dedicated_tests": "D:\\code\\AutoReproducer\\.tmp\\maintenance-native-cpu-5dwdv3ia\\deps\\repository\\cpython-312-win32-AMD64\\e0e779fe9fc3a367",
+    "source_and_logs_retained": true,
+    "errors": []
+  },
+  "runtime_manifest": {
+    "isolated_author_extras": {
+      "path": "D:\\code\\AutoReproducer\\.tmp\\acceptance-chebnetii-cora-8akt_qpe\\extras",
+      "packages": [
+        {
+          "name": "contourpy",
+          "version": "1.3.3"
+        },
+        {
+          "name": "cycler",
+          "version": "0.12.1"
+        },
+        {
+          "name": "fonttools",
+          "version": "4.67.0"
+        },
+        {
+          "name": "kiwisolver",
+          "version": "1.5.1"
+        },
+        {
+          "name": "matplotlib",
+          "version": "3.9.4"
+        },
+        {
+          "name": "numpy",
+          "version": "1.26.4"
+        },
+        {
+          "name": "packaging",
+          "version": "26.3"
+        },
+        {
+          "name": "pandas",
+          "version": "2.2.3"
+        },
+        {
+          "name": "pillow",
+          "version": "13.0.0"
+        },
+        {
+          "name": "pyparsing",
+          "version": "3.3.3"
+        },
+        {
+          "name": "python-dateutil",
+          "version": "2.9.0.post0"
+        },
+        {
+          "name": "pytz",
+          "version": "2026.5"
+        },
+        {
+          "name": "seaborn",
+          "version": "0.13.2"
+        },
+        {
+          "name": "six",
+          "version": "1.17.0"
+        },
+        {
+          "name": "tzdata",
+          "version": "2026.5"
+        }
+      ]
+    },
+    "dedicated_native_test_fixture": {
+      "path": "D:\\code\\AutoReproducer\\.tmp\\maintenance-native-cpu-5dwdv3ia\\deps\\repository\\cpython-312-win32-AMD64\\e0e779fe9fc3a367",
+      "packages": [
+        {
+          "name": "aiohappyeyeballs",
+          "version": "2.7.1"
+        },
+        {
+          "name": "aiohttp",
+          "version": "3.10.10"
+        },
+        {
+          "name": "aiosignal",
+          "version": "1.4.0"
+        },
+        {
+          "name": "attrs",
+          "version": "26.1.0"
+        },
+        {
+          "name": "certifi",
+          "version": "2026.7.22"
+        },
+        {
+          "name": "charset-normalizer",
+          "version": "3.5.2"
+        },
+        {
+          "name": "cloudpickle",
+          "version": "3.1.2"
+        },
+        {
+          "name": "colorama",
+          "version": "0.4.6"
+        },
+        {
+          "name": "filelock",
+          "version": "4.2.0"
+        },
+        {
+          "name": "frozenlist",
+          "version": "1.8.0"
+        },
+        {
+          "name": "fsspec",
+          "version": "2024.10.0"
+        },
+        {
+          "name": "idna",
+          "version": "3.20"
+        },
+        {
+          "name": "Jinja2",
+          "version": "3.1.6"
+        },
+        {
+          "name": "joblib",
+          "version": "1.6.0"
+        },
+        {
+          "name": "MarkupSafe",
+          "version": "3.0.4"
+        },
+        {
+          "name": "mpmath",
+          "version": "1.3.0"
+        },
+        {
+          "name": "multidict",
+          "version": "7.1.0"
+        },
+        {
+          "name": "networkx",
+          "version": "2.8.8"
+        },
+        {
+          "name": "numpy",
+          "version": "1.26.4"
+        },
+        {
+          "name": "propcache",
+          "version": "0.5.4"
+        },
+        {
+          "name": "psutil",
+          "version": "6.1.0"
+        },
+        {
+          "name": "pyparsing",
+          "version": "3.2.0"
+        },
+        {
+          "name": "requests",
+          "version": "2.32.3"
+        },
+        {
+          "name": "scikit-learn",
+          "version": "1.5.2"
+        },
+        {
+          "name": "scipy",
+          "version": "1.14.1"
+        },
+        {
+          "name": "setuptools",
+          "version": "84.0.0"
+        },
+        {
+          "name": "sympy",
+          "version": "1.13.1"
+        },
+        {
+          "name": "threadpoolctl",
+          "version": "3.7.0"
+        },
+        {
+          "name": "torch",
+          "version": "2.5.1+cpu"
+        },
+        {
+          "name": "torch-geometric",
+          "version": "2.6.1"
+        },
+        {
+          "name": "torch_scatter",
+          "version": "2.1.2+pt25cpu"
+        },
+        {
+          "name": "torch_sparse",
+          "version": "0.6.18+pt25cpu"
+        },
+        {
+          "name": "tqdm",
+          "version": "4.67.1"
+        },
+        {
+          "name": "typing_extensions",
+          "version": "4.16.0"
+        },
+        {
+          "name": "urllib3",
+          "version": "2.8.0"
+        },
+        {
+          "name": "yarl",
+          "version": "1.25.1"
+        }
+      ]
+    }
+  },
+  "summary": {
+    "completed_runs": 10,
+    "test_accuracy_mean_percent": 82.44,
+    "optimizer_steps": 5316,
+    "statistics": "The author printed uncertainty is the 95% bootstrap confidence interval half-width, not standard deviation. No independent checkpoint reload or metric evaluation was performed."
+  },
+  "complete_logs_archive": {
+    "path": "docs/evidence/chebnetii_cora_regression_20261017_logs.zip",
+    "sha256": "c9f3e5d8d429aa1100a0230817b0b0f6690fda7e2a4fea3748f8e8e486573a03",
+    "files": 28,
+    "bytes": 104243
+  }
+}

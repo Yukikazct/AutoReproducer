@@ -8,7 +8,7 @@
 | --- | --- | --- | --- |
 | #20 | 多文件事务、两轮显式修复、完整回滚；`run_with_repairs` API | 原子拒绝、取消、受保护文件和回滚错误回归 | 网页显式入口未接入，后续阶段完成 |
 | #27 | PDF 仓库发现、原命令、有限错误修复、指标比较、网页/MD/ZIP | DGC 比较回归；NodeFormer、DIFFormer 完整执行 | 冻结当前修复后，用新 PDF 完成全流程验收 |
-| #30 | bundled 数据提示、旧 PyG/NumPy 兼容 | Chameleon 十次；指定 Cora 十次已自然结束、5316 次更新 | 再完整执行一次，补齐首次生成的 processed 文件运行前后摘要；独立复算另行跟踪 |
+| #30 | bundled 数据提示、旧 PyG/NumPy 兼容 | 指定 Cora 十次自然结束、5316 次更新；raw/processed 前后摘要与输入张量核对通过 | 精确命令回归完成；独立模型重载、指标复算和论文协议完整核对仍待完成，issue 保持开放 |
 | #34 | 原生 DGL 1.1.2 构造器及 raw/processed、mask、文件变化观测 | CCA-SSG 2050 次更新，原生 Cora 输入记录不变 | 与独立官方来源及论文协议核对，仍未完成 |
 | #41 | 训练解释器依赖健康、原生检查、输入观测、统计口径及引用验证 | CPU/PyG、DGL、pip 24.0 及真实作者日志 | 复用已有捕获能力，接入完整协议和独立指标复算 |
 | #42 | 尚无安装包验收 | 无 | 后续阶段，不以启动器代替复现能力验收 |
@@ -48,4 +48,22 @@ python scripts/verify_browser_pdf_holdout.py --pdf <pdf> --repo <repo> --freeze 
 
 GCNH 在 PDF 第 4 页给出作者仓库和 Table I，包含公开 Cornell/Cora 原始数据及十份划分；作者代码通过 CUDA 可用性判断保留 CPU 分支。GREAD 的 CPU 分支明确，但 pykeops 可能需要 Windows 原生编译器，作为已记录的安装风险保留。Critical Look 的 `--device` 及 Dataset 的默认 CPU 参数提供作者支持的 CPU 路径，保留十次运行和 1000 步；分类 accuracy 与其他数据集的 ROC AUC 必须分别比较。DropGNN 因原 Python 3.8 环境不在当前声明支持范围内，在训练前排除。
 
-Cora 回归及新 PDF 验收结果随实际完成追加；本文件不是完成声明。
+## #30：Cora 精确命令回归完成
+
+作者提交 `ded6c18cbe9673234071031767d17826ad632aca`，工作目录 `main/`，完整原命令：
+
+```text
+python training.py --net ChebNetII --dataset Cora --K 10 --prop_lr 0.001 --prop_wd 0.05 --dprate 0.8 --semi_rnd True
+```
+
+最后完整轮次固定产品源码于 `558049c`，十次均保留作者固定种子、最高 1000 轮、early stopping 200 和最低验证损失的模型选择规则。合计 **5316 次优化器更新**，自然退出 0。十份 mask 均为 **140/500/1000**，7 类各 20 个训练节点，互不重叠。测试均值 **82.4400**；作者打印的 **±1.1503** 是 **95% bootstrap 置信区间半宽**，不能当作标准差。
+
+实际输入来自作者自带的 Cora raw 文件；PyG processed 文件由原加载器在首轮尝试中生成。最后十次执行前后记录全部 **13 个 raw/processed 及目录附带文件**，完整集合、大小及 SHA-256 一致。作者加载器只读重载后，`x/y/edge_index` 的张量摘要与十次训练输入全部一致；这仅核对输入对应关系，不是独立模型或指标复算。
+
+历史尝试全部保留：首次缺少 matplotlib、随后十次训练后的 NumPy ragged 汇总失败、现有源码约束兼容修复后的自然成功，以及补齐 processed 前后摘要后的完整十次成功。修复只作用于经过校验的最终统计表达式，原作者 122 个版本内文件摘要不变。没有缩短轮次、减少次数或调整种子。
+
+结束后所属作者进程为零；移除本次额外测试依赖 **205,986,665 字节**，标准应用 CPython 和专用原生测试 fixture 保留。完整命令、规划、全部 stdout/stderr、逐次结果、mask 摘要和清理回执见[结构化证据](evidence/chebnetii_cora_regression_20261017.json)及[完整日志归档](evidence/chebnetii_cora_regression_20261017_logs.zip)。这次固定命令回归没有重新做自动 PDF 规划或独立数值验收；`paper_metrics_verified=false`、`is_reproduced=null`。
+
+执行、比较、环境清理及进程完成契约检查另有 **173 passed / 13 skipped**；这些原生用例由专用环境继续实测，不能把跳过当作原生能力通过。
+
+新 PDF 验收结果随实际完成追加；本文件不是 #27 完成声明。
