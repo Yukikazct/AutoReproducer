@@ -48,7 +48,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           "VIRTUAL_ENV=$ciEnvironment" >> $env:GITHUB_ENV
           (Join-Path $ciEnvironment $scriptsDirectory) >> $env:GITHUB_PATH
-          $nativeDeps = Join-Path $env:RUNNER_TEMP 'autoreproducer-native-deps'
+          $nativeFingerprint = & $ciPython -c "from src.runtime_platform import runtime_fingerprint; print(runtime_fingerprint())"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $nativeDeps = Join-Path (Join-Path (Join-Path $env:RUNNER_TEMP 'autoreproducer-native/deps/repository') $nativeFingerprint) 'reviewed'
           "NATIVE_DEPS=$nativeDeps" >> $env:GITHUB_ENV
       - name: Install reviewed CPU runtime
         run: >-
