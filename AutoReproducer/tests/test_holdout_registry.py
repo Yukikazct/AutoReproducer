@@ -175,3 +175,16 @@ def test_project_registry_contains_retired_recent_papers_and_all_archived_pdf_ha
                  'examples/papers/candidates_20261017/manifest.json'):
         manifest = json.loads((root / name).read_text('utf-8'))
         assert all(p['sha256'] in recorded for p in manifest['papers'])
+
+
+def test_historical_runtime_receipts_and_wrong_paper_download_keep_separate_identities():
+    root = Path(__file__).resolve().parents[1]
+    data = registry.load_registry(root)
+    receipts = json.loads((root / 'docs/evidence/historical_pdf_provenance_20261017.json').read_text('utf-8'))
+    for receipt in receipts['receipts']:
+        paper = registry.select_paper(data, receipt['paper_id'])
+        assert paper['status'] == 'regression'
+        assert receipt['pdf_sha256'] in paper['pdf_sha256']
+    rejected = next(row for row in receipts['receipts'] if row['original_preflight_rejected'])
+    assert rejected['pdf_sha256'] not in registry.select_paper(data, 'nodeformer')['pdf_sha256']
+    assert registry.select_paper(data, rejected['paper_id'])['title'].startswith('Prediction of quaternary hydrides')

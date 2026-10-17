@@ -346,9 +346,12 @@
         "digcn"
       ],
       "source_ids": [
-        "arxiv:2008.12472"
+        "arxiv:2008.12472",
+        "https://papers.nips.cc/paper/2020/file/cffb6e2288a630c2a787a64ccc67097c-paper.pdf"
       ],
-      "pdf_sha256": [],
+      "pdf_sha256": [
+        "1fd2ec4b7b04b7735f53c5ddf5f438fb88ea6bbb7a5817d8da7605ecbb967eff"
+      ],
       "status": "regression",
       "retirement_reason": "Trial precedes later product repairs; retained as a regression, not an unused candidate.",
       "history": [
@@ -356,6 +359,11 @@
           "outcome": "trial_before_product_repair",
           "frozen_commit": "17248a3",
           "evidence": "docs/evidence/digcn_holdout_20261013_05.json"
+        },
+        {
+          "outcome": "historical_pdf_provenance_merged",
+          "frozen_commit": null,
+          "evidence": "docs/evidence/historical_pdf_provenance_20261017.json#digcn_holdout_20261013_05.provenance.json"
         }
       ],
       "repository_url": "https://github.com/flyingtango/DiGCN"
@@ -364,8 +372,12 @@
       "id": "dissecting-the-diffusion-process-in-linear-graph-convolutional-networks",
       "title": "Dissecting the Diffusion Process in Linear Graph Convolutional Networks",
       "aliases": [],
-      "source_ids": [],
-      "pdf_sha256": [],
+      "source_ids": [
+        "arxiv:2102.10739"
+      ],
+      "pdf_sha256": [
+        "295dae352e820b0db6817ca5b6ec5f338bb27c74c39960f4eb519aec2842307e"
+      ],
       "status": "regression",
       "retirement_reason": "Previously used for development or regression; excluded by the historical freeze policy.",
       "history": [
@@ -373,6 +385,11 @@
           "outcome": "historically_excluded",
           "frozen_commit": null,
           "evidence": "git:0f3fd59:AutoReproducer/scripts/freeze_holdout_source.py"
+        },
+        {
+          "outcome": "historical_pdf_provenance_merged",
+          "frozen_commit": null,
+          "evidence": "docs/evidence/historical_pdf_provenance_20261017.json#dgc_holdout_20261013_02.provenance.json"
         }
       ]
     },
@@ -458,8 +475,12 @@
       "id": "evennet-ignoring-odd-hop-neighbors-improves-robustness-of-graph-neural-networks",
       "title": "EvenNet: Ignoring Odd-Hop Neighbors Improves Robustness of Graph Neural Networks",
       "aliases": [],
-      "source_ids": [],
-      "pdf_sha256": [],
+      "source_ids": [
+        "arxiv:2205.13892"
+      ],
+      "pdf_sha256": [
+        "ec48177104be6a7140ea812a32222518a8c0e5bdf54a2fe999bf56cf8dd5ce76"
+      ],
       "status": "regression",
       "retirement_reason": "Previously used for development or regression; excluded by the historical freeze policy.",
       "history": [
@@ -467,6 +488,11 @@
           "outcome": "historically_excluded",
           "frozen_commit": null,
           "evidence": "git:0f3fd59:AutoReproducer/scripts/freeze_holdout_source.py"
+        },
+        {
+          "outcome": "historical_pdf_provenance_merged",
+          "frozen_commit": null,
+          "evidence": "docs/evidence/historical_pdf_provenance_20261017.json#evennet_holdout_20261013_03.provenance.json"
         }
       ]
     },
@@ -477,10 +503,12 @@
         "glognn"
       ],
       "source_ids": [
-        "arxiv:2205.07308"
+        "arxiv:2205.07308",
+        "https://proceedings.mlr.press/v162/li22ad/li22ad.pdf"
       ],
       "pdf_sha256": [
-        "0eba6207e064e6c87ccc1a921321cf061aa0589dc2d6e995ba73fa87a8c94b0a"
+        "0eba6207e064e6c87ccc1a921321cf061aa0589dc2d6e995ba73fa87a8c94b0a",
+        "d1a742d12b988f1e4d0bf9fc2840793b5b4b911d9d25043f497cbed2727d0a58"
       ],
       "status": "regression",
       "retirement_reason": "Previously used for development or regression; excluded by the historical freeze policy.",
@@ -494,6 +522,11 @@
           "outcome": "retired_after_platform_reciprocal_repair",
           "frozen_commit": null,
           "evidence": "examples/papers/candidates_20261012/manifest.json#glognn.pdf"
+        },
+        {
+          "outcome": "historical_pdf_provenance_merged",
+          "frozen_commit": null,
+          "evidence": "docs/evidence/historical_pdf_provenance_20261017.json#issue27_glognn_20261015_01.provenance.json"
         }
       ],
       "repository_url": "https://github.com/RecklessRonan/GloGNN"
@@ -749,8 +782,12 @@
       "id": "graph-structure-learning-for-robust-graph-neural-networks",
       "title": "Graph Structure Learning for Robust Graph Neural Networks",
       "aliases": [],
-      "source_ids": [],
-      "pdf_sha256": [],
+      "source_ids": [
+        "arxiv:2005.10203"
+      ],
+      "pdf_sha256": [
+        "32191b55ab5fd8fbafc5db5591233f44ca256181fb79d825b33a4c24a1367657"
+      ],
       "status": "regression",
       "retirement_reason": "Previously used for development or regression; excluded by the historical freeze policy.",
       "history": [
@@ -758,6 +795,11 @@
           "outcome": "historically_excluded",
           "frozen_commit": null,
           "evidence": "git:0f3fd59:AutoReproducer/scripts/freeze_holdout_source.py"
+        },
+        {
+          "outcome": "historical_pdf_provenance_merged",
+          "frozen_commit": null,
+          "evidence": "docs/evidence/historical_pdf_provenance_20261017.json#prognn_2005.10203_holdout_20261013_01.provenance.json"
         }
       ]
     },
@@ -903,8 +945,12 @@
       "id": "hyperbolic-graph-convolutional-neural-networks",
       "title": "Hyperbolic Graph Convolutional Neural Networks",
       "aliases": [],
-      "source_ids": [],
-      "pdf_sha256": [],
+      "source_ids": [
+        "arxiv:1910.12933"
+      ],
+      "pdf_sha256": [
+        "b5ca6d85e2e2b63d46fe7216fcff9317a574dea1678d4405725c6157442b1956"
+      ],
       "status": "regression",
       "retirement_reason": "Previously used for development or regression; excluded by the historical freeze policy.",
       "history": [
@@ -912,6 +958,11 @@
           "outcome": "historically_excluded",
           "frozen_commit": null,
           "evidence": "git:0f3fd59:AutoReproducer/scripts/freeze_holdout_source.py"
+        },
+        {
+          "outcome": "historical_pdf_provenance_merged",
+          "frozen_commit": null,
+          "evidence": "docs/evidence/historical_pdf_provenance_20261017.json#hgcn_holdout_20261013_04.provenance.json"
         }
       ]
     },
@@ -1121,6 +1172,26 @@
         }
       ],
       "repository_url": "https://github.com/klicperajo/ppnp"
+    },
+    {
+      "id": "quarantined-arxiv-2206-04971-hydrides",
+      "title": "Prediction of quaternary hydrides based on densest ternary sphere packings",
+      "aliases": [],
+      "source_ids": [
+        "arxiv:2206.04971"
+      ],
+      "pdf_sha256": [
+        "4cbd288470211bd362651e6b9b2b25b16344dea4c0a78c5d68ae44763beb4613"
+      ],
+      "status": "regression",
+      "retirement_reason": "PDF title preflight rejected this unrelated hydrides paper when it was downloaded as NodeFormer. Quarantined by its actual title, source identity and hash; never claim NodeFormer execution evidence.",
+      "history": [
+        {
+          "outcome": "rejected_wrong_paper_pdf",
+          "frozen_commit": null,
+          "evidence": "docs/evidence/historical_pdf_provenance_20261017.json#independent_nodeformer_20261016_01.provenance.json"
+        }
+      ]
     },
     {
       "id": "r-fcn-object-detection-via-region-based-fully-convolutional-networks",
