@@ -80,6 +80,36 @@ def test_missing_entrypoint_diagnostics_do_not_allow_path_escape(tmp_path):
         resolve_entrypoint({'argv': ['python', '../outside.py']}, packet, fixture['workspace'])
 
 
+@pytest.mark.parametrize('script', ['train.py', './train.py', 'nested/train.py'])
+def test_inventory_script_target_matches_original_argv_from_nested_cwd(tmp_path, script):
+    fixture = make_experiment(tmp_path)
+    source_path = 'experiments/' + Path(script).as_posix()
+    add_file(fixture, source_path, (fixture['workspace'] / 'train.py').read_text('utf-8'))
+    packet = packet_for(fixture)
+    argv = ['python3', '-u', script, '--epochs', '17']
+    selected = proposal(fixture, {'argv': argv, 'cwd': 'experiments',
+                                  'entrypoint': {'kind': 'script', 'target': source_path}})
+    plan = validate_author_execution_plan(selected, packet, fixture['workspace'])
+    assert plan['steps'][0]['argv'] == argv
+    assert plan['steps'][0]['cwd'] == 'experiments'
+    assert plan['steps'][0]['entrypoint'] == {
+        'kind': 'script', 'target': script, 'source_path': source_path}
+
+
+@pytest.mark.parametrize('explicit', [
+    {'kind': 'script', 'target': 'other/train.py'},
+    {'kind': 'module', 'target': 'experiments.train'},
+])
+def test_explicit_entrypoint_cannot_redirect_the_original_nested_command(tmp_path, explicit):
+    fixture = make_experiment(tmp_path)
+    for path in ('experiments/train.py', 'other/train.py'):
+        add_file(fixture, path, 'import torch\n')
+    packet = packet_for(fixture)
+    with pytest.raises(ValueError, match='differs from the original argv'):
+        resolve_entrypoint({'argv': ['python', 'train.py'], 'cwd': 'experiments',
+                            'entrypoint': explicit}, packet, fixture['workspace'])
+
+
 def test_legacy_syntax_reaches_model_feedback_and_keeps_runtime_failure_kind(tmp_path):
     fixture = make_experiment(tmp_path)
     add_file(fixture, 'README.md', 'Legacy implementation: legacy/train.py.\n')

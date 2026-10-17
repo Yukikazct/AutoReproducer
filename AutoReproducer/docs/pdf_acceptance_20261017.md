@@ -80,4 +80,14 @@ python main.py --dataset cornell --epochs 300 --nlayers 1 --verbose False --mode
 
 修复将最终网页报告、附件、已校验图片和结构化结果同步到运行目录；保存失败明确返回错误，并使历史终态一致，保留作者训练完成的原始事实。ZIP 同时携带报告声明的完整输出附件。新增无图/有图及 ZIP 附件回归先复现失败，修复后相关检查 **167 passed / 4 skipped**；跳过的是缺少可选 matplotlib 的绘图用例，不作为原生能力证据。真实 GCNH 保存结果的副本回放已确认报告、结构化记录及 ZIP 完整输出附件一致，未重训且没有修改原始证据；该回放仍只是回归。修复提交并通过 CI 后重新冻结，按既定顺序进入 **GREAD**。
 
-新 PDF 验收结果随实际完成追加；本文件不是 #27 完成声明。
+## 第二篇：GREAD 因入口身份校验缺陷退役
+
+报告修复后的 `9357bd7` [普通 CI](https://github.com/Yukikazct/AutoReproducer/actions/runs/39013932764) 与[原生 CPU CI](https://github.com/Yukikazct/AutoReproducer/actions/runs/39013932782) 全部通过，PR 检查亦全绿。PyG 两平台各 **51 passed**，DGL 各 **14 passed**，零跳过；[完整版本和 JUnit 摘要](evidence/pdf_acceptance_report_fix_ci_20261017.json)已保存。
+
+GREAD 真实网页上传与 API 连接成功，冻结该提交的 152 个源码文件，摘要 `fccddd17550ae9a9bf80a5c71519efcec7145385b5cc8efde55dd5e44d9946b2`。发现了正确作者提交 `f97ec01a17bb9cba1da2b89192b83cd7a25a250b`，但**在规划阶段失败，没有安装作者训练依赖或执行训练，也没有论文比较**。两次模型提案均正确给出 `cwd=src` 和原命令 `python run_GNN.py --dataset=Cora --use_best_params`，却因显式入口填入仓库路径 `src/run_GNN.py` 而被字符串相等检查拒绝；备用 README 命令提取随后在根目录寻找该脚本，仍失败。
+
+修复先解析原始 argv 和 cwd，再核对显式入口是否是同一个已固定作者文件；命令、工作目录及全部参数保持不变，指向其他文件或改变入口类型仍拒绝。三条等价路径回归先复现失败，修复后通过。使用真实被拒提案做的只读规划回放已通过，并确认原始运行文件没有改变；这不是训练或独立 PDF 通过。GREAD 已转为回归样本，活动 worker/run/execution 全为零，清理无残留；[失败与回放记录](evidence/gread_pdf_trial_20261017.json)及[完整原始证据](evidence/gread_pdf_trial_20261017_logs.zip)已保存。pykeops 安装等原先风险尚未走到，不能据此声称环境已验证。
+
+修复的原生执行与规划检查 **145 passed / 0 skipped**，退役身份与浏览器门槛检查 **60 passed / 0 skipped**；两组不相加。29 个固定作者文件的摘要全部未变。失败运行因没有已接受的仓库元数据，其正式成功路径的 `source_workspace_retained` 检查为 false；磁盘原始仓库已另外逐文件核对存在且未变，其余清理检查均通过，不能把该失败运行视为验收通过。
+
+修复提交并通过 CI 后将再次冻结，按固定顺序进入最后一篇 **Critical Look Heterophily**。新 PDF 验收结果随实际完成追加；本文件不是 #27 完成声明。

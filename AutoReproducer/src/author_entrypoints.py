@@ -88,7 +88,7 @@ def resolve_entrypoint(item, packet, workspace):
             kind, target, args = 'script', argv[index], argv[index + 1:]
         else:
             raise ValueError('Generated code and unsupported Python command cannot replace an author entrypoint')
-        if explicit and (explicit['kind'] != kind or explicit['target'] != target):
+        if explicit and explicit['kind'] != kind:
             raise ValueError('Author entrypoint differs from the original argv')
     cwd = item.get('cwd', '.')
     directory = workspace_path(workspace, cwd, 'author working directory', must_exist=True, forbid_git=True)
@@ -120,6 +120,11 @@ def resolve_entrypoint(item, packet, workspace):
     name = path.relative_to(Path(workspace).resolve()).as_posix()
     if name not in packet['file_inventory']:
         raise ValueError('Author entrypoint is absent from the pinned repository inventory')
+    # Inventory paths are repository-relative, whereas the unchanged argv is
+    # relative to cwd. Accept both only when they name this same pinned script.
+    if (explicit and explicit['target'] != target
+            and not (kind == 'script' and explicit['target'] == name)):
+        raise ValueError('Author entrypoint differs from the original argv')
     return {'kind': kind, 'target': target, 'source_path': name}, argv or [], args
 
 

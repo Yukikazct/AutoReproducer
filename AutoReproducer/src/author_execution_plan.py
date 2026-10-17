@@ -117,7 +117,9 @@ steps:[{id,kind:'train|eval',argv:['python','original.py',...] OR ['python','-m'
               'code, modify source, shorten training, substitute data, invent seeds or report reproduction. '
               'Use timeout_s:null; author commands run until they exit or the user cancels. '
               'Notebook entrypoints use entrypoint:{kind:"notebook",target:"original.ipynb"} '
-              'without argv; never pass a notebook to python as a script. Modules use python -m.')
+              'without argv; never pass a notebook to python as a script. Modules use python -m. '
+              'For a script, entrypoint.target may be the argv script token or its pinned '
+              'repository-relative path; preserve the original argv and working directory.')
     while len(failures) < 4:
         prompt = ('The user requests stable execution of the paper author\'s original repository code FIRST. '
             'Paper metric agreement, checkpoint export and independent predictions are subsequent work; '

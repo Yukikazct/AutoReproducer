@@ -851,7 +851,7 @@
       ],
       "repository_url": "https://github.com/jeongwhanchoi/GREAD",
       "repository_revision": "f97ec01a17bb9cba1da2b89192b83cd7a25a250b",
-      "status": "candidate",
+      "status": "regression",
       "candidate_order": 2,
       "history": [
         {
@@ -859,8 +859,16 @@
           "frozen_commit": null,
           "evidence": "docs/evidence/pdf_candidates_preflight_20261017.json#gread",
           "scope": "Static eligibility review only; no training or candidate-specific product repair."
+        },
+        {
+          "date": "2026-10-17",
+          "product_commit": "9357bd79fea7b5a0ec216ff45a3864785fb8f6e0",
+          "outcome": "retired_after_nested_entrypoint_identity_repair",
+          "evidence": "docs/evidence/gread_pdf_trial_20261017.json",
+          "details": "Original source was found; both LLM proposals were rejected because the explicit repository-relative entrypoint did not equal the cwd-relative argv token. No training or comparison occurred; owned scopes were zero after cleanup."
         }
-      ]
+      ],
+      "retirement_reason": "Triggered a product repair of nested original script identity validation; later trials are regression-only."
     },
     {
       "id": "how-attentive-are-graph-attention-networks",
