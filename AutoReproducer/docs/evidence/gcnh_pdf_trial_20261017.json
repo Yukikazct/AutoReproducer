@@ -184,5 +184,27 @@
     "passed": 167,
     "skipped": 4,
     "skips": "Optional matplotlib figure cases; not native capability evidence."
-  }
+  },
+  "real_history_ui_regression": {
+    "recorded_at": "2026-10-17T08:09:17.609072+00:00",
+    "kind": "real_history_ui_restore",
+    "session_id": "20261017_144840",
+    "original_state": "COMPLETED",
+    "product_commit": "37d8fd64b213e42fb127207ac7b80440207e0b0d",
+    "independent_claim": false,
+    "eligibility": null,
+    "history_view_report": true,
+    "comparison_table": "指标 / 数据集 / 方法\t论文宣称\t作者运行输出\t差值（实际 − 论文）\t结论\naccuracy / Cornell / GCNH\t86.49 ± 6.98%；均值，10 次\t0.8648648648648649（比例）；均值，10 次\t-0.003514 个百分点；相对差异 -0.00%\t仅供参考，尚未验收",
+    "markdown_matches_saved_result": true,
+    "markdown_zip_identical": true,
+    "execution_attachment_identical": true,
+    "no_new_task_created": true,
+    "original_result_and_report_unchanged": true
+  },
+  "history_archive": {
+    "file": "gcnh_history_restore_20261017_logs.zip",
+    "entries": 6,
+    "sha256": "dbeb7a27ffe91e871735688b5104cd56e4a3b1bbb6676f2e41684f3123f3cd0f"
+  },
+  "archive_sha256": "84b2db1aa64962a2b1716561dd22bde90104c33fbbaaf202d1b2d3e1ba8b91fb"
 }

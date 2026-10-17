@@ -199,7 +199,7 @@
       ],
       "repository_url": "https://github.com/yandex-research/heterophilous-graphs",
       "repository_revision": "a431395582e929d88271309716bea4fe24ce6318",
-      "status": "candidate",
+      "status": "regression",
       "candidate_order": 3,
       "history": [
         {
@@ -207,8 +207,16 @@
           "frozen_commit": null,
           "evidence": "docs/evidence/pdf_candidates_preflight_20261017.json#critical-look-heterophily",
           "scope": "Static eligibility review only; no training or candidate-specific product repair."
+        },
+        {
+          "date": "2026-10-17",
+          "product_commit": "37d8fd64b213e42fb127207ac7b80440207e0b0d",
+          "outcome": "retired_after_pdf_uri_ranking_repair",
+          "evidence": "docs/evidence/critical_look_pdf_trial_20261017.json",
+          "details": "The real PDF upload preview ranked a truncated text URL ahead of its complete same-page author URI. The browser stopped before task submission; no installation, training or comparison occurred. Later preview-only validation is regression evidence."
         }
-      ]
+      ],
+      "retirement_reason": "Triggered a product repair of internally split PDF repository links; subsequent uses are regression-only. All three predetermined candidates have now failed independent acceptance."
     },
     {
       "id": "deep-graph-contrastive-representation-learning",

@@ -304,3 +304,41 @@ def test_same_page_uri_and_visible_underscore_continuation_replace_truncated_can
     assert extract_repository_links([text, 'Other page'], [{'page': 2, 'raw_url': full, 'context': text}])[0]['url'] == prefix
     other_text = 'Our code is available at ' + prefix + '. Results follow.'
     assert extract_repository_links([other_text], [{'page': 1, 'raw_url': full, 'context': other_text}])[0]['url'] == prefix
+
+
+@pytest.mark.parametrize('gap', [' ', '\n'])
+def test_complete_uri_outranks_internally_split_text_without_dropping_provenance(gap):
+    prefix = 'https://github.com/research/method-gr'
+    full = prefix + 'aphs'
+    text = 'Our code is available at ' + prefix + gap + 'aphs .'
+    links = extract_repository_links([text], [{'page': 1, 'raw_url': full, 'context': text}])
+    assert links[0]['url'] == full and links[0]['source'] == 'pdf_annotation'
+    assert links[0]['is_author_code'] is True
+    truncated = next(link for link in links if link['url'] == prefix)
+    assert truncated['source'] == 'pdf_text' and truncated['raw_url'] == prefix
+    assert truncated['context'] == re.sub(r'\s+', ' ', text)
+
+
+@pytest.mark.parametrize('annotation_page,tail,claim', [
+    (2, 'aphs .', 'Our code is available at '),
+    (1, '. A different word.', 'Our code is available at '),
+    (1, 'aphsology .', 'Our code is available at '),
+    (1, 'aphs .', 'References\nOur code is available at '),
+])
+def test_incomplete_unrelated_or_reference_uri_does_not_override_visible_candidate(annotation_page, tail, claim):
+    prefix = 'https://github.com/research/method-gr'
+    full = prefix + 'aphs'
+    text = claim + prefix + ' ' + tail
+    annotation = {'page': annotation_page, 'raw_url': full, 'context': text}
+    links = extract_repository_links([text, 'Another page'], [annotation])
+    assert links[0]['url'] == prefix
+
+
+def test_ambiguous_spaced_uri_continuations_preserve_both_candidates():
+    prefix = 'https://github.com/research/method-gr'
+    text = 'Our code is available at ' + prefix + ' aphs or ' + prefix + ' aphic .'
+    annotations = [{'page': 1, 'raw_url': prefix + suffix, 'context': text}
+                   for suffix in ('aphs', 'aphic')]
+    links = extract_repository_links([text], annotations)
+    assert links[0]['url'] == prefix
+    assert {link['url'] for link in links} == {prefix, prefix + 'aphs', prefix + 'aphic'}

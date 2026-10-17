@@ -168,7 +168,8 @@ def test_json_round_trip_preserves_freeze_and_dependency_evidence(paper_root):
 def test_project_registry_contains_retired_recent_papers_and_all_archived_pdf_hashes():
     root = Path(__file__).resolve().parents[1]
     data = registry.load_registry(root)
-    for alias in ('ccassg', 'difformer', 'nodeformer', 'rfcn', 'correctandsmooth', 'graphcon', 'gcnh', 'gread'):
+    for alias in ('ccassg', 'difformer', 'nodeformer', 'rfcn', 'correctandsmooth', 'graphcon', 'gcnh', 'gread',
+                  'critical-look-heterophily', 'Critical Look Heterophily'):
         assert registry.select_paper(data, alias)['status'] == 'regression'
     recorded = {sha for paper in data['papers'] for sha in paper['pdf_sha256']}
     for name in ('examples/papers/manifest.json', 'examples/papers/candidates_20261012/manifest.json',

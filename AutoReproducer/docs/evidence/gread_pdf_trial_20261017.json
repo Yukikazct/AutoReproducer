@@ -273,5 +273,35 @@
     }
   },
   "pinned_repository_files_unchanged": 29,
-  "browser_cleanup_audit_note": "The failed-planning result has no accepted repository metadata, so its successful-run source_workspace_retained audit is false. The pinned workspace remains on disk and all inventory file hashes were independently checked; other cleanup checks passed. This is a failed trial, not an acceptance pass."
+  "browser_cleanup_audit_note": "The failed-planning result has no accepted repository metadata, so its successful-run source_workspace_retained audit is false. The pinned workspace remains on disk and all inventory file hashes were independently checked; other cleanup checks passed. This is a failed trial, not an acceptance pass.",
+  "regression_tests": [
+    {
+      "file": "gread_entrypoint_before_20261017.xml",
+      "tests": 5,
+      "passed": 2,
+      "failures": 3,
+      "errors": 0,
+      "skipped": 0,
+      "sha256": "c2cfc46a7153917033d315e43ec474b1c486589f93838cb6c2b86091d84cd511"
+    },
+    {
+      "file": "gread_entrypoint_native_20261017.xml",
+      "tests": 145,
+      "passed": 145,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "sha256": "e879e5fd7a0086c7143924ada6f4201935de499bb7830b38bed4f08e17aecf9b"
+    },
+    {
+      "file": "gread_retirement_gates_20261017.xml",
+      "tests": 60,
+      "passed": 60,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "sha256": "63c71a231d51ffd408b4621774c3f98db595d28932cb8d80858881a25df3173a"
+    }
+  ],
+  "archive_sha256": "e70bd638615830f15ec832ced0e13f4df4510f6e2f5b62202979f53932bf6c54"
 }
