@@ -1,4 +1,7 @@
 """Source fallback and user-run retry contracts; every pip invocation is mocked."""
+import base64
+import csv
+import hashlib
 import subprocess
 from pathlib import Path
 from unittest.mock import Mock
@@ -233,6 +236,180 @@ def test_cuda_native_health_rebuild_reuses_successful_domestic_source(monkeypatc
     assert [call["index"] for call in calls] == [MIRROR, ALIYUN, ALIYUN]
     assert [call["kwargs"]["timeout"] for call in calls] == [1800, 1800, 1800]
     assert [call["requirements"] for call in calls] == [CUDA_REQUIREMENTS] * 3
+
+
+def graphbolt_wheel_fixture(directory, record_state):
+    """An import failure plus real wheel metadata; no native library is loaded."""
+    directory.mkdir(parents=True, exist_ok=True)
+    package = directory / 'dgl'
+    graphbolt = package / 'graphbolt'
+    graphbolt.mkdir(parents=True)
+    (package / '__init__.py').write_text(
+        'from pathlib import Path\nimport torch\n'
+        "version = torch.__version__.split('+')[0]\n"
+        "library = Path(__file__).parent / 'graphbolt' / f'graphbolt_pytorch_{version}.dll'\n"
+        "raise FileNotFoundError(f'Cannot find DGL C++ graphbolt library at {library}')\n",
+        encoding='utf-8')
+    (graphbolt / '__init__.py').write_text('# Original GraphBolt loader location.\n', encoding='utf-8')
+    (graphbolt / 'graphbolt_pytorch_2.2.1.dll').write_bytes(b'fixture binary for a different Torch version')
+    (directory / 'torch.py').write_text("__version__ = '2.5.1'\n", encoding='utf-8')
+    for name, version in [('dgl', '2.2.1'), ('torch', '2.5.1')]:
+        metadata = directory / f'{name}-{version}.dist-info'
+        metadata.mkdir()
+        (metadata / 'METADATA').write_text(
+            f'Metadata-Version: 2.1\nName: {name}\nVersion: {version}\n', encoding='utf-8')
+        if name == 'dgl' and record_state != 'missing':
+            paths = ['dgl/__init__.py', 'dgl/graphbolt/__init__.py',
+                     'dgl/graphbolt/graphbolt_pytorch_2.2.1.dll', 'dgl-2.2.1.dist-info/METADATA']
+            with (metadata / 'RECORD').open('w', encoding='utf-8', newline='') as stream:
+                writer = csv.writer(stream)
+                for path in paths:
+                    raw = (directory / path).read_bytes()
+                    digest = base64.urlsafe_b64encode(hashlib.sha256(raw).digest()).rstrip(b'=').decode('ascii')
+                    writer.writerow([path, 'sha256=' + digest, str(len(raw))])
+                if record_state == 'declared_missing':
+                    writer.writerow(['dgl/graphbolt/graphbolt_pytorch_2.5.1.dll', '', ''])
+                writer.writerow(['dgl-2.2.1.dist-info/RECORD', '', ''])
+
+
+def graphbolt_install_responses(monkeypatch, record_state):
+    real_run = subprocess.run
+    calls = []
+
+    def run(instance, command, **kwargs):
+        if command[1:4] == ['-m', 'pip', 'install']:
+            directory = Path(command[command.index('--target') + 1])
+            manifest = Path(command[command.index('-r') + 1]).read_text(encoding='utf-8')
+            assert not list(directory.iterdir()), 'every mocked install must receive a clean target'
+            graphbolt_wheel_fixture(directory, record_state)
+            calls.append({'command': command, 'requirements': manifest, 'directory': directory})
+            return subprocess.CompletedProcess(command, 0, 'Successfully installed dgl-2.2.1 torch-2.5.1', '')
+        assert command[1:3] == ['-I', '-c'], 'only the real isolated dependency health probe may execute'
+        return real_run(command, capture_output=True, text=True, encoding='utf-8', errors='replace', **kwargs)
+
+    monkeypatch.setattr(CodeExecutorAgent, '_run_dependency_command', run)
+    return calls
+
+
+def test_graphbolt_wheel_without_the_requested_torch_abi_stops_identical_reinstallation(monkeypatch, tmp_path):
+    calls = graphbolt_install_responses(monkeypatch, 'other_versions_only')
+    instance = executor()
+    requirements = 'dgl==2.2.1\ntorch==2.5.1'
+    instance.env_config.update(requirements_txt=requirements, dependency_health_check=True)
+    diagnostic = prepare(instance, tmp_path)
+    assert len(calls) == 1, 'the installed wheel RECORD proves that reinstalling it cannot supply this Torch ABI'
+    assert diagnostic and 'graphbolt_pytorch_2.5.1.dll' in diagnostic
+    assert 'graphbolt_pytorch_2.2.1.dll' in diagnostic
+    assert instance.env_config['dependency_failure_kind'] == 'native_abi_incompatible'
+    attempts = instance.env_config['dependency_install_attempts']
+    assert len(attempts) == 1 and attempts[0]['exit_code'] == 0 and not attempts[0]['success']
+    assert attempts[0]['failure_kind'] == 'native_abi_incompatible'
+    assert 'graphbolt_pytorch_2.5.1.dll' in attempts[0]['health_diagnostic']
+    assert not instance.env_config.get('dependency_cache_repairs')
+    assert instance._deps_dir is None and not (calls[0]['directory'] / '.ready').exists()
+    assert calls[0]['requirements'] == requirements
+
+
+@pytest.mark.parametrize('record_state', ['declared_missing', 'missing'])
+def test_graphbolt_missing_declared_file_or_record_still_allows_one_cache_rebuild(monkeypatch, tmp_path, record_state):
+    calls = graphbolt_install_responses(monkeypatch, record_state)
+    instance = executor()
+    requirements = 'dgl==2.2.1\ntorch==2.5.1'
+    instance.env_config.update(requirements_txt=requirements, dependency_health_check=True)
+    diagnostic = prepare(instance, tmp_path)
+    assert diagnostic and 'graphbolt_pytorch_2.5.1.dll' in diagnostic
+    assert len(calls) == 2, 'a missing file or manifest is not evidence that the wheel lacks the requested ABI'
+    assert all(call['requirements'] == requirements for call in calls)
+    assert instance.env_config['dependency_failure_kind'] != 'native_abi_incompatible'
+    assert all(attempt['failure_kind'] != 'native_abi_incompatible'
+               for attempt in instance.env_config['dependency_install_attempts'])
+    assert [attempt['phase'] for attempt in instance.env_config['dependency_health_attempts']] == ['installed', 'rebuild']
+    assert instance.env_config['dependency_cache_repairs'][0]['status'] == 'failed'
+    assert instance._deps_dir is None and not (calls[-1]['directory'] / '.ready').exists()
+
+
+@pytest.mark.parametrize('absolute', [False, True])
+def test_graphbolt_unsafe_record_cannot_establish_an_abi_mismatch(monkeypatch, tmp_path, absolute):
+    directory = tmp_path / 'wheel'
+    graphbolt_wheel_fixture(directory, 'other_versions_only')
+    outside = tmp_path / 'outside.dll'
+    outside.write_bytes(b'outside evidence must not be read')
+    record = directory / 'dgl-2.2.1.dist-info/RECORD'
+    with record.open('a', encoding='utf-8', newline='') as stream:
+        csv.writer(stream).writerow([str(outside) if absolute else '../outside.dll', '', ''])
+    real_read_bytes = Path.read_bytes
+
+    def guarded_read_bytes(path):
+        assert path != outside, 'ABI evidence must not read files outside the managed environment'
+        return real_read_bytes(path)
+
+    monkeypatch.setattr(Path, 'read_bytes', guarded_read_bytes)
+    detail = f'FileNotFoundError: Cannot find DGL C++ graphbolt library at {directory / "dgl/graphbolt/graphbolt_pytorch_2.5.1.dll"}'
+    assert ce._graphbolt_abi_evidence([directory], detail) is None
+    assert outside.stat().st_size == len(b'outside evidence must not be read')
+
+
+@pytest.mark.parametrize('filename', ['METADATA', 'RECORD'])
+def test_graphbolt_linked_metadata_cannot_establish_an_abi_mismatch(tmp_path, require_symlinks, filename):
+    directory = tmp_path / 'wheel'
+    graphbolt_wheel_fixture(directory, 'other_versions_only')
+    source = directory / 'dgl-2.2.1.dist-info' / filename
+    outside = tmp_path / filename
+    source.rename(outside)
+    source.symlink_to(outside)
+    before = outside.read_bytes()
+    detail = f'FileNotFoundError: Cannot find DGL C++ graphbolt library at {directory / "dgl/graphbolt/graphbolt_pytorch_2.5.1.dll"}'
+    assert ce._graphbolt_abi_evidence([directory], detail) is None
+    assert outside.read_bytes() == before
+
+
+def test_graphbolt_mismatched_torch_metadata_cannot_establish_an_abi_mismatch(tmp_path):
+    directory = tmp_path / 'wheel'
+    graphbolt_wheel_fixture(directory, 'other_versions_only')
+    (directory / 'torch-2.5.1.dist-info/METADATA').write_text(
+        'Metadata-Version: 2.1\nName: torch\nVersion: 2.2.1\n', encoding='utf-8')
+    detail = f'FileNotFoundError: Cannot find DGL C++ graphbolt library at {directory / "dgl/graphbolt/graphbolt_pytorch_2.5.1.dll"}'
+    assert ce._graphbolt_abi_evidence([directory], detail) is None
+
+
+def test_graphbolt_proven_abi_mismatch_in_ready_cache_does_not_invoke_pip(monkeypatch, tmp_path):
+    requirements = 'dgl==2.2.1\ntorch==2.5.1'
+    directory = ce.DEPS_CACHE_ROOT / ce.reqs_digest(requirements)
+    graphbolt_wheel_fixture(directory, 'other_versions_only')
+    (directory / '.ready').write_text('ok\n', encoding='utf-8')
+    calls = graphbolt_install_responses(monkeypatch, 'other_versions_only')
+    instance = executor()
+    instance.env_config.update(requirements_txt=requirements, dependency_health_check=True)
+    diagnostic = prepare(instance, tmp_path)
+    assert diagnostic and 'graphbolt_pytorch_2.5.1.dll' in diagnostic
+    assert calls == [] and instance.env_config['dependency_install_attempts'] == []
+    assert instance.env_config['dependency_failure_kind'] == 'native_abi_incompatible'
+    assert instance.env_config['dependency_health_attempts'][0]['phase'] == 'cached'
+    assert not instance.env_config.get('dependency_cache_repairs')
+    assert instance._deps_dir is None and not (directory / '.ready').exists()
+    assert (directory / 'dgl-2.2.1.dist-info/RECORD').is_file()
+
+
+def test_graphbolt_many_available_libraries_keep_bounded_diagnostics(monkeypatch, tmp_path):
+    requirements = 'dgl==2.2.1\ntorch==2.5.1'
+    directory = ce.DEPS_CACHE_ROOT / ce.reqs_digest(requirements)
+    graphbolt_wheel_fixture(directory, 'other_versions_only')
+    record_path = directory / 'dgl-2.2.1.dist-info/RECORD'
+    with record_path.open('a', encoding='utf-8', newline='') as stream:
+        writer = csv.writer(stream)
+        for minor in range(40):
+            relative = f'dgl/graphbolt/graphbolt_pytorch_1.{minor}.0.dll'
+            (directory / relative).write_bytes(b'another declared ABI')
+            writer.writerow([relative, '', ''])
+    graphbolt_install_responses(monkeypatch, 'other_versions_only')
+    instance = executor()
+    instance.env_config.update(requirements_txt=requirements, dependency_health_check=True)
+    assert instance._check_local_dependency_health(directory, requirements, 'cached')
+    attempt = instance.env_config['dependency_health_attempts'][0]
+    assert len(attempt['native_abi_evidence']['available_libraries']) == 41
+    assert len(attempt['diagnostic']) <= 1600
+    assert 'graphbolt_pytorch_2.5.1.dll' in attempt['diagnostic']
+    assert 'graphbolt_pytorch_1.0.0.dll' in attempt['diagnostic']
 
 
 def test_private_extra_index_retains_source_policy(monkeypatch, tmp_path):
