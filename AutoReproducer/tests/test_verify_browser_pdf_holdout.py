@@ -18,6 +18,8 @@ def compared_result():
     observed = {'id': 'train:stdout:1', 'value': 0.8328, 'aggregation': 'mean', 'runs': 10,
                 'std': 0.0004, 'source': 'train:stdout:22', 'source_quote': 'mean 0.83280, std 0.00040'}
     row = {'status': 'reference_only', 'difference': -0.02,
+           'settings': {'status': 'different', 'reason': 'CPU execution; paper reports GPU.'},
+           'limitations': ['CPU execution; paper reports GPU.'],
            'reference': {'value_quote': 'DGC 83.3', 'citations': ['paper']},
            'actual': {**observed, 'citations': ['author']}}
     return {'data': {'validation': {'is_reproduced': None, 'paper_metrics_verified': False,
@@ -42,6 +44,40 @@ def test_comparison_acceptance_rejects_rewritten_observed_summary(field, wrong):
     result['data']['validation']['author_claim_comparison']['comparisons'][0]['actual'][field] = wrong
     with pytest.raises(AssertionError):
         audit.verify_claim_comparison(result)
+
+
+@pytest.mark.parametrize('field,value', [('settings', {}), ('settings', {'status': 'different', 'reason': ''}),
+                                        ('limitations', []), ('limitations', [''])])
+def test_reference_only_cannot_hide_setting_assessments_and_limitations(field, value):
+    result = compared_result()
+    result['data']['validation']['author_claim_comparison']['comparisons'][0][field] = value
+    with pytest.raises(AssertionError):
+        audit.verify_claim_comparison(result)
+
+
+@pytest.mark.parametrize('mismatch', ['runtime_revision', 'plan_revision', 'repository'])
+def test_independent_trial_binds_executed_repository_and_plan_to_registered_revision(tmp_path, mismatch):
+    expected = {'url': 'https://github.com/fixture/author', 'revision': '1' * 40}
+    actual, planned = deepcopy(expected), deepcopy(expected)
+    if mismatch == 'runtime_revision':
+        actual['revision'] = '2' * 40
+    elif mismatch == 'plan_revision':
+        planned['revision'] = '2' * 40
+    else:
+        actual['url'] = 'https://github.com/fixture/other'
+    result = {'data': {'repository': actual, 'run_dir': str(tmp_path)}}
+    (tmp_path / 'experiment_spec.json').write_text(json.dumps({'spec': {'repository': planned}}))
+    freeze = {'paper': {'repository_url': expected['url'], 'repository_revision': expected['revision']}}
+    with pytest.raises(AssertionError):
+        audit.verify_trial_repository(result, freeze)
+
+
+def test_independent_trial_accepts_matching_pinned_repository(tmp_path):
+    repository = {'url': 'https://github.com/fixture/author', 'revision': '1' * 40}
+    result = {'data': {'repository': repository, 'run_dir': str(tmp_path)}}
+    (tmp_path / 'experiment_spec.json').write_text(json.dumps({'spec': {'repository': repository}}))
+    freeze = {'paper': {'repository_url': repository['url'], 'repository_revision': repository['revision']}}
+    assert audit.verify_trial_repository(result, freeze) == repository
 
 
 def test_stdin_credential_never_opens_secrets_or_prompts(monkeypatch):
@@ -215,6 +251,29 @@ def test_current_completion_allows_no_observed_optimizer_updates(completed_run):
     evidence = audit.cleanup_evidence(*completed_run)
     assert evidence["passed"], evidence["checks"]
     assert evidence["receipt"]["training_python"]["removed"]
+
+
+@pytest.mark.parametrize('changed', [None, 'download', 'comparison', 'run_report'])
+def test_browser_download_must_match_saved_reports_and_structured_comparison(completed_run, changed):
+    result, _, _ = completed_run
+    report = Path(result['report_path'])
+    run_dir = Path(result['data']['run_dir'])
+    downloaded = report.read_text('utf-8').encode('utf-8')
+    (run_dir / 'report.md').write_text(downloaded.decode('utf-8'), encoding='utf-8')
+    if changed == 'download':
+        downloaded += b'changed'
+    elif changed == 'comparison':
+        path = report.with_suffix('.result.json')
+        saved = json.loads(path.read_text('utf-8'))
+        saved['data']['validation']['author_claim_comparison'] = {'comparisons': []}
+        path.write_text(json.dumps(saved), encoding='utf-8')
+    elif changed == 'run_report':
+        (run_dir / 'report.md').write_text('another report', encoding='utf-8')
+    if changed:
+        with pytest.raises(AssertionError):
+            audit.verify_saved_report(result, downloaded)
+    else:
+        assert audit.verify_saved_report(result, downloaded)['structured_records_identical'] is True
 
 
 @pytest.mark.parametrize("failure", ["exit", "identity", "receipt", "duplicate", "training"])

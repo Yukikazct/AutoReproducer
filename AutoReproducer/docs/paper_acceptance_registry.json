@@ -186,6 +186,31 @@
       ]
     },
     {
+      "id": "critical-look-heterophily",
+      "title": "A Critical Look at the Evaluation of GNNs under Heterophily: Are We Really Making Progress?",
+      "aliases": [
+        "Critical Look Heterophily"
+      ],
+      "source_ids": [
+        "arxiv:2302.11640"
+      ],
+      "pdf_sha256": [
+        "9025d1a5a4258bc77dadc31528a68f7abbe6c08c3b9abf82ecb644e00811bd14"
+      ],
+      "repository_url": "https://github.com/yandex-research/heterophilous-graphs",
+      "repository_revision": "a431395582e929d88271309716bea4fe24ce6318",
+      "status": "candidate",
+      "candidate_order": 3,
+      "history": [
+        {
+          "outcome": "preflight_verified",
+          "frozen_commit": null,
+          "evidence": "docs/evidence/pdf_candidates_preflight_20261017.json#critical-look-heterophily",
+          "scope": "Static eligibility review only; no training or candidate-specific product repair."
+        }
+      ]
+    },
+    {
       "id": "deep-graph-contrastive-representation-learning",
       "title": "Deep Graph Contrastive Representation Learning",
       "aliases": [
@@ -502,6 +527,29 @@
       "repository_url": "https://github.com/hengruizhang98/CCA-SSG"
     },
     {
+      "id": "gcnh",
+      "title": "GCNH: A Simple Method For Representation Learning On Heterophilous Graphs",
+      "aliases": [],
+      "source_ids": [
+        "arxiv:2304.10896"
+      ],
+      "pdf_sha256": [
+        "a5d0c0e93c3613bfd4200a69b573c5390c50f8cb0374630c8cadf1381189a283"
+      ],
+      "repository_url": "https://github.com/SmartData-Polito/GCNH",
+      "repository_revision": "311ebe34d4cd58fdc6279d803e212f4c1ea5aaf0",
+      "status": "candidate",
+      "candidate_order": 1,
+      "history": [
+        {
+          "outcome": "preflight_verified",
+          "frozen_commit": null,
+          "evidence": "docs/evidence/pdf_candidates_preflight_20261017.json#gcnh",
+          "scope": "Static eligibility review only; no training or candidate-specific product repair."
+        }
+      ]
+    },
+    {
       "id": "gmnn-graph-markov-neural-networks",
       "title": "GMNN: Graph Markov Neural Networks",
       "aliases": [
@@ -586,6 +634,32 @@
         }
       ],
       "repository_url": "https://github.com/CRIPAC-DIG/GCA"
+    },
+    {
+      "id": "graph-coupled-oscillator-networks",
+      "title": "Graph-Coupled Oscillator Networks",
+      "aliases": [
+        "GraphCON"
+      ],
+      "source_ids": [
+        "arxiv:2202.02296",
+        "https://proceedings.mlr.press/v162/rusch22a/rusch22a.pdf"
+      ],
+      "pdf_sha256": [
+        "a81e551ffc611520376c40c2e74614db5afd681a5f9503d03ae655176d717619"
+      ],
+      "repository_url": "https://github.com/tk-rusch/GraphCON",
+      "status": "regression",
+      "retirement_reason": "Already attempted through the browser; author subdirectory planning failed and a reference fallback was stopped. Historical trial cannot be reused as an independent sample.",
+      "history": [
+        {
+          "outcome": "historical_trial_stopped",
+          "frozen_commit": null,
+          "evidence": "docs/issue27_progress_20261015.md#保存日志回归与-dgc-浏览器运行",
+          "runtime_evidence": "data/runtime/issue27_graphcon_20261015_01_request.json",
+          "pdf_provenance": "data/papers/issue27_graphcon_20261015_01.provenance.json"
+        }
+      ]
     },
     {
       "id": "graph-neural-networks-with-adaptive-frequency-response-filter",
@@ -714,6 +788,29 @@
         }
       ],
       "repository_url": "https://github.com/HongyangGao/Graph-U-Nets"
+    },
+    {
+      "id": "gread",
+      "title": "GREAD: Graph Neural Reaction-Diffusion Networks",
+      "aliases": [],
+      "source_ids": [
+        "arxiv:2211.14208"
+      ],
+      "pdf_sha256": [
+        "d346cc029d4db2d1994d2dd73afe31e69bace4f5669b62b78652975578bbab7a"
+      ],
+      "repository_url": "https://github.com/jeongwhanchoi/GREAD",
+      "repository_revision": "f97ec01a17bb9cba1da2b89192b83cd7a25a250b",
+      "status": "candidate",
+      "candidate_order": 2,
+      "history": [
+        {
+          "outcome": "preflight_verified",
+          "frozen_commit": null,
+          "evidence": "docs/evidence/pdf_candidates_preflight_20261017.json#gread",
+          "scope": "Static eligibility review only; no training or candidate-specific product repair."
+        }
+      ]
     },
     {
       "id": "how-attentive-are-graph-attention-networks",

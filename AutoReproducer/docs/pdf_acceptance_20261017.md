@@ -8,7 +8,7 @@
 | --- | --- | --- | --- |
 | #20 | 多文件事务、两轮显式修复、完整回滚；`run_with_repairs` API | 原子拒绝、取消、受保护文件和回滚错误回归 | 网页显式入口未接入，后续阶段完成 |
 | #27 | PDF 仓库发现、原命令、有限错误修复、指标比较、网页/MD/ZIP | DGC 比较回归；NodeFormer、DIFFormer 完整执行 | 冻结当前修复后，用新 PDF 完成全流程验收 |
-| #30 | bundled 数据提示、旧 PyG/NumPy 兼容 | ChebNetII Chameleon 十次作者运行 | 指定 Cora 命令的十次精确回归；独立复算另行跟踪 |
+| #30 | bundled 数据提示、旧 PyG/NumPy 兼容 | Chameleon 十次；指定 Cora 十次已自然结束、5316 次更新 | 再完整执行一次，补齐首次生成的 processed 文件运行前后摘要；独立复算另行跟踪 |
 | #34 | 原生 DGL 1.1.2 构造器及 raw/processed、mask、文件变化观测 | CCA-SSG 2050 次更新，原生 Cora 输入记录不变 | 与独立官方来源及论文协议核对，仍未完成 |
 | #41 | 训练解释器依赖健康、原生检查、输入观测、统计口径及引用验证 | CPU/PyG、DGL、pip 24.0 及真实作者日志 | 复用已有捕获能力，接入完整协议和独立指标复算 |
 | #42 | 尚无安装包验收 | 无 | 后续阶段，不以启动器代替复现能力验收 |
@@ -17,9 +17,9 @@
 
 ## 统一台账和冻结规则
 
-[论文验收台账](paper_acceptance_registry.json)是论文身份、PDF 哈希、历史试验及独立候选资格的唯一当前清单。原 PDF 来源清单继续保留下载回执及原始状态，历史记录不覆盖。初始迁移包含 50 个身份；GAT/H2GCN 尚未执行，但其 TensorFlow 环境未验证，不能仅凭候选状态认定本轮可用。
+[论文验收台账](paper_acceptance_registry.json)是论文身份、PDF 哈希、历史试验及独立候选资格的唯一当前清单。原 PDF 来源清单继续保留下载回执及原始状态，历史记录不覆盖。初始迁移包含 50 个身份；补录曾尝试并停止的 GraphCON，再登记本轮三篇候选后共 54 个身份。GAT/H2GCN 尚未执行，其 TensorFlow 环境未验证且尚无本轮固定作者提交，不能仅凭候选状态认定本轮可用。
 
-冻结脚本和浏览器脚本共同读取台账。相同标题别名、同一 arXiv 的不同版本和重复 PDF 哈希不能创建不同身份；未知、冲突、已退役或已有试验历史的候选均拒绝独立验收。新冻结包含完整产品 Python 文件集合、执行/验收脚本及依赖清单；开始和结束均核对，新增/删除文件也属于变化。
+冻结脚本和浏览器脚本共同读取台账。相同标题别名、同一 arXiv 的不同版本和重复 PDF 哈希不能创建不同身份；未知、冲突、已退役或已有试验历史的候选均拒绝独立验收。新冻结包含产品 Python/CSS 文件集合、执行/验收脚本、依赖清单及已安装发行包版本；开始和结束均核对，新增/删除文件、Git 提交及运行环境变化均拒绝独立验收。实际导出的仓库和执行计划也必须匹配登记的作者提交。
 
 ```text
 python scripts/freeze_holdout_source.py --tag <trial> --paper-id <id>
@@ -38,4 +38,14 @@ python scripts/verify_browser_pdf_holdout.py --pdf <pdf> --repo <repo> --freeze 
 
 作者完整训练不设默认截止时间。不得缩短轮次、减少重复次数或更换种子追求通过。原始未跟踪文件及运行证据保留。
 
-当前新增台账/浏览器/JUnit 检查相关测试：**45 passed**。原生专项、Cora 回归及新 PDF 验收结果随实际完成追加；本文件不是完成声明。
+当前新增台账/浏览器/JUnit 检查相关测试：**62 passed**，包括安装环境变化、作者提交变化、CSS 变化、仅供参考的设置说明，以及下载内容与保存的报告/结构化记录不一致。新增用例先复现失败，再修复校验。
+
+原生 CI [39007889018](https://github.com/Yukikazct/AutoReproducer/actions/runs/39007889018) 四个任务全部通过：两平台的 PyG 各 **51 passed**，DGL 各 **14 passed**，均无跳过；实际原生运算、全部安装版本和 JUnit 已归档到工作流制品，[精简证据](evidence/native_cpu_ci_20261017.json)记录结果。
+
+## 训练前固定的新论文顺序
+
+三篇 PDF 的身份、哈希及作者提交已在任何候选训练前写入[来源回执](../examples/papers/candidates_20261017/manifest.json)和[静态筛选记录](evidence/pdf_candidates_preflight_20261017.json)。固定顺序为 **GCNH → GREAD → Critical Look Heterophily**，不按实测成绩改选。完整依赖是否能安装、自动规划及比较是否通过，均由后续真实网页试验检验；静态筛选不等于作者程序已经运行。
+
+GCNH 在 PDF 第 4 页给出作者仓库和 Table I，包含公开 Cornell/Cora 原始数据及十份划分；作者代码通过 CUDA 可用性判断保留 CPU 分支。GREAD 的 CPU 分支明确，但 pykeops 可能需要 Windows 原生编译器，作为已记录的安装风险保留。Critical Look 的 `--device` 及 Dataset 的默认 CPU 参数提供作者支持的 CPU 路径，保留十次运行和 1000 步；分类 accuracy 与其他数据集的 ROC AUC 必须分别比较。DropGNN 因原 Python 3.8 环境不在当前声明支持范围内，在训练前排除。
+
+Cora 回归及新 PDF 验收结果随实际完成追加；本文件不是完成声明。

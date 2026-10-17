@@ -1,10 +1,12 @@
 """Shared paper identity and immutable source-freeze evidence for acceptance tools."""
 from datetime import datetime, timezone
 import hashlib
+from importlib import metadata
 import json
 from pathlib import Path
 import re
 import subprocess
+import sys
 import unicodedata
 from urllib.parse import urlsplit
 
@@ -89,6 +91,8 @@ def select_paper(registry, paper_id, *, independent=False):
     paper = matches[0]
     if independent and paper["status"] != "candidate":
         raise ValueError("Paper is not an unused independent candidate: " + paper["id"])
+    if independent and not re.fullmatch(r"[0-9a-f]{40}", paper.get('repository_revision', '')):
+        raise ValueError('Independent candidate requires a pinned author repository revision')
     return paper
 
 
@@ -96,10 +100,17 @@ def product_hashes(root):
     root = Path(root)
     paths = [root / "app.py"]
     for name in ("src", "frontend"):
-        paths.extend(p for p in (root / name).rglob("*.py") if "__pycache__" not in p.parts)
+        paths.extend(p for p in (root / name).rglob("*") if p.is_file() and "__pycache__" not in p.parts)
     paths.extend(root.glob("requirements*.txt"))
     paths.extend(root / "scripts" / name for name in ("freeze_holdout_source.py", "verify_browser_pdf_holdout.py"))
     return {p.relative_to(root).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(paths)}
+
+
+def runtime_dependencies():
+    distributions = [{'name': item.metadata['Name'], 'version': item.version}
+                     for item in metadata.distributions() if item.metadata['Name']]
+    return {'python': sys.version, 'implementation': sys.implementation.name, 'platform': sys.platform,
+            'distributions': sorted(distributions, key=lambda item: (item['name'].casefold(), item['version']))}
 
 
 def build_freeze(root, *, paper_id=None, registry_path=None):
@@ -110,6 +121,7 @@ def build_freeze(root, *, paper_id=None, registry_path=None):
     return {"version": 2, "frozen_at": datetime.now(timezone.utc).isoformat(),
             "git_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip(),
             "files": hashes, "source_sha256": digest(hashes), "registry_sha256": digest(registry),
+            "environment": runtime_dependencies(),
             "paper": paper, "independent_eligible": bool(paper), "objective": "author_code_execution",
             "excluded_regression_papers": [p["title"] for p in registry["papers"] if p["status"] != "candidate"],
             "rule": "A product repair retires the trial paper. Re-freeze and use another unused candidate."}
@@ -133,6 +145,11 @@ def verify_freeze(root, freeze, *, paper_id=None, pdf_sha256=None, repository=No
         return {"independent": False, "reason": "Regression audit; independent eligibility not requested"}
     if freeze.get("version") != 2 or not paper_id or freeze.get("independent_eligible") is not True:
         raise ValueError("Independent acceptance requires a version-2 paper-bound freeze and --paper-id")
+    current_commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip()
+    if current_commit != freeze.get('git_commit'):
+        raise ValueError('Git commit changed after freeze')
+    if runtime_dependencies() != freeze.get('environment'):
+        raise ValueError('Application environment changed after freeze')
     registry = load_registry(root, registry_path)
     paper = select_paper(registry, paper_id, independent=True)
     if digest(registry) != freeze.get("registry_sha256") or paper != freeze.get("paper"):

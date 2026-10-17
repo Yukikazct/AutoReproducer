@@ -22,7 +22,7 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from src.holdout_registry import verify_freeze
+from src.holdout_registry import repository_key, verify_freeze
 
 
 def read_credential(args):
@@ -212,6 +212,19 @@ def verify_author_completion(result, pdf_hash, expected_repo):
     return validation
 
 
+def verify_trial_repository(result, freeze):
+    """Bind the real export and executed plan to the pre-registered author commit."""
+    paper = freeze['paper']
+    expected = {'url': repository_key(paper['repository_url']), 'revision': paper['repository_revision']}
+    data = result['data']
+    frozen_plan = json.loads((Path(data['run_dir']) / 'experiment_spec.json').read_text('utf-8'))['spec']
+    for repository in (data.get('repository') or {}, frozen_plan.get('repository') or {}):
+        assert repository.get('url'), 'Independent trial requires an observed repository URL'
+        assert repository_key(repository['url']) == expected['url'], 'Executed repository differs from registered candidate'
+        assert repository.get('revision') == expected['revision'], 'Executed author commit differs from registered candidate'
+    return expected
+
+
 def verify_claim_comparison(result):
     validation = (result.get('data') or {}).get('validation') or {}
     comparison = validation.get('author_claim_comparison') or {}
@@ -234,13 +247,34 @@ def verify_claim_comparison(result):
         assert any(citations[key]['source'] == 'repository' for key in actual['citations'])
         assert reference['value_quote'] and actual.get('source_quote') == observed.get('source_quote')
         assert actual.get('source_quote')
+        if row['status'] == 'reference_only':
+            settings = row.get('settings') or {}
+            assert settings.get('status') in {'matched', 'different', 'unknown'}
+            assert isinstance(settings.get('reason'), str) and settings['reason'].strip()
+            limitations = row.get('limitations') or []
+            assert limitations and all(isinstance(note, str) and note.strip() for note in limitations)
         eligible.append(row)
     assert eligible, 'A verified, nonempty paper comparison is required for acceptance'
     assert validation.get('paper_metrics_verified') is False and validation.get('is_reproduced') is None
     return comparison
 
 
-def verify_report_reconnect(page, args, progress, runtime):
+def verify_saved_report(result, downloaded):
+    """Audit downloaded content against both persisted reports and result records."""
+    report = Path(result['report_path'])
+    run_dir = Path(result['data']['run_dir'])
+    text = downloaded.decode('utf-8').replace('\r\n', '\n')
+    assert text == report.read_text('utf-8'), 'Downloaded report differs from saved report'
+    assert text == (run_dir / 'report.md').read_text('utf-8'), 'Run report differs from downloaded report'
+    for path in (run_dir / 'result.json', report.with_suffix('.result.json')):
+        saved = json.loads(path.read_text('utf-8'))
+        assert saved.get('state') == result.get('state'), 'Saved terminal state differs'
+        for key in ('validation', 'execution', 'pdf_input', 'spec_sha256'):
+            assert saved.get('data', {}).get(key) == result['data'].get(key), 'Saved result differs: ' + key
+    return {'saved_reports_identical': True, 'structured_records_identical': True}
+
+
+def verify_report_reconnect(page, args, progress, runtime, result):
     """Real browser downloads and a reload must retain the saved comparison."""
     def show_report():
         page.get_by_role('tab', name=re.compile('复现报告')).click()
@@ -259,12 +293,14 @@ def verify_report_reconnect(page, args, progress, runtime):
         names = [name for name in archive.namelist() if name.endswith('.md')]
         assert len(names) == 1 and archive.read(names[0]) == content[0]
     assert '作者输出与论文宣称对比' in content[0].decode('utf-8')
+    saved = verify_saved_report(result, content[0])
     before = set(runtime.glob('progress_*.jsonl'))
     page.goto(f'http://localhost:{args.port}/?run={progress.name}', wait_until='domcontentloaded')
     assert show_report() == displayed
     assert set(runtime.glob('progress_*.jsonl')) == before
     return {'comparison_table': displayed, 'markdown_zip_identical': True,
-            'report_sha256': hashlib.sha256(content[0]).hexdigest(), 'reconnect_preserved_comparison': True}
+            'report_sha256': hashlib.sha256(content[0]).hexdigest(), 'reconnect_preserved_comparison': True,
+            **saved}
 
 
 def main(args):
@@ -371,6 +407,7 @@ def main(args):
                     validation = verify_author_completion(result, pdf_hash, args.repo)
                     if getattr(args, 'require_independent', False):
                         assert validation.get('training_observed') is True, 'Independent acceptance requires actual training updates'
+                        eligibility['repository'] = verify_trial_repository(result, freeze)
                     comparison = verify_claim_comparison(result) if args.require_comparison else None
                     if args.require_install_progress:
                         assert all(installation_checks[key] for key in
@@ -394,7 +431,7 @@ def main(args):
                     if validation["training_observed"] is False:
                         page.get_by_text("本次未记录到优化器更新；详见作者程序输出。", exact=True).wait_for(timeout=30000)
                     page.get_by_text("任务完成", exact=True).wait_for(timeout=30000)
-                    report_check = verify_report_reconnect(page, args, progress, runtime) if comparison else None
+                    report_check = verify_report_reconnect(page, args, progress, runtime, result) if comparison else None
                     page.screenshot(path=str(runtime / f"{args.tag}_final.png"), full_page=True)
                     record = {"input": "real_browser_pdf_upload", "state": result["state"], "progress_file": str(progress),
                               "freeze": freeze, "pdf_sha256": pdf_hash, "validation": validation,

@@ -14,13 +14,14 @@ from scripts import verify_browser_pdf_holdout as browser
 @pytest.fixture
 def paper_root(tmp_path, monkeypatch):
     for name in ('app.py', 'src/module.py', 'frontend/page.py', 'requirements.txt',
-                 'scripts/freeze_holdout_source.py', 'scripts/verify_browser_pdf_holdout.py'):
+                 'frontend/styles.css', 'scripts/freeze_holdout_source.py', 'scripts/verify_browser_pdf_holdout.py'):
         path = tmp_path / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text('# fixture\n', encoding='utf-8')
     paper = {'id': 'fixture-paper', 'title': 'Fixture Paper', 'aliases': ['FP'],
              'source_ids': ['arxiv:2601.12345v1'], 'pdf_sha256': [hashlib.sha256(b'pdf').hexdigest()],
              'repository_url': 'https://github.com/fixture/author', 'status': 'candidate',
+             'repository_revision': '1' * 40,
              'history': [{'outcome': 'registered_unused_candidate', 'evidence': 'fixture acquisition receipt'}]}
     data = {'version': 1, 'papers': [paper]}
     path = tmp_path / registry.REGISTRY
@@ -90,7 +91,7 @@ def test_status_cannot_contradict_historical_trial_or_unknown_state(paper_root):
         registry.load_registry(root)
 
 
-@pytest.mark.parametrize('change', ['source', 'added_source', 'removed_source', 'requirements', 'registry'])
+@pytest.mark.parametrize('change', ['source', 'added_source', 'removed_source', 'frontend_asset', 'requirements', 'registry'])
 def test_changed_source_file_set_dependencies_or_registry_reject_completion(paper_root, change):
     root, data = paper_root
     freeze = registry.build_freeze(root, paper_id='FP')
@@ -102,6 +103,8 @@ def test_changed_source_file_set_dependencies_or_registry_reject_completion(pape
         (root / 'src/module.py').unlink()
     elif change == 'requirements':
         (root / 'requirements.txt').write_text('changed==1')
+    elif change == 'frontend_asset':
+        (root / 'frontend/styles.css').write_text('body { color: red; }')
     else:
         data['papers'][0]['aliases'].append('new alias')
         store(root, data)
@@ -131,12 +134,44 @@ def test_legacy_freeze_is_regression_only_and_independent_requires_comparison(pa
         browser.verify_acceptance_source(args, freeze, '0' * 64)
 
 
+def test_independent_freeze_requires_a_pinned_author_commit(paper_root):
+    root, data = paper_root
+    del data['papers'][0]['repository_revision']
+    store(root, data)
+    with pytest.raises(ValueError, match='pinned'):
+        registry.build_freeze(root, paper_id='FP')
+
+
+def test_independent_completion_rejects_changed_installed_dependencies(paper_root, monkeypatch):
+    root, _ = paper_root
+    freeze = registry.build_freeze(root, paper_id='FP')
+    assert freeze['environment']['distributions']
+    monkeypatch.setattr(registry, 'runtime_dependencies', lambda: {'distributions': {'changed': '2'}})
+    with pytest.raises(ValueError, match='environment'):
+        verify(root, freeze)
+
+
+def test_independent_completion_rejects_different_git_commit(paper_root, monkeypatch):
+    root, _ = paper_root
+    freeze = registry.build_freeze(root, paper_id='FP')
+    monkeypatch.setattr(registry.subprocess, 'check_output', lambda *a, **k: 'b' * 40)
+    with pytest.raises(ValueError, match='Git commit'):
+        verify(root, freeze)
+
+
+def test_json_round_trip_preserves_freeze_and_dependency_evidence(paper_root):
+    root, _ = paper_root
+    freeze = json.loads(json.dumps(registry.build_freeze(root, paper_id='FP')))
+    assert verify(root, freeze)['independent'] is True
+
+
 def test_project_registry_contains_retired_recent_papers_and_all_archived_pdf_hashes():
     root = Path(__file__).resolve().parents[1]
     data = registry.load_registry(root)
-    for alias in ('ccassg', 'difformer', 'nodeformer', 'rfcn', 'correctandsmooth'):
+    for alias in ('ccassg', 'difformer', 'nodeformer', 'rfcn', 'correctandsmooth', 'graphcon'):
         assert registry.select_paper(data, alias)['status'] == 'regression'
     recorded = {sha for paper in data['papers'] for sha in paper['pdf_sha256']}
-    for name in ('examples/papers/manifest.json', 'examples/papers/candidates_20261012/manifest.json'):
+    for name in ('examples/papers/manifest.json', 'examples/papers/candidates_20261012/manifest.json',
+                 'examples/papers/candidates_20261017/manifest.json'):
         manifest = json.loads((root / name).read_text('utf-8'))
         assert all(p['sha256'] in recorded for p in manifest['papers'])
