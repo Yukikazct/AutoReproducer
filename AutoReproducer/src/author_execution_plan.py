@@ -1,5 +1,6 @@
 """Execution-first planning; evidence review never blocks an original command."""
 from copy import deepcopy
+import ast
 import hashlib
 import json
 from pathlib import Path
@@ -11,6 +12,7 @@ from src.discovered_repository_plan import (
     _json_response, _load_execution_source, _planning_view, _requirements, _steps,
 )
 from src.method_adapters import digest, read_json, write_json
+from src.safety.paths import workspace_path
 
 
 SCOPE = 'author_code_execution'
@@ -239,6 +241,18 @@ steps:[{id,kind:'train|eval',argv:['python','original.py',...] OR ['python','-m'
                                'failure_kind': category}) from exc
 
 
+def _declares_literal_option(packet, step, option):
+    source = packet['repository']['files'][step['entrypoint']['source_path']]
+    try:
+        tree = ast.parse(source['text'])
+    except SyntaxError:
+        return False
+    return any(isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+               and node.func.attr == 'add_argument' and any(
+                   isinstance(arg, ast.Constant) and arg.value == option for arg in node.args)
+               for node in ast.walk(tree))
+
+
 def plan_from_author_commands(packet, workspace):
     """A model outage or unsupported quotation must not hide literal launchers."""
     if packet.get('author_execution_only') is not True:
@@ -257,9 +271,17 @@ def plan_from_author_commands(packet, workspace):
         except (ValueError, OSError, UnicodeError):
             continue
         cwd = Path(name).parent.as_posix() if name.endswith('.sh') else '.'
+        cwd_quote = None
         bindings = {}
         for line in source['text'].replace('\\\r\n', ' ').replace('\\\n', ' ').splitlines():
             stripped = line.strip().removeprefix('$ ').strip('`').strip()
+            if Path(name).name.lower().startswith('readme'):
+                directory_hint = re.search(
+                    r'\b(?:navigate\s+(?:into|to)|change\s+(?:the\s+)?(?:working\s+)?directory\s+to)'
+                    r'\s+`([^`\r\n]+)`', line, re.I)
+                if directory_hint:
+                    cwd, cwd_quote = directory_hint[1], line
+                    continue
             loop = re.fullmatch(r'for\s+([A-Za-z_]\w*)\s+in\s+(.+?)(?:;\s*do)?', stripped)
             if loop:
                 try:
@@ -273,7 +295,7 @@ def plan_from_author_commands(packet, workspace):
                 bindings.clear()
                 continue
             if re.fullmatch(r'cd\s+[\w./-]+', stripped):
-                cwd = stripped.split(maxsplit=1)[1]
+                cwd, cwd_quote = stripped.split(maxsplit=1)[1], line
                 continue
             if not re.match(r'^python(?:3)?\s+', stripped):
                 continue
@@ -288,9 +310,11 @@ def plan_from_author_commands(packet, workspace):
                         for arg in argv]
                 if any('$' in arg or '<' in arg or '>' in arg for arg in argv):
                     continue  # Unresolved shell templates need an actual planner.
+                directory = workspace_path(workspace, cwd, 'author working directory',
+                                           must_exist=True, forbid_git=True)
                 # A launcher may be invoked from the repository root instead
-                # of its own directory. Use only a cwd with its real entrypoint.
-                if (len(argv) > 1 and not (Path(workspace) / cwd / argv[1]).is_file()
+                # of its own directory. An explicit author cwd takes precedence.
+                if (cwd_quote is None and len(argv) > 1 and not (directory / argv[1]).is_file()
                         and (Path(workspace) / argv[1]).is_file()):
                     cwd = '.'
                 declarations = []
@@ -304,8 +328,12 @@ def plan_from_author_commands(packet, workspace):
                     'device': 'cpu', 'datasets': [], 'requirements': {'author': list(dict.fromkeys(declarations))},
                     'steps': [{'id': 'train', 'kind': 'train', 'argv': argv, 'cwd': cwd, 'timeout_s': None}]}
                 plan = validate_author_execution_plan(proposal, packet, workspace)
+                if '--kwargs' in argv and not _declares_literal_option(packet, plan['steps'][0], '--kwargs'):
+                    continue  # README placeholders are not a complete author invocation.
                 plan['command_source'] = {'path': name, 'quote': line, 'sha256': source['sha256'],
                                           'template_bindings': dict(bindings)}
+                if cwd_quote is not None:
+                    plan['command_source']['cwd_quote'] = cwd_quote
                 return plan
             except (ValueError, TypeError, KeyError, OSError) as exc:
                 failures.append(str(exc))
