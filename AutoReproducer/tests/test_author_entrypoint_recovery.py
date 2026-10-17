@@ -240,6 +240,131 @@ def test_actual_requested_package_python_bound_skips_incompatible_interpreter(tm
     assert selected['requirements'] == [{'path': 'actual_requested_dependency', 'specifier': '<3.10'}]
 
 
+def test_author_python_and_reviewed_native_bounds_conflict_before_environment_changes(tmp_path, monkeypatch):
+    packet = {'repository': {'files': {'pyproject.toml': {
+        'text': '[project]\nrequires-python = ">=3.12,<3.13"\n'}}}}
+    original = json.dumps(packet, sort_keys=True)
+    monkeypatch.setattr(author_python.shutil, 'which', lambda name: None)
+    monkeypatch.setattr(author_python, '_probe', lambda path: (3, 12, 10))
+    monkeypatch.setattr(author_python, '_managed_venv',
+                        lambda *args, **kwargs: pytest.fail('Conflicting bounds must not create an environment'))
+    monkeypatch.setattr(author_python, '_uv_command',
+                        lambda *args, **kwargs: pytest.fail('Conflicting bounds must not download another Python'))
+
+    with pytest.raises(author_python.TrainingPythonUnavailable,
+                       match='(?i)(不兼容|冲突|incompatib|conflict)') as rejected:
+        author_python.select_author_python(packet, tmp_path / 'managed', required_python='==3.11.*',
+            required_python_source='reviewed_native_cpu:dgl==1.1.2')
+
+    assert json.dumps(packet, sort_keys=True) == original
+    assert 'pyproject.toml' in str(rejected.value)
+    assert 'reviewed_native_cpu:dgl==1.1.2' in str(rejected.value)
+    assert not (tmp_path / 'managed').exists()
+
+
+@pytest.mark.parametrize('declared', ['>=3.11.9,<3.12', '==3.11.11', '>=3.11,!=3.11.0'])
+def test_reviewed_native_family_keeps_compatible_patch_releases(tmp_path, monkeypatch, declared):
+    packet = {'repository': {'files': {'pyproject.toml': {
+        'text': f'[project]\nrequires-python = "{declared}"\n'}}}}
+    existing = tmp_path / 'python3.11'
+    existing.touch()
+    monkeypatch.setattr(author_python.shutil, 'which',
+                        lambda name: str(existing) if name == 'python3.11' else None)
+    monkeypatch.setattr(author_python, '_probe',
+                        lambda path: (3, 11, 11) if Path(path) == existing else (3, 12, 10))
+    monkeypatch.setattr(author_python, '_managed_venv', lambda root, base, version: existing)
+    monkeypatch.setattr(author_python, 'runtime_fingerprint', lambda executable: 'cpython-311-test')
+    selected = author_python.select_author_python(packet, tmp_path / 'managed', offline=True,
+        required_python='==3.11.*', required_python_source='reviewed_native_cpu:dgl==1.1.2')
+    assert selected['python_executable'] == str(existing)
+    assert selected['python_version'] == '3.11'
+
+
+def test_frozen_execution_passes_reviewed_native_python_bounds_to_selector(tmp_path, monkeypatch):
+    from test_author_execution_plan import AuthorLLM
+    from test_discovered_repository_service import setup_service
+
+    fixture, service, request, _ = setup_service(tmp_path, monkeypatch)
+    source = 'import dgl\n' + (fixture['workspace'] / 'train.py').read_text('utf-8')
+    add_file(fixture, 'train.py', source)
+    next(c for c in fixture['proposal']['citations'] if c['id'] == 'script')['quote'] = source
+    service.llm = AuthorLLM(fixture)
+    calls = []
+
+    def select(packet, root, **kwargs):
+        calls.append(kwargs)
+        return {'python_executable': '/managed/python3.11', 'python_version': '3.11'}
+
+    monkeypatch.setattr(author_python, 'select_author_python', select)
+    result = service.run({**request, 'prepare_only': True})
+    assert result['state'] == 'COMPLETED', result['error']
+    assert len(calls) == 1
+    assert calls[0]['required_python'] == '==3.11.*'
+    assert calls[0]['required_python_source'] == 'reviewed_native_cpu:dgl==1.1.2'
+    assert result['data']['env_config']['python_version'] == '3.11'
+
+
+@pytest.mark.parametrize('author_specifier', ['>=3.11,<3.13', '>=3.12,<3.13'])
+def test_runtime_missing_dgl_selects_reviewed_python_before_install_retry(tmp_path, monkeypatch, author_specifier):
+    from copy import deepcopy
+    from src.method_adapters import write_json
+    from test_author_execution_plan import AuthorLLM
+    from test_discovered_repository_service import setup_service
+
+    fixture, service, request, _ = setup_service(tmp_path, monkeypatch)
+    add_file(fixture, 'pyproject.toml', f'[project]\nrequires-python = "{author_specifier}"\n')
+    service.llm = AuthorLLM(fixture)
+    original_select = author_python.select_author_python
+    selections, executions = [], []
+
+    def select(packet, root, **kwargs):
+        selections.append(deepcopy(kwargs))
+        if len(selections) == 1:
+            return {'python_executable': '/managed/python3.12', 'python_version': '3.12'}
+        if author_specifier.startswith('>=3.12'):
+            return original_select(packet, root, **kwargs)
+        return {'python_executable': '/managed/python3.11', 'python_version': '3.11',
+                'requirements': [{'path': 'reviewed_native_cpu:dgl==1.1.2', 'specifier': '==3.11.*'}]}
+
+    monkeypatch.setattr(author_python, 'select_author_python', select)
+    monkeypatch.setattr(author_python, '_managed_venv',
+                        lambda *args, **kwargs: pytest.fail('Conflicting bounds cannot create an environment'))
+    monkeypatch.setattr(author_python, '_uv_command',
+                        lambda *args, **kwargs: pytest.fail('Conflicting bounds cannot download another Python'))
+    monkeypatch.setattr('src.author_failure_analysis.analyze_author_failure', lambda *args, **kwargs: None)
+
+    def run(workspace, steps, environment, **kwargs):
+        planned = steps['steps'] if isinstance(steps, dict) else steps
+        identifier = planned[0]['id']
+        executions.append((identifier, deepcopy(environment)))
+        if identifier == 'native_preflight':
+            write_json(Path(workspace) / '_autorepro_capture/preflight.json', {'device': 'cpu'})
+            return {'success': True, 'steps': [{'id': identifier, 'exit_code': 0, 'success': True}]}
+        error = ("ModuleNotFoundError: No module named 'dgl'" if len(executions) == 2
+                 else 'RuntimeError: synthetic fixture stops after checking interpreter selection')
+        return {'success': False, 'run_dir': str(tmp_path / str(len(executions))),
+                'final': {'stderr': error, 'exit_code': 1}}
+
+    monkeypatch.setattr(service.runner, 'run', run)
+    result = service.run(request)
+    assert result['state'] == 'ERROR'
+    assert len(selections) == 2
+    assert selections[1]['required_python'] == '==3.11.*'
+    assert selections[1]['required_python_source'] == 'reviewed_native_cpu:dgl==1.1.2'
+    assert 'dgl==1.1.2' not in executions[0][1]['requirements_txt']
+    if author_specifier.startswith('>=3.12'):
+        assert len(executions) == 2  # Reject before attempting to install DGL under Python 3.12.
+        assert 'pyproject.toml' in result['error'] and 'reviewed_native_cpu:dgl==1.1.2' in result['error']
+    else:
+        assert len(executions) == 3
+        retry = executions[2][1]
+        assert retry['python_version'] == '3.11'
+        assert retry['python_executable'] == '/managed/python3.11'
+        assert retry['auto_prepare'] is True and retry['require_prepared'] is False
+        assert 'dgl==1.1.2' in retry['requirements_txt']
+        assert result['data']['training_python_attempts'][-1]['python_version'] == '3.11'
+
+
 def test_requested_python_conflict_switches_and_retries_original_preflight(tmp_path, monkeypatch):
     from src.author_python import retry_requested_python_conflict
     error = "ERROR: Package 'example' requires a different Python: 3.12.0 not in '<3.10'"
@@ -262,3 +387,23 @@ def test_requested_python_conflict_switches_and_retries_original_preflight(tmp_p
     assert calls[0][1]['exclude_versions'] == {(3, 12)}
     assert calls[1][1]['python_executable'] == '/managed/python3.9'
     assert calls[1][1]['requirements_txt'] == 'example==1.2.0\n'
+
+
+def test_requested_package_retry_cannot_override_reviewed_native_python(tmp_path, monkeypatch):
+    error = "ERROR: Package 'example' requires a different Python: 3.11.11 not in '>=3.12'"
+    environment = {'requirements_txt': 'example==1.2.0\ndgl==1.1.2\n',
+        'required_python': '==3.11.*', 'required_python_source': 'reviewed_native_cpu:dgl==1.1.2'}
+    preparation = {'success': False, 'effective_env_config': {**environment,
+        'dependency_failure_kind': 'python_incompatible',
+        'dependency_install_attempts': [{'failure_kind': 'python_incompatible', 'diagnostic': error}]}}
+    monkeypatch.setattr(author_python, '_managed_venv',
+                        lambda *args, **kwargs: pytest.fail('Conflicting bounds cannot create an environment'))
+    monkeypatch.setattr(author_python, '_uv_command',
+                        lambda *args, **kwargs: pytest.fail('Conflicting bounds cannot download another Python'))
+    with pytest.raises(author_python.TrainingPythonUnavailable) as rejected:
+        author_python.retry_requested_python_conflict({'repository': {'files': {}}}, tmp_path / 'managed',
+            environment, {'python_version': '3.11'}, preparation,
+            lambda env: pytest.fail('Conflicting bounds cannot install dependencies'))
+    assert 'actual_requested_dependency' in str(rejected.value)
+    assert 'reviewed_native_cpu:dgl==1.1.2' in str(rejected.value)
+    assert not (tmp_path / 'managed').exists()

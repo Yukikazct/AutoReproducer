@@ -2,12 +2,13 @@
 from copy import deepcopy
 import hashlib
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from discovered_fixtures import make_experiment
-from src import dependency_versions, discovered_repository_plan as planner
+from src import author_python, dependency_versions, discovered_repository_plan as planner
 from src.author_execution_plan import validate_author_execution_plan
 from src.author_runtime_dependencies import repair_requirement, run_with_dependency_repair
 from src.discovered_repository_reproduction import environment_for_plan
@@ -95,6 +96,65 @@ def test_missing_dgl_repair_adds_the_same_legacy_runtime_dependency():
     repair = repair_requirement("ModuleNotFoundError: No module named 'dgl'", plan, {'file_inventory': {}})
     assert 'setuptools==69.5.1' in repair['additions']
     assert 'packaging==24.2' in repair['additions']
+
+
+@pytest.mark.parametrize('platform_name', ['win32', 'linux'])
+def test_reviewed_cpu_dgl_environment_selects_py311_with_author_declarations(tmp_path, monkeypatch, platform_name):
+    set_host(monkeypatch, platform_name)
+    plan = {'scope': 'author_code_execution', 'capture': {'device': 'cpu'},
+            'steps': [{'argv': ['python', 'train.py', '--num_steps', '1000', '--num_runs', '10',
+                                '--device', 'cpu']}],
+            'requirements': {'author': [], 'compatibility': [
+                'torch==2.5.1+cpu', 'numpy==1.26.4', 'dgl==1.1.2']}}
+    packet = {'repository': {'files': {'pyproject.toml': {
+        'text': '[project]\nrequires-python = ">=3.11,<3.13"\n'}}}}
+    original_plan, original_packet = deepcopy(plan), deepcopy(packet)
+    environment = environment_for_plan(plan)
+    assert environment['required_python'] == '==3.11.*'
+    assert environment['required_python_source'] == 'reviewed_native_cpu:dgl==1.1.2'
+
+    existing = tmp_path / 'python3.11'
+    existing.touch()
+    monkeypatch.setattr(author_python.shutil, 'which',
+                        lambda name: str(existing) if name == 'python3.11' else None)
+    monkeypatch.setattr(author_python, '_probe',
+                        lambda path: (3, 11, 11) if Path(path) == existing else (3, 12, 10))
+    monkeypatch.setattr(author_python, '_managed_venv', lambda root, base, version: existing)
+    monkeypatch.setattr(author_python, 'runtime_fingerprint', lambda executable: 'cpython-311-test')
+    selected = author_python.select_author_python(packet, tmp_path / 'managed', offline=True,
+        required_python=environment['required_python'],
+        required_python_source=environment['required_python_source'])
+
+    assert selected['python_version'] == '3.11'
+    assert selected['python_executable'] == str(existing)
+    assert {entry['specifier'] for entry in selected['requirements']} == {'>=3.11,<3.13', '==3.11.*'}
+    assert {'path': 'reviewed_native_cpu:dgl==1.1.2', 'specifier': '==3.11.*'} in selected['requirements']
+    assert {'path': 'pyproject.toml', 'specifier': '>=3.11,<3.13'} in selected['requirements']
+    assert plan == original_plan and packet == original_packet
+
+
+@pytest.mark.parametrize('platform_name,device,dgl_pin', [
+    pytest.param('win32', 'cpu', None, id='windows-without-dgl'),
+    pytest.param('linux', 'cpu', None, id='ubuntu-without-dgl'),
+    pytest.param('darwin', 'cpu', 'dgl==1.1.2', id='unreviewed-macos-dgl'),
+    pytest.param('win32', 'cpu', 'dgl==2.2.1', id='windows-different-author-dgl'),
+    pytest.param('linux', 'cpu', 'dgl==2.2.1', id='ubuntu-different-author-dgl'),
+    pytest.param('win32', 'cuda', 'dgl==1.1.2', id='windows-cuda-author-dgl'),
+    pytest.param('linux', 'cuda', 'dgl==1.1.2', id='ubuntu-cuda-author-dgl'),
+])
+def test_cpu_dgl_python_limit_does_not_leak_to_other_runtime_combinations(monkeypatch, platform_name, device, dgl_pin):
+    set_host(monkeypatch, platform_name)
+    # An exact author pin can be attempted on the execution-only route. It is
+    # not authority to apply another device/version's reviewed CPU contract.
+    author = [dgl_pin] if dgl_pin else []
+    pins = ['torch==' + dependency_versions.compatibility_pins(device)['torch'], 'numpy==1.26.4', *author]
+    plan = {'scope': 'author_code_execution', 'capture': {'device': device},
+            'requirements': {'author': author, 'declared_runtime_pins': author, 'compatibility': pins}}
+    original = deepcopy(plan)
+    environment = environment_for_plan(plan)
+    assert environment.get('required_python') is None
+    assert environment.get('required_python_source') is None
+    assert plan == original
 
 
 @pytest.mark.parametrize('platform_name,device,versions', HOST_BUILDS)

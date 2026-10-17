@@ -233,7 +233,7 @@ def verify_snapshot(workspace, snapshot, generated):
 
 def environment_for_plan(plan):
     from src.discovered_repository_plan import (CPU_INDEX_URL, CUDA_INDEX_URL, GRAPH_WHEEL_LINKS)
-    from src.dependency_versions import compatibility_pins
+    from src.dependency_versions import compatibility_pins, reviewed_python_requirement
     device = (plan.get("capture") or {}).get("device", "cpu")
     if device not in {"cpu", "cuda"}:
         raise ValueError("作者执行设备不在已审阅环境中")
@@ -267,7 +267,8 @@ def environment_for_plan(plan):
             "compatibility_reason": requirements.get("reason", ""),
             "note": f"基于作者依赖与源码导入选择的项目 {device.upper()} 兼容环境；不是论文原始运行环境的等价声明。",
             "auto_prepare": True, "dependency_health_check": True,
-            "cache_lock_timeout_s": AUTO_PREPARATION_LOCK_TIMEOUT}
+            "cache_lock_timeout_s": AUTO_PREPARATION_LOCK_TIMEOUT,
+            **reviewed_python_requirement(checked, device)}
 
 
 _EXECUTION_PREPARATION = '''import json, platform, sys
@@ -643,7 +644,9 @@ class DiscoveredRepositoryReproduction:
                 raise ValueError("落盘来源包与冻结的实验依据不一致")
             from src.author_python import select_author_python
             selected_python = select_author_python(packet, self.root / 'training_python',
-                                                   offline=bool(request.get('offline')))
+                offline=bool(request.get('offline')),
+                required_python=environment.get('required_python'),
+                required_python_source=environment.get('required_python_source', 'actual_requested_dependency'))
             environment.update(selected_python)
             data.setdefault('training_python_attempts', []).append(deepcopy(selected_python))
             data['env_config'] = deepcopy(environment)
@@ -848,6 +851,35 @@ class DiscoveredRepositoryReproduction:
                     return fix
                 return None
 
+            def prepare_runtime_environment(effective):
+                from packaging.specifiers import SpecifierSet
+                from src.dependency_versions import reviewed_python_requirement
+                required = reviewed_python_requirement(effective.get('requirements_txt', '').splitlines(),
+                    plan['capture']['device'])
+                if not required:
+                    return effective
+                prior = ([{'path': effective.get('required_python_source', 'actual_requested_dependency'),
+                           'specifier': effective['required_python']}]
+                         if effective.get('required_python') and effective['required_python'] != required['required_python']
+                         else [])
+                effective.update(required)
+                # This reviewed constraint describes a whole minor family.
+                # Full patch-level author declarations were checked at selection.
+                if SpecifierSet(required['required_python']).contains(effective.get('python_version', '0')):
+                    return effective
+                replacement = select_author_python(packet, self.root / 'training_python',
+                    offline=bool(request.get('offline')), additional_python_requirements=prior, **required)
+                effective.update(replacement, auto_prepare=True, require_prepared=False)
+                data['training_python_attempts'].append(deepcopy(replacement))
+                data['env_config'] = deepcopy(effective)
+                write_json(run_dir / 'runtime_manifest.json', replacement)
+                write_json(run_dir / 'environment.json', effective)
+                progress({'type': 'log', 'log': {'agent': 'CodeExecutor',
+                    'action': 'select_native_training_python', 'status': 'RUNNING',
+                    'detail': '实际新增依赖需要已验证的原生 CPU Python 组合；释放旧环境后重试原作者命令。',
+                    'data': replacement}})
+                return effective
+
             def run_steps(selected, runtime_environment):
                 from src.author_runtime_dependencies import run_with_dependency_repair
                 from src.author_failure_analysis import analyze_author_failure
@@ -866,7 +898,7 @@ class DiscoveredRepositoryReproduction:
                     return suggestion
                 return run_with_dependency_repair(self.runner, workspace, selected, runtime_environment,
                     plan, packet, run_dir, data, progress, verify_frozen_inputs, repair_numeric, repair_path,
-                    analyze_failure, repair_pyg=repair_pyg)
+                    analyze_failure, repair_pyg=repair_pyg, prepare_environment=prepare_runtime_environment)
 
             preflight = [{"id": "native_preflight", "kind": "check", "required": True,
                           "argv": ["python", "-u", f"{CAPTURE_DIR}/preflight.py"], "cwd": ".",

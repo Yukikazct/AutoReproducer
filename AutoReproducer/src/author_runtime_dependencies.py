@@ -56,7 +56,7 @@ def repair_requirement(stderr, plan, packet):
 
 def run_with_dependency_repair(runner, workspace, steps, environment, plan, packet,
                                run_dir, data, on_event, verify_inputs, repair_numeric=None, repair_path=None,
-                               analyze_failure=None, repair_pyg=None):
+                               analyze_failure=None, repair_pyg=None, prepare_environment=None):
     """Retry after cleanup, retaining every failed run and the unchanged argv."""
     effective = deepcopy(environment)
     # Retry allowance counts actual failures, never time spent running code.
@@ -70,6 +70,8 @@ def run_with_dependency_repair(runner, workspace, steps, environment, plan, pack
     seen = {repair['package'] for repair in repairs}
     for attempt in range(MAX_DEPENDENCY_REPAIRS + 1):
         verify_inputs()
+        if prepare_environment is not None:
+            effective = prepare_environment(effective)
         result = runner.run(workspace, steps, effective, on_event=on_event)
         effective = deepcopy(result.get('effective_env_config') or effective)
         result.setdefault('effective_env_config', effective)

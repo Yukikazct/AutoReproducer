@@ -8,6 +8,7 @@ import shutil
 import sys
 
 from packaging.specifiers import InvalidSpecifier, SpecifierSet
+from packaging.version import InvalidVersion, Version
 
 from src.runtime_platform import runtime_fingerprint
 from src.runtime_preparation import run_owned_process
@@ -136,16 +137,39 @@ def _managed_venv(root, base, version):
     return executable.absolute()
 
 
+def _family_can_match(family, bounds):
+    """Check final CPython patches at every constraint boundary, not only x.y.0."""
+    patches = {0}
+    for _, _, specifications in bounds:
+        for specification in specifications:
+            try:
+                boundary = Version(specification.version.removesuffix('.*'))
+            except InvalidVersion:
+                # An arbitrary equality that cannot describe a CPython release
+                # is rejected by contains() below without guessing a version.
+                continue
+            if boundary.release[:2] == family:
+                patch = boundary.release[2] if len(boundary.release) > 2 else 0
+                patches.update({max(0, patch - 1), patch, patch + 1})
+    return any(all(spec.contains('.'.join(map(str, (*family, patch))))
+                   for _, _, spec in bounds) for patch in patches)
+
+
 def select_author_python(packet, managed_root, *, offline=False, mirror=None,
-                         exclude_versions=(), required_python=None):
+                         exclude_versions=(), required_python=None,
+                         required_python_source='actual_requested_dependency',
+                         additional_python_requirements=()):
     """Reuse a matching Python; download one managed version only when needed."""
     bounds = _python_bounds(packet)
-    if required_python:
+    requested = [(required_python_source, required_python)] if required_python else []
+    requested.extend((entry['path'], entry['specifier']) for entry in additional_python_requirements)
+    for source, requirement in requested:
         try:
-            bounds.append(('actual_requested_dependency', required_python, SpecifierSet(required_python)))
+            bounds.append((source, requirement, SpecifierSet(requirement)))
         except InvalidSpecifier as exc:
-            raise TrainingPythonUnavailable('无法核验所请求依赖的 Requires-Python 约束：' + required_python) from exc
-    admissible = [version for version in SUPPORTED if version not in exclude_versions]
+            raise TrainingPythonUnavailable('无法核验 Python 约束 ' + str(source) + '：' + requirement) from exc
+    admissible = [version for version in SUPPORTED
+                  if version not in exclude_versions and _family_can_match(version, bounds)]
     if not admissible:
         raise TrainingPythonUnavailable('作者 Python 声明与支持的 CPython 3.9–3.12 均不兼容：' +
                                         ', '.join(f'{name}: {value}' for name, value, _ in bounds))
@@ -225,7 +249,10 @@ def retry_requested_python_conflict(packet, managed_root, environment, selected_
         if not conflict:
             break
         replacement = select_author_python(packet, managed_root, offline=offline,
-            exclude_versions=set(attempted), required_python=conflict.get('requires_python'))
+            exclude_versions=set(attempted), required_python=conflict.get('requires_python'),
+            additional_python_requirements=([{'path': environment.get('required_python_source',
+                'actual_requested_dependency'), 'specifier': environment['required_python']}]
+                if environment.get('required_python') else []))
         attempted.add(tuple(int(part) for part in replacement['python_version'].split('.')))
         replacement['selected_for'] = conflict
         environment.update(replacement)
