@@ -1,3 +1,5 @@
+> 2026-10-17 当前状态见 [PDF 全流程实施记录](pdf_acceptance_20261017.md)与[统一论文台账](paper_acceptance_registry.json)。下文保留历史方案/证据；其中“未实现”不自动代表当前代码状态。
+
 # AutoReproducer：基于 GitHub 多文件仓库的论文复现实施方案
 
 原始检查日期：2026-10-03，检查版本：de0fa6a。进展更新：2026-10-09。DLinear 单项论文实验已真实复现通过；SIREN 与 Neural ODE 已适配并完成真实方法实验。陌生仓库通用化和自动多文件修复仍是后续方向。

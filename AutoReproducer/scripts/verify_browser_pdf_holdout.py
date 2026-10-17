@@ -2,7 +2,7 @@
 
 Credentials are supplied by a hidden prompt or JSON on stdin, never a secrets file.
 Use data/dependency roots that match the running application.
-This checks execution evidence; it does not establish that a PDF is a new holdout.
+Independent acceptance additionally requires a paper-bound freeze and shared registry.
 """
 import argparse
 from contextlib import ExitStack
@@ -21,6 +21,8 @@ import io
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from src.holdout_registry import verify_freeze
 
 
 def read_credential(args):
@@ -281,8 +283,7 @@ def main(args):
     credential = ""
 
     def verify_frozen():
-        for name, expected in freeze["files"].items():
-            assert hashlib.sha256((ROOT / name).read_bytes()).hexdigest() == expected, name
+        return verify_acceptance_source(args, freeze, pdf_hash)
 
     def save(suffix, value):
         (runtime / f"{args.tag}_{suffix}.json").write_text(
@@ -291,7 +292,7 @@ def main(args):
     def emit(value):
         print(json.dumps(redact(value, credential), ensure_ascii=False), flush=True)
 
-    verify_frozen()
+    eligibility = verify_frozen()
     credential = read_credential(args)
     try:
         # The browser must close while Playwright's event loop still exists.
@@ -332,7 +333,7 @@ def main(args):
                              "author_execution_only": True, "llm": config,
                              "repository_preview_required": not args.allow_no_preview_link,
                              "data_root": str(data_root), "deps_root": str(deps_root),
-                             "pdf_sha256": pdf_hash, "freeze": freeze,
+                             "pdf_sha256": pdf_hash, "freeze": freeze, "eligibility": eligibility,
                              "submitted_at": datetime.now(timezone.utc).isoformat()})
             emit({"progress_file": str(progress), "input": "real_browser_pdf_upload"})
             previous, observations = None, []
@@ -366,8 +367,10 @@ def main(args):
                     save("full_result", result)
                     cleanup = cleanup_evidence(result, data_root, deps_root)
                     save("cleanup", cleanup)
-                    verify_frozen()
+                    eligibility = verify_frozen()
                     validation = verify_author_completion(result, pdf_hash, args.repo)
+                    if getattr(args, 'require_independent', False):
+                        assert validation.get('training_observed') is True, 'Independent acceptance requires actual training updates'
                     comparison = verify_claim_comparison(result) if args.require_comparison else None
                     if args.require_install_progress:
                         assert all(installation_checks[key] for key in
@@ -395,6 +398,7 @@ def main(args):
                     page.screenshot(path=str(runtime / f"{args.tag}_final.png"), full_page=True)
                     record = {"input": "real_browser_pdf_upload", "state": result["state"], "progress_file": str(progress),
                               "freeze": freeze, "pdf_sha256": pdf_hash, "validation": validation,
+                              "eligibility": eligibility,
                               "run_dir": result["data"]["run_dir"], "execution_run_starts": len(starts),
                               "execution_run_ends": len(ends), "observations": observations,
                               "cleanup": cleanup, "live_page_completed": True,
@@ -413,11 +417,22 @@ def main(args):
         raise RuntimeError(redact(str(exc), credential)) from None
 
 
+def verify_acceptance_source(args, freeze, pdf_hash):
+    independent = getattr(args, 'require_independent', False)
+    if independent and not args.require_comparison:
+        raise ValueError('--require-independent also requires --require-comparison')
+    return verify_freeze(ROOT, freeze, paper_id=getattr(args, 'paper_id', None),
+                         pdf_sha256=pdf_hash, repository=args.repo, require_independent=independent)
+
+
 def build_parser():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("pdf", "repo", "freeze", "tag"):
         parser.add_argument("--" + name, required=True)
     parser.add_argument("--port", type=int, default=8501)
+    parser.add_argument("--paper-id", help="Paper identity in the shared acceptance registry")
+    parser.add_argument("--require-independent", action="store_true",
+                        help="Require an unused registry paper, matching PDF and unchanged source/dependency freeze")
     parser.add_argument("--execution-only", action="store_true", help="Compatibility flag; author execution is always used")
     parser.add_argument("--allow-no-preview-link", action="store_true")
     parser.add_argument("--require-comparison", action="store_true",

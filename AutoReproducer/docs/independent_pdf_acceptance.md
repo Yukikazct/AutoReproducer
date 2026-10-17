@@ -1,3 +1,5 @@
+> 2026-10-17 当前状态见 [PDF 全流程实施记录](pdf_acceptance_20261017.md)与[统一论文台账](paper_acceptance_registry.json)。下文保留历史方案/证据；其中“未实现”不自动代表当前代码状态。
+
 # 独立新 PDF 验收规则
 
 已下载的原始 PDF 现已归档到 [论文样本目录](../examples/papers/README.md)，[来源清单](../examples/papers/manifest.json)记录各文件的 SHA-256、页数和下载依据；目录收录只表示保存测试资料，验收结论以本记录为准。

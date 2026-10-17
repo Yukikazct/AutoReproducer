@@ -1,0 +1,91 @@
+name: Native CPU runtime tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        family: [pyg, dgl]
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: AutoReproducer
+    env:
+      PYTHONIOENCODING: utf-8
+      PYTHONUTF8: '1'
+      CUDA_VISIBLE_DEVICES: ''
+      DGLBACKEND: pytorch
+      OMP_NUM_THREADS: '1'
+      MKL_NUM_THREADS: '1'
+      MPLBACKEND: Agg
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.family == 'dgl' && '3.11' || '3.12' }}
+          architecture: x64
+          cache: pip
+          cache-dependency-path: AutoReproducer/requirements-native-*.txt
+      - name: Prepare isolated application and native environments
+        run: |
+          $ciEnvironment = Join-Path $env:RUNNER_TEMP 'autoreproducer-native-app'
+          python -m venv $ciEnvironment
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $scriptsDirectory = if ($IsWindows) { 'Scripts' } else { 'bin' }
+          $ciPython = Join-Path (Join-Path $ciEnvironment $scriptsDirectory) $(if ($IsWindows) { 'python.exe' } else { 'python' })
+          & $ciPython -m pip install --no-user -r requirements-test.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "VIRTUAL_ENV=$ciEnvironment" >> $env:GITHUB_ENV
+          (Join-Path $ciEnvironment $scriptsDirectory) >> $env:GITHUB_PATH
+          $nativeDeps = Join-Path $env:RUNNER_TEMP 'autoreproducer-native-deps'
+          "NATIVE_DEPS=$nativeDeps" >> $env:GITHUB_ENV
+      - name: Install reviewed CPU runtime
+        run: >-
+          python -m pip install --no-user --only-binary=:all:
+          --target "$env:NATIVE_DEPS"
+          --extra-index-url https://download.pytorch.org/whl/cpu
+          --find-links https://data.pyg.org/whl/torch-2.5.1+cpu.html
+          --report native-install.json
+          -r requirements-native-${{ matrix.family }}.txt
+      - name: Check actual native operations and record dependencies
+        run: |
+          python scripts/verify_native_runtime.py --family ${{ matrix.family }} --deps "$env:NATIVE_DEPS" --output native-health.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "AUTOREPRO_TEST_CPU_DEPS=$env:NATIVE_DEPS" >> $env:GITHUB_ENV
+          "AUTOREPRO_TEST_DGL_DEPS=$env:NATIVE_DEPS" >> $env:GITHUB_ENV
+          "AUTOREPRO_TEST_DGL_PYTHON=$((Get-Command python).Source)" >> $env:GITHUB_ENV
+          "PYTHONPATH=$env:NATIVE_DEPS" >> $env:GITHUB_ENV
+      - name: Run PyG native selection
+        if: matrix.family == 'pyg'
+        run: >-
+          python -m pytest -q -ra -k 'not cuda'
+          tests/test_discovered_repository_runtime.py tests/test_graph_author_capture.py
+          tests/test_author_pyg_compatibility.py
+          tests/test_runtime_dataset_evidence.py::test_real_pyg_dataset_files_still_verify_without_links
+          --junitxml=native-tests.xml
+      - name: Run DGL native selection
+        if: matrix.family == 'dgl'
+        run: python -m pytest -q -ra tests/test_dgl_runtime_dataset_evidence.py --junitxml=native-tests.xml
+      - name: Reject skipped or empty native selection
+        run: python scripts/verify_native_runtime.py --junit native-tests.xml
+      - name: Preserve native evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.os }}-${{ matrix.family }}
+          path: |
+            AutoReproducer/native-install.json
+            AutoReproducer/native-health.json
+            AutoReproducer/native-tests.xml
+          if-no-files-found: ignore
