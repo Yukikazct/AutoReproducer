@@ -72,11 +72,13 @@ def make_experiment(root, family="signals"):
                    f"{method} uses the complete {dataset} dataset and fixed test split."]
     metrics_lines = ["Evaluation protocol and results", "Method Dataset Split Accuracy (percent)",
                      f"{method} {dataset} test 100.0", f"Baseline {dataset} train 98.0",
+                     "We report a single run, without averaging repeated experiments.",
                      f"Use {epochs} epochs, seed 7, and all {samples} test samples."]
     pdf = write_pdf(root / (family + ".pdf"), [paper_lines, ["Full methods on the next page."], metrics_lines])
     readme = (f"{title}\nMethod: {method}; dataset: {dataset}; fixed complete test split.\n"
               f"Run python {script_name} --epochs {epochs} --seed 7 --cpu\n"
               f"Train for {epochs} optimizer steps and evaluate all {samples} test samples.\n"
+              "This command executes a single run, without averaging repeated experiments.\n"
               "All data is in dataset.json; no external or generated input is used.\n")
     common = ("import argparse\nimport json\nimport torch\n"
               "parser = argparse.ArgumentParser()\n"

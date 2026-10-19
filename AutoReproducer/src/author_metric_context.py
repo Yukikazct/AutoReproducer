@@ -45,55 +45,89 @@ def _reduction_operand(node, operation, numpy_aliases):
     return ast.dump(operand) if operand is not None else None
 
 
+def _print_template(node, numpy_aliases):
+    if (not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name) or node.func.id != 'print'
+            or len(node.args) != 1 or not isinstance(node.args[0], (ast.JoinedStr, ast.Constant))):
+        return None
+    argument = node.args[0]
+    if isinstance(argument, ast.Constant):
+        if not isinstance(argument.value, str):
+            return None
+        values = [argument]
+    else:
+        values = argument.values
+    parts, fields, literals = [], [], []
+    literal = ''
+    for part in values:
+        if isinstance(part, ast.Constant) and isinstance(part.value, str):
+            literal += part.value
+            parts.append(''.join(r'\s*' if p.isspace() else re.escape(p)
+                                 for p in re.split(r'(\s+)', part.value) if p))
+        elif isinstance(part, ast.FormattedValue):
+            index = len(fields)
+            fields.append(part.value)
+            literals.append(literal)
+            literal = ''
+            numeric = (_reduction_operand(part.value, 'mean', numpy_aliases) is not None
+                       or _reduction_operand(part.value, 'std', numpy_aliases) is not None)
+            # A textual field may itself contain a complete observed line.
+            parts.append(f'(?P<v{index}>' + (NUMBER_PATTERN if numeric else r'[^\r\n]+?') + ')')
+        else:
+            return None
+    if not parts:
+        return None
+    literals.append(literal)
+    return re.compile(r'\s*' + ''.join(parts) + r'\s*'), fields, literals
+
+
+def _parenthesized_std_candidates(record, match, fields, literals, numpy_aliases):
+    candidates = []
+    for index in range(1, len(fields)):
+        operand = _reduction_operand(fields[index - 1], 'mean', numpy_aliases)
+        if (operand is None or operand != _reduction_operand(fields[index], 'std', numpy_aliases)
+                or literals[index].strip() != '(' or not literals[index + 1].lstrip().startswith(')')
+                or metric_number(match[f'v{index - 1}']) != record['value']):
+            continue
+        # Tie the pair to this metric, including equal values on one line.
+        label = re.search(r'((?:(?:macro|micro|weighted)[_\s-]?)?'
+                          r'[A-Za-z_][A-Za-z0-9_-]*(?:\s+score)?)\s*[:=]\s*$',
+                          record.get('source_quote', '')[:match.start(f'v{index - 1}')], re.I)
+        std = metric_number(match[f'v{index}'])
+        if (not label or norm_metric_key(label[1]) != record['name'] or std is None or std < 0
+                or record.get('std', std) != std):
+            continue
+        candidates.append((std, fields[index - 1], fields[index]))
+    return candidates
+
+
 def _annotate_parenthesized_std(records, nodes, numpy_aliases, path, source_sha256):
+    templates = []
     for node in nodes:
-        if (not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name) or node.func.id != 'print'
-                or len(node.args) != 1 or not isinstance(node.args[0], ast.JoinedStr)):
+        template = _print_template(node, numpy_aliases)
+        if template is not None:
+            templates.append((node, *template))
+    for record in records:
+        if record.get('uncertainty_kind'):
             continue
-        parts, fields, literals = [], [], []
-        literal = ''
-        for part in node.args[0].values:
-            if isinstance(part, ast.Constant) and isinstance(part.value, str):
-                literal += part.value
-                parts.append(''.join(r'\s*' if p.isspace() else re.escape(p)
-                                     for p in re.split(r'(\s+)', part.value) if p))
-            elif isinstance(part, ast.FormattedValue):
-                index = len(fields)
-                fields.append(part.value)
-                literals.append(literal)
-                literal = ''
-                numeric = (_reduction_operand(part.value, 'mean', numpy_aliases) is not None
-                           or _reduction_operand(part.value, 'std', numpy_aliases) is not None)
-                # Model/dataset names in an f-string are textual context, not numbers.
-                parts.append(f'(?P<v{index}>' + (NUMBER_PATTERN if numeric else r'[^\r\n]+?') + ')')
-            else:
-                parts = []
-                break
-        if not parts:
-            continue
-        literals.append(literal)
-        for index in range(1, len(fields)):
-            operand = _reduction_operand(fields[index - 1], 'mean', numpy_aliases)
-            if (operand is None or operand != _reduction_operand(fields[index], 'std', numpy_aliases)
-                    or literals[index].strip() != '(' or not literals[index + 1].lstrip().startswith(')')):
+        supported, ambiguous = [], False
+        for node, pattern, fields, literals in templates:
+            match = pattern.fullmatch(record.get('source_quote', ''))
+            if not match:
                 continue
-            for record in records:
-                quote = record.get('source_quote', '')
-                match = re.fullmatch(r'\s*' + ''.join(parts) + r'\s*', quote)
-                if not match or metric_number(match[f'v{index - 1}']) != record['value']:
-                    continue
-                # Tie the pair to this metric, including when one line contains several.
-                label = re.search(r'((?:(?:macro|micro|weighted)[_\s-]?)?'
-                                  r'[A-Za-z_][A-Za-z0-9_-]*(?:\s+score)?)\s*[:=]\s*$',
-                                  quote[:match.start(f'v{index - 1}')], re.I)
-                std = metric_number(match[f'v{index}'])
-                if (not label or norm_metric_key(label[1]) != record['name'] or std is None or std < 0
-                        or record.get('std', std) != std or record.get('uncertainty_kind')):
-                    continue
-                record.update(std=std, aggregation='mean', uncertainty_source={
-                    'path': path, 'source_sha256': source_sha256, 'print_line': node.lineno,
-                    'mean_expression': ast.unparse(fields[index - 1]),
-                    'std_expression': ast.unparse(fields[index])})
+            candidates = _parenthesized_std_candidates(record, match, fields, literals, numpy_aliases)
+            if not candidates:
+                # A different helper can print the exact same line using SEM
+                # or an untyped value. Static source matching cannot identify
+                # which helper ran, so this line establishes no SD provenance.
+                ambiguous = True
+                break
+            supported.extend((node, *candidate) for candidate in candidates)
+        if ambiguous or not supported or len({candidate[1] for candidate in supported}) != 1:
+            continue
+        node, std, mean_expression, std_expression = supported[0]
+        record.update(std=std, aggregation='mean', uncertainty_source={
+            'path': path, 'source_sha256': source_sha256, 'print_line': node.lineno,
+            'mean_expression': ast.unparse(mean_expression), 'std_expression': ast.unparse(std_expression)})
 
 
 def annotate_uncertainty(records, text, path, source_sha256):

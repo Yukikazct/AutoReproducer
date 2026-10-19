@@ -130,6 +130,23 @@ def test_invented_values_baseline_rows_and_relabelled_output_are_rejected(source
         validate_comparisons(payload, packet, fixture['workspace'], records)
 
 
+@pytest.mark.parametrize('old,new', [
+    ('SignGrid', 'SignGridExtended'), ('SignGrid', 'OtherSignGrid'),
+    ('Signal Linear', 'Signal Linear+'), ('Signal Linear', 'Signal Linear-Variant'),
+])
+def test_a_label_substring_is_not_original_evidence_for_another_dataset_or_method(sources, old, new):
+    fixture, packet, records, payload = sources
+    text = packet['repository']['files']['README.md']['text'].replace(old, new)
+    raw = text.encode('utf-8')
+    checksum = hashlib.sha256(raw).hexdigest()
+    (fixture['workspace'] / 'README.md').write_bytes(raw)
+    packet['repository']['files']['README.md'].update(text=text, sha256=checksum, bytes=len(raw))
+    packet['file_inventory']['README.md'].update(sha256=checksum, bytes=len(raw))
+    next(ref for ref in payload['citations'] if ref['id'] == 'readme')['quote'] = text
+    with pytest.raises(ValueError, match='must occur in its cited original evidence'):
+        validate_comparisons(payload, packet, fixture['workspace'], records)
+
+
 def test_explicit_output_unit_cannot_be_rewritten(sources):
     fixture, packet, records, payload = sources
     next(r for r in records if r['split'] == 'test')['unit'] = 'percent'
@@ -306,7 +323,7 @@ def _flat_table(sources, annotation=None):
     header = 'Method SignGrid OtherGrid'
     method = 'Signal Linear' + (f' ({annotation})' if annotation else '')
     row = method + ' test 100.0 98.0'
-    text = 'Test accuracy (%)\n' + header + '\n' + row
+    text = 'Test accuracy (%)\n' + header + '\n' + row + '\nWe report a single run.'
     page = next(page for page in packet['pdf']['pages'] if page['page'] == paper['page'])
     page['text'] += '\n' + text; page['sha256'] = hashlib.sha256(page['text'].encode()).hexdigest()
     paper['quote'] = text
@@ -359,7 +376,7 @@ def _spaced_method_table(sources, label='SIG NAL LIN EAR', first='100.0 ±0.1'):
     page = next(page for page in packet['pdf']['pages'] if page['page'] == paper['page'])
     header = 'Type Model Non-linearity PDE-solver Input-G SignGrid OtherGrid'
     row = f'{label} - - - {first} 98.0 ±0.2'
-    text = 'Test accuracy (%)\n' + header + '\n' + row
+    text = 'Test accuracy (%)\n' + header + '\n' + row + '\nWe report a single run.'
     page['text'] += '\n' + text
     page['sha256'] = hashlib.sha256(page['text'].encode()).hexdigest()
     paper['quote'] = text
@@ -435,7 +452,9 @@ def _paired_metric_table(sources, selected='f1_macro'):
     caption = 'Test results (AUC, Macro-F1) in percent.'
     row = 'Signal Linear (87.5 ±0.9, 68.9 ±0.8) (90.2 ±0.4, 70.1 ±1.2)'
     text = caption + '\n' + header + '\n' + row
-    page['text'] += '\n' + text
+    # Replace this fixture's old table. Repeating the same header elsewhere
+    # on a page is deliberately ambiguous to the production locator.
+    page['text'] = page['text'].replace(paper['quote'], text)
     page['sha256'] = hashlib.sha256(page['text'].encode()).hexdigest()
     paper['quote'] = text
     record = next(r for r in records if r['split'] == 'test')
@@ -461,11 +480,152 @@ def test_tuple_table_pairs_the_dataset_and_metric_columns(sources):
         validate_comparisons(payload, packet, fixture['workspace'], records)
 
 
+def test_truncated_table_row_can_expand_only_to_its_exact_original_physical_line(sources):
+    fixture, packet, records, payload = _paired_metric_table(sources)
+    reference = payload['comparisons'][0]['reference']
+    complete = reference['value_quote']
+    prefix = complete[:complete.index(')') + 1]
+    reference['value_quote'] = prefix
+    rows, _ = validate_comparisons(payload, packet, fixture['workspace'], records)
+    validated = rows[0]['reference']
+    assert validated['value_quote'] == complete
+    assert validated['proposed_value_quote'] == prefix
+    assert validated['column_evidence']['status'] == 'verified'
+    assert payload['comparisons'][0]['reference']['value_quote'] == prefix
+
+
+def test_authoritative_context_does_not_use_an_unverified_optional_model_quote(sources):
+    fixture, packet, records, payload = sources
+    record = next(row for row in records if row['split'] == 'test')
+    record.update(runs=1, aggregation='single')
+    proposed = {'runs': 'parser.add_argument("--runs", default=999)'}
+    payload['comparisons'][0]['actual_context']['context_quotes'] = proposed.copy()
+    rows, _ = validate_comparisons(payload, packet, fixture['workspace'], records)
+    actual = rows[0]['actual']
+    assert 'runs' not in actual['context_quotes']
+    assert actual['field_evidence']['runs']['value'] == 1
+    assert actual['field_evidence']['runs']['reason'] == 'Authoritative observed metric field'
+    assert payload['comparisons'][0]['actual_context']['context_quotes'] == proposed
+
+
 def test_tuple_metric_order_requires_exact_same_page_evidence(sources):
     fixture, packet, records, payload = _paired_metric_table(sources)
     payload['comparisons'][0]['reference']['metric_quote'] = 'Test results (Macro-F1, AUC) in percent.'
     with pytest.raises(ValueError, match='metric_quote'):
         validate_comparisons(payload, packet, fixture['workspace'], records)
+
+
+def test_pdf_row_header_and_metric_quotes_recover_only_verbatim_whitespace(sources):
+    fixture, packet, records, payload = _paired_metric_table(sources)
+    reference = payload['comparisons'][0]['reference']
+    original = reference['metric_quote']
+    reference['metric_quote'] = original.replace('results ', 'results\n')
+    rows, _ = validate_comparisons(payload, packet, fixture['workspace'], records)
+    assert rows[0]['reference']['metric_quote'] == original
+    assert rows[0]['reference']['proposed_metric_quote'] == original.replace('results ', 'results\n')
+    assert rows[0]['reference']['column_evidence']['status'] == 'verified'
+    reference['metric_quote'] = original.replace('Macro-F1', 'Micro-F1')
+    with pytest.raises(ValueError, match='metric_quote'):
+        validate_comparisons(payload, packet, fixture['workspace'], records)
+
+
+def _replace_comparison_table(sources, header, row, caption='Test accuracy (%) in a single run.'):
+    fixture, packet, records, payload = _flat_table(sources)
+    paper = next(ref for ref in payload['citations'] if ref['id'] == 'paper_results')
+    page = next(page for page in packet['pdf']['pages'] if page['page'] == paper['page'])
+    text = caption + '\n' + header + '\n' + row
+    page['text'] = page['text'].replace(paper['quote'], text)
+    page['sha256'] = hashlib.sha256(page['text'].encode()).hexdigest()
+    paper['quote'] = text
+    payload['comparisons'][0]['reference'].update(value_quote=row, column_quote=header)
+    return fixture, packet, records, payload
+
+
+def test_complete_multilevel_header_is_bound_to_hashed_page(sources):
+    header = 'SignGrid OtherGrid\nMethod\nFixed Random Fixed Random'
+    fixture, packet, records, payload = _replace_comparison_table(sources, header,
+        'Signal Linear test 100.0 98.0 96.0 94.0')
+    payload['comparisons'][0]['reference']['column_labels'] = ['SignGrid', 'Fixed']
+    rows, _ = validate_comparisons(payload, packet, fixture['workspace'], records)
+    evidence = rows[0]['reference']['column_evidence']
+    assert evidence['status'] == 'verified' and evidence['column_index'] == 0
+    assert evidence['column_labels'] == ['SignGrid', 'Fixed']
+    page = next(page for page in packet['pdf']['pages'] if page['page'] == evidence['page'])
+    assert evidence['page_sha256'] == page['sha256']
+    assert page['text'][slice(*evidence['row_span'])] == payload['comparisons'][0]['reference']['value_quote']
+    assert rows[0]['status'] == 'comparable'
+
+
+@pytest.mark.parametrize('incomplete', [False, True])
+def test_multilevel_ambiguity_preserves_gap_without_verdict(sources, incomplete):
+    header = 'SignGrid OtherGrid\nMethod\nFixed Random Fixed Random'
+    fixture, packet, records, payload = _replace_comparison_table(sources, header,
+        'Signal Linear test 100.0 98.0 96.0 94.0')
+    reference = payload['comparisons'][0]['reference']
+    reference.update(column_verified=True, column_evidence={'status': 'verified'})
+    if incomplete:
+        reference.update(column_quote='SignGrid OtherGrid', column_labels=['SignGrid'])
+    rows, _ = validate_comparisons(payload, packet, fixture['workspace'], records)
+    assert rows[0]['reference']['column_evidence']['status'] == 'unknown'
+    assert rows[0]['status'] == 'reference_only' and rows[0]['difference'] == 0
+    assert rows[0]['within_tolerance'] is None and rows[0]['meets_reference'] is None
+
+
+def test_inline_dataset_with_multiple_metrics_still_checks_metric_column(sources):
+    fixture, packet, records, payload = _replace_comparison_table(sources, 'Method Accuracy Recall',
+        'Signal Linear SignGrid test 100.0 98.0')
+    rows, _ = validate_comparisons(payload, packet, fixture['workspace'], records)
+    assert rows[0]['reference']['column_evidence']['column_labels'] == ['Accuracy']
+    payload['comparisons'][0]['reference']['value'] = 98.0
+    with pytest.raises(ValueError, match='dataset column'):
+        validate_comparisons(payload, packet, fixture['workspace'], records)
+
+
+def test_reported_uncertainty_cannot_be_borrowed_from_neighbor_column(sources):
+    fixture, packet, records, payload = _replace_comparison_table(sources, 'Method SignGrid OtherGrid',
+        'Signal Linear test 100.0 ±0.1 98.0 ±0.2')
+    reference = payload['comparisons'][0]['reference']
+    reference['reported_uncertainty'] = 0.2
+    with pytest.raises(ValueError, match='standard deviation.*dataset column'):
+        validate_comparisons(payload, packet, fixture['workspace'], records)
+
+
+def test_correction_repeats_authoritative_single_run_mean_without_changing_output(sources):
+    fixture, packet, _, payload = sources
+    execution = actual_execution()
+    execution['steps'][0]['stdout'] = 'Test Accuracy: 1.0 ± 0.0 (runs=1)'
+    payload['comparisons'][0]['actual_id'] = 'train:stdout:0'
+    corrected = deepcopy(payload)
+    corrected['comparisons'][0]['actual_context'].update(aggregation='mean', runs=1, std=0.0)
+    def reply(prompt, **kwargs):
+        if llm.chat.call_count == 1:
+            return json.dumps(payload)
+        assert 'Authoritative observed records for invalid rows' in prompt
+        assert '"aggregation":"mean"' in prompt and '"runs":1' in prompt
+        return json.dumps(corrected)
+    llm = Mock(mock_mode=False)
+    llm.chat.side_effect = reply
+    comparison = compare_author_claims(llm, packet, fixture['proposal'], fixture['workspace'], execution)
+    assert len(comparison['comparisons']) == 1 and not comparison['validation_errors']
+    assert comparison['comparisons'][0]['actual']['aggregation'] == 'mean'
+    assert comparison['comparisons'][0]['actual']['value'] == 1.0
+    assert comparison['extraction_attempts'][0]['validation_errors']
+
+
+@pytest.mark.parametrize('definition,kind', [
+    ('95% confidence interval', 'confidence_interval'), ('standard error', 'standard_error')])
+def test_reference_ci_and_sem_survive_validation_without_becoming_sd(sources, definition, kind):
+    caption = f'Test accuracy (%) with {definition}, in a single run.'
+    fixture, packet, records, payload = _replace_comparison_table(sources, 'Method SignGrid OtherGrid',
+        'Signal Linear test 100.0 ±0.1 98.0 ±0.2', caption)
+    payload['comparisons'][0]['reference'].update(std=0.1, uncertainty_kind='standard_deviation',
+        confidence_level=99, context_quotes={'uncertainty': caption})
+    rows, _ = validate_comparisons(payload, packet, fixture['workspace'], records)
+    reference = rows[0]['reference']
+    assert reference.get('std') is None and reference['reported_uncertainty'] == 0.1
+    assert reference['uncertainty_kind'] == kind
+    assert reference.get('confidence_level') == (95 if kind == 'confidence_interval' else None)
+    assert rows[0]['status'] == 'reference_only' and rows[0]['meets_reference'] is None
 
 
 def test_exact_selected_evidence_id_can_recover_an_omitted_citation_declaration(sources):
