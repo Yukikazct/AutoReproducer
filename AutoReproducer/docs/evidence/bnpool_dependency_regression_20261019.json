@@ -1,0 +1,149 @@
+{
+  "kind": "retained_evidence_dependency_resolution_regression",
+  "original_trial": "bnpool_20261019_01",
+  "trained": false,
+  "environment_installed": false,
+  "paper_metrics_verified": false,
+  "original_author_requirements": [],
+  "recovered_author_requirements": [
+    "hydra-core==1.3.2",
+    "lightning==2.6.1",
+    "numpy==1.26.4",
+    "ogb==1.3.6",
+    "omegaconf==2.3.0",
+    "pygsp==0.6.1",
+    "scikit-learn==1.8.0",
+    "tensorboard==2.20.0",
+    "torch==2.4.1",
+    "torch-cluster==1.6.3",
+    "torch-geometric==2.6.1",
+    "torch-geometric-pool==1.0.0",
+    "torch-scatter==2.1.2",
+    "torch-sparse==0.6.18",
+    "torchmetrics==1.9.0",
+    "setuptools==81.0.0"
+  ],
+  "declaration_evidence": [
+    {
+      "requirement": "hydra-core==1.3.2",
+      "path": "pyproject.toml",
+      "sha256": "020ae1677445c65fe3a5254890944d6251e0a53f28a21e2e996bb26bd59fbeee",
+      "field": "project.dependencies"
+    },
+    {
+      "requirement": "lightning==2.6.1",
+      "path": "pyproject.toml",
+      "sha256": "020ae1677445c65fe3a5254890944d6251e0a53f28a21e2e996bb26bd59fbeee",
+      "field": "project.dependencies"
+    },
+    {
+      "requirement": "numpy==1.26.4",
+      "path": "pyproject.toml",
+      "sha256": "020ae1677445c65fe3a5254890944d6251e0a53f28a21e2e996bb26bd59fbeee",
+      "field": "project.dependencies"
+    },
+    {
+      "requirement": "ogb==1.3.6",
+      "path": "pyproject.toml",
+      "sha256": "020ae1677445c65fe3a5254890944d6251e0a53f28a21e2e996bb26bd59fbeee",
+      "field": "project.dependencies"
+    },
+    {
+      "requirement": "omegaconf==2.3.0",
+      "path": "pyproject.toml",
+      "sha256": "020ae1677445c65fe3a5254890944d6251e0a53f28a21e2e996bb26bd59fbeee",
+      "field": "project.dependencies"
+    },
+    {
+      "requirement": "pygsp==0.6.1",
+      "path": "pyproject.toml",
+      "sha256": "020ae1677445c65fe3a5254890944d6251e0a53f28a21e2e996bb26bd59fbeee",
+      "field": "project.dependencies"
+    },
+    {
+      "requirement": "scikit-learn==1.8.0",
+      "path": "pyproject.toml",
+      "sha256": "020ae1677445c65fe3a5254890944d6251e0a53f28a21e2e996bb26bd59fbeee",
+      "field": "project.dependencies"
+    },
+    {
+      "requirement": "tensorboard==2.20.0",
+      "path": "pyproject.toml",
+      "sha256": "020ae1677445c65fe3a5254890944d6251e0a53f28a21e2e996bb26bd59fbeee",
+      "field": "project.dependencies"
+    },
+    {
+      "requirement": "torch==2.4.1",
+      "path": "pyproject.toml",
+      "sha256": "020ae1677445c65fe3a5254890944d6251e0a53f28a21e2e996bb26bd59fbeee",
+      "field": "project.dependencies"
+    },
+    {
+      "requirement": "torch-cluster==1.6.3",
+      "path": "pyproject.toml",
+      "sha256": "020ae1677445c65fe3a5254890944d6251e0a53f28a21e2e996bb26bd59fbeee",
+      "field": "project.dependencies"
+    },
+    {
+      "requirement": "torch-geometric==2.6.1",
+      "path": "pyproject.toml",
+      "sha256": "020ae1677445c65fe3a5254890944d6251e0a53f28a21e2e996bb26bd59fbeee",
+      "field": "project.dependencies"
+    },
+    {
+      "requirement": "torch-geometric-pool==1.0.0",
+      "path": "pyproject.toml",
+      "sha256": "020ae1677445c65fe3a5254890944d6251e0a53f28a21e2e996bb26bd59fbeee",
+      "field": "project.dependencies"
+    },
+    {
+      "requirement": "torch-scatter==2.1.2",
+      "path": "pyproject.toml",
+      "sha256": "020ae1677445c65fe3a5254890944d6251e0a53f28a21e2e996bb26bd59fbeee",
+      "field": "project.dependencies"
+    },
+    {
+      "requirement": "torch-sparse==0.6.18",
+      "path": "pyproject.toml",
+      "sha256": "020ae1677445c65fe3a5254890944d6251e0a53f28a21e2e996bb26bd59fbeee",
+      "field": "project.dependencies"
+    },
+    {
+      "requirement": "torchmetrics==1.9.0",
+      "path": "pyproject.toml",
+      "sha256": "020ae1677445c65fe3a5254890944d6251e0a53f28a21e2e996bb26bd59fbeee",
+      "field": "project.dependencies"
+    },
+    {
+      "requirement": "setuptools==81.0.0",
+      "path": "pyproject.toml",
+      "sha256": "020ae1677445c65fe3a5254890944d6251e0a53f28a21e2e996bb26bd59fbeee",
+      "field": "project.dependencies"
+    }
+  ],
+  "new_declared_runtime_pins": [
+    "hydra-core==1.3.2",
+    "omegaconf==2.3.0",
+    "pygsp==0.6.1",
+    "torchmetrics==1.9.0"
+  ],
+  "local_import_repair": null,
+  "runtime_dependency_repair": {
+    "module": "hydra",
+    "package": "hydra-core",
+    "requirement": "hydra-core==1.3.2",
+    "additions": [
+      "hydra-core==1.3.2"
+    ],
+    "requirement_options": [],
+    "author_declaration": "hydra-core==1.3.2",
+    "source": "actual_missing_module_error"
+  },
+  "original_artifact_sha256": {
+    ".tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_1e9f77486c50467aaa90b027ca576d7f\\source_packet.json": "ea6e10a95963f4ca29d7c5da69069b69d0be84ad8a7d6e6e4656ef8373de0b4c",
+    ".tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_1e9f77486c50467aaa90b027ca576d7f\\experiment_spec.json": "423dfa3ba6bc3b78acdcab9678d9873f92ee1f04b1787432dd3beaafd1a99fa0",
+    ".tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_1e9f77486c50467aaa90b027ca576d7f\\self_repair.json": "2650d30d771aa9ee7be418d31128be48dc5c060ff1a26a2a95baf16bc3f4e4df",
+    ".tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_1e9f77486c50467aaa90b027ca576d7f\\import_repairs.json": "d1c6f5dd45f9136fad32f9000f36a8865f584b0edeed7934f2923f7335f46bd6"
+  },
+  "original_artifacts_unchanged": true
+}

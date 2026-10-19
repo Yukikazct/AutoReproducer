@@ -1,0 +1,144 @@
+{
+  "paper": {
+    "order": 1,
+    "paper_id": "pytorch-geometric-library",
+    "title": "Fast Graph Representation Learning with PyTorch Geometric",
+    "file": "examples/papers/candidates_20261019_highstar/pyg.pdf",
+    "source_id": "arxiv:1903.02428",
+    "source_url": "https://arxiv.org/pdf/1903.02428",
+    "sha256": "8cfd9824d44c5aba66393ef05e70c1275ca7886e0a0502f7b09e86e6c3a38953",
+    "bytes": 379324,
+    "repository_url": "https://github.com/rusty1s/pytorch_geometric",
+    "current_repository_url": "https://github.com/pyg-team/pytorch_geometric",
+    "revision": "79d33965a40b7fa83616a9f598a0f8619f25d939",
+    "stargazers_count": 24123,
+    "star_query_at": "2026-10-19T04:40:19.237670+00:00",
+    "star_source": "https://api.github.com/repos/pyg-team/pytorch_geometric",
+    "star_interpretation": "Popularity signal only; not proof of reproducibility, correctness or absence of research misconduct."
+  },
+  "screened_at": "2026-10-19T04:46:43.724904+00:00",
+  "kind": "static_screening_only",
+  "official_identity": "PDF page 1 states that PyG is available on GitHub, footnote 1 gives rusty1s/pytorch_geometric; page 3 points to its benchmark directory. The official README cites this exact paper. The repository has moved to pyg-team/pytorch_geometric.",
+  "example_original_command": {
+    "path": "benchmark/citation/run.sh",
+    "cwd": "benchmark/citation",
+    "argv": [
+      "python",
+      "gcn.py",
+      "--dataset=Cora"
+    ],
+    "defaults": {
+      "runs": 100,
+      "epochs": 200,
+      "early_stopping": 10,
+      "hidden": 16,
+      "lr": 0.01
+    },
+    "runtime_choice": "Original train_eval.py selects CUDA, then MPS, then CPU; no device or training overrides injected."
+  },
+  "comparison": {
+    "pdf_page": 3,
+    "table": 1,
+    "row": "GCN",
+    "dataset": "Cora",
+    "split": "Fixed",
+    "accuracy_percent": 81.5,
+    "std_percentage_points": 0.6,
+    "repetitions": 100,
+    "visually_checked": true,
+    "table_image_local": ".tmp/pdf_selfrepair_20261019/screening_highstar/pyg_table.png",
+    "source_print": "Test Accuracy: {float(acc.mean()):.3f} +/- {float(acc.std()):.3f}"
+  },
+  "sources": [
+    {
+      "path": "README.md",
+      "source_url": "https://raw.githubusercontent.com/pyg-team/pytorch_geometric/79d33965a40b7fa83616a9f598a0f8619f25d939/README.md",
+      "local_path": "examples/papers/candidates_20261019_highstar/sources/README.md",
+      "sha256": "2acfdafff9ba526261751e9b7f02fcdcc9c2aacc7be0a528ced9db41136b4978",
+      "bytes": 60641
+    },
+    {
+      "path": "pyproject.toml",
+      "source_url": "https://raw.githubusercontent.com/pyg-team/pytorch_geometric/79d33965a40b7fa83616a9f598a0f8619f25d939/pyproject.toml",
+      "local_path": "examples/papers/candidates_20261019_highstar/sources/pyproject.toml",
+      "sha256": "61e83d1f1ddfaa364ac5403dcd6e7e72779aaa7ed0f1c7f8538b086ee8cd7e2e",
+      "bytes": 6357
+    },
+    {
+      "path": "benchmark/citation/README.md",
+      "source_url": "https://raw.githubusercontent.com/pyg-team/pytorch_geometric/79d33965a40b7fa83616a9f598a0f8619f25d939/benchmark/citation/README.md",
+      "local_path": "examples/papers/candidates_20261019_highstar/sources/benchmark_citation_README.md",
+      "sha256": "cb161770f8ed32dd1908eecde85bd0a718aa1fb1eea1d76beb98cc5e435bb0c2",
+      "bytes": 985
+    },
+    {
+      "path": "benchmark/citation/run.sh",
+      "source_url": "https://raw.githubusercontent.com/pyg-team/pytorch_geometric/79d33965a40b7fa83616a9f598a0f8619f25d939/benchmark/citation/run.sh",
+      "local_path": "examples/papers/candidates_20261019_highstar/sources/benchmark_citation_run.sh",
+      "sha256": "990261b574e7cf231f3f276a01fe454a9ca49fe785fa917b7e3d3ee2e468cdf6",
+      "bytes": 2452
+    },
+    {
+      "path": "benchmark/citation/gcn.py",
+      "source_url": "https://raw.githubusercontent.com/pyg-team/pytorch_geometric/79d33965a40b7fa83616a9f598a0f8619f25d939/benchmark/citation/gcn.py",
+      "local_path": "examples/papers/candidates_20261019_highstar/sources/benchmark_citation_gcn.py",
+      "sha256": "eac182ad2b2bed73dddd93bc026aaa1aa70688e5cdb0a770601abd4ee795b63c",
+      "bytes": 2222
+    },
+    {
+      "path": "benchmark/citation/__init__.py",
+      "source_url": "https://raw.githubusercontent.com/pyg-team/pytorch_geometric/79d33965a40b7fa83616a9f598a0f8619f25d939/benchmark/citation/__init__.py",
+      "local_path": "examples/papers/candidates_20261019_highstar/sources/benchmark_citation___init__.py",
+      "sha256": "63da45ba4bac903256c437401f2cec71920003b615d8079a65806fdf88f325cf",
+      "bytes": 183
+    },
+    {
+      "path": "benchmark/citation/train_eval.py",
+      "source_url": "https://raw.githubusercontent.com/pyg-team/pytorch_geometric/79d33965a40b7fa83616a9f598a0f8619f25d939/benchmark/citation/train_eval.py",
+      "local_path": "examples/papers/candidates_20261019_highstar/sources/benchmark_citation_train_eval.py",
+      "sha256": "d4d1e25626778ed2c5e7a7ee63f2af5443d558bf4391fe9c3ad50274d84498df",
+      "bytes": 5957
+    },
+    {
+      "path": "benchmark/citation/datasets.py",
+      "source_url": "https://raw.githubusercontent.com/pyg-team/pytorch_geometric/79d33965a40b7fa83616a9f598a0f8619f25d939/benchmark/citation/datasets.py",
+      "local_path": "examples/papers/candidates_20261019_highstar/sources/benchmark_citation_datasets.py",
+      "sha256": "ee19d28ea6e870356532d7c902311a7e34964cf27108e07ec5b5f9674cf0bbc0",
+      "bytes": 596
+    },
+    {
+      "path": "examples/gcn.py",
+      "source_url": "https://raw.githubusercontent.com/pyg-team/pytorch_geometric/79d33965a40b7fa83616a9f598a0f8619f25d939/examples/gcn.py",
+      "local_path": "examples/papers/candidates_20261019_highstar/sources/examples_gcn.py",
+      "sha256": "4222098f1ec15cd375c78a004fa3181dd2913d5966d857d89f63c11ddefbb9e6",
+      "bytes": 3518
+    },
+    {
+      "path": "torch_geometric/typing.py",
+      "source_url": "https://raw.githubusercontent.com/pyg-team/pytorch_geometric/79d33965a40b7fa83616a9f598a0f8619f25d939/torch_geometric/typing.py",
+      "local_path": "examples/papers/candidates_20261019_highstar/sources/torch_geometric_typing.py",
+      "sha256": "d756792fedd43e0f0ffe711efca78779405c80b653c0ce3d31bcf8e14b987b86",
+      "bytes": 16096
+    },
+    {
+      "path": "torch_geometric/datasets/planetoid.py",
+      "source_url": "https://raw.githubusercontent.com/pyg-team/pytorch_geometric/79d33965a40b7fa83616a9f598a0f8619f25d939/torch_geometric/datasets/planetoid.py",
+      "local_path": "examples/papers/candidates_20261019_highstar/sources/torch_geometric_datasets_planetoid.py",
+      "sha256": "464b1fc11fcf23ba8656986cf93fb88d70dea58c100b078c5c494b9b4f7a8608",
+      "bytes": 7201
+    }
+  ],
+  "data": "Original Planetoid loader downloads public Cora data; fixed public split uses 140 training, 500 validation and 1000 test nodes. Runtime source/download integrity and actual split remain trial gates.",
+  "selection_basis": "User preference for a high-star official repository, concrete complete benchmark and readable result table. Only this candidate is registered in this batch; no ranking by measured scores.",
+  "limitations": [
+    "Current pinned official code is newer than the 2019 paper; equivalence is not assumed.",
+    "Other experiments or examples may be selected by the product; comparison must follow the actual command.",
+    "Static screening did not install dependencies or execute author code.",
+    "Prior GCN-based experiments exist in the historical registry; novelty here is this paper/repository workflow, not a previously unseen algorithm."
+  ],
+  "author_training_started": false,
+  "dependency_installation_performed": false,
+  "product_specific_repair_performed": false,
+  "paper_metrics_verified": false,
+  "is_reproduced": null
+}

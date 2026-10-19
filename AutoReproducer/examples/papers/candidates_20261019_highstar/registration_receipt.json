@@ -1,0 +1,26 @@
+{
+  "kind": "registered_unused_candidate_batch",
+  "registered_at": "2026-10-19T04:48:59.468257+00:00",
+  "batch_id": "pdf_acceptance_20261019_highstar",
+  "fixed_order": [
+    "pytorch-geometric-library"
+  ],
+  "previous_record_count": 58,
+  "registered_record_count": 59,
+  "all_previous_records_and_histories_unchanged": true,
+  "registry_sha256_before": "2a878bba8845f4ba70bdddfb3abd4ed20357011498a638859086a9a1ad6ae0c8",
+  "registry_sha256_after": "a8562ef8d37c81a9a8dda08179500c3db33d5d82bcb1ecfc96b12b34bbe82c6b",
+  "paper": "pytorch-geometric-library",
+  "source_id": "arxiv:1903.02428",
+  "pdf_sha256": "8cfd9824d44c5aba66393ef05e70c1275ca7886e0a0502f7b09e86e6c3a38953",
+  "repository_revision": "79d33965a40b7fa83616a9f598a0f8619f25d939",
+  "stargazers_count": 24123,
+  "star_query_at": "2026-10-19T04:40:19.237670+00:00",
+  "author_training_started": false,
+  "dependency_installation_performed": false,
+  "product_specific_repair_performed": false,
+  "paper_metrics_verified": false,
+  "is_reproduced": null,
+  "committed": false,
+  "pushed": false
+}

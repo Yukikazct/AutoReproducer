@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_on": "2026-10-17",
+  "updated_on": "2026-10-19",
   "policy": "Paper identity spans aliases and PDF versions. Trial outcomes never imply independent numerical verification.",
   "papers": [
     {
@@ -1481,7 +1481,7 @@
       "pdf_sha256": [
         "3902ece975f46934320629ecdcf5b85c5bdd32a9f3bd9b864c3737bcba997fbc"
       ],
-      "status": "candidate",
+      "status": "regression",
       "repository_url": "https://github.com/SherylHYX/pytorch_geometric_signed_directed",
       "repository_revision": "2968b55b3378a01ade9f391e194f0077e2c6ee3b",
       "history": [
@@ -1497,8 +1497,15 @@
           "registered_at": "2026-10-17T12:29:39.605518+00:00",
           "evidence": "examples/papers/candidates_20261017_batch2/registration_receipt.json",
           "note": "Incrementally registered after the previous frozen run ended. Original static-screening history retained. No author training, dependency installation or product-specific repair for this candidate."
+        },
+        {
+          "outcome": "retired_after_comparison_parser_failure",
+          "frozen_commit": "ac0e6b70aeda1bb5b25310629db3178ea1a991f5",
+          "source_sha256": "6703c9a61482322d61929ec259efdaea10c157e6467e4ed99731637b11600cb6",
+          "evidence": "docs/evidence/pygsd_execution_20261019_01.json"
         }
-      ]
+      ],
+      "retirement_reason": "Author training completed naturally. Product lost parenthesized standard deviations and macro/micro F1; comparison validation failed. Subsequent repairs use this only as regression evidence."
     },
     {
       "id": "polynormer",
@@ -1513,7 +1520,7 @@
       "pdf_sha256": [
         "b48d05ad91bc923b4406b3cc4d29295ccc3ea23ffebfb82fc5fcdaa0af48bb7c"
       ],
-      "status": "candidate",
+      "status": "regression",
       "repository_url": "https://github.com/cornell-zhang/Polynormer",
       "repository_revision": "fc8c276c9c5dfbd616d83f65338a3392188a5e08",
       "history": [
@@ -1529,8 +1536,15 @@
           "registered_at": "2026-10-17T12:29:39.605518+00:00",
           "evidence": "examples/papers/candidates_20261017_batch2/registration_receipt.json",
           "note": "Incrementally registered after the previous frozen run ended. Original static-screening history retained. No author training, dependency installation or product-specific repair for this candidate."
+        },
+        {
+          "outcome": "retired_after_pdf_table_comparison_failure",
+          "frozen_commit": "ac0e6b70aeda1bb5b25310629db3178ea1a991f5",
+          "source_sha256": "30500a2449a2b725832febd7e58217df648cbc10a7d4a41b5cf42e7e49f83468",
+          "evidence": "docs/evidence/polynormer_execution_20261019_01.json"
         }
-      ]
+      ],
+      "retirement_reason": "Original author training completed all 1200 epochs and missing-dependency recovery resolved. PDF extraction merged adjacent table numbers, so cited comparison validation failed. The runtime dataset stage also lacked a terminal event. Subsequent repairs use this paper only as regression evidence."
     },
     {
       "id": "bnpool",
@@ -1547,7 +1561,7 @@
       "pdf_sha256": [
         "35c416b0b1927db60cd936cd430da1dded1e9794799ed13adfecce0f4c3fa316"
       ],
-      "status": "candidate",
+      "status": "regression",
       "repository_url": "https://github.com/NGMLGroup/Bayesian-Nonparametric-Graph-Pooling",
       "repository_revision": "206bcb4c642468ba4c51f79812ff1e220756937f",
       "history": [
@@ -1563,8 +1577,71 @@
           "registered_at": "2026-10-17T12:29:39.605518+00:00",
           "evidence": "examples/papers/candidates_20261017_batch2/registration_receipt.json",
           "note": "Incrementally registered after the previous frozen run ended. Original static-screening history retained. No author training, dependency installation or product-specific repair for this candidate."
+        },
+        {
+          "outcome": "retired_after_import_namespace_conflict",
+          "frozen_commit": "ac0e6b70aeda1bb5b25310629db3178ea1a991f5",
+          "source_sha256": "a9e58cbccedf192a2ead4cabfc4b6c38c267cd126314275171a63c252dd17b4f",
+          "evidence": "docs/evidence/bnpool_execution_20261019_01.json"
         }
-      ]
+      ],
+      "retirement_reason": "Declared external hydra-core==1.3.2 was confused with an internal source/utils/hydra.py module. The agent stopped the incorrect dependency retry before training; this was a diagnostic interruption, not a user stop or natural successful completion. No product changes occurred during the trial."
+    },
+    {
+      "id": "pytorch-geometric-library",
+      "title": "Fast Graph Representation Learning with PyTorch Geometric",
+      "aliases": [
+        "PyTorch Geometric",
+        "PyG library"
+      ],
+      "source_ids": [
+        "arxiv:1903.02428"
+      ],
+      "pdf_sha256": [
+        "8cfd9824d44c5aba66393ef05e70c1275ca7886e0a0502f7b09e86e6c3a38953"
+      ],
+      "status": "regression",
+      "repository_url": "https://github.com/rusty1s/pytorch_geometric",
+      "repository_revision": "79d33965a40b7fa83616a9f598a0f8619f25d939",
+      "history": [
+        {
+          "outcome": "candidate_not_executed",
+          "frozen_commit": null,
+          "evidence": "examples/papers/candidates_20261019_highstar/screening.json",
+          "note": "Static screening of a high-star official repository only. No author execution, dependency installation, or product-specific change for this candidate."
+        },
+        {
+          "outcome": "registered_unused_candidate",
+          "registered_at": "2026-10-19T04:48:59.468257+00:00",
+          "frozen_commit": null,
+          "evidence": "examples/papers/candidates_20261019_highstar/registration_receipt.json"
+        },
+        {
+          "outcome": "retired_after_incomplete_author_command",
+          "frozen_commit": "ac0e6b70aeda1bb5b25310629db3178ea1a991f5",
+          "source_sha256": "a334c2aff80be3285ed6d00c70313b6f30733f2835a6a8079a93252d3e238cf3",
+          "evidence": "docs/evidence/pyg_execution_20261019_01.json"
+        },
+        {
+          "outcome": "regression_failed_wrapped_missing_dependency",
+          "frozen_commit": "ac0e6b70aeda1bb5b25310629db3178ea1a991f5",
+          "source_sha256": "c4533359b5775ed447d3d2bc5873216fa3de7a43d2cac81155e35820ebec6436",
+          "evidence": "docs/evidence/pyg_execution_20261019_regression_02.json"
+        },
+        {
+          "outcome": "regression_failed",
+          "frozen_commit": "ac0e6b70aeda1bb5b25310629db3178ea1a991f5",
+          "source_sha256": "6ac59457ccc6ec8198c5e74cfdf6989b75bbd3e6c51e6a48008e6146776c753a",
+          "evidence": "docs/evidence/pyg_execution_20261019_regression_04.json"
+        },
+        {
+          "outcome": "full_workflow_regression_passed",
+          "frozen_commit": "ac0e6b70aeda1bb5b25310629db3178ea1a991f5",
+          "source_sha256": "4fb1912935bd73db7320772790fd01d13b45a65f10d6de0dca17c9eb46fee11f",
+          "evidence": "docs/evidence/pyg_execution_20261019_regression_05.json"
+        }
+      ],
+      "retirement_reason": "Agent diagnosed a missing required --dataset option in the frozen README shorthand command and interrupted dependency downloads before training. This was a diagnostic intervention, not a user stop or successful author execution. No product edits occurred during the trial."
     }
   ]
 }

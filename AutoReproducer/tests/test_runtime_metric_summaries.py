@@ -175,3 +175,22 @@ def test_explicit_structured_measurement_still_wins_over_typed_logger():
     records, _ = parse_runtime_metrics(logger_output(), structured=[{
         'name': 'accuracy', 'value': 0.7, 'unit': 'fraction', 'split': 'test'}])
     assert records[0]['value'] == 0.7 and records[0]['unit'] == 'fraction'
+
+
+def test_configuration_and_layer_repr_are_not_runtime_measurements():
+    output = ("Namespace(epochs=500, lr=0.01, runs=5, loss=1.0)\n"
+              "(lin): Linear(in_features=40, out_features=3, bias=True)\n"
+              "Test AUC: 0.8730\nlatency=2.1")
+    records, errors = parse_runtime_metrics(output, preserve_contexts=True)
+    assert not errors and [(r['name'], r['value']) for r in records] == [('auc', 0.8730)]
+    custom, _ = parse_runtime_metrics(output, expected_names=['latency'])
+    assert next(r for r in custom if r['name'] == 'latency')['value'] == 2.1
+
+
+@pytest.mark.parametrize('macro,micro', [('MacroF1', 'MicroF1'), ('Macro-F1', 'Micro-F1'),
+    ('f1_macro', 'f1_micro'), ('Macro F1', 'Micro F1'), ('macro_f1_score', 'micro_f1_score')])
+def test_f1_averaging_methods_remain_distinct(macro, micro):
+    records, errors = parse_runtime_metrics(f'F1: 0.9702, {macro}: 0.6859, {micro}: 0.9433')
+    assert not errors
+    assert {r['name']: r['value'] for r in records} == {
+        'f1_score': 0.9702, 'f1_macro': 0.6859, 'f1_micro': 0.9433}

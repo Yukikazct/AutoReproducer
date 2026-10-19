@@ -16,19 +16,20 @@ from packaging.version import InvalidVersion, Version
 from src.agents.code_executor import _safe_install_diagnostic
 from src.method_adapters import write_json
 from src.safety.paths import workspace_path
+from src.author_self_repair import failure_diagnostic, traceback_sources
 
 MAX_FAILURE_ANALYSES = 4
 MAX_SOURCE_READS = 2
 
 
 def _failure_text(result):
-    final = result.get('final') or {}
-    return _safe_install_diagnostic(str(final.get('stderr') or result.get('reason') or ''))[-6000:]
+    return failure_diagnostic(result)[-8000:]
 
 
-def _source_excerpts(plan, packet, workspace, requested=()):
+def _source_excerpts(plan, packet, workspace, requested=(), diagnostic=''):
     entrypoints = [step.get('entrypoint', {}).get('source_path') for step in plan.get('steps', [])]
-    names = list(dict.fromkeys([*entrypoints, *requested]))[:5]
+    locations = dict(traceback_sources(diagnostic, workspace, packet.get('file_inventory') or {}))
+    names = list(dict.fromkeys([*reversed(locations), *requested, *entrypoints]))[:5]
     excerpts = {}
     inventory = packet.get('file_inventory') or []
     for name in names:
@@ -47,7 +48,14 @@ def _source_excerpts(plan, packet, workspace, requested=()):
                 excerpts[name] = '\n'.join(
                     f"# code cell {cell['index'] + 1}\n{cell['source']}" for cell in cells)[:4500]
             else:
-                excerpts[name] = content.decode('utf-8', 'replace')[:4500]
+                text = content.decode('utf-8', 'replace')
+                if name in locations:
+                    lines, line = text.splitlines(), locations[name]
+                    start = max(0, line - 31)
+                    excerpts[name] = '\n'.join(f'{index + 1}: {lines[index]}'
+                        for index in range(start, min(len(lines), line + 30)))[:6500]
+                else:
+                    excerpts[name] = text[:4500]
         except (OSError, ValueError):
             continue
     return excerpts
@@ -138,7 +146,9 @@ def analyze_author_failure(llm, result, plan, packet, workspace, environment, ru
                                         plan.get('requirements', {}).get('author', [])],
                 'compatibility_requirements': plan.get('requirements', {}).get('compatibility', []),
                 'selected_steps': plan.get('steps', []),
-                'source_excerpts': _source_excerpts(plan, packet, workspace, requested),
+                'source_excerpts': _source_excerpts(plan, packet, workspace, requested, diagnostic),
+                'previous_repairs': [{key: item.get(key) for key in ('action', 'status', 'reason')}
+                    for item in (data.get('self_repair') or {}).get('attempts', [])[-8:]],
                 'available_source_paths': list(packet.get('file_inventory') or [])[:200]}
             record['llm_calls'] += 1
             response = llm.chat(json.dumps(evidence, ensure_ascii=False), system_prompt=system,

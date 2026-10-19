@@ -120,3 +120,24 @@ def test_failure_analysis_stops_after_four_distinct_failures_per_repository(tmp_
                                       environment, tmp_path, data) is None
     assert len(llm.calls) == 4
     assert len(data['failure_analyses']) == 4
+
+
+def test_model_reads_actual_traceback_location_and_previous_repair_outcomes(tmp_path):
+    fixture, packet, plan, environment = prepared(tmp_path)
+    source = fixture['workspace'] / 'nested.py'
+    content = '# long original source\n' * 350 + "raise RuntimeError('specific failure here')\n"
+    source.write_text(content, encoding='utf-8')
+    import hashlib
+    packet['file_inventory']['nested.py'] = {'sha256': hashlib.sha256(source.read_bytes()).hexdigest(),
+                                            'text_available': True}
+    data = {'self_repair': {'attempts': [{'action': 'install_missing_dependency',
+             'status': 'failed_with_new_error', 'reason': 'original module now imports'}]}}
+    result = {'final': {'stdout': f'Traceback (most recent call last):\n  File "{source}", line 351, in <module>\n'
+                                  "RuntimeError: specific failure here", 'stderr': ''}}
+    llm = FakeLLM([{'action': 'blocked', 'reason': 'needs a compatible API'}])
+    analyze_author_failure(llm, result, plan, packet, fixture['workspace'], environment, tmp_path, data)
+    context = llm.calls[0][0]
+    assert 'specific failure here' in context['diagnostic']
+    assert 'specific failure here' in context['source_excerpts']['nested.py']
+    assert '351' in context['source_excerpts']['nested.py']
+    assert context['previous_repairs'][0]['status'] == 'failed_with_new_error'

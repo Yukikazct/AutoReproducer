@@ -9,6 +9,7 @@ from src.metric_keys import norm_metric_key
 METRICS_MARKER = "AUTOREPRO_METRICS:"
 NUMBER_PATTERN = r"[+-]?(?:(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?|nan|inf(?:inity)?)"
 _METRIC_LABEL = (
+    r"(?:macro|micro|weighted)[_\s-]?f1(?:[_\s-]?score)?|"
     r"root[_\s-]?mean[_\s-]?squared[_\s-]?error|"
     r"mean[_\s-]?squared[_\s-]?error|测试集准确率|准确率|精确率|召回率|损失|"
     r"[A-Za-z_][A-Za-z0-9_-]*(?:\s+score)?")
@@ -32,7 +33,8 @@ _STD_RE = re.compile(r"(?:\b(?:std(?:dev)?|stdev|standard\s+deviation)\s*[:=]?\s
 _OTHER_UNCERTAINTY = re.compile(r"\b(?:ci|confidence\s+interval|sem|stderr|standard\s+error)\b", re.I)
 _REFERENCE_RE = re.compile(r"论文|声明|参考|目标|\b(?:paper|declared|reference|target)\b", re.I)
 _FINAL_STAGES = {"final", "full", "test", "eval", "evaluation"}
-_TEXT_METRICS = {"accuracy", "f1_score", "precision", "recall", "loss", "mse", "rmse", "mae",
+_TEXT_METRICS = {"accuracy", "f1_score", "f1_macro", "f1_micro", "f1_weighted",
+                 "precision", "recall", "loss", "mse", "rmse", "mae",
                  "r2", "auc", "roc_auc", "mape", "smape", "psnr", "ssim", "bleu", "rouge",
                  "perplexity", "score", "reproduction_score"}
 _LOGGER_RUN = re.compile(r'^\s*Run\s+(\d+)\s*:\s*$', re.I)
@@ -215,6 +217,7 @@ def parse_runtime_metrics(text, structured=None, expected_names=(), *, preserve_
         context = _printed_logger_context(line)
         if context is not None:
             logger, current_run, all_runs, completed_runs = context, None, False, {}
+            continue
         run_header = _LOGGER_RUN.fullmatch(line)
         if run_header:
             current_run, all_runs = int(run_header[1]), False
@@ -264,7 +267,7 @@ def parse_runtime_metrics(text, structured=None, expected_names=(), *, preserve_
                 name = norm_metric_key(qualified[2])
             if name in {"epoch", "step", "seed", "version"} | _STAT_NAMES:
                 continue
-            if name not in known_names and (summary or match["sep"] != "="):
+            if name not in known_names:
                 continue
             stage = "final" if re.search(r"\bfinal\b|最终", prefix, re.I) else ""
             split = ""

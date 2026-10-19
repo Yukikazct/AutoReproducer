@@ -47,6 +47,19 @@ def build(data):
     return ReportGeneratorAgent()._build_report(data)
 
 
+def test_report_shows_verified_self_repair_outcomes_separately_from_paper_verdict():
+    report = build({'self_repair': {'status': 'blocked', 'reason': '需要作者缺失的数据文件',
+        'attempts': [{'round': 1, 'action': 'install_missing_dependency', 'status': 'failed_with_new_error',
+                      'reason': '安装原命令实际缺失的依赖'},
+                     {'round': 2, 'action': 'restore_repository_import', 'status': 'no_progress',
+                      'reason': '补入固定源码的模块路径'}]}})
+    assert '自动诊断与修复' in report
+    assert '重跑后出现新错误' in report
+    assert '重跑后错误相同' in report
+    assert '需要作者缺失的数据文件' in report
+    assert '论文数值复现成功' not in report
+
+
 def test_current_author_run_report_has_completion_and_metrics_without_old_review_requirements():
     report = build({
         'grounded_repository_plan': {'scope': 'author_code_execution', 'steps': [

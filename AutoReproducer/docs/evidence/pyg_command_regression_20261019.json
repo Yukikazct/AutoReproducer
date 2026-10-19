@@ -1,0 +1,58 @@
+{
+  "kind": "retained_command_planning_regression",
+  "original_trial": "pyg_20261019_01",
+  "rejected_original_command": {
+    "id": "train-gcn-citation",
+    "kind": "train",
+    "argv": [
+      "python",
+      "gcn.py"
+    ],
+    "entrypoint": {
+      "kind": "script",
+      "target": "gcn.py",
+      "source_path": "benchmark/citation/gcn.py"
+    },
+    "cwd": "benchmark/citation",
+    "timeout_s": null,
+    "depends_on": [],
+    "citations": [
+      "repo_b444bff972bf_0",
+      "inventory_13ba301ba3c6",
+      "inventory_1f698efead3b",
+      "inventory_00a183d2ccfa"
+    ],
+    "required": true
+  },
+  "diagnostic": "Original author command omits required argparse options in benchmark/citation/gcn.py: --dataset. Read the complete original launcher/README invocation and its values; do not invent values.",
+  "selected_original_command": {
+    "id": "train",
+    "kind": "train",
+    "argv": [
+      "python3",
+      "examples/llm/txt2qa.py",
+      "--config",
+      "examples/llm/txt2qa_config/text_config_vllm.yaml"
+    ],
+    "entrypoint": {
+      "kind": "script",
+      "target": "examples/llm/txt2qa.py",
+      "source_path": "examples/llm/txt2qa.py"
+    },
+    "cwd": ".",
+    "timeout_s": null,
+    "depends_on": [],
+    "citations": [],
+    "required": true
+  },
+  "command_source": {
+    "path": "examples/llm/README.md",
+    "quote": "python3 examples/llm/txt2qa.py    --config examples/llm/txt2qa_config/text_config_vllm.yaml",
+    "sha256": "225ca415d81aeb90011807cc813859996448284446fc7402f98b63edec262cb9",
+    "template_bindings": {}
+  },
+  "trained": false,
+  "environment_installed": false,
+  "paper_metrics_verified": false,
+  "is_reproduced": null
+}

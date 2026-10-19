@@ -41,6 +41,21 @@ def validate_author_execution_plan(payload, packet, workspace):
     claims = payload.get('claims') if isinstance(payload.get('claims'), dict) else {}
     steps = _steps(payload.get('steps'), citations, packet, workspace, device=device)
     for step in steps:
+        if step['entrypoint']['kind'] in {'script', 'module'}:
+            from src.author_command_validation import missing_required_options
+            position = 2 if step['argv'][1] == '-u' else 1
+            if step['entrypoint']['kind'] == 'module':
+                position += 1
+            arguments = step['argv'][position + 1:]
+            name = step['entrypoint']['source_path']
+            source = _load_execution_source(packet, workspace, name)
+            missing = missing_required_options(source['text'], arguments)
+            if missing:
+                raise PlanEvidenceError('Original author command omits required argparse options in '
+                    + name + ': ' + ', '.join(missing)
+                    + '. Read the complete original launcher/README invocation and its values; do not invent values.',
+                    planning_evidence={'stage': 'author_command_arguments', 'entrypoint': name,
+                                       'missing_options': missing, 'arguments': arguments})
         if step['entrypoint']['kind'] == 'notebook' and device == 'cpu':
             from src.author_entrypoints import fixed_cuda_in_notebook, notebook_cells
             if fixed_cuda_in_notebook(notebook_cells(packet, workspace, step['entrypoint']['source_path'])):
@@ -181,13 +196,14 @@ steps:[{id,kind:'train|eval',argv:['python','original.py',...] OR ['python','-m'
             'declare dependency lines; do not invent bare package names from import statements. '
             'Other declared exact package pins are attempted directly; undeclared imports are deferred '
             'to error-driven pip repair. A real missing-module error will install the package and retry '
-            'the unchanged author command up to three repair rounds. '
+            'the unchanged author command within the shared eight-action repair budget. '
             'Preserve documented author CPU/GPU options. CPU hides CUDA. '
             'If necessary request 1-8 exact source_catalog paths with {"request_files":[paths]}; at most '
             'two additional reading rounds are available. Return {"unsupported":"specific evidence-based '
             'reason"} only if no valid original command/data/device can be established. '\
-            '\nSchema:\n' + schema + '\nPrevious structural feedback:\n' + feedback
-            + '\nAuthor execution evidence:\n' + _canonical(_planning_view(packet)))
+            '\nSchema:\n' + schema
+            + '\nAuthor execution evidence:\n' + _canonical(_planning_view(packet))
+            + '\nPrevious structural feedback (correct the original invocation before environment setup):\n' + feedback)
         try:
             response = llm.chat(prompt, system_prompt=system, temperature=0, task='author_execution_plan')
             payload = _json_response(response)
@@ -219,7 +235,12 @@ steps:[{id,kind:'train|eval',argv:['python','original.py',...] OR ['python','-m'
             if len(failures) >= 2 and failures[-1] == failures[-2]:
                 break
     try:
-        plan = plan_from_author_commands(packet, workspace)
+        command_failure = next((item['evidence'] for item in reversed(failure_details)
+            if (item.get('evidence') or {}).get('stage') == 'author_command_arguments'), {})
+        plan = plan_from_author_commands(packet, workspace,
+            required_entrypoint=command_failure.get('entrypoint'),
+            required_arguments=command_failure.get('arguments'),
+            missing_options=command_failure.get('missing_options', []))
         plan['planning_warnings'].append('Model planning unavailable; using a literal original README/launcher command.')
         plan['planning_failures'] = failures
         plan['planning_failure_details'] = failure_details
@@ -253,7 +274,8 @@ def _declares_literal_option(packet, step, option):
                for node in ast.walk(tree))
 
 
-def plan_from_author_commands(packet, workspace):
+def plan_from_author_commands(packet, workspace, *, required_entrypoint=None,
+                              required_arguments=None, missing_options=()):
     """A model outage or unsupported quotation must not hide literal launchers."""
     if packet.get('author_execution_only') is not True:
         raise PlanEvidenceError('Literal command fallback requires an explicit execution objective')
@@ -327,6 +349,15 @@ def plan_from_author_commands(packet, workspace):
                     'repository': {key: packet['repository'][key] for key in ('url', 'revision')},
                     'device': 'cpu', 'datasets': [], 'requirements': {'author': list(dict.fromkeys(declarations))},
                     'steps': [{'id': 'train', 'kind': 'train', 'argv': argv, 'cwd': cwd, 'timeout_s': None}]}
+                if required_entrypoint:
+                    from src.author_entrypoints import resolve_entrypoint
+                    entrypoint, _, arguments = resolve_entrypoint(proposal['steps'][0], packet, workspace)
+                    if entrypoint['source_path'] != required_entrypoint:
+                        continue  # Completing arguments must not switch to an unrelated experiment.
+                    if required_arguments is not None:
+                        from src.author_command_validation import completes_required_options
+                        if not completes_required_options(arguments, required_arguments, missing_options):
+                            continue  # Keep the author's selected mode, repetitions and hyperparameters.
                 plan = validate_author_execution_plan(proposal, packet, workspace)
                 if '--kwargs' in argv and not _declares_literal_option(packet, plan['steps'][0], '--kwargs'):
                     continue  # README placeholders are not a complete author invocation.
@@ -338,7 +369,8 @@ def plan_from_author_commands(packet, workspace):
             except (ValueError, TypeError, KeyError, OSError) as exc:
                 failures.append(str(exc))
     from src.author_entrypoints import notebook_cells
-    notebooks = [name for name in packet['file_inventory'] if name.endswith('.ipynb') and name in readmes]
+    notebooks = [name for name in packet['file_inventory'] if name.endswith('.ipynb') and name in readmes
+                 and (not required_entrypoint or name == required_entrypoint)]
     for name in notebooks[:3]:
         try:
             cells = notebook_cells(packet, workspace, name)

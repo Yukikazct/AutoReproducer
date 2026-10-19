@@ -60,6 +60,7 @@ MODULE_TO_PYPI = {
     "yaml": "pyyaml",
     "absl": "absl-py",
     "dotenv": "python-dotenv",
+    "hydra": "hydra-core",
     "huggingface_hub": "huggingface-hub",
     "google_drive_downloader": "googledrivedownloader",
     "tensorflow_hub": "tensorflow-hub",

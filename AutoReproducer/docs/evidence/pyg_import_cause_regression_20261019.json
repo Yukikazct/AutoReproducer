@@ -1,0 +1,23 @@
+{
+  "evaluation_type": "static_decision_regression",
+  "original_execution": "docs/evidence/pyg_execution_20261019_regression_02.json",
+  "original_artifact_hashes_verified": true,
+  "diagnostic_characters": 6082,
+  "selected_cause": "ModuleNotFoundError: No module named 'aiohttp'",
+  "repair_decision": {
+    "module": "aiohttp",
+    "package": "aiohttp",
+    "requirement": "aiohttp==3.10.10",
+    "additions": [
+      "aiohttp==3.10.10"
+    ],
+    "requirement_options": [],
+    "author_declaration": "aiohttp",
+    "source": "actual_missing_module_error"
+  },
+  "installation_performed": false,
+  "training_performed": false,
+  "paper_metrics_verified": false,
+  "is_reproduced": null,
+  "limitation": "Only replays the dependency decision from preserved logs. A new real run must verify recovery."
+}

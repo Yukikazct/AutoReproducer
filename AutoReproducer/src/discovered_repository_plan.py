@@ -18,6 +18,7 @@ import zipfile
 from urllib.parse import urlsplit
 
 from src.safety.paths import workspace_path
+from src.author_dependencies import declared_requirements, import_distribution, unformat_requirement
 from src.dependency_versions import (
     CPU_COMPATIBILITY_PINS, CUDA_COMPATIBILITY_PINS, compatibility_pins,
 )
@@ -778,6 +779,56 @@ def _effective_author_parameters(packet, step):
     return definitions
 
 
+def _project_dependency_declarations(packet, step, workspace):
+    """Read PEP 621 declarations for the entrypoint's enclosing project only."""
+    import tomllib
+    from packaging.requirements import InvalidRequirement, Requirement
+
+    entrypoint = step.get('entrypoint') or {}
+    argv = step.get('argv') or []
+    position = 2 if len(argv) > 1 and argv[1] == '-u' else 1
+    entry = entrypoint.get('source_path') or (
+        (Path(step.get('cwd', '.')) / argv[position]).as_posix() if len(argv) > position else None)
+    if not entry:
+        return []
+    for parent in Path(entry).parents:
+        name = (parent / 'pyproject.toml').as_posix()
+        record = packet['file_inventory'].get(name)
+        if record is None:
+            continue
+        source = (_load_execution_source(packet, workspace, name) if workspace is not None
+                  else packet['repository']['files'].get(name))
+        if source is None:
+            raise PlanEvidenceError('Project dependency source is absent: ' + name)
+        raw = source['text'].encode('utf-8')
+        if (source['sha256'] != record['sha256'] or record['sha256'] not in
+                {_digest(raw), _digest(b'\xef\xbb\xbf' + raw)}):
+            raise PlanEvidenceError('Project dependency source changed after snapshot: ' + name)
+        try:
+            project = tomllib.loads(source['text']).get('project', {})
+        except ValueError as exc:
+            raise PlanEvidenceError('Invalid project dependency metadata: ' + name) from exc
+        if not isinstance(project, dict):
+            raise PlanEvidenceError('Project metadata must be a table: ' + name)
+        if 'dependencies' not in project:
+            if project:
+                return []  # A distinct/dynamic project does not inherit its parent's dependencies.
+            continue
+        declarations = project['dependencies']
+        if not isinstance(declarations, list) or any(not isinstance(line, str) for line in declarations):
+            raise PlanEvidenceError('Project dependencies must be a list of requirement strings: ' + name)
+        evidence = []
+        for line in declarations:
+            try:
+                Requirement(line)
+            except InvalidRequirement as exc:
+                raise PlanEvidenceError('Invalid declared dependency in ' + name) from exc
+            evidence.append({'requirement': line, 'path': name, 'sha256': record['sha256'],
+                             'field': 'project.dependencies'})
+        return evidence
+    return []
+
+
 def _requirements(value, citations, packet, device="cpu", step=None, *, datasets=None, workspace=None):
     if not isinstance(value, dict) or not isinstance(value.get("reason"), str) or not value["reason"].strip():
         raise PlanEvidenceError("Compatibility dependencies need an explicit explanation")
@@ -790,14 +841,16 @@ def _requirements(value, citations, packet, device="cpu", step=None, *, datasets
         raise PlanEvidenceError("Original dependency lines must be a list of strings")
     combined = ("\n".join(source['text'] for source in packet['repository']['files'].values()) if relaxed
                 else "\n".join(ref["quote"] for ref in refs))
-    def unformat(line):
-        line = re.sub(r"^\s*(?:[-*+]|\d+[.)])\s+", "", line).strip()
-        return line[1:-1] if len(line) >= 2 and line.startswith("`") and line.endswith("`") else line
+    unformat = unformat_requirement
 
     original_lines = [line.strip() for line in combined.splitlines() if line.strip()]
     originals = {unformat(line): line for line in original_lines}
+    declarations = _project_dependency_declarations(packet, step, workspace) if relaxed and step else []
+    for item in declarations:
+        originals[item['requirement']] = item['requirement']
     if relaxed:
         author = [line for line in author if unformat(line) in originals]
+        author = list(dict.fromkeys(author + [item['requirement'] for item in declarations]))
         compatibility = []  # Derive packages from real imports, rather than model pins.
     elif any(unformat(line) not in originals for line in author):
         raise PlanEvidenceError("Original dependencies are not supported by their citations")
@@ -838,17 +891,15 @@ def _requirements(value, citations, packet, device="cpu", step=None, *, datasets
             discovery = {'imports': [], 'excluded_device_branches': [], 'repository_namespaces': []}
         actual, excluded = discovery['imports'], discovery['excluded_device_branches']
         namespaces = discovery['repository_namespaces']
-        inverse = {module: name for name, module in _PACKAGE_IMPORTS.items()}
         required = {'torch', 'numpy'}
         unsupported = []
         for item in actual:
-            package = inverse.get(item['module'], item['module'])
+            package = import_distribution(item['module'])
             if package not in pins:
                 if packet.get('author_execution_only') is True:
-                    from src.agents.dependency_resolver import python_package_for
-                    package = python_package_for(item['module']).casefold().replace('_', '-')
-                    declared = next((unformat(line) for line in author if re.fullmatch(
-                        re.escape(package) + r'==[\w.+-]+', unformat(line), re.I)), None)
+                    matches = declared_requirements(item['module'], author)
+                    declared = (str(matches[0]) if len(matches) == 1 and re.fullmatch(
+                        r'[\w.-]+==[\w.+-]+', str(matches[0])) else None)
                     if declared:
                         declared_pins.append(declared)
                         import_evidence.append({**item, 'package': package, 'pin': declared,
@@ -882,6 +933,7 @@ def _requirements(value, citations, packet, device="cpu", step=None, *, datasets
         omitted = [line for line in compatibility if line.split('==')[0].casefold().replace('_', '-') not in required]
         compatibility = [name + '==' + pins[name] for name in sorted(required)] + sorted(set(declared_pins))
     return {"author": [originals[unformat(line)] for line in author], "compatibility": list(compatibility),
+            "declaration_evidence": declarations,
             "reason": value["reason"], "citations": list(value["citations"]),
             "runtime_required": ["torch==" + pins["torch"], "numpy==" + pins["numpy"]],
             "index_url": CUDA_INDEX_URL if device == "cuda" else CPU_INDEX_URL,

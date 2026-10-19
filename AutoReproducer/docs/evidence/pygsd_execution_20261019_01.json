@@ -1,0 +1,231 @@
+{
+  "trial": "pygsd_20261019_01",
+  "input": "real_browser_pdf_upload",
+  "frozen_commit": "ac0e6b70aeda1bb5b25310629db3178ea1a991f5",
+  "product_source_sha256": "6703c9a61482322d61929ec259efdaea10c157e6467e4ed99731637b11600cb6",
+  "product_source_unchanged_during_trial": true,
+  "pdf_sha256": "3902ece975f46934320629ecdcf5b85c5bdd32a9f3bd9b864c3737bcba997fbc",
+  "repository_url": "https://github.com/SherylHYX/pytorch_geometric_signed_directed",
+  "repository_revision": "2968b55b3378a01ade9f391e194f0077e2c6ee3b",
+  "author_execution": [
+    {
+      "spec_sha256": "078675e58b4e5f506414202810c6861e24cf3ff2bd25d024aab60a3ad97fad49",
+      "step": {
+        "id": "train_sgcn_bitcoin_alpha",
+        "kind": "train",
+        "argv": [
+          "python",
+          "examples/run_link_sign_prediction.py",
+          "--dataset",
+          "bitcoin_alpha",
+          "--model",
+          "SGCN"
+        ],
+        "entrypoint": {
+          "kind": "script",
+          "target": "examples/run_link_sign_prediction.py",
+          "source_path": "examples/run_link_sign_prediction.py"
+        },
+        "cwd": ".",
+        "timeout_s": null,
+        "depends_on": [],
+        "citations": [
+          "repo_36660dae38dd_0",
+          "inventory_36660dae38dd",
+          "inventory_b562d6fa6092"
+        ],
+        "required": true
+      },
+      "natural_return": true,
+      "optimizer_steps": 1680,
+      "torch_version": "2.5.1+cpu",
+      "native_datasets": [],
+      "numeric_compatibility": [],
+      "path_compatibility": [],
+      "pyg_compatibility": [],
+      "pyg_conversions": []
+    }
+  ],
+  "completion_checks": {
+    "all_required_author_commands_returned": true,
+    "observed_training_updates": true,
+    "owned_processes_finished": true
+  },
+  "author_summary_lines": [
+    "SGCN: AUC: 0.8730 (0.0098) ",
+    "SGCN: F1: 0.9702 (0.0019) ",
+    "SGCN: MacroF1: 0.6859 (0.0133) ",
+    "SGCN: MicroF1: 0.9433 (0.0035) "
+  ],
+  "comparison_status": "unavailable",
+  "validation_errors": [
+    {
+      "index": 0,
+      "actual_id": "train_sgcn_bitcoin_alpha:stdout:9",
+      "error": "Model cannot invent an unobserved standard deviation"
+    },
+    {
+      "index": 1,
+      "actual_id": "train_sgcn_bitcoin_alpha:stdout:10",
+      "error": "Model cannot invent an unobserved standard deviation"
+    }
+  ],
+  "comparison_required_browser_audit_passed": false,
+  "refresh_download_checked": false,
+  "paper_metrics_verified": false,
+  "is_reproduced": null,
+  "cleanup_passed": true,
+  "cleanup_checks": {
+    "cleanup_released": true,
+    "cleanup_has_no_errors": true,
+    "cleanup_has_no_remaining": true,
+    "training_python_released": true,
+    "docker_released": true,
+    "runtime_downloads_released": true,
+    "dependency_files_removed": true,
+    "training_environments_removed": true,
+    "final_report_retained": true,
+    "report_result_archive_retained": true,
+    "run_report_retained": true,
+    "run_result_retained": true,
+    "cleanup_receipt_retained": true,
+    "source_workspace_retained": true,
+    "application_python_retained": true,
+    "cleanup_receipt_matches": true,
+    "run_result_cleanup_matches": true,
+    "report_result_archive_cleanup_matches": true
+  },
+  "environment_cleanup": {
+    "status": "released",
+    "removed": [
+      {
+        "path": ".maintenance.json",
+        "bytes": 979
+      },
+      {
+        "path": ".pip-temporary",
+        "bytes": 0
+      },
+      {
+        "path": "repository",
+        "bytes": 1487969682
+      }
+    ],
+    "freed_bytes": 1500003697,
+    "remaining": [],
+    "errors": [],
+    "training_python": {
+      "status": "released",
+      "removed": [
+        {
+          "path": "D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\training_python",
+          "bytes": 12033036
+        }
+      ],
+      "errors": [],
+      "freed_bytes": 12033036
+    },
+    "docker": {
+      "status": "released",
+      "removed": [],
+      "errors": []
+    },
+    "runtime_downloads": {
+      "status": "released",
+      "removed": [],
+      "freed_bytes": 0,
+      "errors": []
+    },
+    "before_run": {
+      "status": "released",
+      "removed": [],
+      "freed_bytes": 0,
+      "remaining": [],
+      "errors": [],
+      "training_python": {
+        "status": "released",
+        "removed": [],
+        "errors": [],
+        "freed_bytes": 0
+      },
+      "docker": {
+        "status": "released",
+        "removed": [],
+        "errors": []
+      },
+      "runtime_downloads": {
+        "status": "released",
+        "removed": [],
+        "freed_bytes": 0,
+        "errors": []
+      }
+    },
+    "replacements": [
+      {
+        "status": "released",
+        "errors": [],
+        "dependencies": {
+          "status": "released",
+          "removed": [],
+          "freed_bytes": 0,
+          "remaining": [],
+          "errors": []
+        },
+        "training_python": {
+          "status": "released",
+          "removed": [],
+          "errors": [],
+          "freed_bytes": 0
+        }
+      },
+      {
+        "status": "released",
+        "removed": [
+          {
+            "path": ".maintenance.json",
+            "bytes": 768
+          }
+        ],
+        "freed_bytes": 768,
+        "remaining": [],
+        "errors": []
+      }
+    ],
+    "supervisor_cleanup": {
+      "status": "released",
+      "removed": [],
+      "freed_bytes": 0,
+      "remaining": [],
+      "errors": [],
+      "training_python": {
+        "status": "released",
+        "removed": [],
+        "errors": [],
+        "freed_bytes": 0
+      },
+      "docker": {
+        "status": "released",
+        "removed": [],
+        "errors": []
+      },
+      "runtime_downloads": {
+        "status": "released",
+        "removed": [],
+        "freed_bytes": 0,
+        "errors": []
+      }
+    }
+  },
+  "local_run_directory": ".tmp/pdf_selfrepair_20261019/data/runs/repository_118a7298ddfc4a64a3778d46b4d72bb7",
+  "original_artifact_sha256": {
+    "pygsd_source_freeze.json": "637d6d8500ef59e6e49cf3fc93d148fab2ba9024dedc6508b33a261da9cf31b5",
+    "source_packet.json": "711f0dd4012706e5f455a13a852941bd6b37ffa9b81f4a777a3c9947d2d12598",
+    "experiment_spec.json": "f62b5f6f734c69ebf86229bbe8b4c74d736cba81c6051fc000d415b44bcbe9a2",
+    "execution.json": "0c161785d04bc288a234630d9381d178d9a42d0e66b72dbfab9854f54ea55b6b",
+    "author_execution_verification.json": "756e9d91cc3e379fbfb09ba91ddaa625c62c1f48e547756dd957281ef7f35f08",
+    "author_claim_comparison.json": "53dbc43aed5dd6f4d7367be4767dcf8d86b136c61746d0f5de1340feb5756c17",
+    "report.md": "55ab8f2ef707bed13c40bba7dc7d1d22d0fd75f73117c130afc59f28e0185de7",
+    "result.json": "a5b172e4df7463772e6c25cd15469af4482495f2318950cce2731a66699dc8b1"
+  },
+  "retirement_reason": "Author training completed naturally. Product lost parenthesized standard deviations and macro/micro F1; comparison validation failed. Subsequent repairs use this only as regression evidence."
+}

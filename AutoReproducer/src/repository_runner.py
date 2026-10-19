@@ -200,7 +200,8 @@ class RepositoryRunner:
             try:
                 killed = subprocess.run(
                     ["taskkill", "/PID", str(process.pid), "/T", "/F"],
-                    capture_output=True, text=True, timeout=5, shell=False)
+                    capture_output=True, text=True, encoding="utf-8", errors="replace",
+                    timeout=5, shell=False)
                 if killed.returncode != 0 and process.poll() is None:
                     process.kill()
                     return "process-tree cleanup failed: " + (killed.stderr or killed.stdout).strip()
@@ -227,10 +228,17 @@ class RepositoryRunner:
         environment = self.executor._exec_env(str(run_dir))
         prepared_pythonpath = environment.get('PYTHONPATH', '')
         environment.update(step["env"])
+        import_roots = []
+        for relative in (self.executor.env_config or {}).get('repository_pythonpath', []):
+            directory = workspace_path(root, relative, 'repaired repository import root', must_exist=True)
+            if not directory.is_dir():
+                raise ValueError('repository import root is not a directory: ' + relative)
+            import_roots.append(str(directory))
         # Entry points under examples/ or scripts/ still need the repository's
         # top-level packages, rather than an unrelated installed namesake.
         environment["PYTHONPATH"] = os.pathsep.join(
-            dict.fromkeys(part for part in (str(root), environment.get("PYTHONPATH", ""), prepared_pythonpath) if part))
+            dict.fromkeys(part for part in (str(root), *import_roots,
+                environment.get("PYTHONPATH", ""), prepared_pythonpath) if part))
         environment["PYTHONUNBUFFERED"] = "1"
         environment["AUTOREPRO_PARENT_PID"] = str(os.getpid())
         supervisor = Path(__file__).with_name("sandbox_timeout.py")
