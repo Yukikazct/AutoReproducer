@@ -717,6 +717,21 @@ class ReportGeneratorAgent(BaseAgent):
                 succeeded = sum(repair.get("status") == "succeeded" for repair in cache_repairs)
                 lines.append(f"- **缓存修复**: {succeeded}/{len(cache_repairs)} 项完成；依赖版本与实验协议保持冻结")
         source_recoveries = data.get("public_source_recovery") or []
+        self_repair = data.get('self_repair') or {}
+        if self_repair:
+            outcomes = {'resolved': '原命令重跑通过', 'blocked': '缺少可验证的自动修复方案',
+                        'retrying': '正在重跑验证', 'no_progress': '重跑后错误相同',
+                        'failed_with_new_error': '重跑后出现新错误', 'interrupted': '已取消',
+                        'timed_out': '已超时', 'budget_exhausted': '已达到修复次数上限'}
+            lines += ['', '### 自动诊断与修复', '',
+                      '- 状态：' + outcomes.get(self_repair.get('status'), '未完成') + '；'
+                      + _markdown_text(_txt(self_repair.get('reason'))),
+                      '- 每次修复都重跑原命令；此处记录运行恢复情况，论文数值核验另行记录。']
+            for item in self_repair.get('attempts') or []:
+                lines.append('- 第 ' + str(item.get('round')) + ' 轮：'
+                    + _markdown_text(_txt(item.get('action'))) + '；'
+                    + outcomes.get(item.get('status'), '未完成') + '；'
+                    + _markdown_text(_txt(item.get('reason'))))
         runtime_repairs = data.get('dependency_repair_attempts') or []
         if runtime_repairs:
             lines += ['', '### 根据运行报错补充依赖', '']

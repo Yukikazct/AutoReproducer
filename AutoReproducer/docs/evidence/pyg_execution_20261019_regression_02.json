@@ -1,0 +1,281 @@
+{
+  "trial": "pyg_20261019_regression_02",
+  "input": "real_browser_pdf_upload",
+  "evaluation_type": "regression",
+  "outcome": "natural_failure_before_training",
+  "frozen_commit": "ac0e6b70aeda1bb5b25310629db3178ea1a991f5",
+  "product_source_sha256": "c4533359b5775ed447d3d2bc5873216fa3de7a43d2cac81155e35820ebec6436",
+  "product_source_unchanged_during_trial": true,
+  "application_environment_unchanged": true,
+  "registry_unchanged_during_trial": true,
+  "pdf_sha256": "8cfd9824d44c5aba66393ef05e70c1275ca7886e0a0502f7b09e86e6c3a38953",
+  "repository_url": "https://github.com/rusty1s/pytorch_geometric",
+  "repository_revision": "79d33965a40b7fa83616a9f598a0f8619f25d939",
+  "self_repair": {
+    "attempts": [
+      {
+        "round": 1,
+        "action": "restore_repository_import",
+        "reason": "固定仓库中的 benchmark/citation/__init__.py 未在原命令的模块路径中；加入 benchmark 后重试原命令。",
+        "status": "failed_with_new_error",
+        "failed_execution_dir": "D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_e47921665dbe4a3e83ed15819cff3961\\.autorepro_repository_runs\\69348442dec04007b0851bcb1345807b",
+        "failure_fingerprint": "40e4b96775c730f5930649942eb72511e40a78b3fb49f6fb96641b57fd5d90c4",
+        "diagnostic": "Traceback (most recent call last):\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_e47921665dbe4a3e83ed15819cff3961\\repo\\_autorepro_capture\\observe_author.py\", line 106, in <module>\n    run_entrypoint(script, config.get('numeric_compatibility', []), workspace, config['source_files'],\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_e47921665dbe4a3e83ed15819cff3961\\repo\\_autorepro_capture\\author_numeric_compatibility.py\", line 222, in run_entrypoint\n    return runpy.run_path(str(script), run_name='__main__')\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"<frozen runpy>\", line 287, in run_path\n  File \"<frozen runpy>\", line 98, in _run_module_code\n  File \"<frozen runpy>\", line 88, in _run_code\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_e47921665dbe4a3e83ed15819cff3961\\repo\\benchmark\\citation\\gcn.py\", line 5, in <module>\n    from citation import get_planetoid_dataset, random_planetoid_splits, run\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_e47921665dbe4a3e83ed15819cff3961\\repo\\_autorepro_capture\\author_pyg_compatibility.py\", line 123, in importing\n    result = self.original_import(*args, **kwargs)\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nModuleNotFoundError: No module named 'citation'\n",
+        "verification_execution_dir": "D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_e47921665dbe4a3e83ed15819cff3961\\.autorepro_repository_runs\\e19ad48b843c46b1b744c28fb6a3397e",
+        "next_failure_fingerprint": "ae78cbbe2cd71d9a9bf9c7a695a2ee330600a77e8c569383cf4906dfab59f953"
+      },
+      {
+        "round": 2,
+        "action": "install_missing_dependency",
+        "reason": "根据实际错误安装 xxhash，重跑原命令验证。",
+        "status": "failed_with_new_error",
+        "failed_execution_dir": "D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_e47921665dbe4a3e83ed15819cff3961\\.autorepro_repository_runs\\e19ad48b843c46b1b744c28fb6a3397e",
+        "failure_fingerprint": "ae78cbbe2cd71d9a9bf9c7a695a2ee330600a77e8c569383cf4906dfab59f953",
+        "diagnostic": "Traceback (most recent call last):\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_e47921665dbe4a3e83ed15819cff3961\\repo\\_autorepro_capture\\observe_author.py\", line 106, in <module>\n    run_entrypoint(script, config.get('numeric_compatibility', []), workspace, config['source_files'],\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_e47921665dbe4a3e83ed15819cff3961\\repo\\_autorepro_capture\\author_numeric_compatibility.py\", line 222, in run_entrypoint\n    return runpy.run_path(str(script), run_name='__main__')\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"<frozen runpy>\", line 287, in run_path\n  File \"<frozen runpy>\", line 98, in _run_module_code\n  File \"<frozen runpy>\", line 88, in _run_code\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_e47921665dbe4a3e83ed15819cff3961\\repo\\benchmark\\citation\\gcn.py\", line 5, in <module>\n    from citation import get_planetoid_dataset, random_planetoid_splits, run\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_e47921665dbe4a3e83ed15819cff3961\\repo\\_autorepro_capture\\author_pyg_compatibility.py\", line 123, in importing\n    result = self.original_import(*args, **kwargs)\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_e47921665dbe4a3e83ed15819cff3961\\repo\\benchmark\\citation\\__init__.py\", line 1, in <module>\n    from .datasets import get_planetoid_dataset\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_e47921665dbe4a3e83ed15819cff3961\\repo\\_autorepro_capture\\author_pyg_compatibility.py\", line 123, in importing\n    result = self.original_import(*args, **kwargs)\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_e47921665dbe4a3e83ed15819cff3961\\repo\\benchmark\\citation\\datasets.py\", line 3, in <module>\n    import torch_geometric.transforms as T\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_e47921665dbe4a3e83ed15819cff3961\\repo\\_autorepro_capture\\author_pyg_compatibility.py\", line 123, in importing\n    result = self.original_import(*args, **kwargs)\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_e47921665dbe4a3e83ed15819cff3961\\repo\\torch_geometric\\__init__.py\", line 10, in <module>\n    from .hash_tensor import HashTensor\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_e47921665dbe4a3e83ed15819cff3961\\repo\\_autorepro_capture\\author_pyg_compatibility.py\", line 123, in importing\n    result = self.original_import(*args, **kwargs)\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_e47921665dbe4a3e83ed15819cff3961\\repo\\torch_geometric\\hash_tensor.py\", line 18, in <module>\n    import xxhash\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_e47921665dbe4a3e83ed15819cff3961\\repo\\_autorepro_capture\\author_pyg_compatibility.py\", line 123, in importing\n    result = self.original_import(*args, **kwargs)\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nModuleNotFoundError: No module named 'xxhash'\n",
+        "verification_execution_dir": "D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_e47921665dbe4a3e83ed15819cff3961\\.autorepro_repository_runs\\4ee59f4b261f4cd6a452e46f81ac7820",
+        "next_failure_fingerprint": "0fa7309667dcc360d5084a272c29a66a30871223ab4438e1a0e26ad30a13f6cb"
+      }
+    ],
+    "status": "blocked",
+    "reason": "The traceback shows `ModuleNotFoundError: No module named 'aiohttp'` raised while fsspec's HTTPFileSystem tries to import aiohttp. aiohttp is an author-declared dependency (listed in author_requirements) but is absent from the compatibility pin set, so it was never installed. This is a missing external package, not a version conflict; no pip error names a candidate version to substitute, and aiohttp is an author declaration, not a project-derived compatibility pin, so no replacement pin is permitted.",
+    "last_failure": "961\\repo\\_autorepro_capture\\observe_author.py\", line 106, in <module>\n    run_entrypoint(script, config.get('numeric_compatibility', []), workspace, config['source_files'],\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_e47921665dbe4a3e83ed15819cff3961\\repo\\_autorepro_capture\\author_numeric_compatibility.py\", line 222, in run_entrypoint\n    return runpy.run_path(str(script), run_name='__main__')\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"<frozen runpy>\", line 287, in run_path\n  File \"<frozen runpy>\", line 98, in _run_module_code\n  File \"<frozen runpy>\", line 88, in _run_code\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_e47921665dbe4a3e83ed15819cff3961\\repo\\benchmark\\citation\\gcn.py\", line 46, in <module>\n    dataset = get_planetoid_dataset(args.dataset, not args.no_normalize_features)\n              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_e47921665dbe4a3e83ed15819cff3961\\repo\\benchmark\\citation\\datasets.py\", line 9, in get_planetoid_dataset\n    dataset = Planetoid(path, name)\n              ^^^^^^^^^^^^^^^^^^^^^\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_e47921665dbe4a3e83ed15819cff3961\\repo\\torch_geometric\\datasets\\planetoid.py\", line 102, in __init__\n    super().__init__(root, transform, pre_transform,\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_e47921665dbe4a3e83ed15819cff3961\\repo\\torch_geometric\\data\\in_memory_dataset.py\", line 81, in __init__\n    super().__init__(root, transform, pre_transform, pre_filter, log,\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_e47921665dbe4a3e83ed15819cff3961\\repo\\torch_geometric\\data\\dataset.py\", line 113, in __init__\n    self._download()\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_e47921665dbe4a3e83ed15819cff3961\\repo\\torch_geometric\\data\\dataset.py\", line 231, in _download\n    self.download()\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_e47921665dbe4a3e83ed15819cff3961\\repo\\torch_geometric\\datasets\\planetoid.py\", line 154, in download\n    fs.cp(f'{self.url}/{name}', self.raw_dir)\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_e47921665dbe4a3e83ed15819cff3961\\repo\\torch_geometric\\io\\fs.py\", line 115, in cp\n    is_path1_dir = isdir(path1)\n                   ^^^^^^^^^^^^\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_e47921665dbe4a3e83ed15819cff3961\\repo\\torch_geometric\\io\\fs.py\", line 63, in isdir\n    return get_fs(path).isdir(path)\n           ^^^^^^^^^^^^\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_e47921665dbe4a3e83ed15819cff3961\\repo\\torch_geometric\\io\\fs.py\", line 45, in get_fs\n    return fsspec.core.url_to_fs(path)[0]\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\deps\\repository\\cpython-312-win32-AMD64\\fd43763f9cbea50d\\fsspec\\core.py\", line 399, in url_to_fs\n    chain = _un_chain(url, kwargs)\n            ^^^^^^^^^^^^^^^^^^^^^^\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\deps\\repository\\cpython-312-win32-AMD64\\fd43763f9cbea50d\\fsspec\\core.py\", line 344, in _un_chain\n    cls = get_filesystem_class(protocol)\n          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\deps\\repository\\cpython-312-win32-AMD64\\fd43763f9cbea50d\\fsspec\\registry.py\", line 244, in get_filesystem_class\n    raise ImportError(bit[\"err\"]) from e\nImportError: HTTPFileSystem requires \"requests\" and \"aiohttp\" to be installed\n"
+  },
+  "planning_trace": [
+    {
+      "repository_url": "https://github.com/rusty1s/pytorch_geometric",
+      "accepted": false,
+      "revision": "79d33965a40b7fa83616a9f598a0f8619f25d939",
+      "archive_sha256": "3549d5f2455db76a0d7497ad14215dfe69e6a45a3f561bba2efc90ebdf423a8f",
+      "workspace": "D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_e47921665dbe4a3e83ed15819cff3961\\repo",
+      "error": "作者训练或独立评估未完整结束：d()\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_e47921665dbe4a3e83ed15819cff3961\\repo\\torch_geometric\\data\\dataset.py\", line 231, in _download\n    self.download()\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_e47921665dbe4a3e83ed15819cff3961\\repo\\torch_geometric\\datasets\\planetoid.py\", line 154, in download\n    fs.cp(f'{self.url}/{name}', self.raw_dir)\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_e47921665dbe4a3e83ed15819cff3961\\repo\\torch_geometric\\io\\fs.py\", line 115, in cp\n    is_path1_dir = isdir(path1)\n                   ^^^^^^^^^^^^\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_e47921665dbe4a3e83ed15819cff3961\\repo\\torch_geometric\\io\\fs.py\", line 63, in isdir\n    return get_fs(path).isdir(path)\n           ^^^^^^^^^^^^\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_e47921665dbe4a3e83ed15819cff3961\\repo\\torch_geometric\\io\\fs.py\", line 45, in get_fs\n    return fsspec.core.url_to_fs(path)[0]\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\deps\\repository\\cpython-312-win32-AMD64\\fd43763f9cbea50d\\fsspec\\core.py\", line 399, in url_to_fs\n    chain = _un_chain(url, kwargs)\n            ^^^^^^^^^^^^^^^^^^^^^^\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\deps\\repository\\cpython-312-win32-AMD64\\fd43763f9cbea50d\\fsspec\\core.py\", line 344, in _un_chain\n    cls = get_filesystem_class(protocol)\n          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\deps\\repository\\cpython-312-win32-AMD64\\fd43763f9cbea50d\\fsspec\\registry.py\", line 244, in get_filesystem_class\n    raise ImportError(bit[\"err\"]) from e\nImportError: HTTPFileSystem requires \"requests\" and \"aiohttp\" to be installed\n",
+      "planning_status": "execution_failed",
+      "failure_kind": "execution_failure"
+    },
+    {
+      "stage": "author_failure_analysis",
+      "fingerprint": "a212f86969dec1b08326c0b0d05a41c6b58f379feba101cde47310aaa8da9a5c",
+      "failure_kind": "execution_failure",
+      "action": "blocked",
+      "reason": "The traceback shows `ModuleNotFoundError: No module named 'aiohttp'` raised while fsspec's HTTPFileSystem tries to import aiohttp. aiohttp is an author-declared dependency (listed in author_requirements) but is absent from the compatibility pin set, so it was never installed. This is a missing external package, not a version conflict; no pip error names a candidate version to substitute, and aiohttp is an author declaration, not a project-derived compatibility pin, so no replacement pin is permitted."
+    }
+  ],
+  "training_observed": false,
+  "paper_metrics_verified": false,
+  "is_reproduced": null,
+  "full_workflow_accepted": false,
+  "report_generated": true,
+  "report_kind": "failure",
+  "refresh_download_checked": false,
+  "cleanup_passed": true,
+  "cleanup_checks": {
+    "cleanup_released": true,
+    "cleanup_has_no_errors": true,
+    "cleanup_has_no_remaining": true,
+    "training_python_released": true,
+    "docker_released": true,
+    "runtime_downloads_released": true,
+    "dependency_files_removed": true,
+    "training_environments_removed": true,
+    "final_report_retained": true,
+    "report_result_archive_retained": true,
+    "run_report_retained": true,
+    "run_result_retained": true,
+    "cleanup_receipt_retained": true,
+    "source_workspace_retained": true,
+    "application_python_retained": true,
+    "cleanup_receipt_matches": true,
+    "run_result_cleanup_matches": true,
+    "report_result_archive_cleanup_matches": true
+  },
+  "environment_cleanup": {
+    "status": "released",
+    "removed": [
+      {
+        "path": ".maintenance.json",
+        "bytes": 979
+      },
+      {
+        "path": ".pip-temporary",
+        "bytes": 0
+      },
+      {
+        "path": "repository",
+        "bytes": 5004706376
+      }
+    ],
+    "freed_bytes": 5016740391,
+    "remaining": [],
+    "errors": [],
+    "training_python": {
+      "status": "released",
+      "removed": [
+        {
+          "path": "D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\training_python",
+          "bytes": 12033036
+        }
+      ],
+      "errors": [],
+      "freed_bytes": 12033036
+    },
+    "docker": {
+      "status": "released",
+      "removed": [],
+      "errors": []
+    },
+    "runtime_downloads": {
+      "status": "released",
+      "removed": [],
+      "freed_bytes": 0,
+      "errors": []
+    },
+    "before_run": {
+      "status": "released",
+      "removed": [],
+      "freed_bytes": 0,
+      "remaining": [],
+      "errors": [],
+      "training_python": {
+        "status": "released",
+        "removed": [],
+        "errors": [],
+        "freed_bytes": 0
+      },
+      "docker": {
+        "status": "released",
+        "removed": [],
+        "errors": []
+      },
+      "runtime_downloads": {
+        "status": "released",
+        "removed": [],
+        "freed_bytes": 0,
+        "errors": []
+      }
+    },
+    "replacements": [
+      {
+        "status": "released",
+        "errors": [],
+        "dependencies": {
+          "status": "released",
+          "removed": [],
+          "freed_bytes": 0,
+          "remaining": [],
+          "errors": []
+        },
+        "training_python": {
+          "status": "released",
+          "removed": [],
+          "errors": [],
+          "freed_bytes": 0
+        }
+      },
+      {
+        "status": "released",
+        "removed": [
+          {
+            "path": ".maintenance.json",
+            "bytes": 768
+          }
+        ],
+        "freed_bytes": 768,
+        "remaining": [],
+        "errors": []
+      },
+      {
+        "status": "released",
+        "removed": [
+          {
+            "path": ".maintenance.json",
+            "bytes": 956
+          },
+          {
+            "path": ".pip-temporary",
+            "bytes": 0
+          },
+          {
+            "path": "repository/cpython-312-win32-AMD64/94721a63590ff430",
+            "bytes": 5004537271
+          }
+        ],
+        "freed_bytes": 5004538227,
+        "remaining": [],
+        "errors": []
+      }
+    ],
+    "supervisor_cleanup": {
+      "status": "released",
+      "removed": [],
+      "freed_bytes": 0,
+      "remaining": [],
+      "errors": [],
+      "training_python": {
+        "status": "released",
+        "removed": [],
+        "errors": [],
+        "freed_bytes": 0
+      },
+      "docker": {
+        "status": "released",
+        "removed": [],
+        "errors": []
+      },
+      "runtime_downloads": {
+        "status": "released",
+        "removed": [],
+        "freed_bytes": 0,
+        "errors": []
+      }
+    }
+  },
+  "terminal_active_counts": {
+    "active_runs": 0,
+    "active_workers": 0,
+    "active_executions": 0
+  },
+  "source_workspace_retained": true,
+  "local_run_directory": ".tmp/pdf_selfrepair_20261019/data/runs/repository_e47921665dbe4a3e83ed15819cff3961",
+  "original_artifact_sha256": {
+    "pyg_regression_source_freeze.json": "a0fa64e5124daf78032ac1f0c3e1c8c78f9ce1410b59b26e874fc94d5eda11d9",
+    "data/runtime/progress_1792386576617.jsonl": "61d0ad0b47c634cc840129cfec0e4b95dfd49981e1fd5a1b2d9093e0704c8c79",
+    "pyg_regression_trial.log": "75218b516d814b7b43940c33234452022f9a03ee7582c274523b332b8ded4eb5",
+    "data/runtime/pyg_20261019_regression_02_cleanup.json": "cec977927cbf9e1a0dc80bdcb801d99f4ce915aa4942df03be2e625690af4815",
+    "data/runtime/pyg_20261019_regression_02_failure.json": "69b277cf9455471e07bb76f24d46cebf5794cf01237d89fdb400d8b24bd6918b",
+    "data/runtime/pyg_20261019_regression_02_full_result.json": "fda276b814388a297335382588a0649a9c01cb44a066846484f89d4f104d64de",
+    "data/runtime/pyg_20261019_regression_02_request.json": "8e7c3451bb3f6540eabac14c28f003900d5bc1223691c7628c7251bc0ef50684",
+    "data/runs/repository_e47921665dbe4a3e83ed15819cff3961/adapter_manifest.json": "b04b075d2e3ac4609b8b538310ece5b37fa30520abca137a4f604718978e4435",
+    "data/runs/repository_e47921665dbe4a3e83ed15819cff3961/dataset.json": "5cd03e53bfe3ae6e7a8d88177a519f9d8208130d8754eeca0d59ccf3a5c3aa4b",
+    "data/runs/repository_e47921665dbe4a3e83ed15819cff3961/dependency_repairs.json": "6008eae9788e1426c95feef942994222459cda1906bdd4096f8fad64fb1dc4fe",
+    "data/runs/repository_e47921665dbe4a3e83ed15819cff3961/environment.json": "fcaff8e5535d0db83abf3d5c1ec0eee2bf6e7930028e37dcd11e93f9904dfc4e",
+    "data/runs/repository_e47921665dbe4a3e83ed15819cff3961/environment_cleanup.json": "9213ea1943a4c6321c6933a7dba5e085c9b9b86e2630d37f2c0e42490d7829a3",
+    "data/runs/repository_e47921665dbe4a3e83ed15819cff3961/environment_preparation.json": "ec8c050b7d70571bc7fabedfbc7784526fcf398ec0f9b00deaa55ab6acf30530",
+    "data/runs/repository_e47921665dbe4a3e83ed15819cff3961/execution.json": "162d046ee6965e4c3bc018553e3e443dab10a6d4355e1bfb068b62fa28cf22ea",
+    "data/runs/repository_e47921665dbe4a3e83ed15819cff3961/execution_plan.json": "b23b3722ea09ed3dd274c0c2208e044d25e1eedc30e9a47d93eed8ffa7574259",
+    "data/runs/repository_e47921665dbe4a3e83ed15819cff3961/experiment_spec.json": "4cee902e7b831c949d37756dd6b300d72aaa9d089699fb2fb8e1c22a007eaa91",
+    "data/runs/repository_e47921665dbe4a3e83ed15819cff3961/failure_analyses.json": "9380dc560ea0cda58288ce848255da35fd7954953450f4a3f6e1120e04efb63d",
+    "data/runs/repository_e47921665dbe4a3e83ed15819cff3961/import_repairs.json": "2fe13ae88ed2c3588b3ac7b262ab285a677b11542caea38b60117d404dce30a0",
+    "data/runs/repository_e47921665dbe4a3e83ed15819cff3961/planning_trace.json": "4f47327a8b1374d77a213786ac4ab73a1d77b22ac715720b5d4b8dbf18171953",
+    "data/runs/repository_e47921665dbe4a3e83ed15819cff3961/repository.json": "647d2fbe3c56b47f0e337f076cebb85b6f3ff6460a4e8004bc7a2fb7082b38ae",
+    "data/runs/repository_e47921665dbe4a3e83ed15819cff3961/repository_identity_attempts.json": "5270f72ef1aee45b55734bb9712fe0d75eb251a0faca15f84c2af53741277a4c",
+    "data/runs/repository_e47921665dbe4a3e83ed15819cff3961/repository_identity_packet_1.json": "89068c0d0dae6900e3b0a7aacc23760054e8f61a7305b2b19ce9fb66b46b2ae7",
+    "data/runs/repository_e47921665dbe4a3e83ed15819cff3961/result.json": "f01d4e5bfe96ded4d4d6bcd8515b55aab26a9096c5b0817589252a1f7986292b",
+    "data/runs/repository_e47921665dbe4a3e83ed15819cff3961/run_status.json": "53cbd985571aaca35379c5271905a5528cb5cdf986ba7ef8f8eb228800de62c7",
+    "data/runs/repository_e47921665dbe4a3e83ed15819cff3961/runtime_manifest.json": "24308400e6b27838871024d7d59acd7513f2b81ff3f3f664cb0ef597a656f393",
+    "data/runs/repository_e47921665dbe4a3e83ed15819cff3961/runtime_repair_environment.json": "5fa01f8afed26af17ddaecb43b5226e2df8911f22ca311b235fb6a97a0bfc611",
+    "data/runs/repository_e47921665dbe4a3e83ed15819cff3961/self_repair.json": "cddbff486109e333cd9deee8c0344aabddba9a7f8b9275a4ca7f79c28fe7ee0d",
+    "data/runs/repository_e47921665dbe4a3e83ed15819cff3961/source_packet.json": "9c4f39b81de041303b524a82562bdb64f391e06adf31ac87f81cb77dfd96256a",
+    "data/runs/repository_e47921665dbe4a3e83ed15819cff3961/Fast_Graph_Representation_Lear_20261019_130940_execution.txt": "3b7c4fc2a571679bcaad0088d0bac64c45dbd8492d1679c40c48a42b12de8562",
+    "data/runs/repository_e47921665dbe4a3e83ed15819cff3961/report.md": "8cca29856a5de7a5faf7121e8b567e4cb45dfa181d9615570c73e601543d7bd0",
+    "data/runs/repository_e47921665dbe4a3e83ed15819cff3961/.autorepro_repository_runs/4ee59f4b261f4cd6a452e46f81ac7820/train.stderr.log": "29e211511e540a772722513dd6fc23d4a8459a0f5de2ab1f09ab2042736f7ad1",
+    "data/runs/repository_e47921665dbe4a3e83ed15819cff3961/.autorepro_repository_runs/4ee59f4b261f4cd6a452e46f81ac7820/train.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "data/runs/repository_e47921665dbe4a3e83ed15819cff3961/.autorepro_repository_runs/69348442dec04007b0851bcb1345807b/train.stderr.log": "3763fd2ad554fbae05bb74982330a403d15f92741e40103d0c28dcace399fd24",
+    "data/runs/repository_e47921665dbe4a3e83ed15819cff3961/.autorepro_repository_runs/69348442dec04007b0851bcb1345807b/train.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "data/runs/repository_e47921665dbe4a3e83ed15819cff3961/.autorepro_repository_runs/e19ad48b843c46b1b744c28fb6a3397e/train.stderr.log": "69a50080188395bba93987b5ff74fc1dfc2b1147d1af0d81d31d2d3d3708d31f",
+    "data/runs/repository_e47921665dbe4a3e83ed15819cff3961/.autorepro_repository_runs/e19ad48b843c46b1b744c28fb6a3397e/train.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "data/runs/repository_e47921665dbe4a3e83ed15819cff3961/.autorepro_repository_runs/e3b371d5ea6a4873b0e1e1c60757d4e0/native_preflight.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "data/runs/repository_e47921665dbe4a3e83ed15819cff3961/.autorepro_repository_runs/e3b371d5ea6a4873b0e1e1c60757d4e0/native_preflight.stdout.log": "3d1d3605664889f4ad9b174647f17f158ee50057378ced445dbfa3668fd896b3",
+    "data/reports/Fast_Graph_Representation_Lear_20261019_130940.md": "8cca29856a5de7a5faf7121e8b567e4cb45dfa181d9615570c73e601543d7bd0",
+    "data/reports/Fast_Graph_Representation_Lear_20261019_130940.result.json": "fda276b814388a297335382588a0649a9c01cb44a066846484f89d4f104d64de"
+  },
+  "limitation": "Original command planning recovered from a missing required option and malformed model JSON. Local citation import and missing xxhash were recovered. Dataset download then failed naturally because an explicit ImportError cause chain hid missing aiohttp. No optimizer training occurred. A failure report was generated and environment cleanup passed. This is a retired-paper regression."
+}

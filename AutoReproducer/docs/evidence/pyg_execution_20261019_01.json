@@ -1,0 +1,148 @@
+{
+  "trial": "pyg_20261019_01",
+  "input": "real_browser_pdf_upload",
+  "frozen_commit": "ac0e6b70aeda1bb5b25310629db3178ea1a991f5",
+  "product_source_sha256": "a334c2aff80be3285ed6d00c70313b6f30733f2835a6a8079a93252d3e238cf3",
+  "product_source_unchanged_during_trial": true,
+  "pdf_sha256": "8cfd9824d44c5aba66393ef05e70c1275ca7886e0a0502f7b09e86e6c3a38953",
+  "repository_url": "https://github.com/rusty1s/pytorch_geometric",
+  "repository_revision": "79d33965a40b7fa83616a9f598a0f8619f25d939",
+  "interruption": {
+    "reason": "Diagnostic interruption before training: selected README shorthand omits --dataset, explicitly required by the pinned entrypoint parser. Stop the known-invalid plan before continuing large dependency downloads.",
+    "user_requested_stop": false,
+    "training_started": false,
+    "source_changed_before_stop": false,
+    "step": {
+      "id": "train-gcn-citation",
+      "kind": "train",
+      "argv": [
+        "python",
+        "gcn.py"
+      ],
+      "entrypoint": {
+        "kind": "script",
+        "target": "gcn.py",
+        "source_path": "benchmark/citation/gcn.py"
+      },
+      "cwd": "benchmark/citation",
+      "timeout_s": null,
+      "depends_on": [],
+      "citations": [
+        "repo_b444bff972bf_0",
+        "inventory_13ba301ba3c6",
+        "inventory_1f698efead3b",
+        "inventory_00a183d2ccfa"
+      ],
+      "required": true
+    },
+    "required_option_source": {
+      "path": "benchmark/citation/gcn.py",
+      "sha256": "eac182ad2b2bed73dddd93bc026aaa1aa70688e5cdb0a770601abd4ee795b63c",
+      "line": 11,
+      "statement": "parser.add_argument('--dataset', type=str, required=True)"
+    },
+    "run_status_before_stop": {
+      "status": "running",
+      "pid": 15672,
+      "started_at": 1792385449.776328
+    },
+    "active_before_stop": {
+      "active_runs": [
+        {
+          "execution_id": "d33cecc47bb7499d9516fbe6a53f43ed",
+          "phase_id": "prepare_environment",
+          "label": "代码执行 · 第 1 轮",
+          "status": "running"
+        }
+      ],
+      "active_workers": [
+        {
+          "worker_id": "worker_361ec6d26e104325a55d4400ef44831b",
+          "phase_id": "",
+          "status": "running"
+        }
+      ],
+      "active_executions": []
+    },
+    "at": 1792385865.8375807
+  },
+  "training_observed": false,
+  "paper_metrics_verified": false,
+  "is_reproduced": null,
+  "full_workflow_accepted": false,
+  "report_generated": false,
+  "environment_released": true,
+  "environment_cleanup": {
+    "status": "released",
+    "removed": [
+      {
+        "path": ".maintenance.json",
+        "bytes": 942
+      },
+      {
+        "path": ".pip-temporary",
+        "bytes": 2601594223
+      },
+      {
+        "path": "repository",
+        "bytes": 0
+      }
+    ],
+    "freed_bytes": 2613628201,
+    "remaining": [],
+    "errors": [],
+    "training_python": {
+      "status": "released",
+      "removed": [
+        {
+          "path": "D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\training_python",
+          "bytes": 12033036
+        }
+      ],
+      "errors": [],
+      "freed_bytes": 12033036
+    },
+    "docker": {
+      "status": "released",
+      "removed": [],
+      "errors": []
+    },
+    "runtime_downloads": {
+      "status": "released",
+      "removed": [],
+      "freed_bytes": 0,
+      "errors": []
+    }
+  },
+  "terminal_active_counts": {
+    "active_runs": 0,
+    "active_workers": 0,
+    "active_executions": 0
+  },
+  "source_workspace_retained": true,
+  "local_run_directory": ".tmp/pdf_selfrepair_20261019/data/runs/repository_fe9c671be520474f9a6d3ab4d4d5bf46",
+  "original_artifact_sha256": {
+    "pyg_source_freeze.json": "842baec2e816205c40fcc6d9e145f1a194cb78e3bf67ef6f62b557c88b3e3b1e",
+    "pyg_diagnostic_interruption.json": "5d2e7d4ab578f6699e5fc16e24ce04667fc0289bbc959a73ad0ee8ac32561540",
+    "pyg_trial.log": "d000788a02931fb47b94e7ab9f19ca6799f2ccbcd8e30e8a157a689b924fd4b0",
+    "data/runtime/progress_1792385441496.jsonl": "7b9fad677828be489ef15629915cb9190eee10600988fc94f9457976fa386776",
+    "data/runtime/pyg_20261019_01_cleanup.json": "05f07c47ba04bf00b8033db348a0c1dfdd9894e2bbd6b88810151d80dac0c1c6",
+    "data/runtime/pyg_20261019_01_failure.json": "c092ba5b088377c1e760b1523997191b256596ddb9edc4a5d67e5b06595fbd46",
+    "data/runtime/pyg_20261019_01_full_result.json": "8a67aeea4101548f97f6b6e9d9d6df7a4137f98f3badac2a6de770f51343140f",
+    "data/runs/repository_fe9c671be520474f9a6d3ab4d4d5bf46/adapter_manifest.json": "b411a2d415a54a09ea80af2bdb54911a69bf4739c65de1d145c44fa59cfc96f2",
+    "data/runs/repository_fe9c671be520474f9a6d3ab4d4d5bf46/dataset.json": "5cd03e53bfe3ae6e7a8d88177a519f9d8208130d8754eeca0d59ccf3a5c3aa4b",
+    "data/runs/repository_fe9c671be520474f9a6d3ab4d4d5bf46/environment.json": "19031ae27919da297cd1c2e97800e070ab585e3f52dbc3d4927b8e78a19154f6",
+    "data/runs/repository_fe9c671be520474f9a6d3ab4d4d5bf46/execution_plan.json": "c5dfd850ed6b14d9f15cb78d2f19f9f85ca0e41a8932b5d409384ba4b37f685d",
+    "data/runs/repository_fe9c671be520474f9a6d3ab4d4d5bf46/experiment_spec.json": "14ae0ac50641f038a9475aac5d7fd76a4a381e364bfb05cc256fa633de0137ed",
+    "data/runs/repository_fe9c671be520474f9a6d3ab4d4d5bf46/planning_trace.json": "76abc0675522fafebae349b43b1c4aa282ad1f77185dab9007187aac18a2c6c7",
+    "data/runs/repository_fe9c671be520474f9a6d3ab4d4d5bf46/repository.json": "115a153009305159c0850a8dae7c0f5798224bdc5e6cf3389ae3fa081a4bd1d0",
+    "data/runs/repository_fe9c671be520474f9a6d3ab4d4d5bf46/repository_identity_packet_1.json": "89068c0d0dae6900e3b0a7aacc23760054e8f61a7305b2b19ce9fb66b46b2ae7",
+    "data/runs/repository_fe9c671be520474f9a6d3ab4d4d5bf46/runtime_manifest.json": "24308400e6b27838871024d7d59acd7513f2b81ff3f3f664cb0ef597a656f393",
+    "data/runs/repository_fe9c671be520474f9a6d3ab4d4d5bf46/run_status.json": "f09b1e0a2637325fcbd9e431857c966cf30d32224e421f21d5f21d7bd48a24c7",
+    "data/runs/repository_fe9c671be520474f9a6d3ab4d4d5bf46/source_packet.json": "fea0b84459f063bbb073916277b51fbb4c1766bbc03ff2493af9073042d3eb0e",
+    "data/runs/repository_fe9c671be520474f9a6d3ab4d4d5bf46/repo/benchmark/citation/gcn.py": "eac182ad2b2bed73dddd93bc026aaa1aa70688e5cdb0a770601abd4ee795b63c",
+    "data/runs/repository_fe9c671be520474f9a6d3ab4d4d5bf46/repo/benchmark/citation/README.md": "cb161770f8ed32dd1908eecde85bd0a718aa1fb1eea1d76beb98cc5e435bb0c2",
+    "data/runs/repository_fe9c671be520474f9a6d3ab4d4d5bf46/repo/benchmark/citation/run.sh": "990261b574e7cf231f3f276a01fe454a9ca49fe785fa917b7e3d3ee2e468cdf6"
+  },
+  "retirement_reason": "Agent diagnosed a missing required --dataset option in the frozen README shorthand command and interrupted dependency downloads before training. This was a diagnostic intervention, not a user stop or successful author execution. No product edits occurred during the trial."
+}

@@ -1,0 +1,2 @@
+# Preserve original source bytes used by the frozen screening hashes.
+sources/** -text

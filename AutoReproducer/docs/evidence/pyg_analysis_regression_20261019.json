@@ -1,0 +1,418 @@
+{
+  "evaluation_type": "analysis_only_regression",
+  "training_rerun": false,
+  "independent_acceptance": false,
+  "full_workflow_regression": false,
+  "original_run_evidence": "docs/evidence/pyg_execution_20261019_regression_04.json",
+  "original_artifact_hashes_checked": 57,
+  "product_source_sha256": "4fb1912935bd73db7320772790fd01d13b45a65f10d6de0dca17c9eb46fee11f",
+  "original_execution_sha256": "f6efdf9cc7a55d18e664439cfd160f3dae6d702caa0fc4b1aee72617e5f164d7",
+  "pdf_sha256": "8cfd9824d44c5aba66393ef05e70c1275ca7886e0a0502f7b09e86e6c3a38953",
+  "analysis": {
+    "original_run": "D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_01d9e1f2edf945eba2f813ee9bb352f6",
+    "training_rerun": false,
+    "independent_acceptance": false,
+    "product_source_sha256": "4fb1912935bd73db7320772790fd01d13b45a65f10d6de0dca17c9eb46fee11f",
+    "pdf_reextracted_from_original_bytes": true,
+    "model_calls": [
+      {
+        "prompt_characters": 224715,
+        "prompt_sha256": "d949deb48a5ee2c921742a57567b8e871d0c8373648729bf2160af1aa255ada7",
+        "finish_reason": "stop",
+        "usage": {
+          "prompt_tokens": 66304,
+          "completion_tokens": 854,
+          "total_tokens": 67158
+        }
+      }
+    ],
+    "original_execution_sha256": "f6efdf9cc7a55d18e664439cfd160f3dae6d702caa0fc4b1aee72617e5f164d7"
+  },
+  "source_discovery": {
+    "added_sources": [
+      {
+        "path": "benchmark/citation/__init__.py",
+        "sha256": "63da45ba4bac903256c437401f2cec71920003b615d8079a65806fdf88f325cf",
+        "bytes": 183
+      },
+      {
+        "path": "benchmark/citation/train_eval.py",
+        "sha256": "d4d1e25626778ed2c5e7a7ee63f2af5443d558bf4391fe9c3ad50274d84498df",
+        "bytes": 5957
+      },
+      {
+        "path": "torch_geometric/logging.py",
+        "sha256": "1e61c72e209c33ae24fba51834e49f5cf21e486340ca2186727f1c0fcb65cae4",
+        "bytes": 858
+      },
+      {
+        "path": "benchmark/citation/appnp.py",
+        "sha256": "7025ef5f94c9e50beed6aef89870c0d534f02104bece23f6713edc86a231caf4",
+        "bytes": 2469
+      },
+      {
+        "path": "benchmark/citation/arma.py",
+        "sha256": "24ca0e8d880570e69a595aa6ea392779e607d81aad3e784c53a4125f211860b4",
+        "bytes": 2751
+      },
+      {
+        "path": "benchmark/citation/cheb.py",
+        "sha256": "b6b8c1e2cd4e866c0ed87dde7f17d07d9c27cd8996fa289dc88b84b94aa5fa6c",
+        "bytes": 2311
+      },
+      {
+        "path": "benchmark/citation/gat.py",
+        "sha256": "d4ad02ffcaae0affa3f2b15c458d1ac528ae8d1d1001a817e4580f074be6a8c0",
+        "bytes": 2600
+      },
+      {
+        "path": "benchmark/citation/sgc.py",
+        "sha256": "7af62401401c32f5ce45c96ed7c6e19ce8de81b6f086572fbeca6a410d081b64",
+        "bytes": 2001
+      },
+      {
+        "path": "benchmark/citation/statistics.py",
+        "sha256": "ea85321a8d5e1ca7b4f2eb18a5c8b014cdf790eebf28cb1be6f30c913fd2bc0a",
+        "bytes": 459
+      }
+    ],
+    "read_failures": [],
+    "additional_bytes": 19589,
+    "additional_byte_limit": 1048576,
+    "attempted_files": 9,
+    "additional_file_limit": 64,
+    "purpose": "static_navigation_only_not_execution_evidence"
+  },
+  "comparison": {
+    "status": "partial",
+    "basis": "author_output",
+    "relative_tolerance": 0.05,
+    "metric_records": [
+      {
+        "name": "loss",
+        "value": 0.8749,
+        "unit": "",
+        "split": "validation",
+        "stage": "validation",
+        "source": "train:stdout:1",
+        "source_quote": "Val Loss: 0.8749, Test Accuracy: 0.814 ± 0.007, Duration: 0.750s",
+        "id": "train:stdout:0",
+        "step_id": "train"
+      },
+      {
+        "name": "accuracy",
+        "value": 0.814,
+        "unit": "",
+        "split": "test",
+        "stage": "final",
+        "source": "train:stdout:1",
+        "source_quote": "Val Loss: 0.8749, Test Accuracy: 0.814 ± 0.007, Duration: 0.750s",
+        "std": 0.007,
+        "aggregation": "mean",
+        "id": "train:stdout:1",
+        "step_id": "train"
+      }
+    ],
+    "parse_errors": [],
+    "comparisons": [
+      {
+        "metric": "accuracy",
+        "reference": {
+          "name": "accuracy",
+          "value": 81.5,
+          "std": 0.6,
+          "unit": "percent",
+          "dataset": "Cora",
+          "method": "GCN",
+          "split": "test",
+          "aggregation": "mean",
+          "runs": 100,
+          "value_quote": "GCN 81.5 ± 0.6 79.4 ± 1.9 71.1 ± 0.7 68.1 ± 1.7 79.0 ± 0.6 77.4 ± 2.4",
+          "column_quote": "Cora CiteSeer PubMed",
+          "citations": [
+            "pdf_p3_0",
+            "pdf_p9_0"
+          ],
+          "column_verified": false
+        },
+        "actual": {
+          "unit": "fraction",
+          "dataset": "Cora",
+          "method": "GCN",
+          "split": "test",
+          "aggregation": "mean",
+          "runs": 100,
+          "std": 0.007,
+          "citations": [
+            "repo_940ba0cf0c98_0",
+            "repo_13ba301ba3c6_0",
+            "repo_1f698efead3b_0",
+            "repo_00a183d2ccfa_0"
+          ],
+          "value": 0.814,
+          "source": "train:stdout:1",
+          "id": "train:stdout:1",
+          "source_quote": "Val Loss: 0.8749, Test Accuracy: 0.814 ± 0.007, Duration: 0.750s"
+        },
+        "settings": {
+          "status": "different",
+          "reason": "论文表1的Cora GCN固定划分结果为81.5±0.6（100次运行均值，固定train/val/test划分，来自Kipf & Welling）。实际执行命令为python gcn.py --dataset=Cora，未加--random_splits，因此使用Planetoid固定划分；但实际输出为单次运行汇总（std为torch默认无偏样本标准差，runs=100为默认参数但输出仅一次汇总），且实际数值81.4±0.7与论文81.5±0.6不同。数据集标签Cora在PDF与仓库中一致。",
+          "citations": [
+            "pdf_p3_0",
+            "pdf_p9_0",
+            "repo_940ba0cf0c98_0",
+            "repo_13ba301ba3c6_0",
+            "repo_1f698efead3b_0",
+            "repo_00a183d2ccfa_0"
+          ]
+        },
+        "direction": "higher",
+        "status": "reference_only",
+        "limitations": [
+          "论文表格列位置未完整核对，差值仅供参考",
+          "实验设置不同，数值差值仅供参考：论文表1的Cora GCN固定划分结果为81.5±0.6（100次运行均值，固定train/val/test划分，来自Kipf & Welling）。实际执行命令为python gcn.py --dataset=Cora，未加--random_splits，因此使用Planetoid固定划分；但实际输出为单次运行汇总（std为torch默认无偏样本标准差，runs=100为默认参数但输出仅一次汇总），且实际数值81.4±0.7与论文81.5±0.6不同。数据集标签Cora在PDF与仓库中一致。"
+        ],
+        "difference": -0.10000000000000009,
+        "relative_difference": -0.001226993865030676,
+        "difference_unit": "percentage_points",
+        "within_tolerance": null,
+        "meets_reference": null
+      }
+    ],
+    "citations": [
+      {
+        "id": "pdf_p3_0",
+        "source": "pdf",
+        "page": 3,
+        "pdf_sha256": "8cfd9824d44c5aba66393ef05e70c1275ca7886e0a0502f7b09e86e6c3a38953",
+        "sha256": "cfa2fe4aa043058f07c481dc5fe646154371f4c780a46b15f7958e0ba18ff951",
+        "quote": "Published as a workshop paper at ICLR 2019\nTable 1: Semi-supervised node classification with both fixed and random splits.\nCora CiteSeer PubMed\nMethod\nFixed Random Fixed Random Fixed Random\nCheby 81.4 ± 0.7 77.8 ± 2.2 70.2 ± 1.0 67.7 ± 1.7 78.4 ± 0.4 75.8 ± 2.2\nGCN 81.5 ± 0.6 79.4 ± 1.9 71.1 ± 0.7 68.1 ± 1.7 79.0 ± 0.6 77.4 ± 2.4\nGAT 83.1 ± 0.4 81.0 ± 1.4 70.8 ± 0.5 69.2 ± 1.9 78.5 ± 0.3 78.3 ± 2.3\nSGC 81.7 ± 0.1 80.2 ± 1.6 71.3 ± 0.2 68.7 ± 1.6 78.9 ± 0.1 76.5 ± 2.4\nARMA 82.8 ± 0.6 80.7 ± 1.4 72.3 ± 1.1 68.9 ± 1.6 78.8 ± 0.3 77.7 ± 2.6\nAPPNP 83.3 ± 0.5 82.2 ± 1.5 71.8 ± 0.5 70.0 ± 1.4 80.1 ± 0.2 79.4 ± 2.2\nMini-batch Handling. Our framework supports batches of multiple graph instances (of potentially\ndifferent size) by automatically creating a single (sparse) block-diagonal adjacency matrix and con-\ncatenating feature matrices in the node dimension. Therefore, neighborhood aggregation methods\ncan be applied without modification, since no messages are exchanged between disconnected graphs.\nIn addition, an automatically generated assignment vector ensures that node-level information is not\naggregated across graphs, e.g., when executing global aggregation operators.\nProcessing of Datasets. We provide a consistent data format and an easy-to-use interface for the\ncreation and processing of datasets, both for large datasets and for datasets that can be kept in memory\nduring training. In order to create new datasets, users just need to read/download their data and\nconvert it to the PyG data format in the respective process method. In addition, datasets can be\nmodified by the use of transforms, which take in separate graphs and transform them, e.g., for\ndata augmentation, for enhancing node features with synthetic structural graph properties (Cai &\nWang, 2018), to automatically generate graphs from point clouds or to sample point clouds from\nmeshes.\nPyG already supports a lot of common benchmark datasets often found in literature which are au-\ntomatically downloaded and processed on first instantiation. In detail, we provide over 60 graph\nkernel benchmark datasets3 (Kersting et al., 2016), e.g., PROTEINS or IMDB-BINARY, the cita-\ntion graphs Cora, CiteSeer, PubMed and Cora-Full (Sen et al., 2008; Bojchevski & Günnemann,\n2018), the Coauthor CS/Physics and Amazon Computers/Photo datasets from Shchur et al. (2018),\nthe molecule datasets QM7b (Montavon et al., 2013) and QM9 (Ramakrishnan et al., 2014), the\nprotein-protein interaction graphs from Hamilton et al. (2017), and the temporal datasets Bitcoin-\nOTC (Kumar et al., 2016), ICEWS (Boschee et al., 2015) and GDELT (Leetaru & Schrodt, 2013). In\naddition, we provide embedded datasets like MNIST superpixels (Monti et al., 2017), FAUST (Bogo\net al., 2014), ModelNet10/40 (Wu et al., 2015), ShapeNet (Chang et al., 2015), COMA (Ranjan et al.,\n2018) and the PCPNet dataset from Guerrero et al. (2018).\n3 EMPIRICAL EVALUATION\nWe evaluate the correctness of the implemented methods by performing a comprehensive compara-\ntive study in homogeneous evaluation scenarios. Descriptions and statistics of all used datasets can\nbe found in Appendix B. For all experiments, we tried to follow the hyperparameter setup of the\nrespective papers as closely as possible. The individual experimental setups can be derived and all\nexperiments can be replicated from the code provided at our GitHub repository.4\nSemi-supervised Node Classification. We perform semi-supervised node classification (cf. Ta-\nble 1) by reporting average accuracies of (a) 100 runs for the fixed train/val/test split from Kipf &\nWelling (2017), and (b) 100 runs of randomly initialized train/val/test splits as suggested by Shchur\net al. (2018), where we additionally ensure uniform class distribution on the train split.\nNearly all experiments show a high reproducibility of the results reported in the respective papers.\nHowever, test performance is worse for all models when using random data splits. Among the ex-\nperiments, the APPNP operator (Klicpera et al., 2019) generally performs best, while the ARMA\n3Kernel datasets: http://graphkernels.cs.tu-dortmund.de\n4https://github.com/rusty1s/pytorch_geometric/benchmark\n3"
+      },
+      {
+        "id": "pdf_p9_0",
+        "source": "pdf",
+        "page": 9,
+        "pdf_sha256": "8cfd9824d44c5aba66393ef05e70c1275ca7886e0a0502f7b09e86e6c3a38953",
+        "sha256": "5c78c8dd9211bcabff3b58cc72cb1a6ce5e9db640421773f46a6755e57df91ef",
+        "quote": "Published as a workshop paper at ICLR 2019\nTable 5: Statistics of the datasets used in the experiments.\nDataset Graphs Nodes Edges Features Classes Label rate\nCora 1 2,708 5,278 1,433 7 0.052\nCiteSeer 1 3,327 4,552 3,703 6 0.036\nPubMed 1 19,717 44,324 500 3 0.003\nMUTAG 188 17.93 19.79 7 2 0.800\nPROTEINS 1,113 39.06 72.82 3 2 0.800\nCOLLAB 5,000 74.49 2,457.22 — 3 0.800\nIMDB-BINARY 1,000 19.77 96.53 — 2 0.800\nREDDIT-BINARY 2,00 429.63 497.754 — 2 0.800\nModelNet10 4,899 1,024 í19,440 — 10 0.815\nSocialNetworkDatasets. COLLABisderivedfromthreepublicscientiﬁccollaborationdatasets.\nEach graph corresponds to an ego-network of diﬀerent researchers from each ﬁeld with the task to\nlabel each graph to the ﬁeld the corresponding researcher belongs to. IMDB-BINARY is a movie\ncollaboration dataset where each graph corresponds to an ego-network of actors/actresses. An edge\nisdrawnbetweentwoactors/actressesiftheyappearinthesamemovie. Thetaskistoinferthegenre\nof the graph. REDDIT-BINARY is an online discussion dataset where each graph corresponds to a\nthread. An edge is drawn between two users if one of them responded to another’s comment. The\ntask is to label each graph to the community/subreddit it belongs to.\nBioinformatic Datasets. MUTAG is a dataset consisting of mutagenetic aromatic and heteroaro-\nmatic nitro compounds. PROTEINS holds a set of proteins represented by graphs. Nodes represent\nsecondarystructureelements(SSEs)whichareconnectedwheneverthereareneighborseitherinthe\namino acid sequence or in 3D space.\n3D Object Datasets. ModelNet10 is an orientation-aligned dataset of CAD models. Each model\ncorrespondstoexactlyoneoutof10objectcategories. Categorieswerechosenbasedonalistofthe\nmost common object categories in the world.\n9"
+      },
+      {
+        "id": "repo_940ba0cf0c98_0",
+        "source": "repository",
+        "path": "benchmark/citation/run.sh",
+        "sha256": "990261b574e7cf231f3f276a01fe454a9ca49fe785fa917b7e3d3ee2e468cdf6",
+        "revision": "79d33965a40b7fa83616a9f598a0f8619f25d939",
+        "quote": "#!/bin/sh\n\necho \"Cora\"\necho \"====\"\n\necho \"GCN\"\npython gcn.py --dataset=Cora\npython gcn.py --dataset=Cora --random_splits\n\necho \"GAT\"\npython gat.py --dataset=Cora\npython gat.py --dataset=Cora --random_splits\n\necho \"Cheby\"\npython cheb.py --dataset=Cora --num_hops=3\npython cheb.py --dataset=Cora --num_hops=3 --random_splits\n\necho \"SGC\"\npython sgc.py --dataset=Cora --K=3 --weight_decay=0.0005\npython sgc.py --dataset=Cora --K=3 --weight_decay=0.0005 --random_splits\n\necho \"ARMA\"\npython arma.py --dataset=Cora --num_stacks=2 --num_layers=1 --shared_weights\npython arma.py --dataset=Cora --num_stacks=3 --num_layers=1 --shared_weights --random_splits\n\necho \"APPNP\"\npython appnp.py --dataset=Cora --alpha=0.1\npython appnp.py --dataset=Cora --alpha=0.1 --random_splits\n\necho \"CiteSeer\"\necho \"========\"\n\necho \"GCN\"\npython gcn.py --dataset=CiteSeer\npython gcn.py --dataset=CiteSeer --random_splits\n\necho \"GAT\"\npython gat.py --dataset=CiteSeer\npython gat.py --dataset=CiteSeer --random_splits\n\necho \"Cheby\"\npython cheb.py --dataset=CiteSeer --num_hops=2\npython cheb.py --dataset=CiteSeer --num_hops=3 --random_splits\n\necho \"SGC\"\npython sgc.py --dataset=CiteSeer --K=2 --weight_decay=0.005\npython sgc.py --dataset=CiteSeer --K=2 --weight_decay=0.005 --random_splits\n\necho \"ARMA\"\npython arma.py --dataset=CiteSeer --num_stacks=3 --num_layers=1 --shared_weights\npython arma.py --dataset=CiteSeer --num_stacks=3 --num_layers=1 --shared_weights --random_splits\n\necho \"APPNP\"\npython appnp.py --dataset=CiteSeer --alpha=0.1\npython appnp.py --dataset=CiteSeer --alpha=0.1 --random_splits\n\necho \"PubMed\"\necho \"======\"\n\necho \"GCN\"\npython gcn.py --dataset=PubMed\npython gcn.py --dataset=PubMed --random_splits\n\necho \"GAT\"\npython gat.py --dataset=PubMed --lr=0.01 --weight_decay=0.001 --output_heads=8\npython gat.py --dataset=PubMed --lr=0.01 --weight_decay=0.001 --output_heads=8 --random_splits\n\necho \"Cheby\"\npython cheb.py --dataset=PubMed --num_hops=2\npython cheb.py --dataset=PubMed --num_hops=2 --random_splits\n\necho \"SGC\"\npython sgc.py --dataset=PubMed --K=2 --weight_decay=0.0005\npython sgc.py --dataset=PubMed --K=2 --weight_decay=0.0005 --random_splits\n\necho \"ARMA\"\npython arma.py --dataset=PubMed --num_stacks=2 --num_layers=1 --skip_dropout=0\npython arma.py --dataset=PubMed --num_stacks=2 --num_layers=1 --skip_dropout=0.5 --random_splits\n\necho \"APPNP\"\npython appnp.py --dataset=PubMed --alpha=0.1\npython appnp.py --dataset=PubMed --alpha=0.1 --random_splits\n"
+      },
+      {
+        "id": "repo_13ba301ba3c6_0",
+        "source": "repository",
+        "path": "benchmark/citation/gcn.py",
+        "sha256": "eac182ad2b2bed73dddd93bc026aaa1aa70688e5cdb0a770601abd4ee795b63c",
+        "revision": "79d33965a40b7fa83616a9f598a0f8619f25d939",
+        "quote": "import argparse\n\nimport torch\nimport torch.nn.functional as F\nfrom citation import get_planetoid_dataset, random_planetoid_splits, run\n\nfrom torch_geometric.nn import GCNConv\nfrom torch_geometric.profile import rename_profile_file\n\nparser = argparse.ArgumentParser()\nparser.add_argument('--dataset', type=str, required=True)\nparser.add_argument('--random_splits', action='store_true')\nparser.add_argument('--runs', type=int, default=100)\nparser.add_argument('--epochs', type=int, default=200)\nparser.add_argument('--lr', type=float, default=0.01)\nparser.add_argument('--weight_decay', type=float, default=0.0005)\nparser.add_argument('--early_stopping', type=int, default=10)\nparser.add_argument('--hidden', type=int, default=16)\nparser.add_argument('--dropout', type=float, default=0.5)\nparser.add_argument('--no_normalize_features', action='store_true')\nparser.add_argument('--inference', action='store_true')\nparser.add_argument('--profile', action='store_true')\nparser.add_argument('--bf16', action='store_true')\nparser.add_argument('--compile', action='store_true')\nargs = parser.parse_args()\n\n\nclass Net(torch.nn.Module):\n    def __init__(self, dataset):\n        super().__init__()\n        self.conv1 = GCNConv(dataset.num_features, args.hidden)\n        self.conv2 = GCNConv(args.hidden, dataset.num_classes)\n\n    def reset_parameters(self):\n        self.conv1.reset_parameters()\n        self.conv2.reset_parameters()\n\n    def forward(self, data):\n        x, edge_index = data.x, data.edge_index\n        x = F.relu(self.conv1(x, edge_index))\n        x = F.dropout(x, p=args.dropout, training=self.training)\n        x = self.conv2(x, edge_index)\n        return F.log_softmax(x, dim=1)\n\n\ndataset = get_planetoid_dataset(args.dataset, not args.no_normalize_features)\npermute_masks = random_planetoid_splits if args.random_splits else None\nrun(dataset, Net(dataset), args.runs, args.epochs, args.lr, args.weight_decay,\n    args.early_stopping, args.inference, args.profile, args.bf16, args.compile,\n    permute_masks)\n\nif args.profile:\n    rename_profile_file('citation', GCNConv.__name__, args.dataset,\n                        str(args.random_splits),\n                        'inference' if args.inference else 'train')\n"
+      },
+      {
+        "id": "repo_1f698efead3b_0",
+        "source": "repository",
+        "path": "benchmark/citation/train_eval.py",
+        "sha256": "d4d1e25626778ed2c5e7a7ee63f2af5443d558bf4391fe9c3ad50274d84498df",
+        "revision": "79d33965a40b7fa83616a9f598a0f8619f25d939",
+        "quote": "import time\n\nimport torch\nimport torch.nn.functional as F\nfrom torch import tensor\nfrom torch.optim import Adam\n\nfrom torch_geometric.profile import timeit, torch_profile\nfrom torch_geometric.utils import index_to_mask\n\nif torch.cuda.is_available():\n    device = torch.device('cuda')\nelif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():\n    device = torch.device('mps')\nelse:\n    device = torch.device('cpu')\n\n\ndef random_planetoid_splits(data, num_classes):\n    # Set new random planetoid splits:\n    # * 20 * num_classes labels for training\n    # * 500 labels for validation\n    # * 1000 labels for testing\n\n    indices = []\n    for i in range(num_classes):\n        index = (data.y == i).nonzero().view(-1)\n        index = index[torch.randperm(index.size(0))]\n        indices.append(index)\n\n    train_index = torch.cat([i[:20] for i in indices], dim=0)\n\n    rest_index = torch.cat([i[20:] for i in indices], dim=0)\n    rest_index = rest_index[torch.randperm(rest_index.size(0))]\n\n    data.train_mask = index_to_mask(train_index, size=data.num_nodes)\n    data.val_mask = index_to_mask(rest_index[:500], size=data.num_nodes)\n    data.test_mask = index_to_mask(rest_index[500:1500], size=data.num_nodes)\n\n    return data\n\n\ndef run_train(dataset, model, runs, epochs, lr, weight_decay, early_stopping,\n              profiling, use_compile, permute_masks=None, logger=None):\n    val_losses, accs, durations = [], [], []\n    if use_compile:\n        model = torch.compile(model)\n\n    for run in range(runs):\n        data = dataset[0]\n        if permute_masks is not None:\n            data = permute_masks(data, dataset.num_classes)\n        data = data.to(device)\n\n        model.to(device).reset_parameters()\n        optimizer = Adam(model.parameters(), lr=lr, weight_decay=weight_decay)\n\n        if torch.cuda.is_available():\n            torch.cuda.synchronize()\n        elif hasattr(torch.backends,\n                     'mps') and torch.backends.mps.is_available():\n            try:\n                torch.mps.synchronize()\n            except ImportError:\n                pass\n\n        t_start = time.perf_counter()\n\n        best_val_loss = float('inf')\n        test_acc = 0\n        val_loss_history = []\n\n        for epoch in range(1, epochs + 1):\n            if run == runs - 1 and epoch == epochs:\n                with timeit():\n                    train(model, optimizer, data)\n            else:\n                train(model, optimizer, data)\n            eval_info = evaluate(model, data)\n            eval_info['epoch'] = epoch\n\n            if logger is not None:\n                logger(eval_info)\n\n            if eval_info['val_loss'] < best_val_loss:\n                best_val_loss = eval_info['val_loss']\n                test_acc = eval_info['test_acc']\n\n            val_loss_history.append(eval_info['val_loss'])\n            if early_stopping > 0 and epoch > epochs // 2:\n                tmp = tensor(val_loss_history[-(early_stopping + 1):-1])\n                if eval_info['val_loss'] > tmp.mean().item():\n                    break\n\n        if torch.cuda.is_available():\n            torch.cuda.synchronize()\n        elif hasattr(torch.backends,\n                     'mps') and torch.backends.mps.is_available():\n            try:\n                torch.mps.synchronize()\n            except ImportError:\n                pass\n\n        t_end = time.perf_counter()\n\n        val_losses.append(best_val_loss)\n        accs.append(test_acc)\n        durations.append(t_end - t_start)\n    loss, acc, duration = tensor(val_losses), tensor(accs), tensor(durations)\n\n    print(f'Val Loss: {float(loss.mean()):.4f}, '\n          f'Test Accuracy: {float(acc.mean()):.3f} ± {float(acc.std()):.3f}, '\n          f'Duration: {float(duration.mean()):.3f}s')\n\n    if profiling:\n        with torch_profile():\n            train(model, optimizer, data)\n\n\n@torch.no_grad()\ndef run_inference(dataset, model, epochs, profiling, bf16, use_compile,\n                  permute_masks=None, logger=None):\n    data = dataset[0]\n    if permute_masks is not None:\n        data = permute_masks(data, dataset.num_classes)\n    data = data.to(device)\n\n    model.to(device).reset_parameters()\n    if use_compile:\n        model = torch.compile(model)\n\n    if torch.cuda.is_available():\n        amp = torch.amp.autocast('cuda', enabled=False)\n    else:\n        amp = torch.cpu.amp.autocast(enabled=bf16)\n    if bf16:\n        data.x = data.x.to(torch.bfloat16)\n\n    with amp:\n        for epoch in range(1, epochs + 1):\n            if epoch == epochs:\n                with timeit():\n                    inference(model, data)\n            else:\n                inference(model, data)\n\n        if profiling:\n            with torch_profile():\n                inference(model, data)\n\n\ndef run(dataset, model, runs, epochs, lr, weight_decay, early_stopping,\n        inference, profiling, bf16, use_compile, permute_masks=None,\n        logger=None):\n    if not inference:\n        run_train(dataset, model, runs, epochs, lr, weight_decay,\n                  early_stopping, profiling, use_compile, permute_masks,\n                  logger)\n    else:\n        run_inference(dataset, model, epochs, profiling, bf16, use_compile,\n                      permute_masks, logger)\n\n\ndef train(model, optimizer, data):\n    model.train()\n    optimizer.zero_grad()\n    out = model(data)\n    loss = F.nll_loss(out[data.train_mask], data.y[data.train_mask])\n    loss.backward()\n    optimizer.step()\n\n\n@torch.no_grad()\ndef evaluate(model, data):\n    model.eval()\n\n    out = model(data)\n\n    outs = {}\n    for key in ['train', 'val', 'test']:\n        mask = data[f'{key}_mask']\n        loss = float(F.nll_loss(out[mask], data.y[mask]))\n        pred = out[mask].argmax(1)\n        acc = pred.eq(data.y[mask]).sum().item() / mask.sum().item()\n\n        outs[f'{key}_loss'] = loss\n        outs[f'{key}_acc'] = acc\n\n    return outs\n\n\n@torch.no_grad()\ndef inference(model, data):\n    model.eval()\n    model(data)\n"
+      },
+      {
+        "id": "repo_00a183d2ccfa_0",
+        "source": "repository",
+        "path": "benchmark/citation/datasets.py",
+        "sha256": "ee19d28ea6e870356532d7c902311a7e34964cf27108e07ec5b5f9674cf0bbc0",
+        "revision": "79d33965a40b7fa83616a9f598a0f8619f25d939",
+        "quote": "import os.path as osp\n\nimport torch_geometric.transforms as T\nfrom torch_geometric.datasets import Planetoid\n\n\ndef get_planetoid_dataset(name, normalize_features=False, transform=None):\n    path = osp.join(osp.dirname(osp.realpath(__file__)), '..', 'data', name)\n    dataset = Planetoid(path, name)\n\n    if transform is not None and normalize_features:\n        dataset.transform = T.Compose([T.NormalizeFeatures(), transform])\n    elif normalize_features:\n        dataset.transform = T.NormalizeFeatures()\n    elif transform is not None:\n        dataset.transform = transform\n\n    return dataset\n"
+      }
+    ],
+    "validation_errors": [],
+    "reason": "已按作者输出与论文原文对比；这不替代独立复算或整篇论文验收。",
+    "comparison_source_discovery": {
+      "added_sources": [
+        {
+          "path": "benchmark/citation/__init__.py",
+          "sha256": "63da45ba4bac903256c437401f2cec71920003b615d8079a65806fdf88f325cf",
+          "bytes": 183
+        },
+        {
+          "path": "benchmark/citation/train_eval.py",
+          "sha256": "d4d1e25626778ed2c5e7a7ee63f2af5443d558bf4391fe9c3ad50274d84498df",
+          "bytes": 5957
+        },
+        {
+          "path": "torch_geometric/logging.py",
+          "sha256": "1e61c72e209c33ae24fba51834e49f5cf21e486340ca2186727f1c0fcb65cae4",
+          "bytes": 858
+        },
+        {
+          "path": "benchmark/citation/appnp.py",
+          "sha256": "7025ef5f94c9e50beed6aef89870c0d534f02104bece23f6713edc86a231caf4",
+          "bytes": 2469
+        },
+        {
+          "path": "benchmark/citation/arma.py",
+          "sha256": "24ca0e8d880570e69a595aa6ea392779e607d81aad3e784c53a4125f211860b4",
+          "bytes": 2751
+        },
+        {
+          "path": "benchmark/citation/cheb.py",
+          "sha256": "b6b8c1e2cd4e866c0ed87dde7f17d07d9c27cd8996fa289dc88b84b94aa5fa6c",
+          "bytes": 2311
+        },
+        {
+          "path": "benchmark/citation/gat.py",
+          "sha256": "d4ad02ffcaae0affa3f2b15c458d1ac528ae8d1d1001a817e4580f074be6a8c0",
+          "bytes": 2600
+        },
+        {
+          "path": "benchmark/citation/sgc.py",
+          "sha256": "7af62401401c32f5ce45c96ed7c6e19ce8de81b6f086572fbeca6a410d081b64",
+          "bytes": 2001
+        },
+        {
+          "path": "benchmark/citation/statistics.py",
+          "sha256": "ea85321a8d5e1ca7b4f2eb18a5c8b014cdf790eebf28cb1be6f30c913fd2bc0a",
+          "bytes": 459
+        }
+      ],
+      "read_failures": [],
+      "additional_bytes": 19589,
+      "additional_byte_limit": 1048576,
+      "attempted_files": 9,
+      "additional_file_limit": 64,
+      "purpose": "static_navigation_only_not_execution_evidence"
+    },
+    "extraction_attempts": [
+      {
+        "attempt": 1,
+        "status": "validated",
+        "citation_repairs": [],
+        "response_type": "str",
+        "response_sha256": "49749982decb9c97651ba1461d74341b5f713c5fe7dd09564cec716d08e8069f",
+        "response_chars": 1946,
+        "response_excerpt": "{\n  \"citations\": [\n    {\"id\": \"pdf_p3_0\", \"evidence_id\": \"pdf_p3_0\"},\n    {\"id\": \"pdf_p9_0\", \"evidence_id\": \"pdf_p9_0\"},\n    {\"id\": \"repo_940ba0cf0c98_0\", \"evidence_id\": \"repo_940ba0cf0c98_0\"},\n    {\"id\": \"repo_13ba301ba3c6_0\", \"evidence_id\": \"repo_13ba301ba3c6_0\"},\n    {\"id\": \"repo_1f698efead3b_0\", \"evidence_id\": \"repo_1f698efead3b_0\"},\n    {\"id\": \"repo_00a183d2ccfa_0\", \"evidence_id\": \"repo_00a183d2ccfa_0\"}\n  ],\n  \"comparisons\": [\n    {\n      \"actual_id\": \"train:stdout:1\",\n      \"reference\": {\n        \"name\": \"accuracy\",\n        \"value\": 81.5,\n        \"std\": 0.6,\n        \"unit\": \"percent\",\n        \"dataset\": \"Cora\",\n        \"method\": \"GCN\",\n        \"split\": \"test\",\n        \"aggregation\": \"mean\",\n        \"runs\": 100,\n        \"value_quote\": \"GCN 81.5 ± 0.6 79.4 ± 1.9 71.1 ± 0.7 68.1 ± 1.7 79.0 ± 0.6 77.4 ± 2.4\",\n        \"column_quote\": \"Cora CiteSeer PubMed\",\n        \"citations\": [\"pdf_p3_0\", \"pdf_p9_0\"]\n      },\n      \"actual_context\": {\n        \"unit\": \"fraction\",\n        \"dataset\": \"Cora\",\n        \"method\": \"GCN\",\n        \"split\": \"test\",\n        \"aggregation\": \"mean\",\n        \"runs\": 100,\n        \"std\": 0.007,\n        \"citations\": [\"repo_940ba0cf0c98_0\", \"repo_13ba301ba3c6_0\", \"repo_1f698efead3b_0\", \"repo_00a183d2ccfa_0\"]\n      },\n      \"settings\": {\n        \"status\": \"different\",\n        \"reason\": \"论文表1的Cora GCN固定划分结果为81.5±0.6（100次运行均值，固定train/val/test划分，来自Kipf & Welling）。实际执行命令为python gcn.py --dataset=Cora，未加--random_splits，因此使用Planetoid固定划分；但实际输出为单次运行汇总（std为torch默认无偏样本标准差，runs=100为默认参数但输出仅一次汇总），且实际数值81.4±0.7与论文81.5±0.6不同。数据集标签Cora在PDF与仓库中一致。\",\n        \"citations\": [\"pdf_p3_0\", \"pdf_p9_0\", \"repo_940ba0cf0c98_0\", \"repo_13ba301ba3c6_0\", \"repo_1f698efead3b_0\", \"repo_00a183d2ccfa_0\"]\n      },\n      \"direction\": \"higher\"\n    }\n  ],\n  \"reason\": \"仅将实际测试集准确率（train:stdout:1，Cora，GCN，test，均值0.814±0.007，即81.4%±0.7%）与论文表1中Cora列GCN固定划分行（81.5±0.6）对应。实际验证损失（train:stdout:0）在论文中无对应数值指标，故省略。论文报告100次运行均值；实际输出为单次运行汇总，二者不可等同。\"\n}",
+        "response_truncated": false,
+        "proposal": {
+          "citations": [
+            {
+              "id": "pdf_p3_0",
+              "evidence_id": "pdf_p3_0"
+            },
+            {
+              "id": "pdf_p9_0",
+              "evidence_id": "pdf_p9_0"
+            },
+            {
+              "id": "repo_940ba0cf0c98_0",
+              "evidence_id": "repo_940ba0cf0c98_0"
+            },
+            {
+              "id": "repo_13ba301ba3c6_0",
+              "evidence_id": "repo_13ba301ba3c6_0"
+            },
+            {
+              "id": "repo_1f698efead3b_0",
+              "evidence_id": "repo_1f698efead3b_0"
+            },
+            {
+              "id": "repo_00a183d2ccfa_0",
+              "evidence_id": "repo_00a183d2ccfa_0"
+            }
+          ],
+          "comparisons": [
+            {
+              "actual_id": "train:stdout:1",
+              "reference": {
+                "name": "accuracy",
+                "value": 81.5,
+                "std": 0.6,
+                "unit": "percent",
+                "dataset": "Cora",
+                "method": "GCN",
+                "split": "test",
+                "aggregation": "mean",
+                "runs": 100,
+                "value_quote": "GCN 81.5 ± 0.6 79.4 ± 1.9 71.1 ± 0.7 68.1 ± 1.7 79.0 ± 0.6 77.4 ± 2.4",
+                "column_quote": "Cora CiteSeer PubMed",
+                "citations": [
+                  "pdf_p3_0",
+                  "pdf_p9_0"
+                ]
+              },
+              "actual_context": {
+                "unit": "fraction",
+                "dataset": "Cora",
+                "method": "GCN",
+                "split": "test",
+                "aggregation": "mean",
+                "runs": 100,
+                "std": 0.007,
+                "citations": [
+                  "repo_940ba0cf0c98_0",
+                  "repo_13ba301ba3c6_0",
+                  "repo_1f698efead3b_0",
+                  "repo_00a183d2ccfa_0"
+                ]
+              },
+              "settings": {
+                "status": "different",
+                "reason": "论文表1的Cora GCN固定划分结果为81.5±0.6（100次运行均值，固定train/val/test划分，来自Kipf & Welling）。实际执行命令为python gcn.py --dataset=Cora，未加--random_splits，因此使用Planetoid固定划分；但实际输出为单次运行汇总（std为torch默认无偏样本标准差，runs=100为默认参数但输出仅一次汇总），且实际数值81.4±0.7与论文81.5±0.6不同。数据集标签Cora在PDF与仓库中一致。",
+                "citations": [
+                  "pdf_p3_0",
+                  "pdf_p9_0",
+                  "repo_940ba0cf0c98_0",
+                  "repo_13ba301ba3c6_0",
+                  "repo_1f698efead3b_0",
+                  "repo_00a183d2ccfa_0"
+                ]
+              },
+              "direction": "higher"
+            }
+          ],
+          "reason": "仅将实际测试集准确率（train:stdout:1，Cora，GCN，test，均值0.814±0.007，即81.4%±0.7%）与论文表1中Cora列GCN固定划分行（81.5±0.6）对应。实际验证损失（train:stdout:0）在论文中无对应数值指标，故省略。论文报告100次运行均值；实际输出为单次运行汇总，二者不可等同。"
+        },
+        "validation_errors": []
+      }
+    ]
+  },
+  "browser_checks": {
+    "comparison_table": "指标 / 数据集 / 方法\t论文宣称\t作者运行输出\t差值（实际 − 论文）\t结论\naccuracy / Cora / GCN\t81.5 ± 0.6%；均值，100 次\t0.814 ± 0.007（比例）；均值，100 次\t-0.1 个百分点；相对差异 -0.12%\t仅供参考，尚未验收",
+    "markdown_zip_identical": true,
+    "full_output_attachment_identical": true,
+    "report_sha256": "cb79a5945a5b9b41740d95ef3cf8298154ec37614e8a6ce4e559bcccd3ef3ad4",
+    "reconnect_preserved_comparison": true,
+    "saved_reports_identical": true,
+    "structured_records_identical": true,
+    "training_rerun": false,
+    "independent_acceptance": false
+  },
+  "paper_metrics_verified": false,
+  "is_reproduced": null,
+  "artifact_sha256": {
+    "pyg_analysis_replay_01/author_claim_comparison.json": "29a3130150b07a98ffe61740018b2f312a0f83090b7deed382b6d8abb63d8f6d",
+    "pyg_analysis_replay_01/browser_text.txt": "5db3062b2e66e5f985d6da9de507cf1375f7cf201f651bff599d932e52cd1a3d",
+    "pyg_analysis_replay_01/browser_verification.json": "8277dccb5d62d416a9c68775a1d89f9e57b0d34aad9a7ef6e3ea1a31c801978c",
+    "pyg_analysis_replay_01/comparison_table.png": "b8c66f54d5cca6e676171e9fdacde52bb67c8a5c93ffa4d8ee1fee19e709183a",
+    "pyg_analysis_replay_01/pyg_analysis_replay_20261019_01_execution.txt": "b4dc5c44d418643f492475c705fa76fcbbaaedb02e3d8efe3f555f112f8df9d4",
+    "pyg_analysis_replay_01/report.md": "379a9ae8fafddfd385bd3c9ab1e97bf0f5a2037293948518e82b82d28a24d6f2",
+    "pyg_analysis_replay_01/report.png": "38632803bb23b25375679340c979a62f898c3d878752807348a7781eaf972ca1",
+    "pyg_analysis_replay_01/report_locations.json": "27deedf60899bab6a5e9ce1962fb73345fa86118f7ae0647eadf21623180a1eb",
+    "pyg_analysis_replay_01/result.json": "9a4753f4a804c8ae7a9fcb827eb9afdc534be02127097f18e8d933f1e8d9f499",
+    "pyg_analysis_replay_01/result_before_report.json": "1ffd96b231e88063663ee0dd113cd32dcab604ef9baf9f2fd8fc6bd7ed38e44f",
+    "pyg_analysis_replay_01/source_freeze.json": "4d48bfd8d90e27193cdd0fa706907a32be352c4b1c45a60328b6c2110ff0065c",
+    "pyg_analysis_replay_01/source_packet.json": "391907b4ed2eff413d3a7c565029d35c029c5d891427803c02a7970346096d29",
+    "replay_pyg_analysis.py": "6fa0ff16422dfb271660289057cff15041ac178debf839ee1bec59091f69be63",
+    "publish_pyg_replay.py": "8e4c4e59fdaa6db06051f0556dfaa08a6265e3fb5f3c69628b6b3336a011dd01",
+    "pyg_analysis_replay_01.log": "d7dc1bab3a78c980740aed04de9bbbab2929d152ae5b98dc9635e2f13147a7b8",
+    "pyg_replay_browser_01.log": "15d14883312e4d06e187f73e1f500b7027701a96f374460bef0ebf39c1a7cbc8",
+    "pyg_comparison_payload_diagnostic.json": "ff1519fd9bd4c143a5992d9a3790572766c1f3d77f56a372982bf937e6c6f054",
+    "probe_comparison_payload.py": "c47be3ddda60892d74a1924e29e96888b2205468a6c3016f379733252ce94cfe",
+    "data/runtime/progress_1792390248890.jsonl": "9da6d06c2c1d46b2712110f51524b01ac80d7dc41c3127f0b42ec818e770caa4",
+    "data/runtime/pyg_analysis_replay_20261019_01_downloaded_report.md": "cb79a5945a5b9b41740d95ef3cf8298154ec37614e8a6ce4e559bcccd3ef3ad4",
+    "data/runtime/pyg_analysis_replay_20261019_01_downloaded_report.zip": "4f4abbf3dbe6c6979898564b79d6447c4144821d76dc1a185ffc27515cfa1682"
+  }
+}

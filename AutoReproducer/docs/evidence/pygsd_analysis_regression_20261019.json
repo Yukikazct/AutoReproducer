@@ -1,0 +1,158 @@
+{
+  "kind": "saved_author_output_analysis_regression",
+  "original_trial": "pygsd_20261019_01",
+  "training_rerun": false,
+  "independent_acceptance": false,
+  "paper_metrics_verified": false,
+  "is_reproduced": null,
+  "comparison_status": "partial",
+  "validation_errors": [],
+  "comparisons": [
+    {
+      "metric": "auc",
+      "reference": {
+        "name": "auc",
+        "value": 87.5,
+        "std": 0.9,
+        "unit": "percent",
+        "dataset": "Bitcoin-Alpha",
+        "method": "SGCN",
+        "split": "test",
+        "aggregation": "mean",
+        "runs": 5,
+        "value_quote": "SGCN (87.5 ±0.9, 68.9 ±0.9)",
+        "column_quote": "Method Bitcoin-Alpha Bitcoin-OTC Wikirfa Slashdot Epinions",
+        "citations": [
+          "pdf_p8_0",
+          "pdf_p25_0"
+        ],
+        "column_verified": false
+      },
+      "actual": {
+        "unit": "fraction",
+        "dataset": "bitcoin_alpha",
+        "method": "SGCN",
+        "split": "test",
+        "aggregation": "mean",
+        "runs": 5,
+        "std": 0.0098,
+        "citations": [
+          "repo_36660dae38dd_0",
+          "repo_16eb52a20da4_0"
+        ],
+        "uncertainty_source": {
+          "path": "examples/run_link_sign_prediction.py",
+          "source_sha256": "20bd7b5117ba5131e43284802c3066effffb25f52d9242862a26e5611c672758",
+          "print_line": 148,
+          "mean_expression": "v[:, 0].mean()",
+          "std_expression": "v[:, 0].std()"
+        },
+        "value": 0.873,
+        "source": "train_sgcn_bitcoin_alpha:stdout:229",
+        "id": "train_sgcn_bitcoin_alpha:stdout:1",
+        "source_quote": "SGCN: AUC: 0.8730 (0.0098)"
+      },
+      "settings": {
+        "status": "different",
+        "reason": "数据集、方法与划分一致（Bitcoin-Alpha、SGCN、测试集、5 次划分取均值），但训练协议不同：论文用 500 epochs（200 warm-up）、每 10 epoch 在测试集 AUC 上评估并早停 patience=10，且下游逻辑回归用 80% 训练边；仓库脚本用 500 epochs、每 10 epoch 在验证集 AUC 上选模型（早停 patience=10），逻辑回归用全部训练边，且未做 warm-up。此外论文报告的是百分数，仓库输出为分数（0.8730 对应 87.30%）。",
+        "citations": [
+          "pdf_p8_0",
+          "pdf_p25_0",
+          "repo_36660dae38dd_0",
+          "repo_16eb52a20da4_0"
+        ]
+      },
+      "direction": "higher",
+      "status": "reference_only",
+      "limitations": [
+        "论文表格列位置未完整核对，差值仅供参考",
+        "实验设置不同，数值差值仅供参考：数据集、方法与划分一致（Bitcoin-Alpha、SGCN、测试集、5 次划分取均值），但训练协议不同：论文用 500 epochs（200 warm-up）、每 10 epoch 在测试集 AUC 上评估并早停 patience=10，且下游逻辑回归用 80% 训练边；仓库脚本用 500 epochs、每 10 epoch 在验证集 AUC 上选模型（早停 patience=10），逻辑回归用全部训练边，且未做 warm-up。此外论文报告的是百分数，仓库输出为分数（0.8730 对应 87.30%）。"
+      ],
+      "difference": -0.20000000000000018,
+      "relative_difference": -0.0022857142857142876,
+      "difference_unit": "percentage_points",
+      "within_tolerance": null,
+      "meets_reference": null
+    },
+    {
+      "metric": "f1_macro",
+      "reference": {
+        "name": "f1_macro",
+        "value": 68.9,
+        "std": 0.9,
+        "unit": "percent",
+        "dataset": "Bitcoin-Alpha",
+        "method": "SGCN",
+        "split": "test",
+        "aggregation": "mean",
+        "runs": 5,
+        "value_quote": "SGCN (87.5 ±0.9, 68.9 ±0.9)",
+        "column_quote": "Method Bitcoin-Alpha Bitcoin-OTC Wikirfa Slashdot Epinions",
+        "metric_quote": "Table 4: Link sign prediction results (AUC, Macro-F1) for signed networks (%).",
+        "citations": [
+          "pdf_p8_0",
+          "pdf_p25_0"
+        ],
+        "column_verified": false
+      },
+      "actual": {
+        "unit": "fraction",
+        "dataset": "bitcoin_alpha",
+        "method": "SGCN",
+        "split": "test",
+        "aggregation": "mean",
+        "runs": 5,
+        "std": 0.0133,
+        "citations": [
+          "repo_36660dae38dd_0",
+          "repo_16eb52a20da4_0"
+        ],
+        "uncertainty_source": {
+          "path": "examples/run_link_sign_prediction.py",
+          "source_sha256": "20bd7b5117ba5131e43284802c3066effffb25f52d9242862a26e5611c672758",
+          "print_line": 150,
+          "mean_expression": "v[:, 2].mean()",
+          "std_expression": "v[:, 2].std()"
+        },
+        "value": 0.6859,
+        "source": "train_sgcn_bitcoin_alpha:stdout:231",
+        "id": "train_sgcn_bitcoin_alpha:stdout:3",
+        "source_quote": "SGCN: MacroF1: 0.6859 (0.0133)"
+      },
+      "settings": {
+        "status": "different",
+        "reason": "数据集、方法与划分一致（Bitcoin-Alpha、SGCN、测试集、5 次划分取均值），但训练协议不同：论文用 500 epochs（200 warm-up）、每 10 epoch 在测试集 AUC 上评估并早停 patience=10，且下游逻辑回归用 80% 训练边；仓库脚本用 500 epochs、每 10 epoch 在验证集 AUC 上选模型（早停 patience=10），逻辑回归用全部训练边，且未做 warm-up。此外论文报告的是百分数，仓库输出为分数（0.6859 对应 68.59%）。",
+        "citations": [
+          "pdf_p8_0",
+          "pdf_p25_0",
+          "repo_36660dae38dd_0",
+          "repo_16eb52a20da4_0"
+        ]
+      },
+      "direction": "higher",
+      "status": "reference_only",
+      "limitations": [
+        "论文表格列位置未完整核对，差值仅供参考",
+        "实验设置不同，数值差值仅供参考：数据集、方法与划分一致（Bitcoin-Alpha、SGCN、测试集、5 次划分取均值），但训练协议不同：论文用 500 epochs（200 warm-up）、每 10 epoch 在测试集 AUC 上评估并早停 patience=10，且下游逻辑回归用 80% 训练边；仓库脚本用 500 epochs、每 10 epoch 在验证集 AUC 上选模型（早停 patience=10），逻辑回归用全部训练边，且未做 warm-up。此外论文报告的是百分数，仓库输出为分数（0.6859 对应 68.59%）。"
+      ],
+      "difference": -0.31000000000001027,
+      "relative_difference": -0.004499274310595214,
+      "difference_unit": "percentage_points",
+      "within_tolerance": null,
+      "meets_reference": null
+    }
+  ],
+  "browser_verification": {
+    "comparison_table": "指标 / 数据集 / 方法\t论文宣称\t作者运行输出\t差值（实际 − 论文）\t结论\nauc / Bitcoin-Alpha / SGCN\t87.5 ± 0.9%；均值，5 次\t0.873 ± 0.0098（比例）；均值，5 次\t-0.2 个百分点；相对差异 -0.23%\t仅供参考，尚未验收\nf1_macro / Bitcoin-Alpha / SGCN\t68.9 ± 0.9%；均值，5 次\t0.6859 ± 0.0133（比例）；均值，5 次\t-0.31 个百分点；相对差异 -0.45%\t仅供参考，尚未验收",
+    "markdown_zip_identical": true,
+    "full_output_attachment_identical": true,
+    "report_sha256": "d24b725ecea4aaff82a24db014c2066edfca94ec02bfd935f6037d78a693bf2d",
+    "reconnect_preserved_comparison": true,
+    "saved_reports_identical": true,
+    "structured_records_identical": true,
+    "training_rerun": false,
+    "independent_acceptance": false,
+    "progress_file": "progress_1792375094493.jsonl"
+  },
+  "local_report": ".tmp/pdf_selfrepair_20261019/data/reports/pygsd_analysis_replay_20261019.md"
+}

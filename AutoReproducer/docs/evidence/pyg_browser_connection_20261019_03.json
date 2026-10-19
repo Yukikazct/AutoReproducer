@@ -1,0 +1,18 @@
+{
+  "trial": "pyg_20261019_regression_03",
+  "phase": "browser_api_connection_before_submission",
+  "task_submitted": false,
+  "installation_performed": false,
+  "training_performed": false,
+  "product_source_sha256": "6ac59457ccc6ec8198c5e74cfdf6989b75bbd3e6c51e6a48008e6146776c753a",
+  "failure": {
+    "error": "Locator.wait_for: Timeout 45000ms exceeded.\nCall log:\n  - waiting for get_by_text(re.compile(r\"连接成功\\ \\(deepseek\\-chat\\ @\\ https:/\\/api\\.deepseek\\.com\\):\")) to be visible\n",
+    "type": "TimeoutError"
+  },
+  "followup": "Direct API request and the application connection helper both returned successfully. A later browser trial uses the same product source and its own records.",
+  "original_artifact_sha256": {
+    "pyg_regression_03_source_freeze.json": "4543937c86bfbb0c000c2ec8d25781428ace8d2a4ed483443818f8b02db7a2ab",
+    "pyg_regression_03_trial.log": "e537bfa89d869730458ec9c210cddc41403ccd678f269725d51a2ef999012cdf",
+    "data/runtime/pyg_20261019_regression_03_failure.json": "eb0f869223f66978c9914cb92c01ca0b95e09fb2235e2285a0679489f2e7a62d"
+  }
+}

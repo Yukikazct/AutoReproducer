@@ -82,3 +82,70 @@ def test_structured_metric_protocol_is_not_overridden_by_text_source(tmp_path):
     observed, errors = collect_author_metrics(execution, workspace=tmp_path, plan=plan,
         sources={'train.py': hashlib.sha256(source.read_bytes()).hexdigest()})
     assert not errors and observed[0]['std'] == 1.5536 and 'uncertainty_kind' not in observed[0]
+
+
+SUMMARY_SOURCE = '''import numpy as np
+values = np.array(results)
+print(f"{args.model}: AUC: {values[:, 0].mean():.4f} ({values[:, 0].std():.4f}) ")
+print(f"{args.model}: MacroF1: {values[:, 1].mean():.4f} ({values[:, 1].std():.4f}) ")
+'''
+SUMMARY_OUTPUT = 'SGCN: AUC: 0.8730 (0.0098)\nSGCN: MacroF1: 0.6859 (0.0133)'
+
+
+def test_parenthesized_statistics_require_matching_original_mean_std_source():
+    parsed, _ = parse_runtime_metrics(SUMMARY_OUTPUT, preserve_contexts=True)
+    result = annotate_uncertainty(parsed, SUMMARY_SOURCE, 'examples/train.py', 'a' * 64)
+    assert len(result) == 2
+    assert [(r['name'], r['value'], r['std'], r['aggregation']) for r in result] == [
+        ('auc', 0.8730, 0.0098, 'mean'), ('f1_macro', 0.6859, 0.0133, 'mean')]
+    assert all(r['uncertainty_source']['source_sha256'] == 'a' * 64 for r in result)
+    assert all('runs' not in r for r in result)
+    assert all('std' not in r for r in parsed)
+
+
+@pytest.mark.parametrize('source', [
+    SUMMARY_SOURCE.replace('.std()', '.mean()'),
+    SUMMARY_SOURCE.replace('values[:, 0].std()', 'values[:, 1].std()'),
+    SUMMARY_SOURCE.replace('AUC:', 'Accuracy:'),
+    SUMMARY_SOURCE.replace('({values[:, 0].std():.4f})', '(CI {values[:, 0].std():.4f})'),
+])
+def test_parentheses_without_matching_statistical_evidence_do_not_become_std(source):
+    parsed, _ = parse_runtime_metrics(SUMMARY_OUTPUT, preserve_contexts=True)
+    assert 'std' not in annotate_uncertainty(parsed, source, 'train.py', 'a' * 64)[0]
+
+
+def test_unlabelled_parentheses_remain_unknown_without_source():
+    parsed, errors = parse_runtime_metrics(SUMMARY_OUTPUT, preserve_contexts=True)
+    assert not errors and all('std' not in r and 'aggregation' not in r for r in parsed)
+
+
+def test_parenthesized_summary_cannot_use_changed_source(tmp_path):
+    path = tmp_path / 'train.py'
+    path.write_text(SUMMARY_SOURCE, encoding='utf-8')
+    plan = {'steps': [{'id': 'train', 'entrypoint': {'source_path': 'train.py'}}]}
+    execution = {'steps': [{'id': 'train', 'success': True, 'exit_code': 0, 'stdout': SUMMARY_OUTPUT}]}
+    result, errors = collect_author_metrics(execution, workspace=tmp_path, plan=plan, sources={'train.py': 'b' * 64})
+    assert errors and all('std' not in r for r in result)
+
+
+@pytest.mark.parametrize('source,line,metric', [
+    ('import numpy as arrays\nprint(f"Estimator-42: RMSE: {arrays.mean(errors):.3f} ({arrays.std(errors):.3f})")',
+     'Estimator-42: RMSE: 1.250 (0.125)', 'rmse'),
+    ('def evaluate(measurements):\n    print(f"Final MAE: {measurements.mean():.3f} ({measurements.std():.3f})")',
+     'Final MAE: 1.250 (0.125)', 'mae'),
+    ('print(f"Benchmark: latency={timings.mean():.3f} ({timings.std():.3f})")',
+     'Benchmark: latency=1.250 (0.125)', 'latency'),
+])
+def test_statistical_rule_applies_to_unrelated_metrics_names_and_function_scopes(source, line, metric):
+    records, errors = parse_runtime_metrics(line, expected_names=[metric])
+    result = annotate_uncertainty(records, source, 'arbitrary/evaluate.py', 'c' * 64)
+    assert not errors and len(result) == 1
+    assert (result[0]['name'], result[0]['value'], result[0]['std'], result[0]['aggregation']) == (
+        metric, 1.25, 0.125, 'mean')
+
+
+def test_equal_metric_values_on_one_line_keep_their_own_deviation():
+    source = 'print(f"AUC: {a.mean():.2f} ({a.std():.2f}); Macro-F1: {b.mean():.2f} ({b.std():.2f})")'
+    parsed, _ = parse_runtime_metrics('AUC: 0.80 (0.01); Macro-F1: 0.80 (0.03)')
+    result = annotate_uncertainty(parsed, source, 'report.py', 'd' * 64)
+    assert {r['name']: r['std'] for r in result} == {'auc': 0.01, 'f1_macro': 0.03}

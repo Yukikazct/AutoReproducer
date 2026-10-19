@@ -114,13 +114,19 @@ def _extract_pdfplumber(payload):
 
 
 def _extraction_damage(text):
-    """Count undecoded glyphs, without guessing what a number should mean."""
-    return (sum(ord(char) < 32 and char not in '\n\r\t' or char == '\ufffd' for char in text)
-            + len(re.findall(r'\(cid:\d+\)', text)))
+    """Rank glyph loss before numeric layout damage; never rewrite numbers."""
+    glyphs = (sum(ord(char) < 32 and char not in '\n\r\t' or char == '\ufffd' for char in text)
+              + len(re.findall(r'\(cid:\d+\)', text)))
+    # Adjacent decimal cells can be concatenated, or a font change can split
+    # one decimal. These are reasons to retry extraction from page geometry,
+    # never enough evidence to insert/remove characters in the extracted text.
+    numeric_layout = (len(re.findall(r'(?<![\w.])[+-]?\d+(?:\.\d+){2,}(?![\w.])', text))
+                      + len(re.findall(r'(?<=\d)[ \t]+\.\d+', text)))
+    return glyphs, numeric_layout
 
 
 def extract_pdf_input(pdf_path):
-    """Read immutable bytes; retry unreadable glyphs without dropping pages."""
+    """Read immutable bytes; recover glyph/layout defects using complete pages."""
     try:
         payload = Path(pdf_path).read_bytes()
     except (OSError, TypeError, ValueError) as exc:
@@ -150,14 +156,20 @@ def extract_pdf_input(pdf_path):
             prior_pages, _, _, prior_damage = candidate
             # A cleaner caption cannot authorize omitting other readable pages.
             if (len(pages) != len(prior_pages)
-                    or any(old.strip() and not new.strip() for old, new in zip(prior_pages, pages))
-                    or damage >= prior_damage):
+                    or any(old.strip() and not new.strip() for old, new in zip(prior_pages, pages))):
+                continue
+            # A geometry parser may recover a table but lose math glyphs on
+            # another page. Choose complete original pages independently.
+            pages = [new if _extraction_damage(new) < _extraction_damage(old) else old
+                     for old, new in zip(prior_pages, pages)]
+            damage = _extraction_damage('\n'.join(pages))
+            if damage >= prior_damage:
                 continue
         # Both parsers read the same bytes. Keep their original annotation
         # contexts: column interleaving can obscure a declaration in one parser.
         annotation_sources.extend(annotations)
         candidate = (pages, metadata_title, annotations, damage)
-        if damage == 0:
+        if damage == (0, 0):
             break
 
     if candidate is not None:

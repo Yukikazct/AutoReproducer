@@ -1,0 +1,538 @@
+{
+  "trial": "polynormer_20261019_01",
+  "input": "real_browser_pdf_upload",
+  "frozen_commit": "ac0e6b70aeda1bb5b25310629db3178ea1a991f5",
+  "product_source_sha256": "30500a2449a2b725832febd7e58217df648cbc10a7d4a41b5cf42e7e49f83468",
+  "product_source_unchanged_during_trial": true,
+  "pdf_sha256": "b48d05ad91bc923b4406b3cc4d29295ccc3ea23ffebfb82fc5fcdaa0af48bb7c",
+  "repository_url": "https://github.com/cornell-zhang/Polynormer",
+  "repository_revision": "fc8c276c9c5dfbd616d83f65338a3392188a5e08",
+  "author_execution": [
+    {
+      "spec_sha256": "5cb98bcdb96d87323907384eb9e3316229836798876df3d5adbd96ad58fd6be8",
+      "step": {
+        "id": "train-amazon-computer",
+        "kind": "train",
+        "argv": [
+          "python",
+          "main.py",
+          "--dataset",
+          "amazon-computer",
+          "--hidden_channels",
+          "64",
+          "--local_epochs",
+          "200",
+          "--global_epochs",
+          "1000",
+          "--lr",
+          "0.001",
+          "--runs",
+          "1",
+          "--local_layers",
+          "5",
+          "--global_layers",
+          "1",
+          "--weight_decay",
+          "5e-5",
+          "--dropout",
+          "0.7",
+          "--in_dropout",
+          "0.2",
+          "--num_heads",
+          "8",
+          "--device",
+          "0",
+          "--save_model"
+        ],
+        "entrypoint": {
+          "kind": "script",
+          "target": "main.py",
+          "source_path": "main.py"
+        },
+        "cwd": ".",
+        "timeout_s": null,
+        "depends_on": [],
+        "citations": [
+          "repo_d31ce0453051_0",
+          "repo_b10564ab7d2c_0",
+          "repo_de084f025a26_0",
+          "repo_11bb3b632c84_0",
+          "repo_468ad6407050_0",
+          "inventory_b1be4762a52d",
+          "data_b1be4762a52d_0"
+        ],
+        "required": true
+      },
+      "natural_return": true,
+      "optimizer_steps": 1200,
+      "torch_version": "2.5.1+cu121",
+      "native_datasets": [
+        {
+          "declaration": {
+            "kind": "author_runtime",
+            "path": "dataset.py",
+            "function": "load_amazon_dataset",
+            "dataset_class": "Amazon",
+            "dataset_name": "Computers",
+            "source_sha256": "a98047544e5b3c25f71519873934900e3d4c69dee10a189ff20d1c95e8d5aa85",
+            "citations": [
+              "repo_11bb3b632c84_0",
+              "repo_468ad6407050_0",
+              "inventory_b1be4762a52d",
+              "data_b1be4762a52d_0"
+            ],
+            "framework": "torch_geometric.datasets",
+            "constructor_quotes": [
+              "Amazon(root=f'{data_dir}Amazon',\n                                 name='Photo', transform=transform)",
+              "Amazon(root=f'{data_dir}Amazon',\n                                 name='Computers', transform=transform)"
+            ]
+          },
+          "dataset_name": "computers",
+          "root": "D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_ea130e9fb6cc4e69842bfc48763ba705\\repo\\data\\Amazon",
+          "files": {
+            "D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_ea130e9fb6cc4e69842bfc48763ba705\\repo\\data\\Amazon\\Computers\\raw\\amazon_electronics_computers.npz": {
+              "sha256": "736ba1d9fd85eac2da83a5ad25c463f04b0031a6ca01563f90a7099d9e8ffb2c",
+              "bytes": 31921488,
+              "role": "raw"
+            },
+            "D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_ea130e9fb6cc4e69842bfc48763ba705\\repo\\data\\Amazon\\Computers\\processed\\data.pt": {
+              "sha256": "f0978f97e76f0c34f5e824ebfc40acbc592d7e95b926325b124f1b01ec21362d",
+              "bytes": 50170388,
+              "role": "processed"
+            }
+          },
+          "loaded_before_training": true,
+          "verified": true,
+          "sample_count": 1,
+          "num_nodes": 13752,
+          "num_edges": 491722,
+          "num_features": 767
+        }
+      ],
+      "numeric_compatibility": [],
+      "path_compatibility": [],
+      "pyg_compatibility": [],
+      "pyg_conversions": []
+    }
+  ],
+  "completion_checks": {
+    "all_required_author_commands_returned": true,
+    "observed_training_updates": true,
+    "owned_processes_finished": true
+  },
+  "self_repair": {
+    "attempts": [
+      {
+        "round": 1,
+        "action": "install_missing_dependency",
+        "reason": "根据实际错误安装 gdown，重跑原命令验证。",
+        "status": "resolved",
+        "failed_execution_dir": "D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_ea130e9fb6cc4e69842bfc48763ba705\\.autorepro_repository_runs\\f0b098b5cf924b359bc7d94ba0d98e06",
+        "failure_fingerprint": "5d8db769345fd8125c2bd8057a1066589d455b3a17ab2d6e560eb4996a55f5bd",
+        "diagnostic": "D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_ea130e9fb6cc4e69842bfc48763ba705\\repo\\logger.py:94: SyntaxWarning: invalid escape sequence '\\p'\n  f\"{results.mean():.2f} $\\pm$ {results.std():.2f} \\n\")\nTraceback (most recent call last):\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_ea130e9fb6cc4e69842bfc48763ba705\\repo\\_autorepro_capture\\observe_author.py\", line 106, in <module>\n    run_entrypoint(script, config.get('numeric_compatibility', []), workspace, config['source_files'],\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_ea130e9fb6cc4e69842bfc48763ba705\\repo\\_autorepro_capture\\author_numeric_compatibility.py\", line 222, in run_entrypoint\n    return runpy.run_path(str(script), run_name='__main__')\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"<frozen runpy>\", line 287, in run_path\n  File \"<frozen runpy>\", line 98, in _run_module_code\n  File \"<frozen runpy>\", line 88, in _run_code\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_ea130e9fb6cc4e69842bfc48763ba705\\repo\\main.py\", line 10, in <module>\n    from dataset import load_dataset\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_ea130e9fb6cc4e69842bfc48763ba705\\repo\\dataset.py\", line 10, in <module>\n    import gdown\nModuleNotFoundError: No module named 'gdown'\n",
+        "verification_execution_dir": "D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_ea130e9fb6cc4e69842bfc48763ba705\\.autorepro_repository_runs\\fdb1b2a34f764bbeb45833d4b4307b93"
+      }
+    ],
+    "status": "resolved",
+    "reason": "修复后的原命令已实际重跑并正常退出。",
+    "last_failure": "D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_ea130e9fb6cc4e69842bfc48763ba705\\repo\\logger.py:94: SyntaxWarning: invalid escape sequence '\\p'\n  f\"{results.mean():.2f} $\\pm$ {results.std():.2f} \\n\")\nTraceback (most recent call last):\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_ea130e9fb6cc4e69842bfc48763ba705\\repo\\_autorepro_capture\\observe_author.py\", line 106, in <module>\n    run_entrypoint(script, config.get('numeric_compatibility', []), workspace, config['source_files'],\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_ea130e9fb6cc4e69842bfc48763ba705\\repo\\_autorepro_capture\\author_numeric_compatibility.py\", line 222, in run_entrypoint\n    return runpy.run_path(str(script), run_name='__main__')\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"<frozen runpy>\", line 287, in run_path\n  File \"<frozen runpy>\", line 98, in _run_module_code\n  File \"<frozen runpy>\", line 88, in _run_code\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_ea130e9fb6cc4e69842bfc48763ba705\\repo\\main.py\", line 10, in <module>\n    from dataset import load_dataset\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_ea130e9fb6cc4e69842bfc48763ba705\\repo\\dataset.py\", line 10, in <module>\n    import gdown\nModuleNotFoundError: No module named 'gdown'\n"
+  },
+  "metric_records": [
+    {
+      "name": "loss",
+      "value": 0.1777,
+      "unit": "",
+      "split": "",
+      "stage": "",
+      "source": "train-amazon-computer:stdout:1237",
+      "source_quote": "Epoch: 1199, Loss: 0.1777, Train: 96.10%, Valid: 91.82%, Test: 92.80%, Best Valid: 92.55%, Best Test: 93.46%",
+      "id": "train-amazon-computer:stdout:0",
+      "step_id": "train-amazon-computer"
+    },
+    {
+      "name": "accuracy",
+      "value": 95.99,
+      "unit": "",
+      "split": "train",
+      "stage": "train",
+      "source": "train-amazon-computer:stdout:1249",
+      "source_quote": "Final Train: 95.99 ± nan",
+      "std": null,
+      "aggregation": "mean",
+      "runs": 1,
+      "id": "train-amazon-computer:stdout:1",
+      "step_id": "train-amazon-computer"
+    },
+    {
+      "name": "accuracy",
+      "value": 93.46,
+      "unit": "",
+      "split": "test",
+      "stage": "final",
+      "source": "train-amazon-computer:stdout:1250",
+      "source_quote": "Final Test: 93.46 ± nan",
+      "std": null,
+      "aggregation": "mean",
+      "runs": 1,
+      "id": "train-amazon-computer:stdout:2",
+      "step_id": "train-amazon-computer"
+    }
+  ],
+  "comparison_status": "unavailable",
+  "validation_errors": [
+    {
+      "index": 0,
+      "actual_id": "train-amazon-computer:stdout:2",
+      "error": "Reference standard deviation needs its exact PDF value quotation"
+    },
+    {
+      "index": 1,
+      "actual_id": "train-amazon-computer:stdout:1",
+      "error": "Reference standard deviation needs its exact PDF value quotation"
+    }
+  ],
+  "comparison_required_browser_audit_passed": false,
+  "refresh_download_checked": false,
+  "pipeline_stages": [
+    {
+      "id": "prepare_runtime",
+      "agent": "🔧 EnvBuilder",
+      "title": "自动准备运行环境",
+      "description": "正在核验运行环境，并在独立后台进程加载本次 PDF 作者仓库实验。",
+      "status": "success",
+      "started_at": "2026-10-19T10:01:42.727238",
+      "state": "BUILD_ENV",
+      "reason": "兼容运行环境已就绪，继续本次复现",
+      "finished_at": "2026-10-19T10:01:44.013079",
+      "completion_rule": "兼容解释器与应用依赖检查通过，交接结果已返回",
+      "completion_pending": false,
+      "completion_confirmed": true
+    },
+    {
+      "id": "generate_reader",
+      "agent": "📖 PaperReader",
+      "title": "论文解析",
+      "description": "执行本阶段工作并记录实际结果。",
+      "status": "success",
+      "started_at": "2026-10-19T10:01:48.133554",
+      "state": "READ_PAPER",
+      "attempt": 1,
+      "finished_at": "2026-10-19T10:01:51.335862",
+      "outcome": "completed",
+      "completion_rule": "负责人已返回本阶段结果，全部所属执行已退出并清理",
+      "completion_pending": false,
+      "completion_confirmed": true
+    },
+    {
+      "id": "find_resources",
+      "agent": "🔍 ResourceFinder",
+      "title": "资源定位",
+      "description": "执行本阶段工作并记录实际结果。",
+      "status": "success",
+      "started_at": "2026-10-19T10:01:51.336885",
+      "state": "FIND_RESOURCES",
+      "attempt": 1,
+      "finished_at": "2026-10-19T10:02:09.072591",
+      "outcome": "completed",
+      "completion_rule": "负责人已返回本阶段结果，全部所属执行已退出并清理",
+      "completion_pending": false,
+      "completion_confirmed": true
+    },
+    {
+      "id": "prepare_repository",
+      "agent": "🔍 ResourceFinder",
+      "title": "获取代码仓库",
+      "status": "success",
+      "started_at": "2026-10-19T10:02:09.109121",
+      "state": "FIND_RESOURCES",
+      "reason": "获取代码仓库",
+      "finished_at": "2026-10-19T10:02:20.974771",
+      "completion_rule": "固定源码、数据及执行计划已准备并完成完整性校验",
+      "completion_pending": false,
+      "completion_confirmed": true
+    },
+    {
+      "id": "plan_repository",
+      "agent": "📖 PaperReader",
+      "title": "结合论文和源码规划作者命令",
+      "status": "success",
+      "started_at": "2026-10-19T10:02:20.974771",
+      "state": "READ_PAPER",
+      "reason": "结合论文和源码规划作者命令",
+      "finished_at": "2026-10-19T10:02:25.116830",
+      "completion_rule": "负责人已返回本阶段结果，全部所属执行已退出并清理",
+      "completion_pending": false,
+      "completion_confirmed": true
+    },
+    {
+      "id": "prepare_dataset",
+      "agent": "🔍 ResourceFinder",
+      "title": "准备运行数据",
+      "status": "blocked",
+      "started_at": "2026-10-19T10:02:25.122832",
+      "state": "FIND_RESOURCES",
+      "reason": "流水线已结束，本阶段未执行",
+      "completion_rule": "负责人已返回本阶段结果，全部所属执行已退出并清理",
+      "completion_pending": false,
+      "completion_confirmed": false
+    },
+    {
+      "id": "prepare_environment",
+      "agent": "🔧 EnvBuilder",
+      "title": "安装运行依赖",
+      "status": "success",
+      "started_at": "2026-10-19T10:02:25.128835",
+      "state": "BUILD_ENV",
+      "reason": "安装运行依赖",
+      "finished_at": "2026-10-19T10:11:03.453386",
+      "completion_rule": "依赖安装返回结果，准备进程已退出并清理",
+      "completion_pending": false,
+      "completion_confirmed": true
+    },
+    {
+      "id": "execute_repository",
+      "agent": "⚡ CodeExecutor",
+      "title": "运行作者命令",
+      "status": "success",
+      "started_at": "2026-10-19T10:11:03.454463",
+      "state": "EXECUTE_CODE",
+      "reason": "运行作者命令",
+      "finished_at": "2026-10-19T11:40:00.392698",
+      "completion_rule": "本轮全部必需步骤返回结果，执行进程已退出并清理",
+      "completion_pending": false,
+      "completion_confirmed": true
+    },
+    {
+      "id": "finish_execution",
+      "agent": "⚡ CodeExecutor",
+      "title": "记录命令退出与进程结束",
+      "status": "success",
+      "started_at": "2026-10-19T11:40:00.393698",
+      "state": "EXECUTE_CODE",
+      "reason": "原作者命令已自然返回，实际训练更新和所属进程结束已核验；尚未判定论文数值复现。",
+      "finished_at": "2026-10-19T11:40:00.613331",
+      "completion_rule": "作者命令已返回退出状态，全部所属执行进程已退出并清理",
+      "completion_pending": false,
+      "completion_confirmed": true
+    },
+    {
+      "id": "compare_author_claims",
+      "agent": "✅ ResultValidator",
+      "title": "对比作者输出与论文指标",
+      "status": "skipped",
+      "started_at": "2026-10-19T11:40:00.614330",
+      "state": "VALIDATE",
+      "reason": "论文指标配对未通过来源校验；保留实际指标，代码运行已完成。",
+      "finished_at": "2026-10-19T11:40:12.580704",
+      "completion_rule": "作者输出与论文宣称对比已返回结果，或明确记录无法配对的原因",
+      "completion_pending": false,
+      "completion_confirmed": true
+    },
+    {
+      "id": "generate_report",
+      "agent": "📝 ReportGenerator",
+      "title": "生成运行报告",
+      "status": "success",
+      "started_at": "2026-10-19T11:40:12.587704",
+      "state": "GENERATE_REPORT",
+      "reason": "生成运行报告",
+      "finished_at": "2026-10-19T11:40:12.604704",
+      "completion_rule": "报告内容已生成，生成结果已返回",
+      "completion_pending": false,
+      "completion_confirmed": true
+    }
+  ],
+  "paper_metrics_verified": false,
+  "is_reproduced": null,
+  "cleanup_passed": true,
+  "cleanup_checks": {
+    "cleanup_released": true,
+    "cleanup_has_no_errors": true,
+    "cleanup_has_no_remaining": true,
+    "training_python_released": true,
+    "docker_released": true,
+    "runtime_downloads_released": true,
+    "dependency_files_removed": true,
+    "training_environments_removed": true,
+    "final_report_retained": true,
+    "report_result_archive_retained": true,
+    "run_report_retained": true,
+    "run_result_retained": true,
+    "cleanup_receipt_retained": true,
+    "source_workspace_retained": true,
+    "application_python_retained": true,
+    "cleanup_receipt_matches": true,
+    "run_result_cleanup_matches": true,
+    "report_result_archive_cleanup_matches": true
+  },
+  "environment_cleanup": {
+    "status": "released",
+    "removed": [
+      {
+        "path": ".maintenance.json",
+        "bytes": 979
+      },
+      {
+        "path": ".pip-temporary",
+        "bytes": 0
+      },
+      {
+        "path": "repository",
+        "bytes": 4932467472
+      }
+    ],
+    "freed_bytes": 4944501487,
+    "remaining": [],
+    "errors": [],
+    "training_python": {
+      "status": "released",
+      "removed": [
+        {
+          "path": "D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\training_python",
+          "bytes": 12033036
+        }
+      ],
+      "errors": [],
+      "freed_bytes": 12033036
+    },
+    "docker": {
+      "status": "released",
+      "removed": [],
+      "errors": []
+    },
+    "runtime_downloads": {
+      "status": "released",
+      "removed": [],
+      "freed_bytes": 0,
+      "errors": []
+    },
+    "before_run": {
+      "status": "released",
+      "removed": [],
+      "freed_bytes": 0,
+      "remaining": [],
+      "errors": [],
+      "training_python": {
+        "status": "released",
+        "removed": [],
+        "errors": [],
+        "freed_bytes": 0
+      },
+      "docker": {
+        "status": "released",
+        "removed": [],
+        "errors": []
+      },
+      "runtime_downloads": {
+        "status": "released",
+        "removed": [],
+        "freed_bytes": 0,
+        "errors": []
+      }
+    },
+    "replacements": [
+      {
+        "status": "released",
+        "errors": [],
+        "dependencies": {
+          "status": "released",
+          "removed": [],
+          "freed_bytes": 0,
+          "remaining": [],
+          "errors": []
+        },
+        "training_python": {
+          "status": "released",
+          "removed": [],
+          "errors": [],
+          "freed_bytes": 0
+        }
+      },
+      {
+        "status": "released",
+        "removed": [
+          {
+            "path": ".maintenance.json",
+            "bytes": 768
+          }
+        ],
+        "freed_bytes": 768,
+        "remaining": [],
+        "errors": []
+      },
+      {
+        "status": "released",
+        "removed": [
+          {
+            "path": ".maintenance.json",
+            "bytes": 956
+          },
+          {
+            "path": ".pip-temporary",
+            "bytes": 0
+          },
+          {
+            "path": "repository/cpython-312-win32-AMD64/a64a4f6f6896d444",
+            "bytes": 4930683548
+          }
+        ],
+        "freed_bytes": 4930684504,
+        "remaining": [],
+        "errors": []
+      }
+    ],
+    "supervisor_cleanup": {
+      "status": "released",
+      "removed": [],
+      "freed_bytes": 0,
+      "remaining": [],
+      "errors": [],
+      "training_python": {
+        "status": "released",
+        "removed": [],
+        "errors": [],
+        "freed_bytes": 0
+      },
+      "docker": {
+        "status": "released",
+        "removed": [],
+        "errors": []
+      },
+      "runtime_downloads": {
+        "status": "released",
+        "removed": [],
+        "freed_bytes": 0,
+        "errors": []
+      }
+    }
+  },
+  "terminal_active_counts": {
+    "active_runs": 0,
+    "active_workers": 0,
+    "active_executions": 0
+  },
+  "local_run_directory": ".tmp/pdf_selfrepair_20261019/data/runs/repository_ea130e9fb6cc4e69842bfc48763ba705",
+  "original_artifact_sha256": {
+    "polynormer_source_freeze.json": "d7fbba5cbe862045f2a44871799121da7d8f8e2439c4da2d68f912b7e7b2b8b9",
+    "data/runtime/polynormer_20261019_01_cleanup.json": "ac259b0ef6b9578bfb1cf23f3c2c78e42a88c773230d038e0def68fe06c21707",
+    "data/runtime/polynormer_20261019_01_failure.json": "172506c09fcbde38a6dca7f5c4959ed527fed6bbf6766c0d4d7d17e99030d227",
+    "data/runs/repository_ea130e9fb6cc4e69842bfc48763ba705/source_packet.json": "d30d9fbd93f5852a02c146c9a886dbc1ae5c399e1f7656ced3e32f24370a86a5",
+    "data/runs/repository_ea130e9fb6cc4e69842bfc48763ba705/experiment_spec.json": "2f250c620d6dfdfab342dcc0b63cbbc63ed72525f93cf367c09655c94ed9b6d2",
+    "data/runs/repository_ea130e9fb6cc4e69842bfc48763ba705/execution.json": "70b18fe9cf15cdc06ae9204eaa2c1508b96ea3c13c01d7cc85ed37f3ffcfbd87",
+    "data/runs/repository_ea130e9fb6cc4e69842bfc48763ba705/author_execution_verification.json": "5ba2f711e0ad4124b5992e5168f37fd3d1f0547c063b8f14e2b3f61a0855614e",
+    "data/runs/repository_ea130e9fb6cc4e69842bfc48763ba705/author_claim_comparison.json": "99ac5481aeb33388e74785d48e6f23bfac6b6f06344189bf172d6e534c7ef010",
+    "data/runs/repository_ea130e9fb6cc4e69842bfc48763ba705/self_repair.json": "3bc3ffe65034c2b6a72da4c5dceab94a22154dc8dd55d6757e1ed6008bf7bc24",
+    "data/runs/repository_ea130e9fb6cc4e69842bfc48763ba705/dependency_repairs.json": "338316c941ce32afb0310a1cef402c2e2f86e2becb89f423c599990942f0158b",
+    "data/runs/repository_ea130e9fb6cc4e69842bfc48763ba705/report.md": "3af93a2952e0fa1b175812ede9c1935a2e83ab3bc508625463c7a86c87b0de05",
+    "data/runs/repository_ea130e9fb6cc4e69842bfc48763ba705/environment_cleanup.json": "6f91e8fe9170092731ac23c6a13f2b93afc1b0f6fefb1045fd50af183e63efaa",
+    "data/runs/repository_ea130e9fb6cc4e69842bfc48763ba705/result.json": "8be1707ff0f6c788374053f9623df09dc6a3fcf8c0a3cc5bb6ccd842ca678118",
+    "data/runs/repository_ea130e9fb6cc4e69842bfc48763ba705/Polynormer_Polynomial-Express_20261019_100146_execution.txt": "679a5013122eb902983818ea4ccbf97243b2086e02d4f4e888500979f5f370b1",
+    "data/runs/repository_ea130e9fb6cc4e69842bfc48763ba705/.autorepro_repository_runs/6995dfedf16e4fbbae2ce75bb0e782d6/native_preflight.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "data/runs/repository_ea130e9fb6cc4e69842bfc48763ba705/.autorepro_repository_runs/6995dfedf16e4fbbae2ce75bb0e782d6/native_preflight.stdout.log": "3d1d3605664889f4ad9b174647f17f158ee50057378ced445dbfa3668fd896b3",
+    "data/runs/repository_ea130e9fb6cc4e69842bfc48763ba705/.autorepro_repository_runs/f0b098b5cf924b359bc7d94ba0d98e06/train-amazon-computer.stderr.log": "86e4893023c66c7e1a87b7aa88fc6115f3b9cf020f0658d020d0f88c28918bbb",
+    "data/runs/repository_ea130e9fb6cc4e69842bfc48763ba705/.autorepro_repository_runs/f0b098b5cf924b359bc7d94ba0d98e06/train-amazon-computer.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "data/runs/repository_ea130e9fb6cc4e69842bfc48763ba705/.autorepro_repository_runs/fdb1b2a34f764bbeb45833d4b4307b93/train-amazon-computer.stderr.log": "5a52ed248bb1fd344d571337fe04347c9aeb1064cb561b24b64bd14f905a42e1",
+    "data/runs/repository_ea130e9fb6cc4e69842bfc48763ba705/.autorepro_repository_runs/fdb1b2a34f764bbeb45833d4b4307b93/train-amazon-computer.stdout.log": "43f3d0d6937c50422446d4e94888e4a160af945db60e7a492f19398d8d06a582"
+  },
+  "retirement_reason": "Original author training completed all 1200 epochs and missing-dependency recovery resolved. PDF extraction merged adjacent table numbers, so cited comparison validation failed. The runtime dataset stage also lacked a terminal event. Subsequent repairs use this paper only as regression evidence."
+}

@@ -232,6 +232,7 @@ def verify_snapshot(workspace, snapshot, generated):
 
 
 def environment_for_plan(plan):
+    from src.author_dependencies import has_declaration
     from src.discovered_repository_plan import (CPU_INDEX_URL, CUDA_INDEX_URL, GRAPH_WHEEL_LINKS)
     from src.dependency_versions import compatibility_pins, reviewed_python_requirement
     device = (plan.get("capture") or {}).get("device", "cpu")
@@ -253,8 +254,7 @@ def environment_for_plan(plan):
         expected = expected.split("==")[-1]
         author_pin = (plan.get('scope') == 'author_code_execution' and
                       value in requirements.get('declared_runtime_pins', []) and
-                      any(value == line.strip().lstrip('-* ').strip('`')
-                          for line in requirements.get('author', [])))
+                        has_declaration(value, requirements.get('author', [])))
         if match[2] != expected and not author_pin:
             raise ValueError(f"计划依赖不在已审阅兼容环境中: {name}")
         checked.append(value)
@@ -1033,6 +1033,8 @@ class DiscoveredRepositoryReproduction:
                 if dataset_audit['errors']:
                     validation.setdefault('warnings', []).append('原作者输入观测未完成核对：' +
                         '; '.join(item['reason'] for item in dataset_audit['errors']))
+                event('prepare_dataset', 'success' if dataset_audit['verified'] else 'skipped',
+                      data['dataset_provenance']['reason'])
             if validation.get('numeric_compatibility'):
                 kinds = {item['kind'] for item in validation['numeric_compatibility']}
                 notes = []

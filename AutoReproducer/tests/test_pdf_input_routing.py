@@ -38,7 +38,7 @@ def write_pdf(path, lines=(), *, metadata_title=None, encrypted=False, later_pag
         commands.append("ET")
         stream = DecodedStreamObject()
         stream.set_data("\n".join(commands).encode("ascii"))
-        page[NameObject("/Contents")] = stream
+        page[NameObject("/Contents")] = writer._add_object(stream)
     if metadata_title is not None:
         writer.add_metadata({"/Title": metadata_title})
     if encrypted:
@@ -192,6 +192,40 @@ def test_clean_ratios_and_times_are_never_rewritten_as_decimals(monkeypatch, tmp
     monkeypatch.setattr(pdf_input, '_extract_pdfplumber', fallback)
     assert pdf_input.extract_pdf_input(path).text == primary[0]
     fallback.assert_not_called()
+
+
+@pytest.mark.parametrize('broken,clean', [
+    ('Method 61.27+/-0.1472.31+/-0.36', 'Method 61.27+/-0.14 72.31+/-0.36'),
+    ('Estimator 0 .731 0.820.64', 'Estimator 0.731 0.82 0.64'),
+])
+def test_fragmented_numeric_columns_retry_real_geometry_extraction(monkeypatch, tmp_path, broken, clean):
+    path = write_pdf(tmp_path / 'table.pdf', ['Unrelated table study'],
+                     later_pages=([clean], ['Complete appendix']))
+    monkeypatch.setattr(pdf_input, '_extract_pypdf', Mock(return_value=(
+        ['Unrelated table study', broken, 'Complete appendix'], '')))
+    document = pdf_input.extract_pdf_input(path)
+    assert document.page_texts == ('Unrelated table study', clean, 'Complete appendix')
+    assert document.sha256 == hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def test_numeric_spacing_recovery_cannot_introduce_undecoded_glyphs(monkeypatch, tmp_path):
+    path = write_pdf(tmp_path / 'table.pdf', ['Unrelated table study'])
+    primary = ['Method 61.27+/-0.1472.31+/-0.36']
+    monkeypatch.setattr(pdf_input, '_extract_pypdf', Mock(return_value=(primary, '')))
+    alternate = Mock(return_value=(['Method 61.27\x060.14 72.31\x060.36'], ''))
+    monkeypatch.setattr(pdf_input, '_extract_pdfplumber', alternate)
+    assert pdf_input.extract_pdf_input(path).text == primary[0]
+    alternate.assert_called_once()
+
+
+def test_table_recovery_keeps_math_pages_from_the_better_original_parser(monkeypatch, tmp_path):
+    path = write_pdf(tmp_path / 'table.pdf', ['Unrelated table study'])
+    primary = ['Method 61.27+/-0.1472.31+/-0.36', 'The equation is x squared.']
+    alternate = ['Method 61.27+/-0.14 72.31+/-0.36', 'The equation is x\x07.']
+    monkeypatch.setattr(pdf_input, '_extract_pypdf', Mock(return_value=(primary, '')))
+    monkeypatch.setattr(pdf_input, '_extract_pdfplumber', Mock(return_value=(alternate, '')))
+    document = pdf_input.extract_pdf_input(path)
+    assert document.page_texts == (alternate[0], primary[1])
 
 
 def test_missing_parsers_distinguished_from_damaged_pdf(monkeypatch, tmp_path):

@@ -4,6 +4,7 @@ from copy import deepcopy
 import re
 
 from src.runtime_metrics import NUMBER_PATTERN, metric_number
+from src.metric_keys import norm_metric_key
 
 
 def _module_nodes(node):
@@ -31,12 +32,77 @@ def _variable(node):
     return None
 
 
+def _reduction_operand(node, operation, numpy_aliases):
+    """Recognize direct mean/std reductions without guessing variable meanings."""
+    if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+        return None
+    if node.func.attr != operation or node.keywords:
+        return None
+    if isinstance(node.func.value, ast.Name) and node.func.value.id in numpy_aliases:
+        operand = node.args[0] if len(node.args) == 1 else None
+    else:
+        operand = node.func.value if not node.args else None
+    return ast.dump(operand) if operand is not None else None
+
+
+def _annotate_parenthesized_std(records, nodes, numpy_aliases, path, source_sha256):
+    for node in nodes:
+        if (not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name) or node.func.id != 'print'
+                or len(node.args) != 1 or not isinstance(node.args[0], ast.JoinedStr)):
+            continue
+        parts, fields, literals = [], [], []
+        literal = ''
+        for part in node.args[0].values:
+            if isinstance(part, ast.Constant) and isinstance(part.value, str):
+                literal += part.value
+                parts.append(''.join(r'\s*' if p.isspace() else re.escape(p)
+                                     for p in re.split(r'(\s+)', part.value) if p))
+            elif isinstance(part, ast.FormattedValue):
+                index = len(fields)
+                fields.append(part.value)
+                literals.append(literal)
+                literal = ''
+                numeric = (_reduction_operand(part.value, 'mean', numpy_aliases) is not None
+                           or _reduction_operand(part.value, 'std', numpy_aliases) is not None)
+                # Model/dataset names in an f-string are textual context, not numbers.
+                parts.append(f'(?P<v{index}>' + (NUMBER_PATTERN if numeric else r'[^\r\n]+?') + ')')
+            else:
+                parts = []
+                break
+        if not parts:
+            continue
+        literals.append(literal)
+        for index in range(1, len(fields)):
+            operand = _reduction_operand(fields[index - 1], 'mean', numpy_aliases)
+            if (operand is None or operand != _reduction_operand(fields[index], 'std', numpy_aliases)
+                    or literals[index].strip() != '(' or not literals[index + 1].lstrip().startswith(')')):
+                continue
+            for record in records:
+                quote = record.get('source_quote', '')
+                match = re.fullmatch(r'\s*' + ''.join(parts) + r'\s*', quote)
+                if not match or metric_number(match[f'v{index - 1}']) != record['value']:
+                    continue
+                # Tie the pair to this metric, including when one line contains several.
+                label = re.search(r'((?:(?:macro|micro|weighted)[_\s-]?)?'
+                                  r'[A-Za-z_][A-Za-z0-9_-]*(?:\s+score)?)\s*[:=]\s*$',
+                                  quote[:match.start(f'v{index - 1}')], re.I)
+                std = metric_number(match[f'v{index}'])
+                if (not label or norm_metric_key(label[1]) != record['name'] or std is None or std < 0
+                        or record.get('std', std) != std or record.get('uncertainty_kind')):
+                    continue
+                record.update(std=std, aggregation='mean', uncertainty_source={
+                    'path': path, 'source_sha256': source_sha256, 'print_line': node.lineno,
+                    'mean_expression': ast.unparse(fields[index - 1]),
+                    'std_expression': ast.unparse(fields[index])})
+
+
 def annotate_uncertainty(records, text, path, source_sha256):
     """Keep observed values; CI half-widths must not masquerade as SD.
 
-    Only a matching printed f-string, a direct variable assignment and the
-    original Seaborn ci(bootstrap(...), confidence) call establish this context.
-    Unrelated keywords or model suggestions are insufficient.
+    Matching mean/std reductions on the same operand establish parenthesized
+    SD, including inside functions. CI half-widths separately require the
+    original Seaborn ci(bootstrap(...), confidence) assignment. Unrelated
+    keywords or model suggestions are insufficient for either rule.
     """
     result = deepcopy(records)
     tree = ast.parse(text)
@@ -45,6 +111,7 @@ def annotate_uncertainty(records, text, path, source_sha256):
                for alias in node.names if alias.name == 'seaborn'}
     numpy_aliases = {alias.asname or alias.name for node in nodes if isinstance(node, ast.Import)
                      for alias in node.names if alias.name == 'numpy'}
+    _annotate_parenthesized_std(result, ast.walk(tree), numpy_aliases, path, source_sha256)
     definitions = {}
     for node in nodes:
         if not isinstance(node, ast.Assign) or len(node.targets) != 1 or not isinstance(node.targets[0], ast.Name):

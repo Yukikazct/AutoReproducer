@@ -1,5 +1,6 @@
 """Comparisons are evidence bound and never replace code completion checks."""
 from copy import deepcopy
+import hashlib
 import json
 from unittest.mock import Mock
 
@@ -423,3 +424,249 @@ def test_method_row_name_correction_handles_only_cosmetic_author_annotations(sou
     reference['name'] = 'Signal Linear (Euler)'
     with pytest.raises(ValueError, match='Reference name'):
         validate_comparisons(payload, packet, fixture['workspace'], records)
+
+
+def _paired_metric_table(sources, selected='f1_macro'):
+    import hashlib
+    fixture, packet, records, payload = _flat_table(sources)
+    paper = next(ref for ref in payload['citations'] if ref['id'] == 'paper_results')
+    page = next(page for page in packet['pdf']['pages'] if page['page'] == paper['page'])
+    header = 'Method SignGrid OtherGrid'
+    caption = 'Test results (AUC, Macro-F1) in percent.'
+    row = 'Signal Linear (87.5 ±0.9, 68.9 ±0.8) (90.2 ±0.4, 70.1 ±1.2)'
+    text = caption + '\n' + header + '\n' + row
+    page['text'] += '\n' + text
+    page['sha256'] = hashlib.sha256(page['text'].encode()).hexdigest()
+    paper['quote'] = text
+    record = next(r for r in records if r['split'] == 'test')
+    record.update(name=selected, value=0.6859)
+    payload['comparisons'][0]['reference'].update(name=selected, value=68.9, std=0.8,
+        value_quote=row, column_quote=header, metric_quote=caption)
+    return fixture, packet, records, payload
+
+
+def test_binary_f1_cannot_stand_in_for_paper_macro_f1_even_if_model_copies_runtime_name(sources):
+    fixture, packet, records, payload = _paired_metric_table(sources, selected='f1_score')
+    with pytest.raises(ValueError, match='metric.*evidence'):
+        validate_comparisons(payload, packet, fixture['workspace'], records)
+
+
+def test_tuple_table_pairs_the_dataset_and_metric_columns(sources):
+    fixture, packet, records, payload = _paired_metric_table(sources)
+    rows, _ = validate_comparisons(payload, packet, fixture['workspace'], records)
+    assert rows[0]['reference']['column_verified'] is True
+    assert rows[0]['difference'] == pytest.approx(-0.31)
+    payload['comparisons'][0]['reference'].update(value=87.5, std=0.9)
+    with pytest.raises(ValueError, match='dataset column'):
+        validate_comparisons(payload, packet, fixture['workspace'], records)
+
+
+def test_tuple_metric_order_requires_exact_same_page_evidence(sources):
+    fixture, packet, records, payload = _paired_metric_table(sources)
+    payload['comparisons'][0]['reference']['metric_quote'] = 'Test results (Macro-F1, AUC) in percent.'
+    with pytest.raises(ValueError, match='metric_quote'):
+        validate_comparisons(payload, packet, fixture['workspace'], records)
+
+
+def test_exact_selected_evidence_id_can_recover_an_omitted_citation_declaration(sources):
+    fixture, packet, _, payload = sources
+    from src.discovered_repository_plan import _planning_view
+    excerpts = _planning_view(packet)['evidence_excerpts']
+    identifier = next(key for key, ref in excerpts.items() if ref['source'] == 'pdf' and ref['page'] == 3)
+    payload['citations'] = [ref for ref in payload['citations'] if ref['id'] != 'paper_results']
+    for field in ('reference', 'settings'):
+        node = payload['comparisons'][0][field]
+        node['citations'] = [identifier if key == 'paper_results' else key for key in node['citations']]
+    llm = Mock(mock_mode=False)
+    llm.chat.return_value = json.dumps(payload)
+    result = compare_author_claims(llm, packet, fixture['proposal'], fixture['workspace'], actual_execution())
+    assert result['status'] == 'compared' and llm.chat.call_count == 1
+    assert result['extraction_attempts'][0]['citation_repairs'] == [
+        {'id': identifier, 'evidence_id': identifier, 'reason': 'Selected exact evidence ID omitted from citation declarations'}]
+    assert all(ref['id'] != identifier for ref in payload['citations'])
+
+
+def test_malformed_comparison_response_is_retained_and_corrected_with_current_feedback(sources):
+    fixture, packet, _, payload = sources
+    malformed = '{"comparisons": [BROKEN_CURRENT_RESPONSE]}'
+    llm = Mock(mock_mode=False)
+    llm.chat.side_effect = [malformed, json.dumps(payload)]
+    result = compare_author_claims(llm, packet, fixture['proposal'], fixture['workspace'], actual_execution())
+    attempts = result['extraction_attempts']
+    assert result['status'] == 'compared' and llm.chat.call_count == 2
+    assert len(attempts) == 2 and [item['attempt'] for item in attempts] == [1, 2]
+    assert attempts[0]['status'] == 'invalid_response' and 'error' in attempts[0]
+    assert 'proposal' not in attempts[0]
+    assert attempts[0]['response_sha256'] == hashlib.sha256(malformed.encode()).hexdigest()
+    assert attempts[0]['response_excerpt'] == malformed
+    assert attempts[0]['json_error']['line'] == 1 and attempts[0]['json_error']['column'] > 1
+    feedback = llm.chat.call_args_list[1].args[0].split('\n\nCorrection feedback', 1)[1]
+    assert 'BROKEN_CURRENT_RESPONSE' in feedback and 'line 1' in feedback
+    assert 'valid JSON object' in feedback and len(feedback) <= 12000
+    assert attempts[1]['status'] == 'validated' and attempts[1]['proposal'] == payload
+
+
+def test_each_malformed_response_has_its_own_attempt_and_finite_retry(sources):
+    fixture, packet, _, _ = sources
+    responses = ['first invalid response', 'second invalid response']
+    llm = Mock(mock_mode=False)
+    llm.chat.side_effect = responses
+    result = compare_author_claims(llm, packet, fixture['proposal'], fixture['workspace'], actual_execution())
+    assert result['status'] == 'unavailable' and llm.chat.call_count == 2
+    assert len(result['extraction_attempts']) == 2
+    assert [item['response_excerpt'] for item in result['extraction_attempts']] == responses
+    assert all(item['status'] == 'invalid_response' and item['error'] for item in result['extraction_attempts'])
+    assert 'not valid JSON' in result['diagnostic']
+
+
+def test_api_exception_is_retained_without_inventing_response_or_retrying(sources):
+    fixture, packet, _, _ = sources
+    exact_secret = 'private-client-credential'
+    generic_secret = 'sk-' + 'a' * 32
+    llm = Mock(mock_mode=False, api_key=exact_secret)
+    llm.chat.side_effect = RuntimeError(f'API unavailable {exact_secret}; Bearer generic-value; {generic_secret}')
+    result = compare_author_claims(llm, packet, fixture['proposal'], fixture['workspace'], actual_execution())
+    assert result['status'] == 'unavailable' and llm.chat.call_count == 1
+    attempt, = result['extraction_attempts']
+    assert attempt['status'] == 'api_error' and attempt['error_type'] == 'RuntimeError'
+    assert 'API unavailable' in attempt['error'] and 'response_excerpt' not in attempt
+    persisted = json.dumps(result)
+    assert all(secret not in persisted for secret in (exact_secret, generic_secret, 'generic-value'))
+
+
+def test_parse_failure_does_not_overwrite_previous_proposal_or_valid_rows(sources):
+    fixture, packet, _, payload = sources
+    execution, second = _two_step_proposal(payload)
+    first = deepcopy(payload)
+    second['reference']['value'] = 91.3
+    first['comparisons'].append(second)
+    llm = Mock(mock_mode=False)
+    llm.chat.side_effect = [json.dumps(first), 'latest malformed response']
+    result = compare_author_claims(llm, packet, fixture['proposal'], fixture['workspace'], execution)
+    assert result['status'] == 'partial' and len(result['comparisons']) == 1
+    assert result['comparisons'][0]['actual']['value'] == 1.0 and result['validation_errors']
+    attempts = result['extraction_attempts']
+    assert len(attempts) == 2
+    assert attempts[0]['proposal'] == first and attempts[0]['validation_errors']
+    assert 'error' not in attempts[0]
+    assert attempts[1]['status'] == 'invalid_response' and 'proposal' not in attempts[1]
+    assert attempts[1]['response_excerpt'] == 'latest malformed response'
+
+
+def test_api_exception_does_not_overwrite_previous_validation_attempt(sources):
+    fixture, packet, _, payload = sources
+    execution, second = _two_step_proposal(payload)
+    first = deepcopy(payload)
+    second['reference']['value'] = 91.3
+    first['comparisons'].append(second)
+    llm = Mock(mock_mode=False)
+    llm.chat.side_effect = [json.dumps(first), RuntimeError('second request unavailable')]
+    result = compare_author_claims(llm, packet, fixture['proposal'], fixture['workspace'], execution)
+    assert result['status'] == 'partial' and len(result['comparisons']) == 1
+    assert len(result['extraction_attempts']) == 2 and llm.chat.call_count == 2
+    assert result['extraction_attempts'][0]['validation_errors']
+    assert 'error' not in result['extraction_attempts'][0]
+    assert result['extraction_attempts'][1]['status'] == 'api_error'
+
+
+def test_long_malformed_response_is_bounded_redacted_and_hashed_before_redaction(sources):
+    fixture, packet, _, payload = sources
+    exact_secret = 'private-client-credential'
+    generic_secret = 'sk-' + 'b' * 32
+    response = (f'{{"api_key": "labelled-secret", "message": "{exact_secret} {generic_secret}"}}\n'
+                + 'x' * 30000 + '\nBearer trailing-secret')
+    llm = Mock(mock_mode=False, api_key=exact_secret)
+    llm.chat.side_effect = [response, json.dumps(payload)]
+    result = compare_author_claims(llm, packet, fixture['proposal'], fixture['workspace'], actual_execution())
+    attempt = result['extraction_attempts'][0]
+    assert attempt['response_sha256'] == hashlib.sha256(response.encode()).hexdigest()
+    assert attempt['response_chars'] == len(response) and attempt['response_truncated'] is True
+    assert len(attempt['response_excerpt']) <= 6000
+    feedback = llm.chat.call_args_list[1].args[0].split('\n\nCorrection feedback', 1)[1]
+    assert len(feedback) <= 12000
+    persisted = json.dumps(result) + feedback
+    assert all(secret not in persisted for secret in
+               (exact_secret, generic_secret, 'labelled-secret', 'trailing-secret'))
+
+
+def test_nontext_response_is_recorded_without_serializing_arbitrary_objects(sources):
+    fixture, packet, _, payload = sources
+    llm = Mock(mock_mode=False)
+    llm.chat.side_effect = [None, json.dumps(payload)]
+    result = compare_author_claims(llm, packet, fixture['proposal'], fixture['workspace'], actual_execution())
+    assert result['status'] == 'compared' and len(result['extraction_attempts']) == 2
+    attempt = result['extraction_attempts'][0]
+    assert attempt['status'] == 'invalid_response' and attempt['response_type'] == 'NoneType'
+    assert 'response_excerpt' not in attempt and 'response_sha256' not in attempt
+
+
+def test_invalid_structure_feedback_uses_only_current_parsed_proposal(sources):
+    fixture, packet, _, payload = sources
+    invalid = {'reason': 'CURRENT_SCHEMA_FAILURE'}
+    llm = Mock(mock_mode=False)
+    llm.chat.side_effect = [json.dumps(invalid), json.dumps(payload)]
+    result = compare_author_claims(llm, packet, fixture['proposal'], fixture['workspace'], actual_execution())
+    assert result['status'] == 'compared' and len(result['extraction_attempts']) == 2
+    attempt = result['extraction_attempts'][0]
+    assert attempt['status'] == 'validation_error' and attempt['proposal'] == invalid
+    assert 'Expected a JSON object with comparisons' in attempt['error']
+    feedback = llm.chat.call_args_list[1].args[0].split('\n\nCorrection feedback', 1)[1]
+    assert 'CURRENT_SCHEMA_FAILURE' in feedback
+
+
+def test_valid_parsed_proposals_and_diagnostics_also_redact_client_credentials(sources):
+    fixture, packet, _, payload = sources
+    exact_secret = 'private-client-credential'
+    payload['comparisons'][0]['settings']['reason'] += ' ' + exact_secret
+    llm = Mock(mock_mode=False, api_key=exact_secret)
+    llm.chat.return_value = json.dumps(payload)
+    result = compare_author_claims(llm, packet, fixture['proposal'], fixture['workspace'], actual_execution())
+    assert result['status'] == 'compared' and len(result['comparisons']) == 1
+    assert exact_secret not in json.dumps(result)
+    assert payload['comparisons'][0]['settings']['reason'].endswith(exact_secret)
+    assert result['comparisons'][0]['reference']['value'] == 100
+
+
+def test_oversized_parsed_proposal_is_bounded_without_bypassing_evidence_validation(sources):
+    fixture, packet, _, payload = sources
+    payload['reason'] = 'x' * 50000
+    llm = Mock(mock_mode=False)
+    response = json.dumps(payload)
+    llm.chat.return_value = response
+    result = compare_author_claims(llm, packet, fixture['proposal'], fixture['workspace'], actual_execution())
+    assert result['status'] == 'compared' and llm.chat.call_count == 1
+    attempt, = result['extraction_attempts']
+    assert 'proposal' not in attempt and attempt['proposal_truncated'] is True
+    assert len(attempt['proposal_excerpt']) <= 6000 and len(attempt['response_excerpt']) <= 6000
+    assert attempt['response_sha256'] == hashlib.sha256(response.encode()).hexdigest()
+    assert result['comparisons'][0]['actual']['value'] == 1.0
+
+
+def test_json_escaped_client_key_is_redacted_in_malformed_response_and_feedback(sources):
+    fixture, packet, _, payload = sources
+    credential = 'opaque_"client_雪_value'
+    response = json.dumps({'reason': credential}) + ' malformed tail'
+    llm = Mock(mock_mode=False, api_key=credential)
+    llm.chat.side_effect = [response, json.dumps(payload)]
+    result = compare_author_claims(llm, packet, fixture['proposal'], fixture['workspace'], actual_execution())
+    persisted = json.dumps(result, ensure_ascii=False) + llm.chat.call_args_list[1].args[0]
+    assert credential not in persisted and json.dumps(credential)[1:-1] not in persisted
+    assert '[REDACTED]' in result['extraction_attempts'][0]['response_excerpt']
+
+
+@pytest.mark.parametrize('invalid_number', [float('nan'), float('inf'), -float('inf')])
+def test_nonfinite_rejected_row_does_not_preempt_other_valid_comparisons(sources, invalid_number):
+    fixture, packet, _, payload = sources
+    execution, second = _two_step_proposal(payload)
+    first = deepcopy(payload)
+    second['reference']['value'] = invalid_number
+    first['comparisons'].append(second)
+    llm = Mock(mock_mode=False)
+    llm.chat.side_effect = [json.dumps(first), json.dumps({'comparisons': []})]
+    result = compare_author_claims(llm, packet, fixture['proposal'], fixture['workspace'], execution)
+    assert result['status'] == 'partial' and len(result['comparisons']) == 1
+    assert result['comparisons'][0]['actual']['value'] == 1.0
+    attempt = result['extraction_attempts'][0]
+    assert attempt['status'] == 'validation_failed' and attempt['validation_errors']
+    assert attempt['proposal']['comparisons'][1]['reference']['value'] == str(invalid_number)
+    json.dumps(result, allow_nan=False)

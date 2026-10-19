@@ -1,0 +1,165 @@
+{
+  "trial": "bnpool_20261019_01",
+  "input": "real_browser_pdf_upload",
+  "frozen_commit": "ac0e6b70aeda1bb5b25310629db3178ea1a991f5",
+  "product_source_sha256": "a9e58cbccedf192a2ead4cabfc4b6c38c267cd126314275171a63c252dd17b4f",
+  "product_source_unchanged_during_trial": true,
+  "pdf_sha256": "35c416b0b1927db60cd936cd430da1dded1e9794799ed13adfecce0f4c3fa316",
+  "repository_url": "https://github.com/NGMLGroup/Bayesian-Nonparametric-Graph-Pooling",
+  "repository_revision": "206bcb4c642468ba4c51f79812ff1e220756937f",
+  "interruption": {
+    "reason": "Diagnostic interruption before training: external hydra-core==1.3.2 declared in pyproject.toml was confused with source/utils/hydra.py by local-import repair.",
+    "user_requested_stop": false,
+    "training_started": false,
+    "source_changed_before_stop": false,
+    "run_status_before_stop": {
+      "status": "running",
+      "pid": 30952,
+      "started_at": 1792382958.5104365
+    },
+    "active_before_stop": {
+      "active_runs": [
+        {
+          "execution_id": "44eda82a754145e8a596bcf22acce03a",
+          "phase_id": "execute_repository",
+          "label": "代码执行 · 第 5 轮",
+          "status": "running"
+        }
+      ],
+      "active_workers": [
+        {
+          "worker_id": "worker_f0a8e77a47bd4d2abc9ceca845565480",
+          "phase_id": "",
+          "status": "running"
+        }
+      ],
+      "active_executions": []
+    },
+    "at": 1792384139.6359
+  },
+  "self_repair_before_interruption": {
+    "attempts": [
+      {
+        "round": 1,
+        "action": "install_missing_dependency",
+        "reason": "根据实际错误安装 pytorch_lightning，重跑原命令验证。",
+        "status": "failed_with_new_error",
+        "failed_execution_dir": "D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_1e9f77486c50467aaa90b027ca576d7f\\.autorepro_repository_runs\\1079762d250543eb9ae11771b5c1799c",
+        "failure_fingerprint": "17696171916d8134a50e240fe4c77ec511c492e82c3cc921c30cd1029ac7939f",
+        "diagnostic": "Traceback (most recent call last):\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_1e9f77486c50467aaa90b027ca576d7f\\repo\\_autorepro_capture\\observe_author.py\", line 106, in <module>\n    run_entrypoint(script, config.get('numeric_compatibility', []), workspace, config['source_files'],\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_1e9f77486c50467aaa90b027ca576d7f\\repo\\_autorepro_capture\\author_numeric_compatibility.py\", line 222, in run_entrypoint\n    return runpy.run_path(str(script), run_name='__main__')\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"<frozen runpy>\", line 287, in run_path\n  File \"<frozen runpy>\", line 98, in _run_module_code\n  File \"<frozen runpy>\", line 88, in _run_code\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_1e9f77486c50467aaa90b027ca576d7f\\repo\\run_classification.py\", line 3, in <module>\n    import pytorch_lightning as pl\nModuleNotFoundError: No module named 'pytorch_lightning'\n",
+        "verification_execution_dir": "D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_1e9f77486c50467aaa90b027ca576d7f\\.autorepro_repository_runs\\a8d1c114ecc741d78714caee59cbfece",
+        "next_failure_fingerprint": "d2c676165374b4d34691105e8eede9558d2b0a978d2eac485af5873e319c5c02"
+      },
+      {
+        "round": 2,
+        "action": "restore_repository_import",
+        "reason": "固定仓库中的 source/utils/hydra.py 未在原命令的模块路径中；加入 source/utils 后重试原命令。",
+        "status": "failed_with_new_error",
+        "failed_execution_dir": "D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_1e9f77486c50467aaa90b027ca576d7f\\.autorepro_repository_runs\\a8d1c114ecc741d78714caee59cbfece",
+        "failure_fingerprint": "d2c676165374b4d34691105e8eede9558d2b0a978d2eac485af5873e319c5c02",
+        "diagnostic": "Traceback (most recent call last):\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_1e9f77486c50467aaa90b027ca576d7f\\repo\\_autorepro_capture\\observe_author.py\", line 106, in <module>\n    run_entrypoint(script, config.get('numeric_compatibility', []), workspace, config['source_files'],\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_1e9f77486c50467aaa90b027ca576d7f\\repo\\_autorepro_capture\\author_numeric_compatibility.py\", line 222, in run_entrypoint\n    return runpy.run_path(str(script), run_name='__main__')\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"<frozen runpy>\", line 287, in run_path\n  File \"<frozen runpy>\", line 98, in _run_module_code\n  File \"<frozen runpy>\", line 88, in _run_code\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_1e9f77486c50467aaa90b027ca576d7f\\repo\\run_classification.py\", line 6, in <module>\n    import hydra\nModuleNotFoundError: No module named 'hydra'\n",
+        "verification_execution_dir": "D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_1e9f77486c50467aaa90b027ca576d7f\\.autorepro_repository_runs\\dfcc072e5c954cc19ea66d752869cf7a",
+        "next_failure_fingerprint": "4790edbe2d977c7f989574079fe8f2076f48e10c491b2774c4f5e40c6ef97775"
+      },
+      {
+        "round": 3,
+        "action": "install_missing_dependency",
+        "reason": "根据实际错误安装 omegaconf，重跑原命令验证。",
+        "status": "retrying",
+        "failed_execution_dir": "D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_1e9f77486c50467aaa90b027ca576d7f\\.autorepro_repository_runs\\dfcc072e5c954cc19ea66d752869cf7a",
+        "failure_fingerprint": "4790edbe2d977c7f989574079fe8f2076f48e10c491b2774c4f5e40c6ef97775",
+        "diagnostic": "Traceback (most recent call last):\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_1e9f77486c50467aaa90b027ca576d7f\\repo\\_autorepro_capture\\observe_author.py\", line 106, in <module>\n    run_entrypoint(script, config.get('numeric_compatibility', []), workspace, config['source_files'],\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_1e9f77486c50467aaa90b027ca576d7f\\repo\\_autorepro_capture\\author_numeric_compatibility.py\", line 222, in run_entrypoint\n    return runpy.run_path(str(script), run_name='__main__')\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"<frozen runpy>\", line 287, in run_path\n  File \"<frozen runpy>\", line 98, in _run_module_code\n  File \"<frozen runpy>\", line 88, in _run_code\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_1e9f77486c50467aaa90b027ca576d7f\\repo\\run_classification.py\", line 6, in <module>\n    import hydra\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_1e9f77486c50467aaa90b027ca576d7f\\repo\\source\\utils\\hydra.py\", line 2, in <module>\n    from omegaconf import OmegaConf\nModuleNotFoundError: No module named 'omegaconf'\n"
+      }
+    ],
+    "status": "retrying",
+    "reason": "根据实际错误安装 omegaconf，重跑原命令验证。",
+    "last_failure": "Traceback (most recent call last):\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_1e9f77486c50467aaa90b027ca576d7f\\repo\\_autorepro_capture\\observe_author.py\", line 106, in <module>\n    run_entrypoint(script, config.get('numeric_compatibility', []), workspace, config['source_files'],\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_1e9f77486c50467aaa90b027ca576d7f\\repo\\_autorepro_capture\\author_numeric_compatibility.py\", line 222, in run_entrypoint\n    return runpy.run_path(str(script), run_name='__main__')\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"<frozen runpy>\", line 287, in run_path\n  File \"<frozen runpy>\", line 98, in _run_module_code\n  File \"<frozen runpy>\", line 88, in _run_code\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_1e9f77486c50467aaa90b027ca576d7f\\repo\\run_classification.py\", line 6, in <module>\n    import hydra\n  File \"D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\runs\\repository_1e9f77486c50467aaa90b027ca576d7f\\repo\\source\\utils\\hydra.py\", line 2, in <module>\n    from omegaconf import OmegaConf\nModuleNotFoundError: No module named 'omegaconf'\n"
+  },
+  "training_observed": false,
+  "paper_metrics_verified": false,
+  "is_reproduced": null,
+  "full_workflow_accepted": false,
+  "report_generated": false,
+  "environment_released": true,
+  "environment_cleanup": {
+    "status": "released",
+    "removed": [
+      {
+        "path": ".maintenance.json",
+        "bytes": 942
+      },
+      {
+        "path": ".pip-temporary",
+        "bytes": 419101632
+      },
+      {
+        "path": "repository",
+        "bytes": 0
+      }
+    ],
+    "freed_bytes": 431135610,
+    "remaining": [],
+    "errors": [],
+    "training_python": {
+      "status": "released",
+      "removed": [
+        {
+          "path": "D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\pdf_selfrepair_20261019\\data\\training_python",
+          "bytes": 12033036
+        }
+      ],
+      "errors": [],
+      "freed_bytes": 12033036
+    },
+    "docker": {
+      "status": "released",
+      "removed": [],
+      "errors": []
+    },
+    "runtime_downloads": {
+      "status": "released",
+      "removed": [],
+      "freed_bytes": 0,
+      "errors": []
+    }
+  },
+  "terminal_active_counts": {
+    "active_runs": 0,
+    "active_workers": 0,
+    "active_executions": 0
+  },
+  "source_workspace_retained": true,
+  "local_run_directory": ".tmp/pdf_selfrepair_20261019/data/runs/repository_1e9f77486c50467aaa90b027ca576d7f",
+  "original_artifact_sha256": {
+    "bnpool_source_freeze.json": "56acff207b3710f345ddfc0c61a0b40d81cb51ed2bb7755d2a5691d31ec13427",
+    "bnpool_diagnostic_interruption.json": "9420289371d1ab942fbcd0a8a58545c59e6f1e26161829de68ce61c5d6f1d032",
+    "data/runtime/bnpool_20261019_01_cleanup.json": "3dfb55b45e7f91d475b68cc6931c1a4f053c28be032cd498bae4de27b986f478",
+    "data/runtime/bnpool_20261019_01_failure.json": "c092ba5b088377c1e760b1523997191b256596ddb9edc4a5d67e5b06595fbd46",
+    "data/runtime/bnpool_20261019_01_full_result.json": "0da49af7cfc3003cb45795ed4ec4056116438ba35411f045c483b88b41ca1462",
+    "data/runs/repository_1e9f77486c50467aaa90b027ca576d7f/adapter_manifest.json": "050efee2dff8afd2f16486342992d39ef2c89e4ab34408479398e861bfbbdc35",
+    "data/runs/repository_1e9f77486c50467aaa90b027ca576d7f/dataset.json": "5cd03e53bfe3ae6e7a8d88177a519f9d8208130d8754eeca0d59ccf3a5c3aa4b",
+    "data/runs/repository_1e9f77486c50467aaa90b027ca576d7f/dependency_repairs.json": "10d3307cca08bc1f33ea7f5c94abb2cc65a2304349813e88a57cd8b4bafa7d17",
+    "data/runs/repository_1e9f77486c50467aaa90b027ca576d7f/environment.json": "91f77622d85896c321fe14d590409e470f8a6c63b2e4ff3d47d6fa270ba17079",
+    "data/runs/repository_1e9f77486c50467aaa90b027ca576d7f/environment_preparation.json": "36d743238417a4b27f785b6f07e98fbaf6c7613cf91cd8703f56d698f9687117",
+    "data/runs/repository_1e9f77486c50467aaa90b027ca576d7f/execution_plan.json": "5f55af34671d679a4ce0739e0b970fbba5f25343748f192055b642a7c6932245",
+    "data/runs/repository_1e9f77486c50467aaa90b027ca576d7f/experiment_spec.json": "423dfa3ba6bc3b78acdcab9678d9873f92ee1f04b1787432dd3beaafd1a99fa0",
+    "data/runs/repository_1e9f77486c50467aaa90b027ca576d7f/import_repairs.json": "d1c6f5dd45f9136fad32f9000f36a8865f584b0edeed7934f2923f7335f46bd6",
+    "data/runs/repository_1e9f77486c50467aaa90b027ca576d7f/planning_trace.json": "ba53a29b65e48d4b7f1e333ce7d96c67984f4fbd25eb2c616a633c28e686c195",
+    "data/runs/repository_1e9f77486c50467aaa90b027ca576d7f/repository.json": "fe288ad36b6ad9da521643787b3e9eba8c6f720bd02b96b884cda58735b193aa",
+    "data/runs/repository_1e9f77486c50467aaa90b027ca576d7f/repository_identity_packet_1.json": "67439e878afeb700308ca2857cbae30d60757cf83ea7e65cd4e3cb48e7670392",
+    "data/runs/repository_1e9f77486c50467aaa90b027ca576d7f/runtime_manifest.json": "dc345d374f5adf83ca4b67030dacca833e13226da025ca40af3cba9912a65d5e",
+    "data/runs/repository_1e9f77486c50467aaa90b027ca576d7f/runtime_repair_environment.json": "c019ea4df5b209c330f5b44a88c86f381f196a70584b51fd76be52008228005a",
+    "data/runs/repository_1e9f77486c50467aaa90b027ca576d7f/run_status.json": "e601fea16e396408a11a0adc93bd34b7779740f6d302d51241d54c4541630ede",
+    "data/runs/repository_1e9f77486c50467aaa90b027ca576d7f/self_repair.json": "2650d30d771aa9ee7be418d31128be48dc5c060ff1a26a2a95baf16bc3f4e4df",
+    "data/runs/repository_1e9f77486c50467aaa90b027ca576d7f/source_packet.json": "ea6e10a95963f4ca29d7c5da69069b69d0be84ad8a7d6e6e4656ef8373de0b4c",
+    "data/runs/repository_1e9f77486c50467aaa90b027ca576d7f/.autorepro_repository_runs/1079762d250543eb9ae11771b5c1799c/train_classification_mutag.stderr.log": "76b53cac6173aaace03445886f3c67aac6dd9e8f44307dd6f024a47220ee527c",
+    "data/runs/repository_1e9f77486c50467aaa90b027ca576d7f/.autorepro_repository_runs/1079762d250543eb9ae11771b5c1799c/train_classification_mutag.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "data/runs/repository_1e9f77486c50467aaa90b027ca576d7f/.autorepro_repository_runs/70e351a8c21f4c5d88117422d7989de0/native_preflight.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "data/runs/repository_1e9f77486c50467aaa90b027ca576d7f/.autorepro_repository_runs/70e351a8c21f4c5d88117422d7989de0/native_preflight.stdout.log": "8e7064bd5f4a686a93912923f93e6833decef4f11298dcfe2f368e7ab694eba8",
+    "data/runs/repository_1e9f77486c50467aaa90b027ca576d7f/.autorepro_repository_runs/a8d1c114ecc741d78714caee59cbfece/train_classification_mutag.stderr.log": "6758235d0008cbc061a29e718048ac3a23944e8111980c4c1430b82d2e6387c0",
+    "data/runs/repository_1e9f77486c50467aaa90b027ca576d7f/.autorepro_repository_runs/a8d1c114ecc741d78714caee59cbfece/train_classification_mutag.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "data/runs/repository_1e9f77486c50467aaa90b027ca576d7f/.autorepro_repository_runs/dfcc072e5c954cc19ea66d752869cf7a/train_classification_mutag.stderr.log": "1a874e2028cc0b64bb3ae4f6b189e0fa51659d82006676aa49a7294c03a08414",
+    "data/runs/repository_1e9f77486c50467aaa90b027ca576d7f/.autorepro_repository_runs/dfcc072e5c954cc19ea66d752869cf7a/train_classification_mutag.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "retirement_reason": "Declared external hydra-core==1.3.2 was confused with an internal source/utils/hydra.py module. The agent stopped the incorrect dependency retry before training; this was a diagnostic interruption, not a user stop or natural successful completion. No product changes occurred during the trial."
+}

@@ -34,7 +34,7 @@ class ComparisonLLM(PlannedLLM):
         if self.outcome == 'no_claim':
             return json.dumps({'comparisons': [], 'reason': '论文没有对应指标'})
         records = json.loads(prompt.split('\nObserved metrics:\n', 1)[1].split('\nOriginal sources:\n', 1)[0])
-        sources = json.loads(prompt.split('\nOriginal sources:\n', 1)[1])
+        sources, _ = json.JSONDecoder().raw_decode(prompt.split('\nOriginal sources:\n', 1)[1])
         excerpts = sources['evidence_excerpts']
         citations = []
         for identifier, source, locator in [('paper_results', 'pdf', 3),
@@ -130,6 +130,41 @@ def test_completed_pipeline_compares_real_records_and_persists_report_evidence(t
     assert stage['status'] == 'success' and stage['completion_confirmed'] is True
     assert progress['done'] is True and progress['running'] is False
     assert result['data']['total_llm_calls'] == 2
+
+
+@pytest.mark.parametrize('observed', [True, False])
+def test_author_runtime_data_stage_finishes_without_claiming_independent_provenance(tmp_path, monkeypatch, observed):
+    from frontend.backend_pipeline import ProgressStore
+    from src import runtime_dataset_evidence
+    fixture, runner, request = comparison_service(tmp_path, monkeypatch)
+    source = ('from torch_geometric.datasets import WikiCS\n'
+              'def load_inputs(root):\n    return WikiCS(root=root)\n')
+    path = fixture['workspace'] / 'data_loader.py'
+    path.write_text(source, encoding='utf-8')
+    fixture['snapshot']['files'][path.name] = digest(path)
+    fixture['proposal']['citations'].append({'id': 'runtime_loader', 'source': 'repository',
+        'path': path.name, 'quote': source})
+    fixture['proposal']['datasets'] = [{'kind': 'author_runtime', 'path': path.name,
+        'function': 'load_inputs', 'dataset_class': 'WikiCS', 'dataset_name': 'WikiCS',
+        'citations': ['runtime_loader']}]
+    runner.llm = ComparisonLLM(fixture)
+    monkeypatch.setattr(runtime_dataset_evidence, 'audit_runtime_datasets', lambda *args: {
+        'verified': observed, 'independent_reference_verified': False, 'sources': [],
+        'errors': [] if observed else [{'reason': 'Original input observation is incomplete'}]})
+    events = []
+    result = runner.run(request, on_event=events.append)
+    assert_code_completed(result)
+    validation = result['data']['validation']
+    assert validation['dataset_observation_verified'] is observed
+    assert validation['dataset_provenance_verified'] is False
+    store = ProgressStore(str(tmp_path / 'runtime_data_progress.jsonl'))
+    for event in events:
+        store.emit(event)
+    store.emit({'type': 'done', 'result': result})
+    progress = store.read_snapshot(str(store.path))
+    stage = next(stage for stage in progress['pipeline_stages'] if stage['id'] == 'prepare_dataset')
+    assert stage['status'] == ('success' if observed else 'skipped')
+    assert stage['completion_confirmed'] is True
 
 
 @pytest.mark.parametrize('outcome', ['different', 'unknown'])

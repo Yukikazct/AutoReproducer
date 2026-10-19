@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "batch_id": "pdf_acceptance_20261019_highstar",
+  "fixed_at": "2026-10-19T04:46:43.724904+00:00",
+  "activation_status": "registered_not_executed",
+  "fixed_order": [
+    "pytorch-geometric-library"
+  ],
+  "rule": "Single high-star official candidate selected before author execution. Preserve the original commands and full repetitions. Freeze product and registry before trial; a failed candidate remains regression evidence and is never relabeled as a fresh acceptance.",
+  "papers": [
+    {
+      "order": 1,
+      "paper_id": "pytorch-geometric-library",
+      "title": "Fast Graph Representation Learning with PyTorch Geometric",
+      "file": "examples/papers/candidates_20261019_highstar/pyg.pdf",
+      "source_id": "arxiv:1903.02428",
+      "source_url": "https://arxiv.org/pdf/1903.02428",
+      "sha256": "8cfd9824d44c5aba66393ef05e70c1275ca7886e0a0502f7b09e86e6c3a38953",
+      "bytes": 379324,
+      "repository_url": "https://github.com/rusty1s/pytorch_geometric",
+      "current_repository_url": "https://github.com/pyg-team/pytorch_geometric",
+      "revision": "79d33965a40b7fa83616a9f598a0f8619f25d939",
+      "stargazers_count": 24123,
+      "star_query_at": "2026-10-19T04:40:19.237670+00:00",
+      "star_source": "https://api.github.com/repos/pyg-team/pytorch_geometric",
+      "star_interpretation": "Popularity signal only; not proof of reproducibility, correctness or absence of research misconduct."
+    }
+  ]
+}

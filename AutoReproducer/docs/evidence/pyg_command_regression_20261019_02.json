@@ -1,0 +1,41 @@
+{
+  "kind": "retained_command_planning_regression",
+  "original_trial": "pyg_20261019_01",
+  "previous_unscoped_fallback_evidence": "docs/evidence/pyg_command_regression_20261019.json",
+  "previous_fallback_matches_selected_experiment": false,
+  "required_entrypoint": "benchmark/citation/gcn.py",
+  "selected_original_command": {
+    "id": "train",
+    "kind": "train",
+    "argv": [
+      "python",
+      "gcn.py",
+      "--dataset=Cora"
+    ],
+    "entrypoint": {
+      "kind": "script",
+      "target": "gcn.py",
+      "source_path": "benchmark/citation/gcn.py"
+    },
+    "cwd": "benchmark/citation",
+    "timeout_s": null,
+    "depends_on": [],
+    "citations": [],
+    "required": true
+  },
+  "command_source": {
+    "path": "benchmark/citation/run.sh",
+    "quote": "python gcn.py --dataset=Cora",
+    "sha256": "990261b574e7cf231f3f276a01fe454a9ca49fe785fa917b7e3d3ee2e468cdf6",
+    "template_bindings": {}
+  },
+  "original_artifact_sha256": {
+    "source_packet.json": "fea0b84459f063bbb073916277b51fbb4c1766bbc03ff2493af9073042d3eb0e",
+    "experiment_spec.json": "14ae0ac50641f038a9475aac5d7fd76a4a381e364bfb05cc256fa633de0137ed"
+  },
+  "trained": false,
+  "environment_installed": false,
+  "paper_metrics_verified": false,
+  "is_reproduced": null,
+  "planning_regression_passed": true
+}

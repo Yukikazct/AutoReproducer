@@ -31,6 +31,23 @@ def step(identifier, *argv, cwd=".", timeout=3, env=None, **declared):
             "timeout_s": timeout, "env": env or {}, **declared}
 
 
+def test_windows_cleanup_preserves_non_utf8_diagnostic(monkeypatch):
+    """A localized taskkill must not crash its pipe reader during cancellation."""
+    original_run = subprocess.run
+    process = SimpleNamespace(pid=12345, poll=lambda: None, kill=Mock())
+
+    def localized_taskkill(command, **kwargs):
+        assert command[:1] == ['taskkill']
+        return original_run([sys.executable, '-c',
+            "import sys;sys.stderr.buffer.write(b'cleanup: \\xb4\\xed\\xce\\xf3');sys.exit(1)"], **kwargs)
+
+    monkeypatch.setattr(runner_module, 'os', SimpleNamespace(name='nt'))
+    monkeypatch.setattr(runner_module.subprocess, 'run', localized_taskkill)
+    diagnostic = RepositoryRunner._kill_group(process)
+    assert diagnostic.startswith('process-tree cleanup failed: cleanup: ')
+    process.kill.assert_called_once()
+
+
 def test_prepared_environment_lookup_uses_the_selected_training_interpreter(runner, tmp_path, monkeypatch):
     root = tmp_path / "deps"
     monkeypatch.setattr(runner_module, "DEPS_CACHE_ROOT", root)

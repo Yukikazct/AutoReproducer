@@ -18,6 +18,10 @@ _ALIASES = {
     "召回率": "recall", "损失": "loss", "mean_squared_error": "mse",
     "root_mean_squared_error": "rmse",
 }
+for _average in ('macro', 'micro', 'weighted'):
+    for _alias in (f'{_average}f1', f'{_average}_f1', f'{_average}_f1_score',
+                   f'f1_{_average}', f'f1_score_{_average}'):
+        _ALIASES[_alias] = f'f1_{_average}'
 
 
 def norm_metric_key(key) -> str:

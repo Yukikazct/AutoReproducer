@@ -1,0 +1,26 @@
+{
+  "command": ".venv-py312/Scripts/python.exe -X utf8 -m pytest tests -q",
+  "passed": 3647,
+  "skipped": 104,
+  "failures": 0,
+  "errors": 0,
+  "duration_seconds": 592.85,
+  "product_source_sha256": "4fb1912935bd73db7320772790fd01d13b45a65f10d6de0dca17c9eb46fee11f",
+  "source_freeze": ".tmp/pdf_selfrepair_20261019/pyg_regression_05_source_freeze.json",
+  "warning": "Existing PyPDF2 deprecation warning",
+  "earlier_collection_error": {
+    "command": "python -X utf8 -m pytest -q",
+    "errors": 27,
+    "reason": "Unscoped collection included retained third-party Caffe repositories in data/",
+    "corrected_scope": "tests/"
+  },
+  "artifact_sha256": {
+    ".tmp/selfrepair_20261019/final_regression_v8.xml": "c73119caa104315c57a74bdaa8925c9eb80597a31fb13f09da634c69658d3713",
+    ".tmp/selfrepair_20261019/final_regression_v8.log": "cf68bf1ddbc2bfc459c71eb1226ebbcb7ebc62f4ac11525e7b29838a9023c496",
+    ".tmp/selfrepair_20261019/final_regression_v7.xml": "188d2c88481316127c721e91152b9da5a3fbc96d1cb8e7fce01fbf947b894b74",
+    ".tmp/selfrepair_20261019/final_regression_v7.log": "6ad02773de2cba178bd3ac8643eb9be61f71666b0d94cbc45878b2a1044e84d7",
+    ".tmp/selfrepair_20261019/comparison_context.xml": "a7d7d85859883ca759b3def6df570852b77a63a96ae95df8574b850fb5d47205",
+    ".tmp/selfrepair_20261019/comparison_attempts_final_unit.xml": "5a220ba54d2d696209237ab1384eddfc50323d31675f5a0ad6577e6c2fa33e38",
+    ".tmp/selfrepair_20261019/comparison_attempts_final_service.xml": "bdcfa266f9c13de1de24ff033774f555ba0333794dec3acece93cf2bf9b35717"
+  }
+}
