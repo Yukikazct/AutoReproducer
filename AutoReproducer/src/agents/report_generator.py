@@ -44,14 +44,66 @@ def _metric_value_text(node, suffix=''):
     value = _txt(node.get('value'))
     uncertainty = node.get('reported_uncertainty')
     if uncertainty is not None:
-        if node.get('uncertainty_kind') == 'bootstrap_confidence_interval':
+        kind = node.get('uncertainty_kind')
+        if kind in {'bootstrap_confidence_interval', 'confidence_interval'}:
             level = node.get('confidence_level')
-            label = (f'{level}% ' if level is not None else '') + 'bootstrap 置信区间半宽'
+            level_text = format(level, 'g') if type(level) in (int, float) else _txt(level)
+            label = (f'{level_text}% ' if level is not None else '')
+            label += ('bootstrap ' if kind == 'bootstrap_confidence_interval' else '') + '置信区间半宽'
+        elif kind == 'standard_error':
+            label = '标准误'
         else:
             label = '误差含义未明确'
         return f'{value} ± {uncertainty}{suffix}（{label}）'
     deviation = f" ± {node['std']}" if node.get('std') is not None else ''
     return value + deviation + suffix
+
+
+def _comparison_column_lines(reference):
+    """Display recorded column evidence without deriving a path from prose."""
+    evidence = reference.get('column_evidence')
+    evidence = evidence if isinstance(evidence, dict) else {}
+    if evidence:
+        state = {'verified': '已核验', 'unknown': '未完成', 'rejected': '未通过'}.get(
+            evidence.get('status'), '未完成')
+    elif reference.get('column_verified') is True:
+        state = '已核验（历史记录；列路径未记录）'
+    elif reference.get('column_verified') is False:
+        state = '未完成（历史记录）'
+    else:
+        state = '未记录'
+    lines = ['- **论文列位置核验**: ' + state]
+    labels = evidence.get('column_labels')
+    if (evidence.get('status') == 'verified' and isinstance(labels, list) and labels
+            and all(isinstance(label, str) and label.strip() for label in labels)):
+        lines.append('- **已核验列路径**: ' + _markdown_text(' → '.join(labels)))
+    if evidence.get('reason'):
+        lines.append('- **列核验说明**: ' + _markdown_text(_txt(evidence['reason'])))
+    return lines
+
+
+def _comparison_field_lines(node, side):
+    """Keep semantic field status and distinct supporting quotations together."""
+    evidence = node.get('field_evidence')
+    if not isinstance(evidence, dict) or not evidence:
+        return []  # Old reports do not acquire evidence they never recorded.
+    statuses, quotations = [], {}
+    for field, label in (('unit', '单位'), ('split', '划分'), ('aggregation', '统计方式'), ('runs', '重复次数')):
+        info = evidence.get(field)
+        info = info if isinstance(info, dict) else {}
+        status = {'verified': '已核验', 'unknown': '未知', 'contradicted': '与原文矛盾'}.get(
+            info.get('status'), '未记录')
+        statuses.append(label + '：' + status)
+        quote = info.get('quote')
+        if isinstance(quote, str) and quote and info.get('status') in {'verified', 'contradicted'}:
+            key = (_txt(info.get('citation')), quote)
+            quotations.setdefault(key, []).append(label)
+    lines = ['- **字段核对（' + side + '）**: ' + '；'.join(statuses)]
+    for (source, quote), labels in quotations.items():
+        excerpt = quote[:400] + ('（引用节选）' if len(quote) > 400 else '')
+        lines.append('- **字段依据（' + side + '：' + '、'.join(labels) + '）**: '
+                     + _markdown_text((source + '；' if source else '') + excerpt))
+    return lines
 
 
 def _author_claim_comparison_lines(comparison):
@@ -93,9 +145,19 @@ def _author_claim_comparison_lines(comparison):
     citations = {ref['id']: ref for ref in comparison.get('citations', [])}
     for row in rows:
         paper, actual = row['reference'], row['actual']
+        settings = row.get('settings')
+        settings = settings if isinstance(settings, dict) else {}
+        assessment = {'matched': '所引设置相符', 'different': '所引设置不同',
+                      'unknown': '设置证据不足或未记录'}.get(settings.get('status'), '设置证据不足或未记录')
+        basis = ('带引文的模型分析' if settings.get('assessment_basis') == 'model_with_citations'
+                 else '判断来源未记录')
         lines += ['', '- **对比范围**: ' + _markdown_text(f"{row['metric']}；论文划分 {paper.get('split')} / 实际划分 {actual.get('split')}"),
-                  '- **实验设置**: ' + _markdown_text(_txt(row['settings'].get('reason'))),
+                  '- **设置分析**: ' + assessment + '；' + basis + '，不等于独立协议核验通过。',
+                  '- **实验设置**: ' + _markdown_text(_txt(settings.get('reason'), '未记录')),
                   '- **实际来源**: ' + _markdown_text(_txt(actual.get('source')))]
+        lines += _comparison_column_lines(paper)
+        lines += _comparison_field_lines(paper, '论文')
+        lines += _comparison_field_lines(actual, '实际')
         for limitation in row.get('limitations', []):
             lines.append('- **对比限制**: ' + _markdown_text(limitation))
         pages = [str(citations[key]['page']) for key in paper.get('citations', []) if key in citations and citations[key]['source'] == 'pdf']

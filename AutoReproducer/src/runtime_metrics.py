@@ -134,7 +134,19 @@ def _statistics(prefix, suffix, summary=None):
     if len(counts) == 1:
         fields['runs'] = counts.pop()
     std = _STD_RE.search(suffix)
-    if std and not _OTHER_UNCERTAINTY.search(suffix):
+    uncertainty_context = prefix + ' ' + suffix
+    if std and _OTHER_UNCERTAINTY.search(uncertainty_context):
+        # Authors often label a CI/SEM before the metric rather than after
+        # the +/- quantity. Keep that observation without calling it SD.
+        fields['reported_uncertainty'] = metric_number(std.group('std'))
+        fields['uncertainty_kind'] = ('standard_error' if re.search(
+            r'\b(?:sem|stderr|standard\s+error)\b', uncertainty_context, re.I)
+            else 'confidence_interval')
+        confidence = re.search(r'\b(\d+(?:\.\d+)?)\s*%\s*(?:ci|confidence\s+interval)\b',
+                               uncertainty_context, re.I)
+        if confidence and 0 < float(confidence[1]) < 100:
+            fields['confidence_level'] = float(confidence[1])
+    elif std:
         fields['std'] = metric_number(std.group('std'))
         # Unqualified mean ± standard deviation is a conventional summary,
         # while an explicitly labelled confidence interval remains unknown.
@@ -160,6 +172,12 @@ def _statistic_errors(record):
             errors.append('标准差必须是有限非负数')
             std = None
         record['std'] = std
+    if 'reported_uncertainty' in record:
+        uncertainty = metric_number(record['reported_uncertainty'])
+        if uncertainty is None or uncertainty < 0:
+            errors.append('报告误差必须是有限非负数')
+            uncertainty = None
+        record['reported_uncertainty'] = uncertainty
     return [f"{record['name']}: {message}" for message in errors]
 
 
