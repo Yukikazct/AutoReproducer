@@ -1,4 +1,4 @@
-> 2026-10-17 当前状态见 [PDF 全流程实施记录](pdf_acceptance_20261017.md)与[统一论文台账](paper_acceptance_registry.json)。下文保留历史方案/证据；其中“未实现”不自动代表当前代码状态。
+> 2026-10-21 当前状态：ChebNetII / Cora 已在修复后的同一冻结版本完成 PDF/API 规划、十轮原训练、独立模型预测、论文数值比较和报告生成，正式终态 COMPLETED；详见[严格回归记录](chebnetii_strict_regression_20261021.md)及[统一论文台账](paper_acceptance_registry.json)。它仍是已参与修复的回归样本，#27 的未使用新论文验收尚未完成。下文保留历史方案/证据；其中“未实现”不自动代表当前代码状态。2026-10-17 的实施记录见[原文](pdf_acceptance_20261017.md)。
 
 # 独立新 PDF 验收规则
 

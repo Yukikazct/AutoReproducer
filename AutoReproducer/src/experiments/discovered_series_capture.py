@@ -9,7 +9,6 @@ import math
 import os
 import random
 from pathlib import Path
-import runpy
 import sys
 
 import numpy as np
@@ -122,7 +121,7 @@ def capture_return(namespace, index, observers, script, config, retained=None):
             raise ValueError("Export changed the captured author's forward path")
         model_file, tensor_file = artifact_names(index)
         torch.jit.save(traced, str(ROOT / model_file))
-        torch.save({"inputs": tuple(tensors), "labels": labels, "test_indices": indices,
+        torch.save({"inputs": tuple(tensors), 'input_layouts': layouts, "labels": labels, "test_indices": indices,
                     "outputs": outputs.detach()}, ROOT / tensor_file)
     for key, _ in relevant:
         del observers[key]
@@ -145,6 +144,8 @@ def capture_return(namespace, index, observers, script, config, retained=None):
 
 
 def capture(config):
+    from strict_numeric_compatibility import prepare_capture, run_entrypoint
+    numeric_repairs = prepare_capture(config, ROOT)
     check_sources(config)
     _support.prepare_output_directories(config)
     contract = config["capture"]
@@ -169,6 +170,7 @@ def capture(config):
         if function_selection:
             loop = resolve_function_selection(scope_path.read_text('utf-8'), contract['scope'])
     observers, runs, return_instructions = {}, [], {}
+    total_updates = 0
     loop_state = {'pending': False, 'retained': None, 'frame': None}
 
     def before(optimizer, args, kwargs):
@@ -179,7 +181,9 @@ def capture(config):
                               "initial": [p.detach().cpu().clone() for p in parameters], "steps": 0}
 
     def after(optimizer, args, kwargs):
+        nonlocal total_updates
         observers[id(optimizer)]["steps"] += 1
+        total_updates += 1
 
     def profile(frame, event, result):
         code = frame.f_code
@@ -285,7 +289,7 @@ def capture(config):
             sys.settrace(trace)
         if not module_loop:
             sys.setprofile(profile)
-        runpy.run_path(str(script), run_name="__main__")
+        run_entrypoint(config, script, ROOT, lambda: total_updates)
     finally:
         sys.setprofile(old_profile)
         sys.settrace(old_trace)
@@ -295,11 +299,14 @@ def capture(config):
         raise ValueError("Author entrypoint did not naturally finish every declared native repetition")
     if observers:
         raise ValueError("Training updates outside the captured complete native series remain unaccounted")
+    if total_updates != sum(run['optimizer_steps'] for run in runs):
+        raise ValueError('Cumulative author updates differ from the captured complete native series')
     check_sources(config)
     write("capture.json", {"version": 1, "kind": contract["kind"], "pass": True,
           "spec_sha256": config["spec_sha256"], "aggregation": "mean", "training_device": contract["device"],
           "torch_version": torch.__version__, "process_pid": os.getpid(),
           "runs": runs, "parameters_changed": True,
+          'numeric_compatibility': numeric_repairs,
           "optimizer_steps": sum(run["optimizer_steps"] for run in runs),
           "test_samples": [run["test_samples"] for run in runs],
           "files_sha256": {name: digest for run in runs for name, digest in run["files_sha256"].items()}})
@@ -307,6 +314,8 @@ def capture(config):
 
 
 def evaluate(config):
+    from strict_numeric_compatibility import prepare_evaluation, verify_numeric_receipts
+    prepare_evaluation(ROOT)
     check_sources(config)
     _support.load_native_operators(config)
     receipt = read("capture.json")
@@ -314,6 +323,7 @@ def evaluate(config):
     if (receipt.get("pass") is not True or receipt["spec_sha256"] != config["spec_sha256"]
             or len(receipt["runs"]) != contract["expected_runs"]):
         raise ValueError("Complete native series capture is missing or belongs to another run")
+    numeric_repairs = verify_numeric_receipts(config, WORKSPACE, receipt)
     for index, captured in enumerate(receipt["runs"]):
         model_file, tensor_file = artifact_names(index)
         for name in (model_file, tensor_file):
@@ -347,6 +357,7 @@ def evaluate(config):
     check_sources(config)
     write("independent_metrics.json", {"version": 1, "pass": True, "spec_sha256": config["spec_sha256"],
           "capture_sha256": sha(ROOT / "capture.json"), "aggregation": "mean", "runs": runs,
+           'numeric_compatibility': numeric_repairs,
           "accuracy": float(np.mean([run["accuracy"] for run in runs])),
           "cross_entropy": float(np.mean([run["cross_entropy"] for run in runs])),
           "test_samples": [run["test_samples"] for run in runs],

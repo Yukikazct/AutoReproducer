@@ -273,3 +273,30 @@ def test_history_supplies_terminal_state_for_old_config_only_failure(legacy_resu
     historical = hm.get_session_report_result({"state": "ERROR", "report_path": str(path)})
     assert historical["state"] == "ERROR"
     assert can_regenerate_report(historical)
+
+
+def test_v2_strict_report_upgrade_discloses_numeric_compatibility_offline(
+        legacy_result, tmp_path, forbid_execution_and_api):
+    old = '<!-- autoreproducer-report-format: 2 -->\n# Original strict report\n'
+    path = tmp_path / 'report.md'
+    path.write_text(old, encoding='utf-8')
+    legacy_result['data']['report'] = old
+    legacy_result['data']['strict_validation'] = {'requested': True, 'status': 'verified'}
+    legacy_result['data']['validation'].update(
+        paper_metrics_verified=True, independent_metrics_pass=True,
+        numeric_compatibility=[{'kind': 'numpy_ragged_summary', 'path': 'train.py',
+                                'calls': [{'line': 20}, {'line': 21}]}])
+    before = deepcopy(legacy_result)
+    result_before = (tmp_path / 'result.json').read_bytes()
+    log_before = (tmp_path / 'stdout.log').read_bytes()
+    updated = regenerate_report(legacy_result)
+    assert REPORT_FORMAT_VERSION > 2
+    assert report_format_version(updated['data']['report']) == REPORT_FORMAT_VERSION
+    assert '旧 NumPy 不规则结果表汇总兼容修复' in updated['data']['report']
+    assert 'train.py；行 20, 21' in updated['data']['report']
+    assert updated['data']['validation'] == before['data']['validation']
+    assert updated['data']['execution'] == before['data']['execution']
+    assert legacy_result == before
+    assert path.read_text('utf-8') == old
+    assert (tmp_path / 'result.json').read_bytes() == result_before
+    assert (tmp_path / 'stdout.log').read_bytes() == log_before

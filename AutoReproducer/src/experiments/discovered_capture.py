@@ -10,7 +10,6 @@ import json
 import os
 from pathlib import Path
 import re
-import runpy
 import sys
 
 from author_values import geometric_data_fields, resolve_author_value
@@ -250,11 +249,14 @@ def cpu_snapshot(model):
 
 
 def capture(config):
+    from strict_numeric_compatibility import prepare_capture, run_entrypoint
+    numeric_repairs = prepare_capture(config, ROOT)
     check_sources(config)
     prepare_output_directories(config)
     if torch.cuda.is_available():
         raise ValueError("Frozen CPU execution unexpectedly exposes CUDA")
     observers = {}
+    total_updates = 0
 
     def before(optimizer, args, kwargs):
         key = id(optimizer)
@@ -264,7 +266,9 @@ def capture(config):
                               "initial": [p.detach().cpu().clone() for p in parameters], "steps": 0}
 
     def after(optimizer, args, kwargs):
+        nonlocal total_updates
         observers[id(optimizer)]["steps"] += 1
+        total_updates += 1
 
     from torch.optim.optimizer import register_optimizer_step_pre_hook, register_optimizer_step_post_hook
     pre, post = register_optimizer_step_pre_hook(before), register_optimizer_step_post_hook(after)
@@ -279,7 +283,7 @@ def capture(config):
     sys.path.insert(0, str(script.parent))
     sys.argv = [str(script), *argv[position + 1:]]
     try:
-        namespace = runpy.run_path(str(script), run_name="__main__")
+        namespace = run_entrypoint(config, script, ROOT, lambda: total_updates)
     finally:
         pre.remove()
         post.remove()
@@ -309,6 +313,8 @@ def capture(config):
                   if id(p) in parameters)
     if updates != contract["expected_optimizer_steps"] or not changed:
         raise ValueError("Observed model optimizer steps or actual parameter changes do not prove full training")
+    if total_updates != updates:
+        raise ValueError('Training updates outside the captured author model remain unaccounted')
     inputs = tuple(resolve_author_value(namespace, name) for name in contract['forward_args'])
     raw_labels = resolve_author_value(namespace, contract['labels'])
     labels = cpu_tensor(author_integer_tensor(raw_labels))
@@ -329,7 +335,7 @@ def capture(config):
         if not torch.allclose(traced(*tensors), outputs, atol=1e-6, rtol=1e-5):
             raise ValueError("Exported author forward path differs from the trained model")
         torch.jit.save(traced, str(ROOT / "model.pt"))
-        torch.save({"inputs": tuple(tensors), "labels": labels, "test_indices": indices,
+        torch.save({"inputs": tuple(tensors), 'input_layouts': layouts, "labels": labels, "test_indices": indices,
                     "outputs": outputs.detach()}, ROOT / "tensors.pt")
     check_sources(config)
     write("capture.json", {"version": 1, "pass": True, "spec_sha256": config["spec_sha256"],
@@ -342,17 +348,21 @@ def capture(config):
           "model_type": type(model).__module__ + "." + type(model).__qualname__,
           "torch_version": torch.__version__, "native_torch_model": built_in,
           "process_pid": os.getpid(),
+          'numeric_compatibility': numeric_repairs,
           "files_sha256": {name: sha(ROOT / name) for name in ("model.pt", "tensors.pt")}})
     print("AUTHOR_CAPTURE_COMPLETE " + json.dumps({"optimizer_steps": updates,
           "test_samples": contract["expected_test_samples"]}), flush=True)
 
 
 def evaluate(config):
+    from strict_numeric_compatibility import prepare_evaluation, verify_numeric_receipts
+    prepare_evaluation(ROOT)
     check_sources(config)
     load_native_operators(config)
     receipt = read("capture.json")
     if receipt["spec_sha256"] != config["spec_sha256"] or receipt.get("pass") is not True:
         raise ValueError("Training capture is not from this frozen run")
+    numeric_repairs = verify_numeric_receipts(config, WORKSPACE, receipt)
     for name in ("model.pt", "tensors.pt"):
         if receipt["files_sha256"][name] != sha(ROOT / name):
             raise ValueError("Captured training artifact changed before fresh evaluation")
@@ -381,6 +391,7 @@ def evaluate(config):
               "evaluation": "fresh_process_torchscript_forward_numpy_metrics", "device": "cpu",
               "numpy_torch_crosscheck": True, "process_pid": os.getpid(),
               "capture_process_pid": receipt['process_pid']}
+    result['numeric_compatibility'] = numeric_repairs
     write("independent_metrics.json", result)
     print("INDEPENDENT_EVALUATION_COMPLETE " + json.dumps(result), flush=True)
 

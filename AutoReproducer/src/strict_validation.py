@@ -105,6 +105,14 @@ def assert_strict_plan(plan, packet, workspace):
         for step in proposal['steps']:
             if isinstance(step.get('entrypoint'), dict):
                 step['entrypoint'] = {key: step['entrypoint'][key] for key in ('kind', 'target')}
+        # Dependency compilation omits unused reviewed suggestions. Restore
+        # those declarations before replay so their validated audit trail is
+        # reproduced; they must still be rejected or omitted by the compiler.
+        requirements = proposal.get('requirements', {})
+        omitted = requirements.get('omitted_unused_proposals', [])
+        if not isinstance(omitted, list):
+            raise PlanEvidenceError('Strict dependency proposal audit must be a list')
+        requirements['compatibility'] = [*requirements.get('compatibility', []), *omitted]
         if validate_plan(proposal, packet, workspace) != candidate:
             raise PlanEvidenceError('Reviewed strict plan no longer matches deterministic source validation')
         # Re-read every quotation, including source IDs added by the reviewer.
