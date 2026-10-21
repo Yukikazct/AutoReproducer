@@ -536,8 +536,9 @@ def _validated_rows(payload, packet, workspace, records, accepted, known_citatio
     return errors
 
 
-def compare_author_claims(llm, packet, plan, workspace, execution, *, sources=None):
-    records, errors = collect_author_metrics(execution, workspace=workspace, plan=plan, sources=sources)
+def compare_author_claims(llm, packet, plan, workspace, execution, *, sources=None, metric_workspace=None):
+    records, errors = collect_author_metrics(execution,
+        workspace=metric_workspace if metric_workspace is not None else workspace, plan=plan, sources=sources)
     result = {'status': 'unavailable', 'basis': 'author_output', 'relative_tolerance': TOLERANCE,
               'metric_records': records, 'parse_errors': errors, 'comparisons': [], 'citations': [],
               'validation_errors': [],

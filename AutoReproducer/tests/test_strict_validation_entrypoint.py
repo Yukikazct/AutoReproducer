@@ -108,7 +108,7 @@ def test_cached_backend_before_strict_mode_gets_private_upgrade(monkeypatch):
     old.run_pipeline_background = Mock()
     monkeypatch.setitem(sys.modules, 'frontend.backend_pipeline', old)
     upgraded = loader.load_backend_pipeline()
-    assert upgraded is not old and upgraded.BACKEND_API_VERSION == 7
+    assert upgraded is not old and upgraded.BACKEND_API_VERSION == 8
     assert sys.modules['frontend.backend_pipeline'] is old
     old.run_pipeline_background.assert_not_called()
 

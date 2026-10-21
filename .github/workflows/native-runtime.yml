@@ -74,6 +74,7 @@ jobs:
           python -m pytest -q -ra -k 'not cuda'
           tests/test_discovered_repository_runtime.py tests/test_graph_author_capture.py
           tests/test_author_pyg_compatibility.py
+          tests/test_source_repair_service.py
           tests/test_runtime_dataset_evidence.py::test_real_pyg_dataset_files_still_verify_without_links
           --junitxml=native-tests.xml
       - name: Run DGL native selection

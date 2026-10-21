@@ -102,12 +102,16 @@ def build_report_bundle(report, report_path):
             raise ValueError(f"图 {part['number']} 的报告图片缺失或校验失败")
         figures[unquote(target)] = raw
     buffer = io.BytesIO()
+    from src.source_repair_evidence import report_evidence_bytes
+    repair_evidence = report_evidence_bytes(report, report_file)
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         archive.writestr(report_file.name, report)
         for target, raw in figures.items():
             archive.writestr(target, raw)
         if attachment is not None:
             archive.write(attachment, attachment_name)
+        for name, raw in repair_evidence.items():
+            archive.writestr(name, raw)
     return buffer.getvalue()
 
 

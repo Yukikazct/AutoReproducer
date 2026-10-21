@@ -1,0 +1,173 @@
+{
+  "version": 1,
+  "recorded_at": "2026-10-21T09:29:47.952684+00:00",
+  "issue": "https://github.com/Yukikazct/AutoReproducer/issues/20",
+  "git_base_commit": "6c6fc8a3aa62253b4097e062f15ae266ff04313b",
+  "scope": "opt-in web repair integration; synthetic compatibility failures with actual owned subprocesses",
+  "source_sha256": "70687201756980b1a76ff64eb4162bd16483f772d534be6bdd3c2e81588c7770",
+  "source_files": 348,
+  "tests": [
+    {
+      "tests": 248,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "passed": 248,
+      "duration_seconds": 119.102,
+      "generation": "final frozen source; native CPU cache configured; no external model calls",
+      "artifact": "tests/issue20_final.xml"
+    },
+    {
+      "tests": 1846,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 80,
+      "passed": 1766,
+      "duration_seconds": 390.539,
+      "generation": "adjacent regression before final report companion long-path changes",
+      "artifact": "tests/issue20_adjacent_final.xml"
+    }
+  ],
+  "native_runs": [
+    {
+      "artifact_prefix": "native/1/",
+      "backend": false,
+      "original_sources_preserved": {
+        "README.md": "547f681ec750f6bc15392d33d8a634c9b299b0a65b61dc10b6a19ee9d2455551",
+        "requirements.txt": "34f063d4d8cfe9e6948c9a8186e2b5ffdf611b49f9569c384e6962eb3f72a6f8",
+        "train.py": "02293d51dde99ff99e1c37d9a27bf13516145413097385c9c27a9204d0b922a0",
+        "author_model.py": "e1769bde5d7baeb20fc351272973e55a1efbaabf40aa8830e23e5bb1e1b26fe9",
+        "dataset.json": "87277a4a2737e3b414dd33cfae7a027c1cc770ef4a31918f02ddf542f01eaf3a"
+      },
+      "changed_files": [
+        {
+          "path": "author_model.py",
+          "base_sha256": "e1769bde5d7baeb20fc351272973e55a1efbaabf40aa8830e23e5bb1e1b26fe9",
+          "sha256": "0d701d3677368b6134ac77dd59794e93938d7d860dec0268d055040df04633da"
+        },
+        {
+          "path": "train.py",
+          "base_sha256": "02293d51dde99ff99e1c37d9a27bf13516145413097385c9c27a9204d0b922a0",
+          "sha256": "20184723ef57f17a29e9583f096ee44b5f977b759226a968b4dfcf1585c3d069"
+        }
+      ],
+      "original_command": [
+        [
+          "python",
+          "train.py",
+          "--epochs",
+          "40",
+          "--seed",
+          "7",
+          "--cpu"
+        ]
+      ],
+      "validation_status": "author_code_completed",
+      "source_modified": true,
+      "paper_metrics_verified": false,
+      "is_reproduced": null,
+      "repair_manifest_sha256": "262c4a17518471467e74bc57e215da9e4db98dab54926e4c71a1f129dea6121e"
+    },
+    {
+      "artifact_prefix": "native/2/",
+      "backend": true,
+      "original_sources_preserved": {
+        "README.md": "547f681ec750f6bc15392d33d8a634c9b299b0a65b61dc10b6a19ee9d2455551",
+        "requirements.txt": "34f063d4d8cfe9e6948c9a8186e2b5ffdf611b49f9569c384e6962eb3f72a6f8",
+        "train.py": "02293d51dde99ff99e1c37d9a27bf13516145413097385c9c27a9204d0b922a0",
+        "author_model.py": "e1769bde5d7baeb20fc351272973e55a1efbaabf40aa8830e23e5bb1e1b26fe9",
+        "dataset.json": "87277a4a2737e3b414dd33cfae7a027c1cc770ef4a31918f02ddf542f01eaf3a"
+      },
+      "changed_files": [
+        {
+          "path": "author_model.py",
+          "base_sha256": "e1769bde5d7baeb20fc351272973e55a1efbaabf40aa8830e23e5bb1e1b26fe9",
+          "sha256": "0d701d3677368b6134ac77dd59794e93938d7d860dec0268d055040df04633da"
+        },
+        {
+          "path": "train.py",
+          "base_sha256": "02293d51dde99ff99e1c37d9a27bf13516145413097385c9c27a9204d0b922a0",
+          "sha256": "20184723ef57f17a29e9583f096ee44b5f977b759226a968b4dfcf1585c3d069"
+        }
+      ],
+      "original_command": [
+        [
+          "python",
+          "train.py",
+          "--epochs",
+          "40",
+          "--seed",
+          "7",
+          "--cpu"
+        ]
+      ],
+      "validation_status": "author_code_completed",
+      "source_modified": true,
+      "paper_metrics_verified": false,
+      "is_reproduced": null,
+      "repair_manifest_sha256": "2806e1af191ed96a17c00d9d63287a97a1ec9dc0c75304f7eca13ea921fccee1"
+    }
+  ],
+  "cleanup_receipts": [
+    {
+      "artifact": "cleanup/test_final_web_report_updates_0/runs/fixture/environment_cleanup.json",
+      "status": "released",
+      "remaining": [],
+      "errors": []
+    },
+    {
+      "artifact": "cleanup/test_final_web_report_updates_1/runs/fixture/environment_cleanup.json",
+      "status": "released",
+      "remaining": [],
+      "errors": []
+    },
+    {
+      "artifact": "cleanup/test_prepare_only_never_invoke0/service/runs/repository_6a5a2956aa9d4b6ea2138768ae550c38/environment_cleanup.json",
+      "status": "released",
+      "remaining": [],
+      "errors": []
+    },
+    {
+      "artifact": "cleanup/test_real_service_default_fail0/service/runs/repository_a677312011584d1385846304f2b1020a/environment_cleanup.json",
+      "status": "released",
+      "remaining": [],
+      "errors": []
+    },
+    {
+      "artifact": "cleanup/test_real_service_two_file_rep0/service/runs/repository_a651db77ea0c41beb94237920e3328e3/environment_cleanup.json",
+      "status": "released",
+      "remaining": [],
+      "errors": []
+    },
+    {
+      "artifact": "cleanup/test_real_service_two_file_rep1/service/runs/repository_6361476940fe45cdb97b82cd340b23ec/environment_cleanup.json",
+      "status": "released",
+      "remaining": [],
+      "errors": []
+    },
+    {
+      "artifact": "cleanup/test_report_copy_failure_keeps0/run/environment_cleanup.json",
+      "status": "released",
+      "remaining": [],
+      "errors": []
+    }
+  ],
+  "process_audit": {
+    "matching_owned_python_processes_after_final_batch": 0,
+    "scope": "command lines containing issue20-final-acceptance"
+  },
+  "archive": {
+    "path": "issue20_web_repairs_20261021_logs.zip",
+    "sha256": "c4e89f4d1fdab4ba75417e1c7f5c59227b066a4563e70c162887edb19e83505c",
+    "bytes": 151588,
+    "members": 26,
+    "nested_safe_paths_and_credentials_checked": true
+  },
+  "limitations": [
+    "Network repository fetch and model responses are fixtures, not live API or real-paper acceptance.",
+    "Streamlit controls use AppTest; actual backend-to-service child execution is a separate integration fixture.",
+    "AST compatibility guards are bounded structural checks, not a proof of arbitrary algorithm equivalence.",
+    "Notebook and unfrozen author_runtime inputs are ineligible for source repair; default author execution is unchanged.",
+    "Adjacent test batch precedes final report long-path edits; final 248-test batch binds the recorded source fingerprint."
+  ]
+}

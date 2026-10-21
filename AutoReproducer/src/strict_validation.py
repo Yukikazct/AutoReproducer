@@ -17,6 +17,8 @@ def normalize_strict_validation_request(request):
     """Normalize the explicit boolean mode; legacy review flags are unrelated."""
     if not isinstance(request, dict):
         raise ValueError('Reproduction request must be an object')
+    from src.source_repair import normalize_source_repair_request
+    request = normalize_source_repair_request(request)
     strict = request.get('strict_validation', False)
     if type(strict) is not bool:
         raise ValueError('strict_validation must be an explicit boolean')
