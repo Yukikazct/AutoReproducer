@@ -77,6 +77,86 @@ def test_service_failure_never_falls_back_to_generated_training(setup):
     orch.agents["executor"].run.assert_not_called()
 
 
+@pytest.mark.parametrize('strict', [False, True])
+def test_explicit_strict_mode_survives_repository_dispatch(setup, strict):
+    orch, paper, run = setup
+    result = orch.run({'pdf_path': str(paper), 'strict_validation': strict,
+                       'author_execution_only': True})
+    assert result['state'] == 'COMPLETED'
+    request = run.call_args.args[0]
+    assert request['strict_validation'] is strict
+    assert request['author_execution_only'] is not strict
+    assert request['use_llm_review'] is False
+    assert request['allow_result_summary_review'] is False
+    assert result['data']['strict_validation'] is strict
+    orch.agents['builder'].run.assert_not_called()
+    orch.agents['executor'].run.assert_not_called()
+    orch.llm.chat.assert_not_called()
+
+
+def test_default_dispatch_retains_author_execution_without_strict_acceptance(setup):
+    orch, paper, run = setup
+    result = orch.run({'pdf_path': str(paper)})
+    request = run.call_args.args[0]
+    assert request['strict_validation'] is False
+    assert request['author_execution_only'] is True
+    assert result['data']['validation']['is_reproduced'] is None
+    assert result['data']['validation']['status'] == 'author_code_completed'
+
+
+@pytest.mark.parametrize('mode', [None, 'true', 'false', 1, 0, [], {}])
+def test_malformed_strict_request_fails_before_any_discovery_or_execution(setup, mode):
+    orch, paper, run = setup
+    result = orch.run({'pdf_path': str(paper), 'strict_validation': mode})
+    assert result['state'] == 'ERROR'
+    assert 'strict_validation must be an explicit boolean' in result['error']
+    run.assert_not_called()
+    for name in ('reader', 'finder', 'builder', 'executor'):
+        orch.agents[name].run.assert_not_called()
+    orch.llm.chat.assert_not_called()
+
+
+@pytest.mark.parametrize('field,value', [('mock_mode', True), ('code', 'print(1)'),
+    ('corpus_paper', 'fixture'), ('experiment_profile', 'dlinear_etth1_reference')])
+def test_unsupported_strict_request_fails_honestly_before_execution(setup, field, value):
+    orch, paper, run = setup
+    result = orch.run({'pdf_path': str(paper), 'strict_validation': True, field: value})
+    assert result['state'] == 'ERROR'
+    assert 'generic repository workflow' in result['error']
+    run.assert_not_called()
+    for name in ('reader', 'finder', 'builder', 'executor'):
+        orch.agents[name].run.assert_not_called()
+    orch.llm.chat.assert_not_called()
+
+
+def test_orchestrator_mock_setting_cannot_bypass_strict_mode_guard(setup):
+    orch, paper, run = setup
+    orch.mock_mode = True
+    result = orch.run({'pdf_path': str(paper), 'strict_validation': True})
+    assert result['state'] == 'ERROR'
+    assert 'generic repository workflow' in result['error']
+    run.assert_not_called()
+    for name in ('reader', 'finder', 'builder', 'executor'):
+        orch.agents[name].run.assert_not_called()
+
+
+@pytest.mark.parametrize('title', ['Unregistered Strict Fixture Paper',
+    'Neural Ordinary Differential Equations'])
+def test_title_discovery_keeps_strict_request_and_requests_original_pdf(setup, title):
+    orch, _, run = setup
+    result = orch.run({'paper_title': title, 'strict_validation': True})
+    assert result['state'] == 'ERROR'
+    assert result['data']['strict_validation'] is True
+    assert result['data']['source_request']['status'] == 'needs_pdf'
+    assert result['data']['validation']['is_reproduced'] is None
+    assert result['data']['validation']['paper_metrics_verified'] is False
+    run.assert_not_called()
+    orch.agents['reader'].run.assert_called_once()
+    orch.agents['finder'].run.assert_called_once()
+    orch.agents['builder'].run.assert_not_called()
+    orch.agents['executor'].run.assert_not_called()
+
+
 @pytest.mark.parametrize("payload", [
     {"pdf_path": "actual-input.pdf"},
     {"resources": {"code_repo_url": AUTHOR}},

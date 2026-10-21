@@ -34,7 +34,7 @@ from src.project_paths import get_data_root
 
 
 # Contract checked by the web loader before starting a new background thread.
-BACKEND_API_VERSION = 6
+BACKEND_API_VERSION = 7
 
 
 def __getattr__(name):
@@ -181,6 +181,7 @@ def run_pipeline_core(progress_path: str,
                       pdf_resolution: Optional[dict] = None,
                       preferred_repo_url: str = "",
                       author_execution_only: bool = True,
+                      strict_validation: bool = False,
                       _managed_runtime: bool = False,
                       _append_progress: bool = False,
                       _runtime_preparation: Optional[dict] = None) -> Dict[str, Any]:
@@ -201,6 +202,7 @@ def run_pipeline_core(progress_path: str,
                 "preferred_repo_url": preferred_repo_url,
                 "corpus_paper": corpus_paper, "mock_mode": mock_mode,
                 "author_execution_only": author_execution_only,
+                "strict_validation": strict_validation,
                 "experiment_profile": experiment_profile}
     pdf_parser_reason = None
     if pdf_path:
@@ -216,7 +218,8 @@ def run_pipeline_core(progress_path: str,
                 return _reject_pdf_input(store, str(exc))
         except PDFInputError as exc:
             return _reject_pdf_input(store, str(exc))
-    resolved = resolve_title_request(resolved)
+    if not (strict_validation is True and not pdf_path and not experiment_profile):
+        resolved = resolve_title_request(resolved)
     experiment_profile = resolved.get("experiment_profile")
     title_resolution = title_resolution or resolved.get("title_resolution")
     if title_resolution:
@@ -233,6 +236,7 @@ def run_pipeline_core(progress_path: str,
                 "preferred_repo_url": preferred_repo_url,
                 "corpus_paper": corpus_paper, "model_name": model_name,
                 "author_execution_only": author_execution_only,
+                "strict_validation": strict_validation,
                 "base_url": base_url, "api_key": api_key, "mock_mode": mock_mode,
                 "max_trials": max_trials, "use_docker": use_docker,
                 "workspace_dir": workspace_dir, "experiment_profile": experiment_profile,
@@ -317,6 +321,7 @@ def run_pipeline_core(progress_path: str,
                 "preferred_repo_url": preferred_repo_url,
                 "corpus_paper": corpus_paper, "experiment_profile": experiment_profile,
                 "author_execution_only": author_execution_only,
+                "strict_validation": strict_validation,
                 "prepare_only": prepare_only, "offline": offline,
                 "use_llm_review": use_llm_review,
                 "allow_result_summary_review": allow_result_summary_review,
@@ -616,6 +621,7 @@ def run_pipeline_background(progress_path: str, *,
                             pdf_resolution: Optional[dict] = None,
                             preferred_repo_url: str = "",
                             author_execution_only: bool = True,
+                            strict_validation: bool = False,
                             cleanup_pdf: bool = True,
                             on_done=None) -> threading.Thread:
     """启动后台线程执行流水线；返回守护线程句柄。
@@ -630,6 +636,7 @@ def run_pipeline_background(progress_path: str, *,
                 progress_path, paper_title=paper_title, pdf_path=pdf_path,
                 preferred_repo_url=preferred_repo_url,
                 author_execution_only=author_execution_only,
+                strict_validation=strict_validation,
                 corpus_paper=corpus_paper, model_name=model_name,
                 base_url=base_url, api_key=api_key, mock_mode=mock_mode,
                 max_trials=max_trials, use_docker=use_docker,

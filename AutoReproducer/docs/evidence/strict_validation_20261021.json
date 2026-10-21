@@ -1,0 +1,373 @@
+{
+  "version": 1,
+  "recorded_at": "2026-10-21T04:52:40.668007+00:00",
+  "kind": "strict execution mechanism and previously used paper planning regression",
+  "git_base_commit": "bd37c6a90036efe9086c6e737a64b25e50f9f512",
+  "final_product_source_sha256": "b1212a940690b30b27650b97ca083392e48d042c48a506016c58c52cf3c937c5",
+  "behavior": {
+    "default": "ordinary full author command execution",
+    "strict_mode": "explicit opt-in, unavailable planning evidence falls back to ordinary execution",
+    "terminal_errors": [
+      "changed frozen inputs",
+      "command failure",
+      "cancellation",
+      "independent verification failure"
+    ],
+    "author_step_timeout": null,
+    "independent_evaluation_timeout_seconds": 300
+  },
+  "tests": [
+    {
+      "tests": 27,
+      "failures": 0,
+      "errors": 27,
+      "skipped": 0,
+      "passed": 0,
+      "duration_seconds": 7.9,
+      "artifact": ".tmp/strict_validation_20261021/full_suite.xml",
+      "generation": "earlier unscoped collection; retained failure evidence"
+    },
+    {
+      "tests": 88,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 11,
+      "passed": 77,
+      "duration_seconds": 177.79,
+      "artifact": ".tmp/strict_validation_native_20261021.xml",
+      "generation": "earlier native regression generation"
+    },
+    {
+      "tests": 166,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "passed": 166,
+      "duration_seconds": 121.113,
+      "artifact": ".tmp/strict_validation_20261021/strict_final.xml",
+      "generation": "earlier strict combined generation"
+    },
+    {
+      "tests": 4034,
+      "failures": 1,
+      "errors": 0,
+      "skipped": 32,
+      "passed": 4001,
+      "duration_seconds": 1419.535,
+      "artifact": ".tmp/strict_validation_20261021/full_tests.xml",
+      "generation": "full tests/ scope started before final source edits; complemented below"
+    },
+    {
+      "tests": 3,
+      "failures": 3,
+      "errors": 0,
+      "skipped": 0,
+      "passed": 0,
+      "duration_seconds": 25.351,
+      "artifact": ".tmp/strict_validation_20261021/final_native_long_path.xml",
+      "generation": "b1212a940690b30b27650b97ca083392e48d042c48a506016c58c52cf3c937c5; deep custom Windows test path failed before training"
+    },
+    {
+      "tests": 235,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 22,
+      "passed": 213,
+      "duration_seconds": 79.465,
+      "artifact": ".tmp/strict_validation_20261021/final_changed_source.xml",
+      "generation": "b1212a940690b30b27650b97ca083392e48d042c48a506016c58c52cf3c937c5"
+    },
+    {
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "passed": 3,
+      "duration_seconds": 65.221,
+      "artifact": ".tmp/strict_validation_20261021/final_native.xml",
+      "generation": "b1212a940690b30b27650b97ca083392e48d042c48a506016c58c52cf3c937c5"
+    }
+  ],
+  "api_pdf_regressions": {
+    "paper_role": "already-used regression paper; not a new independent acceptance candidate",
+    "repository": "https://github.com/rusty1s/pytorch_geometric",
+    "revision": "79d33965a40b7fa83616a9f598a0f8619f25d939",
+    "attempts": [
+      {
+        "id": "attempt_01",
+        "source_sha256": "2cd9e7c90de0d0eb9fef7217c24d527fd1e16b003a66d93b91d2dc5594dd98f1",
+        "api_health": {
+          "success": true,
+          "calls": 1
+        },
+        "state": "COMPLETED",
+        "training_executed": false,
+        "independent_acceptance": false,
+        "model_calls_including_health": 5,
+        "strict_validation": {
+          "requested": true,
+          "status": "unavailable",
+          "reason": "No evidence-bound experiment protocol: Experiment protocol source requests are exhausted or malformed",
+          "failure_kind": "model_structure_error",
+          "evidence": {
+            "stage": "experiment_protocol",
+            "schema_failures": [
+              "Required import source is not in the bounded packet; request_files: torch_geometric/profile/nvtx.py",
+              "Experiment protocol source requests are exhausted or malformed"
+            ],
+            "source_requests": 2,
+            "text_requests": 2,
+            "dataset_requests": 0,
+            "response_excerpt": "{\"request_files\":[\"torch_geometric/profile/nvtx.py\"]}"
+          }
+        },
+        "validation": {
+          "status": "prepared",
+          "is_reproduced": null,
+          "result_level": "prepared",
+          "reason": "源码和完整原命令已冻结；实际数据将在作者执行中构造，尚未训练"
+        },
+        "environment_cleanup": {
+          "status": "released",
+          "removed": [],
+          "freed_bytes": 12034290,
+          "remaining": [],
+          "errors": [],
+          "training_python": {
+            "status": "released",
+            "removed": [
+              {
+                "path": "D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\strict_validation_20261021\\data\\training_python",
+                "bytes": 12034290
+              }
+            ],
+            "errors": [],
+            "freed_bytes": 12034290
+          },
+          "docker": {
+            "status": "released",
+            "removed": [],
+            "errors": []
+          },
+          "runtime_downloads": {
+            "status": "released",
+            "removed": [],
+            "freed_bytes": 0,
+            "errors": []
+          },
+          "before_run": {
+            "status": "released",
+            "removed": [],
+            "freed_bytes": 0,
+            "remaining": [],
+            "errors": [],
+            "training_python": {
+              "status": "released",
+              "removed": [],
+              "errors": [],
+              "freed_bytes": 0
+            },
+            "docker": {
+              "status": "released",
+              "removed": [],
+              "errors": []
+            },
+            "runtime_downloads": {
+              "status": "released",
+              "removed": [],
+              "freed_bytes": 0,
+              "errors": []
+            }
+          },
+          "replacements": [
+            {
+              "status": "released",
+              "errors": [],
+              "dependencies": {
+                "status": "released",
+                "removed": [],
+                "freed_bytes": 0,
+                "remaining": [],
+                "errors": []
+              },
+              "training_python": {
+                "status": "released",
+                "removed": [],
+                "errors": [],
+                "freed_bytes": 0
+              }
+            }
+          ]
+        },
+        "source_generation": "earlier planning generation, not final product source"
+      },
+      {
+        "id": "attempt_02",
+        "source_sha256": "af42a7d598fcbacc780513974817287a9a98f80fd52941a4428ab1ea421960c7",
+        "api_health": {
+          "success": true,
+          "calls": 1
+        },
+        "state": "COMPLETED",
+        "training_executed": false,
+        "independent_acceptance": false,
+        "model_calls_including_health": 5,
+        "strict_validation": {
+          "requested": true,
+          "status": "unavailable",
+          "reason": "No evidence-bound experiment protocol: Requested evidence exceeds the bounded source budget",
+          "failure_kind": "model_structure_error",
+          "evidence": {
+            "stage": "experiment_protocol",
+            "schema_failures": [
+              "Requested evidence exceeds the bounded source budget",
+              "Requested evidence exceeds the bounded source budget"
+            ],
+            "source_requests": 1,
+            "text_requests": 1,
+            "dataset_requests": 0,
+            "automatic_source_reads": 8,
+            "response_excerpt": "{\"alignment\":{\"citations\":[\"pdf_p3_0\",\"repo_b444bff972bf_0\",\"repo_13ba301ba3c6_0\",\"repo_1f698efead3b_0\",\"repo_00a183d2ccfa_0\"],\"reason\":\"Table 1 (pdf_p3_0) reports GCN on Cora with fixed split (81.5±0.6) and random splits (79.4±1.9), each averaged over 100 runs. The repository's benchmark/citation/gcn.py implements exactly this GCN (two GCNConv layers, hidden=16, dropout=0.5) and calls run() in train_eval.py with runs=100, epochs=200, lr=0.01, weight_decay=0.0005, early_stopping=10. The fixed-split variant uses Planetoid's default masks (permute_masks=None); the random-split variant uses random_planetoid_splits (20 per class train, 500 val, 1000 test). The paper's Table 1 does not state optimizer, epochs, or early-stopping details, so those come from the author source defaults. The run_train selection branch (val_loss < best_val_loss → test_acc) is captured by the supported snapshot_after_original_validation_result_assignment mechanism, so the selected model weights are available without author checkpoints. The CPU runtime makes the torch.cuda.is_available() branch inactive, so device=cpu.\",\"status\":\"matched\"},\"dataset\":{\"citations\":[\"pdf_p3_0\",\"pdf_p8_0\",\"repo_00a183d2ccfa_0\",\"repo_1f698efead3b_0\"],\"name\":\"Cora\",\"preprocessing\":\"Planetoid Cora loaded via get_planetoid_dataset with normalize_features=True (T.NormalizeFeatures applied); fixed train/val/test masks from Kipf & Welling (20 labels per class for training).\",\"split\":\"Fixed public Planetoid split (train/val/test masks bundled with the Cora dataset); permute_masks=None so masks are not resampled.\"},\"implementation\":{\"argv\":[\"python\",\"gcn.py\",\"--dataset=Cora\"],\"citations\":[\"repo_13ba301ba3c6_0\",\"repo_940ba0cf0c98_0\",\"repo_1f698efead3b_0\"],\"cwd\":\"benchmark/citation\",\"device\":\"cpu\"},\"method\":{\"citations\":[\"pdf_p3_0\",\"repo_13ba301ba3c6_0\"],\"name\":\"GCN\",\"variant\":\"2-layer GCNConv (hidden=16, dropout=0.5), fixed split\"},\"metrics\":[{\"citations\":[\"pdf_p3_0\"],\"name\":\"accuracy\",\"reference\":81.5,\"table_context\":\"Table 1, GCN row, Cora column, Fixed split (mean ± std over 100 runs)\",\"unit\":\"percent\"}],\"model_selection\":{\"citations\":[\"repo_1f698efead3b_0\"],\"criterion\":\"Lowest validation loss (eval_info['val_loss'] < best_val_loss) tracked per epoch; early stopping after epochs//2 when current val_loss exceeds mean of previous early_stopping val losses.\",\"evaluation_weights\":\"Author reports test accuracy at the epoch with minimum validation loss (test_acc captured at the same assignment). The supported snapshot_after_original_validation_result_assignment mechanism captures the model at that same original selection point, so the evaluated weights are the best-validation-loss checkpoint, not the final-epoch model.\",\"policy\":\"best_validation\"},\"repetitions\":{\"aggregation\":\"mean\",\"citations\":[\"pdf_p3_0\",\"repo_b444bff972bf_0\",\"repo_13ba301ba3c6_0\"],\"count\":100},\"training\":{\"citations\":[\"repo_13ba301ba3c6_0\",\"repo_1f698efead3b_0\"],\"description\":\"Adam optimizer (lr=0.01, weight_decay=0.0005); up to 200 epochs per run; negative log-likelihood loss on train_mask; early stopping with patience 10 applied only after epoch > epochs//2; 100 independent runs, each re-initializing model parameters and optimizer.\",\"parameters\":[{\"citations\":[\"repo_13ba301ba3c6_0\"],\"name\":\"epochs\",\"value\":200},{\"citations\":[\"repo_13ba301ba3c6_0\"],\"name\":\"lr\",\"value\":0.01},{\"citations\":[\"repo_13ba301ba3c6_0\"],\"name\":\"weight_decay\",\"value\":0.0005},{\"citations\":[\"repo_13ba301ba3c6_0\"],\"name\":\"early_stopping\",\"value\":10},{\"citations\":[\"repo_13ba301ba3c6_0\"],\"name\":\"hidden\",\"value\":16},{\"citations\":[\"repo_13ba301ba3c6_0\"],\"name\":\"dropout\",\"value\":0.5},{\"citations\":[\"repo_13ba301ba3c6_0\"],\"name\":\"runs\",\"value\":100}]},\"version\":1}"
+          }
+        },
+        "validation": {
+          "status": "prepared",
+          "is_reproduced": null,
+          "result_level": "prepared",
+          "reason": "源码和完整原命令已冻结；实际数据将在作者执行中构造，尚未训练"
+        },
+        "environment_cleanup": {
+          "status": "released",
+          "removed": [],
+          "freed_bytes": 12038052,
+          "remaining": [],
+          "errors": [],
+          "training_python": {
+            "status": "released",
+            "removed": [
+              {
+                "path": "D:\\code\\AutoReproducer\\AutoReproducer\\.tmp\\strict_validation_20261021\\retry_02\\data\\training_python",
+                "bytes": 12038052
+              }
+            ],
+            "errors": [],
+            "freed_bytes": 12038052
+          },
+          "docker": {
+            "status": "released",
+            "removed": [],
+            "errors": []
+          },
+          "runtime_downloads": {
+            "status": "released",
+            "removed": [],
+            "freed_bytes": 0,
+            "errors": []
+          },
+          "before_run": {
+            "status": "released",
+            "removed": [],
+            "freed_bytes": 0,
+            "remaining": [],
+            "errors": [],
+            "training_python": {
+              "status": "released",
+              "removed": [],
+              "errors": [],
+              "freed_bytes": 0
+            },
+            "docker": {
+              "status": "released",
+              "removed": [],
+              "errors": []
+            },
+            "runtime_downloads": {
+              "status": "released",
+              "removed": [],
+              "freed_bytes": 0,
+              "errors": []
+            }
+          },
+          "replacements": [
+            {
+              "status": "released",
+              "errors": [],
+              "dependencies": {
+                "status": "released",
+                "removed": [],
+                "freed_bytes": 0,
+                "remaining": [],
+                "errors": []
+              },
+              "training_python": {
+                "status": "released",
+                "removed": [],
+                "errors": [],
+                "freed_bytes": 0
+              }
+            }
+          ]
+        },
+        "source_generation": "earlier planning generation, not final product source"
+      }
+    ]
+  },
+  "limitations": [
+    "Native tests train synthetic fixture models and independently reload them; these are mechanism tests, not paper reproduction.",
+    "Both real API/PDF runs prepared author plans only and did not train; strict evidence remained unavailable.",
+    "No new genuine-paper strict acceptance or new browser acceptance completed this turn.",
+    "No population-wide blocking rate measured; repository star counts rank candidates and do not prove correctness.",
+    "Full-suite collection began before the last edits. Final changed-source and native batches verify the frozen final generation.",
+    "Training-wrapper export failure remains a terminal strict runtime failure; author logs are retained.",
+    "An initial final-native run used an overly nested custom pytest workspace and failed with Windows WinError 206 before training. The unchanged source was rerun using a shorter workspace. Deep Windows workspace paths remain a platform limitation."
+  ],
+  "earlier_collection_error": {
+    "command": "python -X utf8 -m pytest -q",
+    "reason": "Unscoped collection included downloaded third-party Caffe tests in data/.",
+    "corrected_command": "python -X utf8 -m pytest -q tests"
+  },
+  "corrected_test_command_error": "The first final targeted command named a nonexistent test_title_pdf_requirement.py; no tests executed. Corrected to test_title_source_requirement.py.",
+  "full_tests_failure_resolution": "The single full-suite failure expected a missing literal PDF repository link to block execution. The intended default now permits discovered candidates. The fallback test now uses an actual missing candidate, and a new test checks unconfirmed discovered provenance. Both are included in the final changed-source batch. The full suite was not rerun at the final generation.",
+  "archive_members": {
+    ".tmp/strict_validation_20261021/cleanup_audit.json": "62db2b9eeea810bab128866752feb22f069e0486c925895345e2c7e2cf435a3b",
+    ".tmp/strict_validation_20261021/final_changed_source.log": "5e952a482f0121f5dba83295e476ef7a9ee914642feb57ef9947488dad6fece3",
+    ".tmp/strict_validation_20261021/final_changed_source.xml": "1c9759b8a341fb1c4251efc62db7d415f2c92cb58b6e6bb604315c571a7662d9",
+    ".tmp/strict_validation_20261021/final_changed_source_bad_path.log": "66c39f6624343426bc1acb4bb8c00dba4fdc65cd9ade2b28f7cab727736d8021",
+    ".tmp/strict_validation_20261021/final_changed_source_bad_path.xml": "3fbea24f28bfd34413bd6a569524efd28a87978e24f44192441821cdcae99839",
+    ".tmp/strict_validation_20261021/final_changed_source_before_budget_reset.log": "4f3b18928e3c766e44fbde9d8e3b47499a7da98a0d52d603a5daf8cde036a5e9",
+    ".tmp/strict_validation_20261021/final_changed_source_before_budget_reset.xml": "82a594e730b0dd259290a78a56373f474cf69022d99a5419284ae5d12595ed05",
+    ".tmp/strict_validation_20261021/final_native.log": "45562adf28584fc22c6a67fa95f82000115ddedfeaed47e1d85fbdcbf6f6ae7c",
+    ".tmp/strict_validation_20261021/final_native.xml": "40d68207fc9baf5f7b7782dfd3bad0f0eec21c892ceec8660512a590a5bea2f9",
+    ".tmp/strict_validation_20261021/final_native_before_budget_reset.log": "f5046b42a261654e40687a3fc0a9d454d75ca17e3bb44699cbc6310d0a8a08d0",
+    ".tmp/strict_validation_20261021/final_native_before_budget_reset.xml": "7fb0e2599b8cfb5f44849c25cb4d4babd3d1b95f56ee0ec76fb445e4794b3636",
+    ".tmp/strict_validation_20261021/final_native_long_path.log": "3754ff1097e0af0e8a9060325e831b17d3b97a258e7962f7730e650edbbb98e8",
+    ".tmp/strict_validation_20261021/final_native_long_path.xml": "db912983ed22f9e9224e5e340b25538c77443227d3a9269dc63f16ac2698afa6",
+    ".tmp/strict_validation_20261021/final_source_freeze.json": "e8f902cf674a29454ab9ce454b95b4bea5a6daa62d9f567b2bd5d4509ac17ada",
+    ".tmp/strict_validation_20261021/full_suite.log": "87e25ac85b64df575f5a1d3bd460491698739848b1243f4e348f17dd519247d4",
+    ".tmp/strict_validation_20261021/full_suite.xml": "b317f45f167195f264bdea2df508c609c79ef341d515021b5a6cc8ed120eaa87",
+    ".tmp/strict_validation_20261021/full_tests.log": "111743b8e71f7468cd78be73e3a0df8be332054daf1d4abc52d079bfb0bdf8c0",
+    ".tmp/strict_validation_20261021/full_tests.xml": "67515da843dd4c804d7dbeffa6a1116181fa6c8cc19812990cfa4c718e568b88",
+    ".tmp/strict_validation_20261021/source_freeze_before_budget_reset.json": "cd5a14019f49ae6f232e24d1a9d69bddd40fe0b68c08a1122a9846cf9a0eb162",
+    ".tmp/strict_validation_20261021/strict_final.log": "709989304293f8c575c159c88df1b6cb9b19f55838f94dc22775e1ce649e79e9",
+    ".tmp/strict_validation_20261021/strict_final.xml": "1b62832e9c9af1d7eb28288985e59f2c38a833b5bd906c2dac84eb32690dff6f",
+    ".tmp/strict_validation_native_20261021.xml": "92f1faf347ce0f149c02ba7f64ea7f601678a575601f0b79c6adbd4cfe537683",
+    "api_pdf/attempt_01/api_health.json": "424d8919a495c1d9ab097ac2a0bc32f723b31321f3e47f4a877ba98f59c36aa6",
+    "api_pdf/attempt_01/planning_source_freeze.json": "c0c2f2fb444e787e406807821fc10941a4f353491e12bf04cc1a1e2027673124",
+    "api_pdf/attempt_01/planning_summary.json": "75fad03b4fe29eefc56ba4359033e4c7516514e4867fb47ea0890d912d1bd44e",
+    "api_pdf/attempt_02/api_health.json": "424d8919a495c1d9ab097ac2a0bc32f723b31321f3e47f4a877ba98f59c36aa6",
+    "api_pdf/attempt_02/planning_source_freeze.json": "39e3c0111a135ab963cfec0eb1da14af5a438d8a018c0fd9dc34c41d0ba809fb",
+    "api_pdf/attempt_02/planning_summary.json": "d212a25a7f22574869cd2b9be009fec5c243b4d03fb31345060aed10104aed21",
+    "final_native_receipts/test_actual_strict_service_rel0/service/runs/repository_e104d526c7ac478c9864df0c1595de21/environment_cleanup.json": "639beb3504f3af2c5db5b1642a2fa6bbcab70bfb26db0a73d707356730d1822c",
+    "final_native_receipts/test_actual_strict_service_rel0/service/runs/repository_e104d526c7ac478c9864df0c1595de21/execution.json": "4ed88dfc6674eeb8a414f0255cb33efad7ff4bf9f01583732f98f6e3ed11b430",
+    "final_native_receipts/test_actual_strict_service_rel0/service/runs/repository_e104d526c7ac478c9864df0c1595de21/strict_execution_verification.json": "34f48338dfa674e8b8a495ade989a8f2c5afbdc873ecdeb3e03dea19f6ef4729",
+    "final_native_receipts/test_actual_strict_service_rel1/service/runs/repository_00b71f0fd2134381a7339210cf78bb2c/environment_cleanup.json": "12b0e324e4c7002223a84ff960221062a91e2aa2b155f544055952925c200bf5",
+    "final_native_receipts/test_actual_strict_service_rel1/service/runs/repository_00b71f0fd2134381a7339210cf78bb2c/execution.json": "2a354ba764f61026a4dfb5d9682dec7eb48b18ec9f91dfeaf8e470d1e58737b2",
+    "final_native_receipts/test_actual_strict_service_rel1/service/runs/repository_00b71f0fd2134381a7339210cf78bb2c/strict_execution_verification.json": "f60445aff83aed7d0b37498e91d1c7c9038d139031c287ffca2925c9d866e793",
+    "final_native_receipts/test_actual_unsupported_strict0/service/runs/repository_088cc4a20c794ff3b37ce5b72daa190e/environment_cleanup.json": "ad6f870c50af80034b8ce85417c452158bc04f5781f5909568ae3e89ee1c9bc4",
+    "final_native_receipts/test_actual_unsupported_strict0/service/runs/repository_088cc4a20c794ff3b37ce5b72daa190e/execution.json": "08bcb22f0096c53433e519a260e5ea26a70545acefa11dddcbade008ce8335a1"
+  },
+  "archive": {
+    "path": "docs/evidence/strict_validation_20261021_logs.zip",
+    "sha256": "44b61c6b069ceda685434bf24d79041817d1dc5aec77e5fda4da9eb96e2051e7"
+  }
+}
