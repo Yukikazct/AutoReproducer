@@ -364,6 +364,9 @@ class DiscoveredRepositoryReproduction:
         data['reproduction_scope'] = 'author_code_execution'
         data['strict_validation'] = {'requested': strict_requested,
             'status': 'pending' if strict_requested else 'not_requested'}
+        data['source_repair'] = {'requested': request['source_repair'],
+            'editable': request['source_repair_editable'], 'max_rounds': 2,
+            'status': 'pending' if request['source_repair'] else 'not_requested'}
         for key in ('reading_coverage', 'reading_batches', 'reading_originals'):
             if key in request:
                 data[key] = deepcopy(request[key])
@@ -705,6 +708,8 @@ class DiscoveredRepositoryReproduction:
         try:
             event(phase, "running")
             execution_only = plan['scope'] == 'author_code_execution'
+            from src.source_repair import validate_repair_sources
+            validate_repair_sources(request, workspace, snapshot)
             with _frozen_input_validation():
                 if read_json(run_dir / "experiment_spec.json") != {"spec": plan, "sha256": data["spec_sha256"]}:
                     raise ValueError("落盘实验协议与冻结的本次计划不一致")
@@ -800,6 +805,8 @@ class DiscoveredRepositoryReproduction:
                                     raise ValueError('作者加载器下载或处理的真实数据在执行期间发生变化')
             verify_frozen_inputs()
             if request.get("prepare_only"):
+                if request.get('source_repair'):
+                    data['source_repair'].update(status='not_run', reason='仅准备计划，尚未运行或请求源码补丁。')
                 data["execution"] = {"mode": "repository", "executed": False, "success": False,
                                      "repository_executed": False, "reason": "仅准备计划，尚未执行作者训练"}
                 data["validation"] = {"status": "prepared", "is_reproduced": None,
@@ -1076,6 +1083,8 @@ class DiscoveredRepositoryReproduction:
             if data['dataset_provenance'].get('verified') is not True and not native_pending and not author_managed_data:
                 raise ValueError('完整真实数据尚未冻结，不能开始作者训练')
             if request.get("prepare_environment"):
+                if request.get('source_repair'):
+                    data['source_repair'].update(status='not_run', reason='仅准备环境，尚未运行或请求源码补丁。')
                 data["execution"] = {"mode": "repository", "executed": False, "success": False,
                                      "repository_executed": False, "reason": "环境已准备，尚未执行作者训练"}
                 data["validation"] = {"status": "environment_ready", "is_reproduced": None,
@@ -1093,6 +1102,13 @@ class DiscoveredRepositoryReproduction:
             prepared_environment = {**environment, "auto_prepare": False, "require_prepared": True,
                                     "deadline_monotonic": None}
             execution = run_steps(execution_plan, prepared_environment)
+            data['execution'] = execution
+            if request.get('source_repair'):
+                from src.source_repair import repair_author_failure
+                data['original_execution'] = deepcopy(execution)
+                write_json(run_dir / 'original_execution.json', execution)
+                execution = repair_author_failure(self.runner, self.llm, request, plan, snapshot,
+                    workspace, run_dir, data, execution, verify_frozen_inputs, emit)
             data["execution"] = execution
             training_id = next(step["id"] for step in plan["steps"] if step["kind"] == "train")
             data["repository_executed"] = any(step.get("id") == training_id and step.get("executed")
@@ -1122,14 +1138,19 @@ class DiscoveredRepositoryReproduction:
                 event('compare_author_claims', 'success', '已使用独立复算结果对比冻结的论文参考值')
                 return
             from src.author_execution_plan import verify_author_execution
-            validation = verify_author_execution(plan, workspace, execution, data['spec_sha256'])
+            repaired = data['source_repair']['status'] == 'succeeded'
+            if repaired:
+                from src.source_repair import verify_repaired_execution
+                validation = verify_repaired_execution(plan, data, execution)
+            else:
+                validation = verify_author_execution(plan, workspace, execution, data['spec_sha256'])
             validation.update(reviews_removed=True, paper_metrics_verified=False,
                               pre_execution_review='disabled', dataset_provenance_verified=False)
             if data.get('strict_validation', {}).get('requested'):
                 validation['strict_validation'] = deepcopy(data['strict_validation'])
                 validation.setdefault('warnings', []).append('作者命令可运行；严格验收未完成：' +
                     data['strict_validation'].get('reason', '缺少完整独立证据'))
-            if runtime_loaders:
+            if runtime_loaders and not repaired:
                 from src.runtime_dataset_evidence import audit_runtime_datasets
                 dataset_audit = audit_runtime_datasets(plan, validation['author_execution'], workspace)
                 data['runtime_dataset_evidence'] = validation['runtime_dataset_evidence'] = dataset_audit
@@ -1164,9 +1185,11 @@ class DiscoveredRepositoryReproduction:
             if validation.get('pyg_compatibility'):
                 validation.setdefault('warnings', []).append('执行包含实际报错后的旧 PyG 容器兼容；原数据文件、张量值与划分未改写。')
             from src.author_claim_comparison import collect_author_metrics
+            metric_workspace = Path(data['source_repair']['workspace']) if repaired else workspace
+            metric_sources = data['source_repair']['effective_source_files'] if repaired else snapshot['files']
             try:
                 validation['metric_records'], data['metric_parse_errors'] = collect_author_metrics(
-                    execution, workspace=workspace, plan=plan, sources=snapshot['files'])
+                    execution, workspace=metric_workspace, plan=plan, sources=metric_sources)
                 if any(record.get('uncertainty_kind') == 'bootstrap_confidence_interval' for record in validation['metric_records']):
                     validation.setdefault('warnings', []).append('作者打印的误差项为 bootstrap 置信区间半宽，未当作标准差比较。')
             except Exception as exc:
@@ -1189,9 +1212,13 @@ class DiscoveredRepositoryReproduction:
             event(phase, 'running')
             try:
                 comparison.update(compare_author_claims(self.llm, packet, plan, workspace, execution,
-                                                        sources=snapshot['files']))
+                                                        sources=metric_sources, metric_workspace=metric_workspace))
             except Exception as exc:
                 comparison['diagnostic'] = str(exc) or type(exc).__name__
+            if repaired:
+                comparison.update(basis='patched_author_output', source_modified=True,
+                    source_repair_manifest_sha256=data['source_repair']['manifest_sha256'])
+                comparison['reason'] += ' 本次实际输出来自兼容补丁后的源码，未作为原始源码或独立论文复现证明。'
             for name, value in (('author_claim_comparison.json', comparison),
                                 ('author_execution_verification.json', validation), ('execution.json', execution)):
                 try:

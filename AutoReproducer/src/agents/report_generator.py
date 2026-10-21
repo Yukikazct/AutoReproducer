@@ -40,6 +40,45 @@ def _markdown_text(value: str) -> str:
                   value.replace("\n", " ").replace("\r", " "))
 
 
+def _source_repair_lines(data, report_path):
+    from src.repository_repairer import _private
+    state = _private(data.get('source_repair') or {})
+    if not state.get('requested'):
+        return []
+    lines = ['', '### 兼容性源码修复', '',
+        '- **状态**: ' + _markdown_text(_txt(state.get('status'))),
+        '- **授权范围**: ' + ', '.join(_markdown_text(name) for name in state.get('editable', [])),
+        f"- **补丁轮数**: {len(state.get('attempts', []))} / 2；每轮整体校验、完整原命令重跑，失败或取消整体回滚。",
+        '- 原始源码、来源包与冻结计划保留；补丁仅作用于独立修复副本。修改后执行不构成原始源码严格复现或独立论文数值核验。']
+    for key, label in (('original_workspace', '原始副本'), ('workspace', '修复副本'),
+                       ('reason', '说明'), ('report_path', '修复结果与失败报告'), ('records_path', '结构化审计记录')):
+        if state.get(key):
+            lines.append('- **' + label + '**: ' + _markdown_text(_txt(state[key])))
+    if state.get('manifest_sha256'):
+        lines.append('- **修复清单 SHA-256**: `' + state['manifest_sha256'] + '`')
+    for attempt in state.get('attempts', []):
+        lines += ['', f"- 第 {attempt['round']} 轮：" + _markdown_text(_txt(attempt.get('status')))
+                  + '；' + _markdown_text(_txt(attempt.get('reason') or attempt.get('error')))]
+        if attempt.get('reason') and attempt.get('error'):
+            lines.append('  错误：' + _markdown_text(_txt(attempt['error'])))
+        if attempt.get('rollback_error'):
+            lines.append('  回滚失败：' + _markdown_text(_txt(attempt['rollback_error'])))
+        for change in attempt.get('changed_files', []):
+            lines.append('  ' + _markdown_text(change['path']) + '：`' + change['base_sha256'] + '` → `' + change['sha256'] + '`')
+    if state.get('evidence_archive'):
+        from src.source_repair_evidence import evidence_target
+        try:
+            target = evidence_target(data, report_path)
+            if target:
+                lines += ['', target,
+                    '附件包含逐轮 proposal、diff、结果、回滚记录与完整进程日志；成员哈希与脱敏状态见 evidence_manifest.json。']
+        except (OSError, ValueError, KeyError) as exc:
+            lines += ['', '源码修复证据附件不可用：' + _markdown_text(str(exc))]
+    if state.get('evidence_error'):
+        lines.append('- **附件生成失败**: ' + _markdown_text(state['evidence_error']))
+    return lines
+
+
 def _metric_value_text(node, suffix=''):
     value = _txt(node.get('value'))
     uncertainty = node.get('reported_uncertainty')
@@ -748,6 +787,7 @@ class ReportGeneratorAgent(BaseAgent):
                       "- 此记录证明源码已获取；实际执行来源以执行记录为准。", ""]
         lines += _repository_analysis_lines(data)
         lines += _discovered_plan_lines(data)
+        lines += _source_repair_lines(data, report_path)
 
         # 3. 环境配置 + 依赖诊断
         lines += ["## 3. 环境配置",
@@ -864,7 +904,8 @@ class ReportGeneratorAgent(BaseAgent):
             if candidate:
                 lines.append("- **候选仓库（作者归属未核验）**: " + _markdown_text(_txt(candidate)))
         elif execution.get("mode") == "repository":
-            lines.append("- **执行对象**: 固定版本作者仓库中的实验入口（多文件）")
+            lines.append("- **执行对象**: " + ('兼容补丁后的独立作者源码副本（多文件）；原始源码保留'
+                if data.get('execution_source') == 'patched_author_repository' else '固定版本作者仓库中的实验入口（多文件）'))
         else:
             lines.append(f"- **代码长度**: {len(_txt(execution.get('code')))} 字符")
             scope = execution.get("reproduction_scope")

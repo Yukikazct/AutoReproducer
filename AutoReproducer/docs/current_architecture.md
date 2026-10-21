@@ -1,6 +1,6 @@
 # 当前架构与能力边界
 
-本文描述当前代码的执行路径。普通作者执行仍为默认流程；普通真实 PDF 可额外请求严格核验。历史实验和旧架构图中的结果不能代替当前版本的实际验收，智能优化仍未开放。
+本文描述当前代码的执行路径。普通作者执行仍为默认流程；普通真实 PDF 可额外请求严格核验或显式兼容性源码修复，两者互斥。历史实验和旧架构图中的结果不能代替当前版本的实际验收，智能优化仍未开放。
 
 当前支持与验收目标是 Windows，应用使用 64 位 CPython 3.11 / 3.12。其他系统的兼容实现仍保留，不作为当前交付承诺。
 
@@ -23,6 +23,10 @@ app.py
       │   → DiscoveredRepositoryReproduction
       │   → 固定仓库版本 → 规划作者命令 → 准备数据与环境
       │   → RepositoryRunner → 命令完成核验 → 论文指标比较
+      │   ├─ 可选 source_repair=True + 精确 Python 白名单
+      │   │   → 实际失败 → 独立修复副本 → 最多两轮兼容补丁
+      │   │   → 原命令/环境重跑 → 补丁来源核对与参考比较
+      │   │   （与严格核验互斥；不产生严格成功结论）
       │   └─ 可选 strict_validation=True
       │       → 冻结实验协议与来源核验 → 作者完整实验
       │       → 独立进程重载模型与复算指标 → 所选实验数值判定
@@ -47,6 +51,7 @@ app.py
 | `author_execution_plan.py`、`author_entrypoints.py` | 从固定源码规划原始 Python 脚本、模块或 Notebook 命令 |
 | `author_python.py`、`author_runtime_dependencies.py`、`author_failure_analysis.py` | 选择兼容 Python，依据实际错误进行有限依赖修复与失败分析 |
 | `repository_runner.py`、`process_lifecycle.py` | 执行 argv 命令，保存输出和产物，处理退出、中断及所属进程清理 |
+| `source_repair.py`、`repository_repairer.py`、`safety/patch_transaction.py`、`source_repair_evidence.py` | 显式兼容修复：精确白名单、独立副本、运行前 AST 与实际缺失 API 核对、原命令重跑、全树回滚、补丁来源清单及脱敏证据 ZIP |
 | `repository_profiles.py`、`method_profiles.py`、`rezero_profiles.py` | 注册固定实验；预设范围由各自源码、数据、参数与设备要求限定 |
 | `author_claim_comparison.py` 及相关证据模块 | 从作者输出提取指标，对照原 PDF 并验证引用、统计口径和比较条件 |
 | `strict_validation.py`、`agents/experiment_protocol.py`、`discovered_repository_runtime.py` | 可选严格核验：绑定论文与源码协议、在预算内自动读取确切本地 import 并重查冻结依据，核对完整运行、独立模型推理和指标复算证据 |
@@ -61,6 +66,10 @@ app.py
 - 原始作者命令不设训练时间上限；严格捕获保留全部原作者步骤，并将这些步骤的 `timeout_s` 设为 `None`。追加的独立模型推理与指标复算步骤单独限制为 300 秒；下载、安装和模型请求保留各自的超时，错误修复有次数上限。缺少 CUDA、依赖或可支持入口时保留具体阻塞原因。
 - `author_code_completed` 表示所需命令正常返回且所属进程完成处理。仅准备源码或环境属于准备状态；Mock 属于演示状态。
 - 普通 PDF 作者仓库执行完成后尝试比较作者输出与论文宣称。比较保留引用、差值和限制，失败不改变已经保存的命令完成事实；它不替代独立复算和整篇论文验收。
+- `source_repair` 默认 `False`。网页仅对普通真实 PDF 提供选项，并要求明确填写 1–32 个已存在的 Python 相对路径；不接受目录、通配符、数据、评测或权重文件。请求经后台与独立 worker 传递，默认执行不修改作者源码；标题、Mock、语料对照、外部代码、固定预设和 Notebook 计划不进入该修复路径。
+- 显式源码修复在原命令真实失败后只创建一次独立会话，最多两轮、每轮最多三个文件；拒绝也消耗轮数。副本只包含固定作者源码与冻结输入，原工作区、来源与观测器保持独立。候选保留原 argv、cwd、依赖顺序、步骤环境及已准备依赖；在应用前核对 AST 结构、训练/划分/评测敏感名称与会话已观测的真实报错中的缺失 API，再按原命令完整重跑。复制和快照前用元数据检查 4096 文件 / 256 MiB 上限，超限保留 `resource_limit` 诊断；失败或后验校验异常全树回滚，恢复失败立即停止并标记 `rollback_failed`。
+- 源码修复对作者环境中的工作区绝对路径做有记录的副本重定位；尚无冻结凭据的动态 `author_runtime` 数据不进入修复。最终 248 项合成机制验证及来源指纹见 [入口证据](evidence/issue20_web_repairs_20261021.json)，其中控件 AppTest 与真实后台执行分开验证，没有调用真实模型 API。
+- 修复成功保存原失败、独立修复计划、逐轮提案 / diff / 日志 / 回滚结果及原/实际源码摘要清单。结果明确标记 `patched_author_repository`、`patched_author_code_execution` 和 `source_modified=true`；仍为 `paper_metrics_verified=false`、`is_reproduced=null`、`training_observed=false`。参考比较使用修复后的来源摘要并标记 `patched_author_output`。此入口与严格核验互斥，细节见 [显式仓库兼容修复](repository_repairs.md)；实现接入不等于网页完整验收或真实论文严格通过。
 - `strict_validation` 默认 `False`。网页只对普通真实 PDF、未选预设和语料对照时提供勾选项；旧的审核、结果摘要共享及优化开关不会启用严格核验。显式请求严格核验时，先检查所选实验协议与冻结来源；当前不支持或资格证据不足则记录 `strict_validation.status=unavailable` 和原因，继续普通作者执行及参考比较。
 - 严格协议分析器可自动跟随冻结源码中程序解析出的确切本地 import，并核对读取内容与固定哈希；自动补读受总文件数和字节上限约束，不消耗模型的两轮源码请求额度。证据缺失、预算耗尽或不支持的源码结构会保留诊断，不以模型猜测补齐协议。降级前保存严格拒绝来源包，并在核对物理输入未变后恢复普通规划的原始来源视图，避免严格补读占满普通规划的证据预算。
 - 严格数值验收要求原 PDF、固定作者源码、实验协议与执行计划相互绑定，并验证完整训练/测试、原生运行次数、独立新模型预测、独立复算及作者输出的一致性。只有全部证据通过才能标记 `paper_metrics_verified=true`；是否达到冻结论文参考值另由 `is_reproduced` 给出，范围限于 `selected_paper_experiment`。仅勾选、命令退出或打印出相近分数均不满足这些条件。

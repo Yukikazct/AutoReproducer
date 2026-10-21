@@ -58,7 +58,7 @@ PROFILE_LABELS = repository_entrypoint.profile_labels()
 get_profile = repository_entrypoint.get_profile
 
 # Only refresh the small loader. Older active pipeline modules keep their globals.
-if pipeline_entrypoint.BACKEND_API_VERSION != 7:
+if pipeline_entrypoint.BACKEND_API_VERSION != 8:
     pipeline_entrypoint = importlib.reload(pipeline_entrypoint)
 
 _pipeline_backend = pipeline_entrypoint.load_backend_pipeline()
@@ -461,14 +461,42 @@ with st.sidebar:
         author_execution_only = True
 
     strict_validation = False
+    source_repair = False
+    source_repair_editable = []
     if (input_mode == "上传PDF" and uploaded_file and not st.session_state.mock_mode
             and not experiment_profile and not corpus_paper):
+        def _select_pdf_execution_mode(selected, alternative):
+            if st.session_state.get(selected):
+                st.session_state[alternative] = False
+
+        if (st.session_state.get("pdf_source_repair")
+                and st.session_state.get("pdf_strict_validation")):
+            st.session_state["pdf_strict_validation"] = False
         strict_validation = st.checkbox(
             "严格核验：重载模型并独立复算指标", key="pdf_strict_validation",
             disabled=st.session_state.running,
+            on_change=_select_pdf_execution_mode,
+            args=("pdf_strict_validation", "pdf_source_repair"),
             help="请求在作者代码运行后检查实验协议、重载模型并独立计算指标；暂不支持核验时继续普通运行并记录原因。")
         if strict_validation:
             st.caption("严格核验需要完整模型、数据划分和实验设置证据；不支持时继续普通运行并记录核验不可用，结果以实际检查为准。")
+        source_repair = st.checkbox(
+            "兼容性源码修复：失败后自动重试", key="pdf_source_repair",
+            disabled=st.session_state.running,
+            on_change=_select_pdf_execution_mode,
+            args=("pdf_source_repair", "pdf_strict_validation"),
+            help="仅允许修改下方列出的 Python 文件，最多两轮修复；保留补丁和失败日志，失败时整体回滚，不得改变实验协议。")
+        if source_repair:
+            strict_validation = False
+            editable_text = st.text_area(
+                "允许修复的 Python 文件（每行一个仓库相对路径）",
+                key="pdf_source_repair_editable",
+                placeholder="src/model.py\ntrain.py",
+                disabled=st.session_state.running,
+                help="请根据作者仓库填写明确的文件路径；不接受目录、通配符或仓库外路径。")
+            source_repair_editable = list(dict.fromkeys(
+                line.strip() for line in editable_text.splitlines() if line.strip()))
+            st.caption("源码修复与严格核验互斥：修复会改变源码，严格核验要求冻结源码。修复不能改变模型、数据划分、训练轮数或评价方法。")
 
     # 启动 / 重置按钮
     col1, col2 = st.columns(2)
@@ -517,6 +545,8 @@ if start_btn and not st.session_state.running:
         st.sidebar.error("官方仓库预设需要关闭 Mock 模式，才能执行真实论文代码。")
     elif manual_repo_error:
         st.sidebar.error(manual_repo_error)
+    elif source_repair and not source_repair_editable:
+        st.sidebar.error("启用源码修复时，请至少填写一个允许修复的 Python 文件相对路径。")
     elif not experiment_profile and not pt and not uploaded_file:
         st.sidebar.error("请先上传PDF文件" if input_mode == "上传PDF"
                          else "请先输入论文标题")
@@ -551,6 +581,8 @@ if start_btn and not st.session_state.running:
             paper_title=pt, pdf_path=tmp_pdf,
             **({'author_execution_only': True} if author_execution_only else {}),
             strict_validation=strict_validation,
+            source_repair=source_repair,
+            source_repair_editable=source_repair_editable,
             **({"preferred_repo_url": manual_repo_url} if manual_repo_url else {}),
             corpus_paper=corpus_paper,
             experiment_profile=experiment_profile,

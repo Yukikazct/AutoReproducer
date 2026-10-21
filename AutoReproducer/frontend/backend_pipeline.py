@@ -34,7 +34,7 @@ from src.project_paths import get_data_root
 
 
 # Contract checked by the web loader before starting a new background thread.
-BACKEND_API_VERSION = 7
+BACKEND_API_VERSION = 8
 
 
 def __getattr__(name):
@@ -98,6 +98,8 @@ class ProgressStore:
 
 
 def _write_report_copy(path: Path, raw: bytes) -> None:
+    from src.safety.paths import filesystem_path
+    path = Path(filesystem_path(path))
     temporary = None
     try:
         with tempfile.NamedTemporaryFile("wb", dir=path.parent, delete=False) as output:
@@ -120,11 +122,15 @@ def _sync_run_report(result: dict) -> None:
 
     run_dir = Path(data["run_dir"])
     report = Path(result["report_path"])
+    from src.source_repair_evidence import report_evidence_bytes
+    repair_evidence = report_evidence_bytes(report.read_text(encoding='utf-8'), report)
     assets = report.with_name(report.stem + "_assets")
     if assets.exists():
         for image in assets.iterdir():
             relative = assets.name + "/" + image.name
-            raw = verified_report_image_bytes(relative, report)
+            raw = repair_evidence.get(relative)
+            if raw is None:
+                raw = verified_report_image_bytes(relative, report)
             if raw is None:
                 raise ValueError("报告图片已改变或无法验证: " + image.name)
             target = workspace_path(run_dir, relative, "run report image")
@@ -182,6 +188,8 @@ def run_pipeline_core(progress_path: str,
                       preferred_repo_url: str = "",
                       author_execution_only: bool = True,
                       strict_validation: bool = False,
+                      source_repair: bool = False,
+                      source_repair_editable: Optional[List[str]] = None,
                       _managed_runtime: bool = False,
                       _append_progress: bool = False,
                       _runtime_preparation: Optional[dict] = None) -> Dict[str, Any]:
@@ -196,6 +204,8 @@ def run_pipeline_core(progress_path: str,
     use_llm_review = allow_result_summary_review = enable_optimization = False
     optimization_mode = "off"
     author_execution_only = True
+    # Disabled repair controls must not reuse paths from an earlier PDF task.
+    source_repair_editable = source_repair_editable if source_repair is True else []
     store = ProgressStore(progress_path, reset=not _append_progress)
     from src.title_routing import resolve_title_request
     resolved = {"paper_title": paper_title, "pdf_path": pdf_path,
@@ -203,6 +213,8 @@ def run_pipeline_core(progress_path: str,
                 "corpus_paper": corpus_paper, "mock_mode": mock_mode,
                 "author_execution_only": author_execution_only,
                 "strict_validation": strict_validation,
+                "source_repair": source_repair,
+                "source_repair_editable": source_repair_editable,
                 "experiment_profile": experiment_profile}
     pdf_parser_reason = None
     if pdf_path:
@@ -221,6 +233,12 @@ def run_pipeline_core(progress_path: str,
     if not (strict_validation is True and not pdf_path and not experiment_profile):
         resolved = resolve_title_request(resolved)
     experiment_profile = resolved.get("experiment_profile")
+    from src.source_repair import normalize_source_repair_request
+    try:
+        normalize_source_repair_request({**resolved, 'source_repair': source_repair,
+            'source_repair_editable': source_repair_editable, 'strict_validation': strict_validation})
+    except ValueError as exc:
+        return _reject_pdf_input(store, str(exc))
     title_resolution = title_resolution or resolved.get("title_resolution")
     if title_resolution:
         store.emit({"type": "title_resolution", **title_resolution})
@@ -237,6 +255,8 @@ def run_pipeline_core(progress_path: str,
                 "corpus_paper": corpus_paper, "model_name": model_name,
                 "author_execution_only": author_execution_only,
                 "strict_validation": strict_validation,
+                "source_repair": source_repair,
+                "source_repair_editable": source_repair_editable,
                 "base_url": base_url, "api_key": api_key, "mock_mode": mock_mode,
                 "max_trials": max_trials, "use_docker": use_docker,
                 "workspace_dir": workspace_dir, "experiment_profile": experiment_profile,
@@ -322,6 +342,8 @@ def run_pipeline_core(progress_path: str,
                 "corpus_paper": corpus_paper, "experiment_profile": experiment_profile,
                 "author_execution_only": author_execution_only,
                 "strict_validation": strict_validation,
+                "source_repair": source_repair,
+                "source_repair_editable": source_repair_editable,
                 "prepare_only": prepare_only, "offline": offline,
                 "use_llm_review": use_llm_review,
                 "allow_result_summary_review": allow_result_summary_review,
@@ -622,6 +644,8 @@ def run_pipeline_background(progress_path: str, *,
                             preferred_repo_url: str = "",
                             author_execution_only: bool = True,
                             strict_validation: bool = False,
+                            source_repair: bool = False,
+                            source_repair_editable: Optional[List[str]] = None,
                             cleanup_pdf: bool = True,
                             on_done=None) -> threading.Thread:
     """启动后台线程执行流水线；返回守护线程句柄。
@@ -637,6 +661,8 @@ def run_pipeline_background(progress_path: str, *,
                 preferred_repo_url=preferred_repo_url,
                 author_execution_only=author_execution_only,
                 strict_validation=strict_validation,
+                source_repair=source_repair,
+                source_repair_editable=source_repair_editable if source_repair is True else [],
                 corpus_paper=corpus_paper, model_name=model_name,
                 base_url=base_url, api_key=api_key, mock_mode=mock_mode,
                 max_trials=max_trials, use_docker=use_docker,
