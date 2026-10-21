@@ -77,6 +77,20 @@ def test_valid_review_and_protocol_are_rechecked_without_model_calls(strict_plan
     assert (packet, plan) == original
 
 
+def test_replay_retains_validated_unused_dependency_audit(tmp_path):
+    fixture = make_experiment(tmp_path)
+    packet = planner.build_evidence_packet(fixture['pdf'], fixture['workspace'], fixture['snapshot'])
+    packet['author_execution_only'] = False
+    raw = fixture_protocol(fixture['proposal'], planner._planning_view(packet))
+    packet['experiment_protocol'] = validate_experiment_protocol(raw, packet, fixture['workspace'])
+    suggestion = 'tqdm==' + planner.CPU_COMPATIBILITY_PINS['tqdm']
+    fixture['proposal']['requirements']['compatibility'].append(suggestion)
+    plan = planner.propose_plan(PlannedLLM(fixture['proposal']), packet, fixture['workspace'])
+    assert plan['requirements']['omitted_unused_proposals'] == [suggestion]
+    assert suggestion not in plan['requirements']['compatibility']
+    assert assert_strict_plan(plan, packet, fixture['workspace'])['status'] == 'verified'
+
+
 @pytest.mark.parametrize('mutation,match', [
     (lambda p: p.pop('semantic_review'), 'plan_sha256'),
     (lambda p: p['semantic_review'].update(reviewed_plan_sha256='0' * 64), 'does not bind'),

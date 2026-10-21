@@ -230,6 +230,9 @@ def materialize_capture(workspace, plan, spec_hash, *, snapshot=None):
     (destination / 'author_values.py').write_bytes((Path(__file__).parent / 'author_values.py').read_bytes())
     (destination / 'split_counts.py').write_bytes((Path(__file__).parent / 'split_counts.py').read_bytes())
     runtime_files = ["runtime.py", "config.json", 'author_values.py', 'split_counts.py']
+    for name in ('strict_numeric_compatibility.py', 'author_numeric_compatibility.py'):
+        (destination / name).write_bytes((runtime.parent / name).read_bytes())
+        runtime_files.append(name)
     if series:
         (destination / "common.py").write_bytes(runtime.read_bytes())
         runtime = runtime.with_name("discovered_series_capture.py")
@@ -239,7 +242,8 @@ def materialize_capture(workspace, plan, spec_hash, *, snapshot=None):
     (destination / "runtime.py").write_bytes(runtime.read_bytes())
     train = next(step for step in plan["steps"] if step["kind"] == "train")
     config = {"version": 1, "spec_sha256": spec_hash, "capture": deepcopy(plan["capture"]),
-              "train": deepcopy(train), "source_files": deepcopy((snapshot or {}).get("files", {}))}
+              "train": deepcopy(train), "source_files": deepcopy((snapshot or {}).get("files", {})),
+              'numeric_compatibility': []}
     graph_modules = {'torch-sparse': 'torch_sparse', 'torch-scatter': 'torch_scatter', 'dgl': 'dgl'}
     config['operator_imports'] = sorted({graph_modules[pin.split('==')[0]]
         for pin in plan['requirements']['compatibility'] if pin.split('==')[0] in graph_modules})
@@ -278,7 +282,7 @@ def series_artifact_names(runs):
     return [f"run_{index:03d}_{suffix}" for index in range(runs) for suffix in ("model.pt", "tensors.pt")]
 
 
-def _reported_accuracy(plan, execution):
+def _reported_accuracy(plan, execution, independent_metrics):
     identifier = next(step["id"] for step in plan["steps"] if step["kind"] == "train")
     step = next(item for item in execution["steps"] if item["id"] == identifier)
     log_root = Path(execution["run_dir"]).resolve(strict=True)
@@ -292,16 +296,47 @@ def _reported_accuracy(plan, execution):
     values = re.findall(pattern, stdout)
     if not values:
         raise ValueError("The completed author training log has no declared final accuracy")
-    literal = values[-1]
-    value = float(literal)
-    if not math.isfinite(value):
-        raise ValueError("The author accuracy is non-finite")
     from decimal import Decimal
-    # Half of the least printed decimal digit is the actual rounding allowance.
-    rounding = 0.5 * 10.0 ** Decimal(literal).as_tuple().exponent
     divisor = 100 if reported["unit"] == "percent" else 1
-    return {"value": value / divisor, "rounding_tolerance": rounding / divisor + 1e-8,
-            "literal": literal, "unit": reported["unit"], "label": reported["label"]}
+
+    def parsed(literal):
+        value = float(literal)
+        if not math.isfinite(value):
+            raise ValueError("The author accuracy is non-finite")
+        # Half of EACH value's least printed decimal digit is its actual
+        # rounding allowance, including scientific notation and percent units.
+        rounding = 0.5 * 10.0 ** Decimal(literal).as_tuple().exponent
+        return {"value": value / divisor, "rounding_tolerance": rounding / divisor + 1e-8,
+                "literal": literal}
+
+    contract = plan['capture']
+    series = contract['kind'] == 'torch_classification_series'
+    if series and len(values) != 1:
+        expected = contract['expected_runs']
+        if len(values) != expected or contract.get('aggregation') != 'mean':
+            raise ValueError('Author native series metric log must contain one aggregate or exactly '
+                             + str(expected) + ' ordered per-run values')
+        independent = independent_metrics.get('runs')
+        if not isinstance(independent, list) or len(independent) != expected:
+            raise ValueError('Author per-run metrics require every independent native repetition')
+        reconciled = []
+        for index, (literal, evaluated) in enumerate(zip(values, independent)):
+            row = parsed(literal)
+            actual = evaluated.get('accuracy')
+            if (evaluated.get('index') != index or type(actual) not in (int, float)
+                    or not math.isfinite(actual) or not 0 <= actual <= 1
+                    or abs(row['value'] - actual) > row['rounding_tolerance']):
+                raise ValueError('Author printed accuracy and fresh model evaluation disagree for native run '
+                                 + str(index))
+            reconciled.append({**row, 'index': index, 'independent_value': actual, 'pass': True})
+        return {'value': sum(row['value'] for row in reconciled) / expected,
+                'rounding_tolerance': sum(row['rounding_tolerance'] for row in reconciled) / expected,
+                'unit': reported['unit'], 'label': reported['label'], 'aggregation': 'mean',
+                'source': 'ordered_per_run_author_output', 'per_run': reconciled}
+    result = {**parsed(values[-1]), 'unit': reported['unit'], 'label': reported['label']}
+    if series:
+        result.update(aggregation='mean', source='author_aggregate', per_run=[])
+    return result
 
 
 def verify_capture(plan, workspace, execution, spec_hash):
@@ -319,6 +354,12 @@ def verify_capture(plan, workspace, execution, spec_hash):
     for record in (capture, metrics):
         if record.get("spec_sha256") != spec_hash or record.get("pass") is not True:
             raise ValueError("Independent runtime evidence does not match the frozen experiment")
+    from src.experiments.strict_numeric_compatibility import verify_numeric_receipts
+    configuration = read_json(root / 'config.json')
+    if (configuration.get('spec_sha256') != spec_hash or configuration.get('capture') != plan['capture']
+            or configuration.get('train') != next(step for step in plan['steps'] if step['kind'] == 'train')):
+        raise ValueError('Strict numeric runtime configuration differs from the frozen experiment')
+    numeric_repairs = verify_numeric_receipts(configuration, workspace, capture, metrics)
     series = plan["capture"]["kind"] == "torch_classification_series"
     if series:
         verify_series_receipts(plan["capture"], root, capture, metrics)
@@ -340,7 +381,7 @@ def verify_capture(plan, workspace, execution, spec_hash):
             or isinstance(loss, bool) or not isinstance(loss, (int, float))
             or not math.isfinite(loss) or loss < 0):
         raise ValueError("Independent metrics are missing, invalid or non-finite")
-    reported = _reported_accuracy(plan, execution)
+    reported = _reported_accuracy(plan, execution, metrics)
     if abs(reported["value"] - accuracy) > reported["rounding_tolerance"]:
         raise ValueError("Author printed accuracy and fresh model evaluation disagree")
     comparisons = []
@@ -378,7 +419,8 @@ def verify_capture(plan, workspace, execution, spec_hash):
                                  "runs_required": plan['capture'].get('expected_runs', 1),
                                  "test_samples": capture["test_samples"], "complete": True},
             "metrics": {item["name"]: item["actual"] for item in comparisons},
-            "capture": capture, "independent_metrics": metrics, "author_reported_metric": reported}
+            "capture": capture, "independent_metrics": metrics, "author_reported_metric": reported,
+            'numeric_compatibility': numeric_repairs}
 
 
 def verify_series_receipts(contract, root, capture, metrics):

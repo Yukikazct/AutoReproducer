@@ -17,7 +17,7 @@ from urllib.parse import quote
 from src.project_paths import get_data_root
 
 
-REPORT_FORMAT_VERSION = 2
+REPORT_FORMAT_VERSION = 3
 REPORT_FORMAT_MARKER = f"<!-- autoreproducer-report-format: {REPORT_FORMAT_VERSION} -->"
 _VERSION = re.compile(r"^<!-- autoreproducer-report-format: (\d+) -->$", re.MULTILINE)
 _PRESENTATION_FIELDS = {"report", "report_path", "report_length", "report_format_version", "report_rendering"}

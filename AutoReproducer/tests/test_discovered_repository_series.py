@@ -201,6 +201,85 @@ def test_all_native_function_returns_and_independent_mean(completed):
     assert result["is_reproduced"] is False  # The frozen 100% reference remains unmet.
 
 
+def _use_per_run_accuracy_output(fixture):
+    path = fixture['workspace'] / 'train.py'
+    source = path.read_text('utf-8').replace("print('Test Accuracy:', np.mean(accuracies))",
+        "for index, accuracy in enumerate(accuracies):\n"
+        "    print(f'run_{index} Test Accuracy: {accuracy:.4f}')")
+    path.write_text(source, encoding='utf-8')
+    fixture['snapshot']['files'][path.name] = hashlib.sha256(path.read_bytes()).hexdigest()
+    next(c for c in fixture['proposal']['citations'] if c.get('path') == path.name)['quote'] = source
+
+
+@pytest.fixture(scope='module')
+def completed_per_run_output(tmp_path_factory):
+    return run_series(tmp_path_factory.mktemp('native_series_per_run_output'), mutate=_use_per_run_accuracy_output)
+
+
+def test_native_per_run_output_is_reconciled_in_order_and_aggregated(completed_per_run_output):
+    fixture, plan, spec_hash, execution = completed_per_run_output
+    result = verify_capture(plan, fixture['workspace'], execution, spec_hash)
+    values = [row['accuracy'] for row in result['independent_metrics']['runs']]
+    assert values == [1.0, .75, 1.0]
+    reported = result['author_reported_metric']
+    assert reported['value'] == sum(values) / 3
+    assert reported['value'] != values[-1]
+    assert reported['aggregation'] == 'mean'
+    assert reported['source'] == 'ordered_per_run_author_output'
+    assert [row['index'] for row in reported['per_run']] == [0, 1, 2]
+    assert [row['literal'] for row in reported['per_run']] == ['1.0000', '0.7500', '1.0000']
+    assert all(row['pass'] and row['value'] == row['independent_value'] for row in reported['per_run'])
+    assert reported['rounding_tolerance'] == pytest.approx(.00005 + 1e-8)
+    assert result['protocol_pass'] and result['independent_metrics_pass']
+    assert result['is_reproduced'] is False  # No change to the original 100% paper reference.
+
+
+@pytest.mark.parametrize('values', [
+    [1.0, .75],  # Missing repetition.
+    [1.0, .75, 1.0, 1.0],  # Ambiguous extra output.
+    [.75, 1.0, 1.0],  # Same mean in a different order still fails.
+    [1.0, .5, 1.0],  # A wrong individual value cannot hide in an aggregate.
+])
+def test_native_per_run_output_cannot_omit_reorder_or_replace_values(completed_per_run_output, values):
+    fixture, plan, spec_hash, execution = completed_per_run_output
+    path = Path(execution['steps'][0]['stdout_path'])
+    original = path.read_bytes()
+    try:
+        path.write_text(''.join(f'run_{index} Test Accuracy: {value:.4f}\n'
+                               for index, value in enumerate(values)), encoding='utf-8')
+        with pytest.raises(ValueError, match='ordered per-run|disagree for native run'):
+            verify_capture(plan, fixture['workspace'], execution, spec_hash)
+    finally:
+        path.write_bytes(original)
+
+
+def test_native_series_single_aggregate_output_remains_compatible(completed):
+    fixture, plan, spec_hash, execution = completed
+    reported = verify_capture(plan, fixture['workspace'], execution, spec_hash)['author_reported_metric']
+    assert reported['aggregation'] == 'mean'
+    assert reported['source'] == 'author_aggregate'
+    assert reported['per_run'] == []
+    assert reported['value'] == (1.0 + .75 + 1.0) / 3
+    assert reported['literal'] == str((1.0 + .75 + 1.0) / 3)
+
+
+def test_native_per_run_output_retains_each_printed_precision(completed_per_run_output):
+    fixture, plan, spec_hash, execution = completed_per_run_output
+    path = Path(execution['steps'][0]['stdout_path'])
+    original = path.read_bytes()
+    try:
+        # A permissive final printed precision must not weaken earlier rows.
+        path.write_text('Test Accuracy: 1.0000\nTest Accuracy: 0.75\nTest Accuracy: 1.0\n', encoding='utf-8')
+        reported = verify_capture(plan, fixture['workspace'], execution, spec_hash)['author_reported_metric']
+        assert [row['rounding_tolerance'] for row in reported['per_run']] == pytest.approx(
+            [.00005 + 1e-8, .005 + 1e-8, .05 + 1e-8])
+        path.write_text('Test Accuracy: 0.9900\nTest Accuracy: 0.75\nTest Accuracy: 1.0\n', encoding='utf-8')
+        with pytest.raises(ValueError, match='disagree for native run 0'):
+            verify_capture(plan, fixture['workspace'], execution, spec_hash)
+    finally:
+        path.write_bytes(original)
+
+
 @pytest.mark.parametrize("mutation", [
     lambda capture: capture.update(expected_runs=2),
     lambda capture: capture["scope"].update(function="train()"),

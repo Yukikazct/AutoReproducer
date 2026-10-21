@@ -40,6 +40,37 @@ def _markdown_text(value: str) -> str:
                   value.replace("\n", " ").replace("\r", " "))
 
 
+def _numeric_compatibility_lines(validation):
+    """Disclose adopted source-bound operations from verified runtime receipts."""
+    labels = {
+        'numpy_float_reciprocal': '浮点倒数兼容修复',
+        'numpy_builtin_alias': '旧 NumPy 类型别名兼容修复',
+        'numpy_ragged_summary': '旧 NumPy 不规则结果表汇总兼容修复',
+    }
+    records = validation.get('numeric_compatibility')
+    if not isinstance(records, list):
+        return []
+    records = [item for item in records if isinstance(item, dict) and item.get('kind') in labels]
+    if not records:
+        return []
+    kinds = {item['kind'] for item in records}
+    note = ('执行包含实际报错后记录的' + '、'.join(label for kind, label in labels.items() if kind in kinds)
+            + '；原仓库文件未改写。')
+    lines = [] if note in (validation.get('warnings') or []) else ['- **运行说明**: ' + note]
+    for item in records:
+        locations = [item.get('line'), *(call.get('line') for call in item.get('calls', [])
+                                        if isinstance(call, dict))]
+        locations = sorted({line for line in locations if type(line) is int and line > 0})
+        source = _txt(item.get('path'))
+        if locations:
+            source += '；行 ' + ', '.join(str(line) for line in locations)
+        if item.get('source_sha256'):
+            source += '；SHA-256: ' + _txt(item['source_sha256'])
+        if source:
+            lines.append('- **数值兼容来源**: ' + _markdown_text(source))
+    return lines
+
+
 def _source_repair_lines(data, report_path):
     from src.repository_repairer import _private
     state = _private(data.get('source_repair') or {})
@@ -1087,6 +1118,7 @@ class ReportGeneratorAgent(BaseAgent):
             lines.append("- **下一步**: " + _markdown_text(_txt(source_request["next_action"])))
         for warning in validation.get('warnings', []):
             lines.append('- **运行说明**: ' + _markdown_text(_txt(warning)))
+        lines.extend(_numeric_compatibility_lines(validation))
         for receipt in validation.get('author_execution', []):
             step = receipt.get('step') or {}
             lines.append('- **作者命令结束记录**: ' + _markdown_text(_txt(step.get('id'))) +

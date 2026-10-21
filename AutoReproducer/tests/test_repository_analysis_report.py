@@ -378,3 +378,44 @@ def test_documented_author_requirements_and_algorithm_constraint_are_not_runtime
     assert "不提供运行核验证据" in report
     assert "兼容候选状态**: 未执行" in report
     assert "选定论文实验数值复现通过" in report
+
+
+@pytest.mark.parametrize('kind,label,locations', [
+    ('numpy_float_reciprocal', '浮点倒数兼容修复', {'line': 17}),
+    ('numpy_builtin_alias', '旧 NumPy 类型别名兼容修复', {'line': 23}),
+    ('numpy_ragged_summary', '旧 NumPy 不规则结果表汇总兼容修复',
+     {'calls': [{'line': 29}, {'line': 31}]}),
+])
+def test_strict_report_discloses_adopted_numeric_operations_without_changing_verdict(
+        report_data, kind, label, locations):
+    record = {'kind': kind, 'path': 'author_[source].py', 'source_sha256': 'a' * 64, **locations}
+    report_data['strict_validation'] = {'requested': True, 'status': 'verified'}
+    report_data['validation'].update(numeric_compatibility=[record], warnings=['Existing warning'])
+    before = deepcopy(report_data)
+    report = build(report_data)
+    assert label in report
+    assert '原仓库文件未改写' in report
+    assert 'author\\_\\[source\\].py' in report
+    assert 'a' * 64 in report
+    assert '行 ' in report
+    assert 'Existing warning' in report
+    assert '选定论文实验数值复现通过' in report
+    assert report_data == before
+
+
+def test_normal_report_keeps_existing_numeric_warning_once(report_data):
+    note = '执行包含实际报错后记录的旧 NumPy 类型别名兼容修复；原仓库文件未改写。'
+    report_data['validation'].update(
+        numeric_compatibility=[{'kind': 'numpy_builtin_alias', 'path': 'train.py', 'line': 4}],
+        warnings=[note])
+    report = build(report_data)
+    assert report.count(note) == 1
+    assert '数值兼容来源' in report
+
+
+def test_report_does_not_treat_attempted_repairs_as_adopted_operations(report_data):
+    report_data['numeric_repair_attempts'] = [{'kind': 'numpy_ragged_summary'}]
+    report_data['validation']['numeric_compatibility'] = []
+    report = build(report_data)
+    assert '不规则结果表汇总兼容修复' not in report
+    assert '数值兼容来源' not in report

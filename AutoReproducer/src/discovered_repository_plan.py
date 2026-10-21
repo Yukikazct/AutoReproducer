@@ -496,6 +496,12 @@ def _citations(payload, packet, workspace):
             else:
                 accepted["proposed_quote"] = quote
                 quote = match.group()
+        if 'proposed_quote' in item:
+            proposed = item['proposed_quote']
+            if (not isinstance(proposed, str) or not 4 <= len(proposed.strip()) <= 10000
+                    or re.split(r'\s+', proposed.strip()) != re.split(r'\s+', quote.strip())):
+                raise PlanEvidenceError('Preserved citation proposal differs from the original source quote')
+            accepted['proposed_quote'] = proposed
         accepted["quote"] = quote
         result[item["id"]] = accepted
     if unmatched:
@@ -1691,6 +1697,9 @@ metric_definition_and_reference: paper number with its row/header/units,
 evaluation definition and reported accuracy label agree. A number merely
 appearing anywhere in a citation is insufficient. A multi-seed/fold result
 requires the complete protocol; one favorable run cannot replace its mean.
+For this check cite BOTH the original PDF table/reference AND the repository
+code that computes and reports the selected metric. The paper table alone
+does not establish the implementation's metric definition, unit or label.
 dependency_compatibility: reviewed modern device pins cover the author's actual
 imports without changing the method; original requirement lines remain
 truthful; runtime-only torch/NumPy are separately identified.

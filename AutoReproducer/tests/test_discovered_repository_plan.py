@@ -277,6 +277,16 @@ def test_quote_whitespace_is_reconciled_to_exact_original_without_editing_propos
     assert evidence["quote"] == original
     assert evidence["proposed_quote"] == citation["quote"]
     assert citation["quote"] != original
+    assert planner._citations({'citations': accepted['citations']},
+                              experiment['packet'], experiment['workspace']) == {
+        item['id']: item for item in accepted['citations']}
+
+
+def test_preserved_citation_proposal_cannot_change_source_content(experiment):
+    proposal = deepcopy(experiment['proposal'])
+    proposal['citations'][1]['proposed_quote'] = 'Fabricated value 123.456'
+    with pytest.raises(planner.PlanEvidenceError, match='Preserved citation proposal'):
+        validate(experiment, proposal)
 
 
 def test_quote_whitespace_reconciliation_cannot_change_reference_number(experiment):

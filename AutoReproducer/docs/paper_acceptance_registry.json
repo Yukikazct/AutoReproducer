@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_on": "2026-10-19",
+  "updated_on": "2026-10-21",
   "policy": "Paper identity spans aliases and PDF versions. Trial outcomes never imply independent numerical verification.",
   "papers": [
     {
@@ -182,6 +182,14 @@
           "outcome": "regression_or_candidate",
           "frozen_commit": null,
           "evidence": "examples/papers/manifest.json#pdf/chebnetii_independent_20261011_function.pdf"
+        },
+        {
+          "date": "2026-10-21",
+          "outcome": "strict_regression_verified",
+          "frozen_commit": null,
+          "product_sha256": "d579d9f38b812d498a77e9492967ef9665b8a3b5558eec2ae93b81f212f6cf4a",
+          "evidence": "docs/evidence/issue30_chebnetii_20261021.json",
+          "scope": "Known-sample PDF/API regression: 10 complete native runs, independent saved-model predictions, exact original-loader inputs, paper mean comparison and report directly COMPLETED. Not unused-paper acceptance."
         }
       ]
     },
