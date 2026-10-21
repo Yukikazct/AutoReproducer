@@ -341,6 +341,7 @@ def capture(config):
           "model_source_sha256": config["source_files"][name],
           "model_type": type(model).__module__ + "." + type(model).__qualname__,
           "torch_version": torch.__version__, "native_torch_model": built_in,
+          "process_pid": os.getpid(),
           "files_sha256": {name: sha(ROOT / name) for name in ("model.pt", "tensors.pt")}})
     print("AUTHOR_CAPTURE_COMPLETE " + json.dumps({"optimizer_steps": updates,
           "test_samples": contract["expected_test_samples"]}), flush=True)
@@ -359,7 +360,8 @@ def evaluate(config):
     model = torch.jit.load(str(ROOT / "model.pt"), map_location="cpu").eval()
     with torch.no_grad():
         outputs = model(*tensors["inputs"])
-        if not torch.allclose(outputs, tensors["outputs"], atol=1e-6, rtol=1e-5):
+        if (not torch.allclose(outputs, tensors["outputs"], atol=1e-6, rtol=1e-5)
+                or not torch.equal(outputs.argmax(1), tensors["outputs"].argmax(1))):
             raise ValueError("Freshly loaded author model disagrees with captured predictions")
         logits, labels = select(outputs, tensors["labels"], tensors["test_indices"],
                                 config['capture']['expected_test_samples'],
@@ -377,7 +379,8 @@ def evaluate(config):
               "capture_sha256": sha(ROOT / "capture.json"), "predictions_match": True,
               "test_samples": len(labels), "accuracy": accuracy, "cross_entropy": cross_entropy,
               "evaluation": "fresh_process_torchscript_forward_numpy_metrics", "device": "cpu",
-              "numpy_torch_crosscheck": True}
+              "numpy_torch_crosscheck": True, "process_pid": os.getpid(),
+              "capture_process_pid": receipt['process_pid']}
     write("independent_metrics.json", result)
     print("INDEPENDENT_EVALUATION_COMPLETE " + json.dumps(result), flush=True)
 

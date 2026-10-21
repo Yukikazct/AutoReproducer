@@ -58,7 +58,7 @@ PROFILE_LABELS = repository_entrypoint.profile_labels()
 get_profile = repository_entrypoint.get_profile
 
 # Only refresh the small loader. Older active pipeline modules keep their globals.
-if pipeline_entrypoint.BACKEND_API_VERSION != 6:
+if pipeline_entrypoint.BACKEND_API_VERSION != 7:
     pipeline_entrypoint = importlib.reload(pipeline_entrypoint)
 
 _pipeline_backend = pipeline_entrypoint.load_backend_pipeline()
@@ -460,6 +460,16 @@ with st.sidebar:
     if uploaded_file and not st.session_state.mock_mode and not experiment_profile and not corpus_paper:
         author_execution_only = True
 
+    strict_validation = False
+    if (input_mode == "上传PDF" and uploaded_file and not st.session_state.mock_mode
+            and not experiment_profile and not corpus_paper):
+        strict_validation = st.checkbox(
+            "严格核验：重载模型并独立复算指标", key="pdf_strict_validation",
+            disabled=st.session_state.running,
+            help="请求在作者代码运行后检查实验协议、重载模型并独立计算指标；暂不支持核验时继续普通运行并记录原因。")
+        if strict_validation:
+            st.caption("严格核验需要完整模型、数据划分和实验设置证据；不支持时继续普通运行并记录核验不可用，结果以实际检查为准。")
+
     # 启动 / 重置按钮
     col1, col2 = st.columns(2)
     with col1:
@@ -540,6 +550,7 @@ if start_btn and not st.session_state.running:
             progress_file,
             paper_title=pt, pdf_path=tmp_pdf,
             **({'author_execution_only': True} if author_execution_only else {}),
+            strict_validation=strict_validation,
             **({"preferred_repo_url": manual_repo_url} if manual_repo_url else {}),
             corpus_paper=corpus_paper,
             experiment_profile=experiment_profile,

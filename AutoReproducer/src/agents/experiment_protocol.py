@@ -215,6 +215,7 @@ class ExperimentProtocolAgent(BaseAgent):
         failures = []
         requests = 0
         text_requests = dataset_requests = 0
+        automatic_source_reads = 0
         while len(failures) < 2:
             prompt = ('Select one complete experimental protocol before generating any execution steps. '
                 'If paper_reading is present, its full-paper notes navigate separate main-table/appendix '
@@ -265,6 +266,8 @@ class ExperimentProtocolAgent(BaseAgent):
                 '{"request_files":["exact source_catalog path",...]} for 1 to 8 files. '
                 'Two source-reading rounds and two separate NPZ summary rounds are available, '
                 'each at most 8 paths; a mixed request consumes both budgets. Do not invent unseen contents. '
+                'The program follows exact pinned local imports automatically within the total source '
+                'file/byte bounds; these deterministic reads do not spend model request rounds. '
                 'Training parameters should use actual author CLI/config names. All citations select evidence_excerpts IDs. '
                 'Required citation kinds are enforced separately for EACH field: method, dataset, '
                 'repetitions and alignment each need at least one PDF ID AND one repository ID. Training needs '
@@ -311,15 +314,14 @@ class ExperimentProtocolAgent(BaseAgent):
                         return validate_experiment_protocol(payload, packet, workspace)
                     except PlanEvidenceError as missing:
                         # The source analyzer knows an exact local dependency;
-                        # read it under the SAME budget and recheck this payload.
-                        # No second model call or speculative filename is needed.
+                        # Follow a program-resolved local dependency under the
+                        # total file/byte bounds, without spending model rounds.
+                        # A dependency chain is not repeated model indecision.
                         required = getattr(missing, 'required_files', None)
-                        if not required or text_requests >= 2:
+                        if (not required or any(name in packet['repository']['files'] for name in required)):
                             raise
                         _add_requested_files(required, packet, workspace)
-                        requests += 1
-                        text_requests += 1
-                        feedback = _source_request_progress(required, packet, text_requests, dataset_requests)
+                        automatic_source_reads += len(required)
             except (PlanEvidenceError, ValueError, TypeError, KeyError) as exc:
                 if getattr(exc, 'planning_evidence', None):
                     raise
@@ -329,4 +331,5 @@ class ExperimentProtocolAgent(BaseAgent):
             planning_evidence={'stage':'experiment_protocol','schema_failures':failures,
                                'source_requests':requests,
                                'text_requests':text_requests, 'dataset_requests':dataset_requests,
+                               'automatic_source_reads':automatic_source_reads,
                                'response_excerpt':str(response)[:24000]}, category='model_structure_error')

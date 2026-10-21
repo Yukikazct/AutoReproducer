@@ -34,7 +34,8 @@ def repair_requirement(stderr, plan, packet):
         return None
     package = import_distribution(module)
     declared = str(declarations[0]) if declarations else None
-    pins = compatibility_pins(plan['capture']['device'])
+    device = plan['capture'].get('device', 'cpu')
+    pins = compatibility_pins(device)
     # Known native pairs retain their compatible pins; other packages prefer
     # the author's requirement. Undeclared dependencies are installed only
     # after their genuine runtime error, then cache health checks their import.
@@ -42,7 +43,7 @@ def repair_requirement(stderr, plan, packet):
     additions = [requirement]
     for dependency in _RUNTIME_DEPENDENCIES.get(package, ()):
         additions.append(dependency + '==' + pins[dependency])
-    options = (["--find-links " + GRAPH_WHEEL_LINKS[plan['capture']['device']]]
+    options = (["--find-links " + GRAPH_WHEEL_LINKS[device]]
                if any(item.split('==')[0] in {'torch-scatter', 'torch-sparse'} for item in additions)
                else [])
     return {'module': module, 'package': package, 'requirement': requirement,

@@ -4,6 +4,7 @@ No paper identity is registered here. The frozen plan is derived from the actual
 PDF and pinned repository, then executed with the repository process owner.
 """
 from copy import deepcopy
+from contextlib import contextmanager
 import hashlib
 import json
 import os
@@ -31,6 +32,16 @@ from src.environment_lifecycle import bind_environment_run, release_run_environm
 _MAX_DATA_BYTES = 512 * 1024 * 1024
 _REF = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_./-]{0,200}")
 _SHA = re.compile(r"[0-9a-f]{40}")
+
+
+@contextmanager
+def _frozen_input_validation():
+    """A changed frozen input must never become an environment fallback."""
+    try:
+        yield
+    except (ValueError, OSError, TypeError, KeyError) as exc:
+        exc.category = 'source_changed'
+        raise
 
 
 def repository_candidates(document, evidence, resources, *, execution_only=False):
@@ -319,7 +330,10 @@ class DiscoveredRepositoryReproduction:
         from src.discovered_repository_plan import PlanEvidenceError, build_evidence_packet, bind_full_paper_notes
         started = time.monotonic()
         emit = on_event or (lambda event: None)
-        execution_only = True
+        from src.strict_validation import normalize_strict_validation_request
+        request = normalize_strict_validation_request(request)
+        strict_requested = request['strict_validation']
+        execution_only = not strict_requested
         phases = [("prepare_repository", "FIND_RESOURCES", "ResourceFinder", "获取代码仓库"),
                   ("plan_repository", "READ_PAPER", "PaperReader", "结合论文和源码规划作者命令"),
                   ("prepare_dataset", "FIND_RESOURCES", "ResourceFinder", "准备运行数据"),
@@ -348,6 +362,8 @@ class DiscoveredRepositoryReproduction:
                 "optimization": {"mode": "off", "available": False, "optimized": False,
                                  "status": "disabled", "reason": "运行已冻结作者实验协议"}}
         data['reproduction_scope'] = 'author_code_execution'
+        data['strict_validation'] = {'requested': strict_requested,
+            'status': 'pending' if strict_requested else 'not_requested'}
         for key in ('reading_coverage', 'reading_batches', 'reading_originals'):
             if key in request:
                 data[key] = deepcopy(request[key])
@@ -357,7 +373,8 @@ class DiscoveredRepositoryReproduction:
             event(phase, "running")
             if self.use_docker:
                 raise ValueError("通用作者仓库执行当前需要本地受控进程模式")
-            document, url, evidence = author_repository_input(request, require_author=False)
+            document, url, evidence = author_repository_input(
+                {**request, 'author_execution_only': True}, require_author=False)
             manual = evidence["source"] == "user_supplied"
             if manual:
                 data["execution_source"] = "user_supplied_repository"
@@ -386,6 +403,15 @@ class DiscoveredRepositoryReproduction:
 
             def execute_candidate(candidate_url, candidate_evidence, candidate_plan, candidate_packet,
                                   candidate_snapshot, candidate_revision, candidate_pin_evidence):
+                nonlocal execution_only
+                execution_only = candidate_plan['scope'] == 'author_code_execution'
+                if not execution_only:
+                    from src.strict_validation import assert_strict_plan
+                    data['strict_validation'].update(status='eligible',
+                        binding=assert_strict_plan(candidate_plan, candidate_packet, workspace))
+                    for key in ('reason', 'failure_kind', 'failure_phase', 'evidence', 'rejection_packet'):
+                        data['strict_validation'].pop(key, None)
+                data['reproduction_scope'] = candidate_plan['scope']
                 record_candidate_identity(candidate_url, candidate_evidence, candidate_revision)
                 data['resources']['implementation_selection'] = {
                     'initial_repository': url, 'selected_repository': candidate_url,
@@ -416,8 +442,9 @@ class DiscoveredRepositoryReproduction:
                     "label": "依据本次 PDF 与用户提供的固定仓库生成的实验计划" if manual else "依据本次 PDF 与固定作者源码生成的实验计划",
                     "repository": candidate_plan["repository"],
                     "paper": deepcopy(data["paper_info"]), "parameters": candidate_plan.get("parameters", {}),
-                    "environment": deepcopy(candidate_environment), "validation": {"scope": "author_code_execution",
-                        "note": "核验原作者完整命令的实际运行和进程结束；尚未验收论文数值。"}}
+                    "environment": deepcopy(candidate_environment), "validation": {"scope": candidate_plan['scope'],
+                        "note": ("核验原作者完整命令的实际运行和进程结束；尚未验收论文数值。" if execution_only else
+                                 "冻结所选实验协议，捕获作者权重并在独立进程中复算完整测试集指标。")}}
                 event('prepare_dataset', "running")
                 datasets = prepare_plan_datasets(self.root, workspace, candidate_plan, candidate_snapshot, offline=offline)
                 data["dataset_provenance"] = datasets
@@ -458,8 +485,9 @@ class DiscoveredRepositoryReproduction:
                     # evidence acquisition; execution mode skips the reviewer.
                     self.logger.log("ResourceFinder", phase, "RUNNING", "源码已就绪；正在读取 README、依赖声明与论文运行线索")
                     packet = build_evidence_packet(request["pdf_path"], workspace, snapshot, for_identity_review=True)
-                    packet['author_execution_only'] = True
-                    packet['limits']['training_timeout_s'] = None
+                    packet['author_execution_only'] = not strict_requested
+                    if not strict_requested:
+                        packet['limits']['training_timeout_s'] = None
                     bind_full_paper_notes(packet, request)
                     if manual:
                         packet["repository_input"] = {"source": "user_supplied", "url": url}
@@ -471,8 +499,9 @@ class DiscoveredRepositoryReproduction:
                     if snapshot.get('submodules_pending'):
                         materialize_submodules(self.root, snapshot, offline=offline)
                         packet = build_evidence_packet(request['pdf_path'], workspace, snapshot, for_identity_review=True)
-                        packet['author_execution_only'] = execution_only
-                        packet['limits']['training_timeout_s'] = None
+                        packet['author_execution_only'] = not strict_requested
+                        if not strict_requested:
+                            packet['limits']['training_timeout_s'] = None
                         bind_full_paper_notes(packet, request)
                         packet['repository_input'] = {'source': candidate['source'], 'url': candidate_url}
                     packet['repository_identity_pending'] = False
@@ -482,7 +511,43 @@ class DiscoveredRepositoryReproduction:
                     write_json(run_dir / 'source_packet.json', packet)
                     from src.author_execution_plan import propose_author_execution_plan
                     try:
-                        plan = propose_author_execution_plan(self.llm, packet, workspace)
+                        if strict_requested:
+                            from src.agents.experiment_protocol import ExperimentProtocolAgent
+                            from src.discovered_repository_plan import propose_plan
+                            author_packet = deepcopy(packet)
+                            try:
+                                protocol = ExperimentProtocolAgent(self.llm, self.logger).run(packet, workspace)
+                                packet['experiment_protocol'] = protocol
+                                write_json(run_dir / 'experiment_protocol.json', protocol)
+                                plan = propose_plan(self.llm, packet, workspace)
+                                from src.strict_validation import assert_strict_plan
+                                assert_strict_plan(plan, packet, workspace)
+                            except PlanEvidenceError as strict_error:
+                                # Eligibility limits the acceptance claim, not the
+                                # ability to run the original author command.
+                                # Never downgrade changed frozen inputs to a warning.
+                                verify_snapshot(workspace, snapshot, {})
+                                if digest(request['pdf_path']) != document.sha256:
+                                    raise ValueError('原始 PDF 在严格规划期间发生变化') from strict_error
+                                rejection_packet = ('strict_rejection_packet.json' if index == 1
+                                                    else f'strict_rejection_packet_{index}.json')
+                                write_json(run_dir / rejection_packet, packet)
+                                data['strict_validation'].update(status='unavailable', reason=str(strict_error),
+                                    failure_kind=strict_error.category,
+                                    rejection_packet=rejection_packet,
+                                    evidence=deepcopy(getattr(strict_error, 'planning_evidence', None)))
+                                write_json(run_dir / 'strict_validation.json', data['strict_validation'])
+                                self.logger.log('PaperReader', 'strict_validation', 'WARNING',
+                                    '严格验收暂不可用，继续运行原作者命令：' + str(strict_error))
+                                # Strict discovery must not spend the ordinary
+                                # planner's source budget or leave rejected
+                                # protocol state in its execution evidence.
+                                packet = author_packet
+                                packet['author_execution_only'] = True
+                                packet['limits']['training_timeout_s'] = None
+                                plan = propose_author_execution_plan(self.llm, packet, workspace)
+                        else:
+                            plan = propose_author_execution_plan(self.llm, packet, workspace)
                     except BaseException:
                         try:
                             write_json(run_dir / 'source_packet.json', packet)
@@ -499,6 +564,10 @@ class DiscoveredRepositoryReproduction:
                     url, evidence = candidate_url, deepcopy(candidate)
                     break
                 except PlanEvidenceError as exc:
+                    if getattr(exc, 'reproduction_phase', None):
+                        attempt.update(error=str(exc), planning_status='execution_failed',
+                                       failure_kind=getattr(exc, 'category', 'execution_failure'))
+                        raise
                     selected, last_plan_error = False, exc
                     attempt.update(error=str(exc), planning_status='rejected',
                                    failure_kind=getattr(exc, 'category', 'invalid_evidence'))
@@ -635,13 +704,17 @@ class DiscoveredRepositoryReproduction:
         phase = "prepare_environment"
         try:
             event(phase, "running")
-            execution_only = True
-            if read_json(run_dir / "experiment_spec.json") != {"spec": plan, "sha256": data["spec_sha256"]}:
-                raise ValueError("落盘实验协议与冻结的本次计划不一致")
-            packet = read_json(run_dir / "source_packet.json")
-            canonical = json.dumps(packet, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
-            if hashlib.sha256(canonical.encode("utf-8")).hexdigest() != plan["evidence_sha256"]:
-                raise ValueError("落盘来源包与冻结的实验依据不一致")
+            execution_only = plan['scope'] == 'author_code_execution'
+            with _frozen_input_validation():
+                if read_json(run_dir / "experiment_spec.json") != {"spec": plan, "sha256": data["spec_sha256"]}:
+                    raise ValueError("落盘实验协议与冻结的本次计划不一致")
+                packet = read_json(run_dir / "source_packet.json")
+                canonical = json.dumps(packet, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+                if hashlib.sha256(canonical.encode("utf-8")).hexdigest() != plan["evidence_sha256"]:
+                    raise ValueError("落盘来源包与冻结的实验依据不一致")
+                if not execution_only:
+                    from src.strict_validation import assert_strict_plan
+                    assert_strict_plan(plan, packet, workspace)
             from src.author_python import select_author_python
             selected_python = select_author_python(packet, self.root / 'training_python',
                 offline=bool(request.get('offline')),
@@ -651,12 +724,28 @@ class DiscoveredRepositoryReproduction:
             data.setdefault('training_python_attempts', []).append(deepcopy(selected_python))
             data['env_config'] = deepcopy(environment)
             write_json(run_dir / 'runtime_manifest.json', selected_python)
-            from src.author_execution_plan import materialize_author_execution
-            materialized = materialize_author_execution(workspace, plan, data['spec_sha256'], snapshot)
+            if execution_only:
+                from src.author_execution_plan import materialize_author_execution
+                materialized = materialize_author_execution(workspace, plan, data['spec_sha256'], snapshot)
+            else:
+                from src.discovered_repository_runtime import materialize_capture
+                materialized = materialize_capture(workspace, plan, data['spec_sha256'], snapshot=snapshot)
             generated = materialized["files"]
             runtime_dir = workspace / CAPTURE_DIR
+            if not execution_only:
+                configuration = read_json(runtime_dir / 'config.json')
+                configuration['data_files'] = {
+                    name: record for source in data['dataset_provenance']['sources']
+                    for name, record in source.get('extracted_files', {}).items()}
+                configuration['data_files'].update({source['target']: {
+                    'sha256': source['sha256'], 'bytes': source['bytes']}
+                    for source in data['dataset_provenance']['sources'] if source['kind'] == 'https'})
+                write_json(runtime_dir / 'config.json', configuration)
+                generated[f'{CAPTURE_DIR}/config.json'] = digest(runtime_dir / 'config.json')
             (runtime_dir / "preflight.py").write_text(
-                _EXECUTION_PREPARATION, encoding="utf-8")
+                _EXECUTION_PREPARATION if execution_only else
+                (Path(__file__).parent / 'experiments/strict_preflight.py').read_text(encoding='utf-8'),
+                encoding="utf-8")
             write_json(runtime_dir / "requirements.json", plan["requirements"]["compatibility"])
             for name in ("preflight.py", "requirements.json"):
                 generated[f"{CAPTURE_DIR}/{name}"] = digest(runtime_dir / name)
@@ -671,7 +760,8 @@ class DiscoveredRepositoryReproduction:
                     generated[f'{CAPTURE_DIR}/{name}'] = digest(runtime_dir / name)
             write_json(run_dir / "adapter_manifest.json", {"files": generated,
                        "note": "原样保留作者源码；项目包装器仅记录训练、导出模型及独立评估"})
-            verify_snapshot(workspace, snapshot, generated)
+            with _frozen_input_validation():
+                verify_snapshot(workspace, snapshot, generated)
             steps = materialized["steps"]
             execution_plan = build_plan(profile="discovered_author_experiment", spec_sha256=data["spec_sha256"],
                 workspace=workspace, repository=plan["repository"], dataset=data["dataset_provenance"], steps=steps)
@@ -679,32 +769,35 @@ class DiscoveredRepositoryReproduction:
             write_json(run_dir / "execution_plan.json", execution_plan)
             write_json(run_dir / "environment.json", environment)
             def verify_frozen_inputs():
-                if digest(request["pdf_path"]) != plan["pdf_sha256"]:
-                    raise ValueError("原始 PDF 在执行准备或运行期间发生变化")
-                if read_json(run_dir / "experiment_spec.json") != {"spec": plan, "sha256": data["spec_sha256"]}:
-                    raise ValueError("落盘实验协议在执行期间发生变化")
-                if read_json(run_dir / "execution_plan.json") != execution_plan:
-                    raise ValueError("落盘执行计划在执行期间发生变化")
-                stored_packet = read_json(run_dir / "source_packet.json")
-                encoded = json.dumps(stored_packet, sort_keys=True, ensure_ascii=False,
-                                     separators=(",", ":"), allow_nan=False).encode("utf-8")
-                if hashlib.sha256(encoded).hexdigest() != plan["evidence_sha256"]:
-                    raise ValueError("落盘来源包在执行期间发生变化")
-                verify_snapshot(workspace, snapshot, generated)
-                for dataset in data["dataset_provenance"]["sources"]:
-                    for name, record in dataset.get('extracted_files', {}).items():
-                        path = workspace_path(workspace, name, 'frozen archive data', must_exist=True, forbid_git=True)
-                        if digest(path) != record['sha256'] or path.stat().st_size != record['bytes']:
-                            raise ValueError('作者压缩包中的真实数据在执行期间发生变化')
-                    if dataset["kind"] == "https":
-                        path = workspace_path(workspace, dataset["target"], "frozen real data", must_exist=True)
-                        if digest(path) != dataset["sha256"] or path.stat().st_size != dataset["bytes"]:
-                            raise ValueError("真实下载数据在执行期间发生变化")
-                    elif dataset['kind'] == 'author_loader' and dataset.get('verified') is True:
-                        for name, record in dataset['files'].items():
-                            path = workspace_path(workspace, name, 'frozen author data', must_exist=True, forbid_git=True)
+                with _frozen_input_validation():
+                    if digest(request["pdf_path"]) != plan["pdf_sha256"]:
+                        raise ValueError("原始 PDF 在执行准备或运行期间发生变化")
+                    if read_json(run_dir / "experiment_spec.json") != {"spec": plan, "sha256": data["spec_sha256"]}:
+                        raise ValueError("落盘实验协议在执行期间发生变化")
+                    if read_json(run_dir / "execution_plan.json") != execution_plan:
+                        raise ValueError("落盘执行计划在执行期间发生变化")
+                    stored_packet = read_json(run_dir / "source_packet.json")
+                    encoded = json.dumps(stored_packet, sort_keys=True, ensure_ascii=False,
+                                         separators=(",", ":"), allow_nan=False).encode("utf-8")
+                    if hashlib.sha256(encoded).hexdigest() != plan["evidence_sha256"]:
+                        raise ValueError("落盘来源包在执行期间发生变化")
+                    verify_snapshot(workspace, snapshot, generated)
+                    if not execution_only:
+                        assert_strict_plan(plan, stored_packet, workspace)
+                    for dataset in data["dataset_provenance"]["sources"]:
+                        for name, record in dataset.get('extracted_files', {}).items():
+                            path = workspace_path(workspace, name, 'frozen archive data', must_exist=True, forbid_git=True)
                             if digest(path) != record['sha256'] or path.stat().st_size != record['bytes']:
-                                raise ValueError('作者加载器下载或处理的真实数据在执行期间发生变化')
+                                raise ValueError('作者压缩包中的真实数据在执行期间发生变化')
+                        if dataset["kind"] == "https":
+                            path = workspace_path(workspace, dataset["target"], "frozen real data", must_exist=True)
+                            if digest(path) != dataset["sha256"] or path.stat().st_size != dataset["bytes"]:
+                                raise ValueError("真实下载数据在执行期间发生变化")
+                        elif dataset['kind'] == 'author_loader' and dataset.get('verified') is True:
+                            for name, record in dataset['files'].items():
+                                path = workspace_path(workspace, name, 'frozen author data', must_exist=True, forbid_git=True)
+                                if digest(path) != record['sha256'] or path.stat().st_size != record['bytes']:
+                                    raise ValueError('作者加载器下载或处理的真实数据在执行期间发生变化')
             verify_frozen_inputs()
             if request.get("prepare_only"):
                 data["execution"] = {"mode": "repository", "executed": False, "success": False,
@@ -855,7 +948,7 @@ class DiscoveredRepositoryReproduction:
                 from packaging.specifiers import SpecifierSet
                 from src.dependency_versions import reviewed_python_requirement
                 required = reviewed_python_requirement(effective.get('requirements_txt', '').splitlines(),
-                    plan['capture']['device'])
+                    plan['capture'].get('device', 'cpu'))
                 if not required:
                     return effective
                 prior = ([{'path': effective.get('required_python_source', 'actual_requested_dependency'),
@@ -923,6 +1016,9 @@ class DiscoveredRepositoryReproduction:
             environment = preparation.get('effective_env_config') or environment
             probe = read_json(runtime_dir / "preflight.json")
             data["native_preflight"] = probe
+            if not execution_only and (probe.get('native_probe_pass') is not True
+                                       or probe.get('device') != plan['capture'].get('device', 'cpu')):
+                raise ValueError('严格运行环境缺少冻结设备上的实际原生运算证据')
             verify_frozen_inputs()
             event(phase, "success")
             if loaders:
@@ -959,7 +1055,8 @@ class DiscoveredRepositoryReproduction:
                                   sha256=spec_digest(provenance['sources']))
                 write_json(run_dir / 'dataset.json', provenance)
                 capture_configuration = read_json(runtime_dir / 'config.json')
-                capture_configuration['data_files'] = {name: record for source in records for name, record in source['files'].items()}
+                capture_configuration.setdefault('data_files', {}).update(
+                    {name: record for source in records for name, record in source['files'].items()})
                 write_json(runtime_dir / 'config.json', capture_configuration)
                 for name in ('config.json', 'prepared_datasets.json'):
                     generated[f'{CAPTURE_DIR}/{name}'] = digest(runtime_dir / name)
@@ -1011,10 +1108,27 @@ class DiscoveredRepositoryReproduction:
             event(phase, "success")
             phase = "finish_execution"; event(phase, "running")
             verify_frozen_inputs()
+            if not execution_only:
+                from src.strict_validation import verify_strict_execution
+                validation = verify_strict_execution(plan, packet, workspace, execution, data['spec_sha256'])
+                validation['dataset_provenance_verified'] = data['dataset_provenance']['verified']
+                data['strict_validation'].update(status='verified', result=validation['status'])
+                data['validation'] = validation
+                execution['strict_execution_verification'] = validation
+                write_json(run_dir / 'strict_validation.json', data['strict_validation'])
+                write_json(run_dir / 'strict_execution_verification.json', validation)
+                write_json(run_dir / 'execution.json', execution)
+                event(phase, 'success', validation['reason'])
+                event('compare_author_claims', 'success', '已使用独立复算结果对比冻结的论文参考值')
+                return
             from src.author_execution_plan import verify_author_execution
             validation = verify_author_execution(plan, workspace, execution, data['spec_sha256'])
             validation.update(reviews_removed=True, paper_metrics_verified=False,
                               pre_execution_review='disabled', dataset_provenance_verified=False)
+            if data.get('strict_validation', {}).get('requested'):
+                validation['strict_validation'] = deepcopy(data['strict_validation'])
+                validation.setdefault('warnings', []).append('作者命令可运行；严格验收未完成：' +
+                    data['strict_validation'].get('reason', '缺少完整独立证据'))
             if runtime_loaders:
                 from src.runtime_dataset_evidence import audit_runtime_datasets
                 dataset_audit = audit_runtime_datasets(plan, validation['author_execution'], workspace)
@@ -1087,9 +1201,12 @@ class DiscoveredRepositoryReproduction:
                     validation.setdefault('warnings', []).append(f'论文指标对比记录保存失败（{name}）：{exc}')
             event(phase, 'success' if comparison['comparisons'] else 'skipped', comparison['reason'])
         except BaseException as exc:
+            if data.get('strict_validation', {}).get('status') == 'eligible':
+                data['strict_validation'].update(status='failed', failure_phase=phase,
+                                               reason=str(exc) or type(exc).__name__)
             if phase == 'prepare_environment':
                 effective = (data.get('environment_preparation') or {}).get('effective_env_config') or {}
-                if effective.get('dependency_failure_kind'):
+                if effective.get('dependency_failure_kind') and getattr(exc, 'category', None) != 'source_changed':
                     exc.category = effective['dependency_failure_kind']
             exc.reproduction_phase = phase
             raise

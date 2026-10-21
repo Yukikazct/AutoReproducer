@@ -93,9 +93,14 @@ class Orchestrator:
           - "enable_optimization": 可选布尔值，缺省 False；True 也记录为未开放并跳过
         """
         self.on_event = on_event
-        input_data = {**input_data, "author_execution_only": True, "use_llm_review": False,
-                      "allow_result_summary_review": False}
         self.state, self.error = "INIT", None
+        from src.strict_validation import normalize_strict_validation_request
+        try:
+            input_data = normalize_strict_validation_request(input_data)
+        except ValueError as exc:
+            self.data = {}
+            self._fail('INIT', str(exc))
+            return self.get_result()
         from src.pdf_input import PDFInputError, resolve_pdf_request
         try:
             input_data = resolve_pdf_request({**input_data, "mock_mode": self.mock_mode})
@@ -108,7 +113,18 @@ class Orchestrator:
             self._fail("READ_PAPER", str(exc))
             return self.get_result()
         from src.title_routing import resolve_title_request
-        input_data = resolve_title_request({**input_data, "mock_mode": self.mock_mode})
+        if input_data['strict_validation'] and not input_data.get('pdf_path'):
+            # Strict title discovery still needs the original PDF, even when
+            # the title happens to match a separately registered preset.
+            input_data = {**input_data, 'mock_mode': self.mock_mode}
+        else:
+            input_data = resolve_title_request({**input_data, "mock_mode": self.mock_mode})
+        try:
+            input_data = normalize_strict_validation_request(input_data)
+        except ValueError as exc:
+            self.data = {}
+            self._fail('INIT', str(exc))
+            return self.get_result()
         if input_data.get("experiment_profile"):
             if self.mock_mode:
                 self.data = {}
@@ -141,6 +157,7 @@ class Orchestrator:
             "corpus_paper": input_data.get("corpus_paper"),
             "preferred_repo_url": input_data.get("preferred_repo_url", ""),
             "author_execution_only": input_data.get("author_execution_only") is True,
+            "strict_validation": input_data['strict_validation'],
             "code_repo_url": input_data.get("code_repo_url", ""),
             "reproduction_scope": "user_supplied_code" if input_data.get("code") else (
                 "mock_demo" if self.mock_mode else

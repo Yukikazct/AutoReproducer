@@ -247,6 +247,9 @@ def materialize_capture(workspace, plan, spec_hash, *, snapshot=None):
     steps = []
     for original in plan["steps"]:
         step = deepcopy(original)
+        # Verification must not shorten the author's original experiment using
+        # an estimated planner budget. Independent inference has its own limit.
+        step['timeout_s'] = None
         step["env"] = {"PYTHONUNBUFFERED": "1"}
         if any(pin.startswith('dgl==') for pin in plan['requirements']['compatibility']):
             step['env']['DGLBACKEND'] = 'pytorch'

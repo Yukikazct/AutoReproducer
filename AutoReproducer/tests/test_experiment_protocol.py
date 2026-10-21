@@ -118,6 +118,96 @@ def test_protocol_rejection_after_source_reading_is_final(tmp_path):
     assert len(calls) == 2
 
 
+def chained_protocol_fixture(tmp_path):
+    """Keep four exact local imports in the snapshot but outside the read packet."""
+    fixture = make_experiment(tmp_path)
+    names = [f'native_chain_{index}.py' for index in range(4)]
+    model = fixture['workspace'] / 'author_model.py'
+    model.write_text('import native_chain_0\n' + model.read_text('utf-8'), encoding='utf-8')
+    fixture['snapshot']['files'][model.name] = hashlib.sha256(model.read_bytes()).hexdigest()
+    for index, name in enumerate(names):
+        text = (f'import native_chain_{index + 1}\n' if index + 1 < len(names)
+                else 'FINAL_NATIVE_SETTING = 40\n')
+        path = fixture['workspace'] / name
+        path.write_text(text, encoding='utf-8')
+        fixture['snapshot']['files'][name] = hashlib.sha256(path.read_bytes()).hexdigest()
+    packet = planner.build_evidence_packet(fixture['pdf'], fixture['workspace'], fixture['snapshot'])
+    for name in names:
+        packet['repository']['files'].pop(name)
+    raw = fixture_protocol(fixture['proposal'], planner._planning_view(packet))
+    return fixture, packet, raw, names
+
+
+def test_exact_chained_import_sources_are_read_without_additional_model_calls(tmp_path):
+    fixture, packet, raw, names = chained_protocol_fixture(tmp_path)
+    calls = []
+
+    class Reader:
+        mock_mode = False
+        def chat(self, prompt, **kwargs):
+            calls.append(prompt)
+            return json.dumps(raw)
+
+    protocol = ExperimentProtocolAgent(Reader()).run(packet, fixture['workspace'])
+    assert len(calls) == 1
+    assert protocol['alignment']['status'] == 'matched'
+    assert protocol['effective_author_parameters']['epochs']['value'] == 40
+    for name in names:
+        source = packet['repository']['files'][name]
+        assert source['text'] == (fixture['workspace'] / name).read_bytes().decode('utf-8-sig')
+        assert source['sha256'] == fixture['snapshot']['files'][name]
+
+
+@pytest.mark.parametrize('budget', ['source_files', 'source_bytes'])
+def test_automatic_chained_reads_cannot_exceed_total_source_bounds(tmp_path, budget):
+    fixture, packet, raw, names = chained_protocol_fixture(tmp_path)
+    initial = deepcopy(packet['repository']['files'])
+    if budget == 'source_files':
+        packet['limits'][budget] = len(initial) + 2
+    else:
+        packet['limits'][budget] = (sum(item['bytes'] for item in initial.values())
+                                   + sum(packet['file_inventory'][name]['bytes'] for name in names[:2]))
+    calls = []
+
+    class Reader:
+        mock_mode = False
+        def chat(self, prompt, **kwargs):
+            calls.append(prompt)
+            return json.dumps(raw)
+
+    with pytest.raises(planner.PlanEvidenceError, match='bounded source budget') as failure:
+        ExperimentProtocolAgent(Reader()).run(packet, fixture['workspace'])
+    assert len(calls) == 2
+    audit = failure.value.planning_evidence
+    assert audit['automatic_source_reads'] == 2
+    assert audit['source_requests'] == audit['text_requests'] == audit['dataset_requests'] == 0
+    assert set(packet['repository']['files']) == set(initial) | set(names[:2])
+    assert len(packet['repository']['files']) <= packet['limits']['source_files']
+    assert sum(item['bytes'] for item in packet['repository']['files'].values()) <= packet['limits']['source_bytes']
+
+
+def test_automatic_chained_reads_reject_changed_snapshot_source_hash(tmp_path):
+    fixture, packet, raw, names = chained_protocol_fixture(tmp_path)
+    changed = fixture['workspace'] / names[2]
+    changed.write_text('import unrelated_replacement\n', encoding='utf-8')
+    calls = []
+
+    class Reader:
+        mock_mode = False
+        def chat(self, prompt, **kwargs):
+            calls.append(prompt)
+            return json.dumps(raw)
+
+    with pytest.raises(planner.PlanEvidenceError, match='source changed after snapshot') as failure:
+        ExperimentProtocolAgent(Reader()).run(packet, fixture['workspace'])
+    assert len(calls) == 2
+    assert failure.value.planning_evidence['automatic_source_reads'] == 2
+    assert failure.value.planning_evidence['source_requests'] == 0
+    assert names[2] not in packet['repository']['files']
+    assert names[3] not in packet['repository']['files']
+    assert packet['file_inventory'][names[2]]['sha256'] == fixture['snapshot']['files'][names[2]]
+
+
 @pytest.mark.parametrize('names', [['missing.py'], [['unhashable']]])
 def test_invalid_source_requests_cannot_loop(tmp_path, names):
     fixture, packet, _, _ = protocol_fixture(tmp_path)

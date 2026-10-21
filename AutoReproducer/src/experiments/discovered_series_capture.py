@@ -298,7 +298,8 @@ def capture(config):
     check_sources(config)
     write("capture.json", {"version": 1, "kind": contract["kind"], "pass": True,
           "spec_sha256": config["spec_sha256"], "aggregation": "mean", "training_device": contract["device"],
-          "torch_version": torch.__version__, "runs": runs, "parameters_changed": True,
+          "torch_version": torch.__version__, "process_pid": os.getpid(),
+          "runs": runs, "parameters_changed": True,
           "optimizer_steps": sum(run["optimizer_steps"] for run in runs),
           "test_samples": [run["test_samples"] for run in runs],
           "files_sha256": {name: digest for run in runs for name, digest in run["files_sha256"].items()}})
@@ -350,7 +351,8 @@ def evaluate(config):
           "cross_entropy": float(np.mean([run["cross_entropy"] for run in runs])),
           "test_samples": [run["test_samples"] for run in runs],
           "predictions_match": True, "numpy_torch_crosscheck": True, "device": "cpu",
-          "evaluation": "fresh_process_all_native_models_numpy_mean"})
+          "evaluation": "fresh_process_all_native_models_numpy_mean",
+          "process_pid": os.getpid(), "capture_process_pid": receipt['process_pid']})
     print("INDEPENDENT_EVALUATION_COMPLETE native_runs=" + str(len(runs)), flush=True)
 
 

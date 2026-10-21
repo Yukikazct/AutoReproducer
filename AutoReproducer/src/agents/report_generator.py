@@ -1023,6 +1023,15 @@ class ReportGeneratorAgent(BaseAgent):
             state_text = "❌ 失败"
         lines += ["## 5. 运行结果",
                   f"- **复现状态**: {state_text}"]
+        strict = data.get('strict_validation')
+        if isinstance(strict, dict) and strict.get('requested'):
+            status = {'pending': '等待检查', 'eligible': '协议已固定，尚未完成独立运行',
+                      'unavailable': '未完成；保留普通作者执行结果',
+                      'verified': '完整独立复算证据已核验', 'failed': '未通过'}.get(
+                          strict.get('status'), '未完成')
+            lines.append('- **严格验收**: ' + status)
+            if strict.get('reason'):
+                lines.append('- **严格验收说明**: ' + _markdown_text(_txt(strict['reason'])))
         if execution.get("mode") != "repository":
             lines.append(f"- **置信度**: {_fmt(validation.get('confidence', 0.0))}")
         lines.append(f"- **分析**: {(validation.get('validation') or {}).get('analysis', '无')}")

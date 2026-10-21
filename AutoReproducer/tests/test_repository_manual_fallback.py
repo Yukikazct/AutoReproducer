@@ -37,12 +37,37 @@ def test_manual_url_normalizes_repository_root():
 def test_failed_auto_confirmation_exposes_fallback_and_preserves_original_run(tmp_path, monkeypatch):
     fixture, runner, request, _ = setup_service(tmp_path, monkeypatch)
     write_pdf(fixture["pdf"], [["Separating Signed Signals", "Abstract", "No repository link was printed."]])
-    runner.runner.run = Mock(side_effect=AssertionError("Unconfirmed lookup cannot execute"))
+    # A missing literal PDF link alone does not block a discovered candidate.
+    # Exercise the real last resort: discovery supplied no valid repository.
+    request['resources'] = {}
+    runner.runner.run = Mock(side_effect=AssertionError("Missing repository cannot execute"))
     result = runner.run(request)
     fallback = result["data"]["repository_fallback"]
     assert result["state"] == "ERROR" and result["data"]["validation"]["is_reproduced"] is None
     assert fallback["available"] and fallback["pdf_sha256"] == hashlib.sha256(fixture["pdf"].read_bytes()).hexdigest()
     assert result["data"]["run_dir"]
+    runner.runner.run.assert_not_called()
+
+
+def test_discovered_candidate_without_literal_pdf_link_can_prepare_without_claiming_authorship(
+        tmp_path, monkeypatch):
+    from src.pdf_input import extract_pdf_input
+    fixture, runner, request, llm = setup_service(tmp_path, monkeypatch)
+    document = extract_pdf_input(fixture['pdf'])
+    url = fixture['snapshot']['url']
+    write_pdf(fixture['pdf'], [[line for line in page.splitlines() if url not in line]
+                              for page in document.page_texts])
+    runner.runner.run = Mock(side_effect=AssertionError('Prepare-only cannot execute'))
+    result = runner.run({**request, 'prepare_only': True})
+    assert result['state'] == 'COMPLETED', result['error']
+    data = result['data']
+    assert data['reproduction_scope'] == 'author_code_execution'
+    assert data['validation']['status'] == 'prepared'
+    assert data['validation']['is_reproduced'] is None
+    assert not data['repository_executed']
+    assert data['resources']['repository_identity']['author_identity_confirmed'] is False
+    assert data['resources']['selection_evidence']['source'] == 'model_discovered'
+    assert {options['task'] for _, options in llm.calls} == {'author_execution_plan'}
     runner.runner.run.assert_not_called()
 
 
