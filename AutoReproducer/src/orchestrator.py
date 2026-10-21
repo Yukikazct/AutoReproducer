@@ -130,6 +130,8 @@ class Orchestrator:
             return self.get_result()
         self.logger.log("Orchestrator", "start_pipeline", "START",
                         "开始自动复现流水线", input_data)
+        author_request = (not self.mock_mode and not input_data.get("code")
+                          and not input_data.get("corpus_paper"))
 
         # 透传用户输入（修复：此前 paper_title/pdf_path 未进入数据上下文）
         self.data = {
@@ -141,12 +143,13 @@ class Orchestrator:
             "author_execution_only": input_data.get("author_execution_only") is True,
             "code_repo_url": input_data.get("code_repo_url", ""),
             "reproduction_scope": "user_supplied_code" if input_data.get("code") else (
-                "mock_demo" if self.mock_mode else "generated_reconstruction"),
+                "mock_demo" if self.mock_mode else
+                "author_code_execution" if author_request else "generated_reconstruction"),
             "execution_source": "user_supplied_code" if input_data.get("code") else (
-                "mock_demo" if self.mock_mode else "llm_generated"),
+                "mock_demo" if self.mock_mode else
+                "author_repository" if author_request else "llm_generated"),
             "repository_executed": False,
-            "reading_purpose": "repository_discovery" if input_data.get("pdf_path")
-                and not input_data.get("code") and not input_data.get("corpus_paper") else "experiment",
+            "reading_purpose": "repository_discovery" if author_request else "experiment",
             "verifications": [],
             "fix_records": [],
             "optimization": self._reserved_optimization(input_data),
@@ -170,9 +173,12 @@ class Orchestrator:
         ]
         if self.on_event:
             planned = self._generic_plan(pipeline)
-            if (not self.mock_mode and self.data.get("pdf_path")
-                    and not self.data.get("code") and not self.data.get("corpus_paper")):
+            if author_request:
                 planned = planned[:2]
+                if not self.data.get("pdf_path"):
+                    planned += [{"id": "require_paper_source", "agent": "ResourceFinder",
+                                 "title": "补充论文正文", "status": "waiting"},
+                                self._generic_plan(pipeline)[-1]]
             self.on_event({"type": "pipeline_plan", "pipeline": "generic",
                            "stages": planned})
 
@@ -213,10 +219,13 @@ class Orchestrator:
                     self.data['validation'] = completed_execution(result, mock_mode=self.mock_mode)
 
                 if state_name == "FIND_RESOURCES":
-                    if (not self.mock_mode and self.data.get("pdf_path")
-                            and not self.data.get("code") and not self.data.get("corpus_paper")):
+                    if author_request:
+                        if self.data.get("pdf_path"):
+                            self.logger.end_plan(state_name)
+                            return self._run_discovered_repository(input_data)
+                        self._request_paper_source()
                         self.logger.end_plan(state_name)
-                        return self._run_discovered_repository(input_data)
+                        break
                     self._fetch_resources()
 
                 self.logger.log("Orchestrator", f"exit_{state_name}", "SUCCESS",
@@ -245,7 +254,7 @@ class Orchestrator:
                              reason=self.data["optimization"]["reason"], outcome="not_implemented")
 
         # 报告生成（合并复现 + 优化）
-        if not pipeline_failed or self.data.get("execution"):
+        if not pipeline_failed or self.data.get("execution") or self.data.get("source_request"):
             self.state = "GENERATE_REPORT"
             self._emit_state(self.state, "ReportGenerator", "running", phase_id="generate_report", attempt=1)
             self.logger.begin_plan("GENERATE_REPORT")
@@ -285,6 +294,34 @@ class Orchestrator:
             self.on_event(event)
 
     # ---------------- 内部流程 ----------------
+
+    def _request_paper_source(self):
+        """Keep title discovery useful without inventing a paper or replacement code."""
+        from src.repository_evidence import normalize_repository_url
+        resources = self.data.get("resources") or {}
+        selected = normalize_repository_url(
+            self.data.get("preferred_repo_url") or
+            (resources.get("repo_discovery") or {}).get("selected_repo") or
+            resources.get("code_repo_url") or resources.get("selected_repo") or "")
+        reason = (("已定位候选仓库 " + selected + "，") if selected else "标题检索尚未确认作者仓库，") + (
+            "当前缺少原始论文正文。请切换到“上传PDF”并上传这篇论文；"
+            "系统将依据论文与固定源码规划作者命令。")
+        self.data["source_request"] = {
+            "status": "needs_pdf", "requested_title": self.data.get("paper_title", ""),
+            "selected_repository": selected, "required_input": "pdf_path",
+            "next_action": "切换到“上传PDF”并上传原始论文；如自动定位失败，可补充上述候选仓库。",
+            "reason": reason,
+        }
+        self.data["execution"] = {"mode": "repository", "executed": False,
+                                  "not_runnable": True, "reason": reason}
+        self.data["validation"] = {
+            "status": "needs_pdf", "result_level": "not_run", "execution_status": "not_run",
+            "is_reproduced": None, "paper_metrics_verified": False,
+            "reviews_removed": True, "reason": reason,
+        }
+        self._emit_state("FIND_RESOURCES", "ResourceFinder", "error",
+                         phase_id="require_paper_source", reason=reason, outcome="needs_pdf")
+        self._fail("FIND_RESOURCES", reason)
 
     def _run_discovered_repository(self, input_data):
         from src.discovered_repository_reproduction import DiscoveredRepositoryReproduction

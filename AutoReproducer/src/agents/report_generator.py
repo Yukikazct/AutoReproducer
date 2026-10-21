@@ -857,7 +857,13 @@ class ReportGeneratorAgent(BaseAgent):
 
         # 4. 代码执行（smoke + full）
         lines += ["## 4. 代码执行"]
-        if execution.get("mode") == "repository":
+        needs_pdf = validation.get("status") == "needs_pdf"
+        if needs_pdf:
+            lines.append("- **执行准备**: 待补充论文 PDF；尚未准备执行命令。")
+            candidate = (data.get("source_request") or {}).get("selected_repository")
+            if candidate:
+                lines.append("- **候选仓库（作者归属未核验）**: " + _markdown_text(_txt(candidate)))
+        elif execution.get("mode") == "repository":
             lines.append("- **执行对象**: 固定版本作者仓库中的实验入口（多文件）")
         else:
             lines.append(f"- **代码长度**: {len(_txt(execution.get('code')))} 字符")
@@ -914,7 +920,7 @@ class ReportGeneratorAgent(BaseAgent):
             lines.append(
                 f"  - {st.get('stage')}: {'✅ 通过' if st_ok else '❌ 失败'} "
                 f"(退出码 {st.get('exit_code')})")
-        if execution.get("mode") == "repository":
+        if execution.get("mode") == "repository" and not needs_pdf:
             lines += ["", "### 官方仓库执行命令", ""]
             steps = stages or (data.get("execution_plan") or {}).get("steps", [])
             for step in steps:
@@ -967,7 +973,9 @@ class ReportGeneratorAgent(BaseAgent):
         # 5. 验证结果 + 指标对比
         # 四态：复现成功 / 复现失败 / 无法验证（代码没跑起来，不能算复现失败）/
         # 无法核对（跑了，但论文信息不足、代码是占位实现——既不判成功也不判失败）
-        if validation.get("status") == "insufficient_evidence":
+        if validation.get("status") == "needs_pdf":
+            state_text = "⏳ 待补充论文 PDF（作者代码尚未执行）"
+        elif validation.get("status") == "insufficient_evidence":
             state_text = ("⚠️ 无法核验（运行环境不受支持，未执行论文实验）"
                           if validation.get('failure_kind') == 'runtime_unsupported' else
                           "⚠️ 无法核验（论文证据不足，未执行论文实验）")
@@ -1024,6 +1032,9 @@ class ReportGeneratorAgent(BaseAgent):
         if reason and reason not in _txt(
                 (validation.get("validation") or {}).get("analysis")):
             lines.append(f"- **判定原因**: {reason}")
+        source_request = data.get("source_request") or {}
+        if source_request.get("next_action"):
+            lines.append("- **下一步**: " + _markdown_text(_txt(source_request["next_action"])))
         for warning in validation.get('warnings', []):
             lines.append('- **运行说明**: ' + _markdown_text(_txt(warning)))
         for receipt in validation.get('author_execution', []):

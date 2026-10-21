@@ -169,7 +169,7 @@ def test_full_url_entry_downloads(mgr, monkeypatch, tmp_path):
         return type("P", (), {"returncode": 0, "stdout": "",
                               "stderr": ""})()
 
-    monkeypatch.setattr("src.resource_manager.subprocess.run", fake_run)
+    monkeypatch.setattr("src.resource_manager.run_owned_process", fake_run)
     info = mgr.fetch_dataset(pid, "Tiny ImageNet", level="full")
     assert info["state"] == "downloaded"
     assert info["level"] == "full"
@@ -183,7 +183,7 @@ def test_url_download_failure_falls_back_smoke(mgr, monkeypatch):
         return type("P", (), {"returncode": 1, "stdout": "",
                               "stderr": "404 not found"})()
 
-    monkeypatch.setattr("src.resource_manager.subprocess.run", fake_run)
+    monkeypatch.setattr("src.resource_manager.run_owned_process", fake_run)
     info = mgr.fetch_dataset(pid, "Tiny ImageNet", level="full")
     assert info["state"] == "smoke-synth"      # 诚实降级，不伪造大文件
     assert "降级合成冒烟集" in info["detail"]
