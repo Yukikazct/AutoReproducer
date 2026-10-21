@@ -1,0 +1,294 @@
+{
+  "version": 1,
+  "recorded_at": "2026-10-21T08:33:45.686945+00:00",
+  "kind": "Windows internal repository records long-path repair; synthetic strict mechanism regression",
+  "git_base_commit": "2deb30417781147b1f3ebe01c0a20e3ed2041c85",
+  "product_source_sha256": "f0d4d7ccf94b95ac99a9b544b299fc1a84173fff832b5fc81029a7b84f84b2e4",
+  "tests": [
+    {
+      "tests": 1,
+      "failures": 1,
+      "errors": 0,
+      "skipped": 0,
+      "passed": 0,
+      "duration_seconds": 0.373,
+      "generation": "PR54 source; observed directory creation failure",
+      "artifact": ".tmp/strict_followup_20261021/deep_path_before.xml"
+    },
+    {
+      "tests": 1,
+      "failures": 1,
+      "errors": 0,
+      "skipped": 0,
+      "passed": 0,
+      "duration_seconds": 0.689,
+      "generation": "initial repair; new test incorrectly expected success execution.json in low-level runner",
+      "artifact": ".tmp/strict_followup_20261021/deep_path_after.xml"
+    },
+    {
+      "tests": 63,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "passed": 63,
+      "duration_seconds": 25.786,
+      "generation": "initial repair before extended-path link check ordering",
+      "artifact": ".tmp/strict_followup_20261021/runtime_paths_final.xml"
+    },
+    {
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "passed": 3,
+      "duration_seconds": 58.834,
+      "generation": "initial repair before extended-path link check ordering",
+      "artifact": ".tmp/strict_followup_20261021/native_deep.xml"
+    },
+    {
+      "tests": 4,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "passed": 4,
+      "duration_seconds": 0.996,
+      "generation": "final source before freeze; four path and junction cases",
+      "artifact": ".tmp/strict_followup_20261021/long_paths_final.xml"
+    },
+    {
+      "tests": 108,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 7,
+      "passed": 101,
+      "duration_seconds": 151.551,
+      "generation": "began on initial repair; link check ordering changed while batch was active",
+      "artifact": ".tmp/strict_followup_20261021/downstream_final.xml"
+    },
+    {
+      "tests": 172,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 7,
+      "passed": 165,
+      "duration_seconds": 178.677,
+      "generation": "f0d4d7ccf94b95ac99a9b544b299fc1a84173fff832b5fc81029a7b84f84b2e4",
+      "artifact": ".tmp/strict_followup_20261021/final_deep.xml"
+    }
+  ],
+  "strict_synthetic_results": [
+    {
+      "run": "test_actual_strict_service_rel0/service/runs/repository_772929238de144c9a3bede193dfca163",
+      "is_reproduced": true,
+      "scope": "selected_paper_experiment",
+      "paper_metrics_verified": true,
+      "capture_process_pid": 30040,
+      "independent_process_pid": 40992,
+      "max_record_path_chars": 270
+    },
+    {
+      "run": "test_actual_strict_service_rel1/service/runs/repository_3f52bc730f474ee9a792b0258fa78c57",
+      "is_reproduced": true,
+      "scope": "selected_paper_experiment",
+      "paper_metrics_verified": true,
+      "capture_process_pid": 47480,
+      "independent_process_pid": 46256,
+      "max_record_path_chars": 270
+    }
+  ],
+  "environment_cleanup": [
+    {
+      "run": "test_actual_frozen_input_check0/service/runs/repository_35bea71dc0484c62b1ae9159bef9445e",
+      "status": "released",
+      "remaining": [],
+      "errors": []
+    },
+    {
+      "run": "test_actual_frozen_input_check1/service/runs/repository_2e2dbd1cc79a473d8704617091d46cd5",
+      "status": "released",
+      "remaining": [],
+      "errors": []
+    },
+    {
+      "run": "test_actual_frozen_input_check10/service/runs/repository_e1e34029e527429f89cd1c5498f58fb6",
+      "status": "released",
+      "remaining": [],
+      "errors": []
+    },
+    {
+      "run": "test_actual_frozen_input_check11/service/runs/repository_f8bd786acfa047849179dcf9ef7eec2e",
+      "status": "released",
+      "remaining": [],
+      "errors": []
+    },
+    {
+      "run": "test_actual_frozen_input_check12/service/runs/repository_05fc9cf1397a49988569fcfef9a8d0bb",
+      "status": "released",
+      "remaining": [],
+      "errors": []
+    },
+    {
+      "run": "test_actual_frozen_input_check13/service/runs/repository_d5bdf63ecd0142fcbbcf846c27f79790",
+      "status": "released",
+      "remaining": [],
+      "errors": []
+    },
+    {
+      "run": "test_actual_frozen_input_check14/service/runs/repository_13df377906a14816937e3913b1c5d10e",
+      "status": "released",
+      "remaining": [],
+      "errors": []
+    },
+    {
+      "run": "test_actual_frozen_input_check15/service/runs/repository_b3ded6a023c544ecad62df993d80498a",
+      "status": "released",
+      "remaining": [],
+      "errors": []
+    },
+    {
+      "run": "test_actual_frozen_input_check2/service/runs/repository_e121fac75fb541e88eb7bc522553a0e8",
+      "status": "released",
+      "remaining": [],
+      "errors": []
+    },
+    {
+      "run": "test_actual_frozen_input_check3/service/runs/repository_98fcdf0b2b3141efb2e295ea90a86c1e",
+      "status": "released",
+      "remaining": [],
+      "errors": []
+    },
+    {
+      "run": "test_actual_frozen_input_check4/service/runs/repository_1ded4e0945f44fdba1517f2847885712",
+      "status": "released",
+      "remaining": [],
+      "errors": []
+    },
+    {
+      "run": "test_actual_frozen_input_check5/service/runs/repository_b6f0612c4dfb4ae4b66958f37879a858",
+      "status": "released",
+      "remaining": [],
+      "errors": []
+    },
+    {
+      "run": "test_actual_frozen_input_check6/service/runs/repository_db1801acd3644bb7ae8386dd3258a6c1",
+      "status": "released",
+      "remaining": [],
+      "errors": []
+    },
+    {
+      "run": "test_actual_frozen_input_check7/service/runs/repository_ef135d7a23be4c05bcdd4f5d116b151b",
+      "status": "released",
+      "remaining": [],
+      "errors": []
+    },
+    {
+      "run": "test_actual_frozen_input_check8/service/runs/repository_bdcff5de78e6402cb90590d6d328578b",
+      "status": "released",
+      "remaining": [],
+      "errors": []
+    },
+    {
+      "run": "test_actual_frozen_input_check9/service/runs/repository_c60b0983739241638bd8f4ea18d9d070",
+      "status": "released",
+      "remaining": [],
+      "errors": []
+    },
+    {
+      "run": "test_actual_strict_service_rel0/service/runs/repository_772929238de144c9a3bede193dfca163",
+      "status": "released",
+      "remaining": [],
+      "errors": []
+    },
+    {
+      "run": "test_actual_strict_service_rel1/service/runs/repository_3f52bc730f474ee9a792b0258fa78c57",
+      "status": "released",
+      "remaining": [],
+      "errors": []
+    },
+    {
+      "run": "test_actual_unsupported_strict0/service/runs/repository_1597801c306a45258436db1dcf42f547",
+      "status": "released",
+      "remaining": [],
+      "errors": []
+    }
+  ],
+  "owned_training_or_worker_processes": [],
+  "long_paths_enabled_registry_value": 0,
+  "system_settings_changed": false,
+  "pr54": {
+    "url": "https://github.com/Yukikazct/AutoReproducer/pull/54",
+    "state": "MERGED",
+    "merge_commit": "2deb30417781147b1f3ebe01c0a20e3ed2041c85",
+    "displayed_checks": 16,
+    "successful_checks": 16
+  },
+  "behavior": [
+    "Internal owned record paths use Windows extended-length syntax consistently.",
+    "Author workspace, cwd and command are preserved.",
+    "Record directory symlinks and junctions are rejected, including beyond MAX_PATH.",
+    "Successful and failed author invocations retain Unicode output and hashed artifacts."
+  ],
+  "limitations": [
+    "Synthetic native models demonstrate mechanics, not new real-paper reproduction.",
+    "No new real API/PDF training or browser acceptance was attempted.",
+    "Arbitrary deep author directories and third-party tools are not covered by this fix.",
+    "New paper candidates remain static audits; no candidate training or numeric acceptance.",
+    "The first downstream command named nonexistent test_safety_paths.py and ran no tests; corrected to test_safety.py."
+  ],
+  "archive_members": {
+    ".tmp/strict_followup_20261021/deep_path_after.log": "1907b77e4aca2e2dd3bd7da9ce2c7a90d6b200730e587a2986b81a339eab834c",
+    ".tmp/strict_followup_20261021/deep_path_after.xml": "ea219385564a9ceb2146814de9a4daef3097f883c72e4be45024f3d6369ca1fc",
+    ".tmp/strict_followup_20261021/deep_path_before.log": "938ff2c37fb31c550fe14e3f0ef3595ea6117083bbc8dff6e184e740bec5cc1d",
+    ".tmp/strict_followup_20261021/deep_path_before.xml": "40ef268d8aeb3cda8ede86f28bb0bc881989de16225fab1d30615004ffe8d3ee",
+    ".tmp/strict_followup_20261021/downstream.log": "587552f0c88248060265d060e314da5c8e2b8dfa6808d77bc3ef385e0fcca022",
+    ".tmp/strict_followup_20261021/downstream_final.log": "d8fc45b93d5f1255cfc8d472f9949d425c5ee05cdcd0cb84a7d9d02bc4378d98",
+    ".tmp/strict_followup_20261021/downstream_final.xml": "0f86958349fc9c786e18868f3b3a2ef4ee9ec7c8951373d8f67b1c66aacda502",
+    ".tmp/strict_followup_20261021/final_deep.log": "2f866ff8f7d718768065f342e97921309bec311db37763a67310c06db4b2826a",
+    ".tmp/strict_followup_20261021/final_deep.xml": "5eb5e736f97fbcef205900d5e3b1fa8d7f7db5580ab9351360cfb27f9f50acbe",
+    ".tmp/strict_followup_20261021/final_source_freeze.json": "d276a5b07da5560b623882801a3465c6a34b4fb60b0722b4f0a111c48e0500cd",
+    ".tmp/strict_followup_20261021/long_paths_final.log": "be1022e54818de9473f60b278c6e07b6649e563ad6be9f431f5101e6bf7ac471",
+    ".tmp/strict_followup_20261021/long_paths_final.xml": "7fcb724b4846e889b5b1a975d14bf5506bd639101735b460286ecdf206accad2",
+    ".tmp/strict_followup_20261021/native_deep.log": "e74293038b71a13585e8ca7099c99ee8037e8ec09b3d572cb2a844dd4d88bb88",
+    ".tmp/strict_followup_20261021/native_deep.xml": "92200cefff0101a8af466c4b1716297e6630ac8adaef97d39cc4345af3045ce3",
+    ".tmp/strict_followup_20261021/owned_process_snapshot.json": "a5338d955b09046ec0b16f3a9625b7955c763aae07dc722e474e6078745f932f",
+    ".tmp/strict_followup_20261021/pr54_status.json": "4d552d6ba3e498d6e6e362620f79f7fad35f12f8fd40c6a6d5ecfe5a941a2263",
+    ".tmp/strict_followup_20261021/runtime_paths_final.log": "ccbacbae401060247c6e007e81749c2717e8973169a1d52747f57ffeffdde16c",
+    ".tmp/strict_followup_20261021/runtime_paths_final.xml": "5b3cd4a20f61ba652b110c11f5d342ab85d1d12484ced05e61ef6e2172aefd89",
+    "final_native_receipts/test_actual_frozen_input_check0/service/runs/repository_35bea71dc0484c62b1ae9159bef9445e/environment_cleanup.json": "498696df53209fb6da5907f9dc3cc737769230b2a04980b82a53077b02b95a92",
+    "final_native_receipts/test_actual_frozen_input_check1/service/runs/repository_2e2dbd1cc79a473d8704617091d46cd5/environment_cleanup.json": "498696df53209fb6da5907f9dc3cc737769230b2a04980b82a53077b02b95a92",
+    "final_native_receipts/test_actual_frozen_input_check10/service/runs/repository_e1e34029e527429f89cd1c5498f58fb6/environment_cleanup.json": "498696df53209fb6da5907f9dc3cc737769230b2a04980b82a53077b02b95a92",
+    "final_native_receipts/test_actual_frozen_input_check11/service/runs/repository_f8bd786acfa047849179dcf9ef7eec2e/environment_cleanup.json": "498696df53209fb6da5907f9dc3cc737769230b2a04980b82a53077b02b95a92",
+    "final_native_receipts/test_actual_frozen_input_check12/service/runs/repository_05fc9cf1397a49988569fcfef9a8d0bb/environment_cleanup.json": "498696df53209fb6da5907f9dc3cc737769230b2a04980b82a53077b02b95a92",
+    "final_native_receipts/test_actual_frozen_input_check13/service/runs/repository_d5bdf63ecd0142fcbbcf846c27f79790/environment_cleanup.json": "498696df53209fb6da5907f9dc3cc737769230b2a04980b82a53077b02b95a92",
+    "final_native_receipts/test_actual_frozen_input_check14/service/runs/repository_13df377906a14816937e3913b1c5d10e/environment_cleanup.json": "498696df53209fb6da5907f9dc3cc737769230b2a04980b82a53077b02b95a92",
+    "final_native_receipts/test_actual_frozen_input_check15/service/runs/repository_b3ded6a023c544ecad62df993d80498a/environment_cleanup.json": "498696df53209fb6da5907f9dc3cc737769230b2a04980b82a53077b02b95a92",
+    "final_native_receipts/test_actual_frozen_input_check2/service/runs/repository_e121fac75fb541e88eb7bc522553a0e8/environment_cleanup.json": "498696df53209fb6da5907f9dc3cc737769230b2a04980b82a53077b02b95a92",
+    "final_native_receipts/test_actual_frozen_input_check3/service/runs/repository_98fcdf0b2b3141efb2e295ea90a86c1e/environment_cleanup.json": "498696df53209fb6da5907f9dc3cc737769230b2a04980b82a53077b02b95a92",
+    "final_native_receipts/test_actual_frozen_input_check4/service/runs/repository_1ded4e0945f44fdba1517f2847885712/environment_cleanup.json": "498696df53209fb6da5907f9dc3cc737769230b2a04980b82a53077b02b95a92",
+    "final_native_receipts/test_actual_frozen_input_check5/service/runs/repository_b6f0612c4dfb4ae4b66958f37879a858/environment_cleanup.json": "498696df53209fb6da5907f9dc3cc737769230b2a04980b82a53077b02b95a92",
+    "final_native_receipts/test_actual_frozen_input_check6/service/runs/repository_db1801acd3644bb7ae8386dd3258a6c1/environment_cleanup.json": "498696df53209fb6da5907f9dc3cc737769230b2a04980b82a53077b02b95a92",
+    "final_native_receipts/test_actual_frozen_input_check7/service/runs/repository_ef135d7a23be4c05bcdd4f5d116b151b/environment_cleanup.json": "498696df53209fb6da5907f9dc3cc737769230b2a04980b82a53077b02b95a92",
+    "final_native_receipts/test_actual_frozen_input_check8/service/runs/repository_bdcff5de78e6402cb90590d6d328578b/environment_cleanup.json": "498696df53209fb6da5907f9dc3cc737769230b2a04980b82a53077b02b95a92",
+    "final_native_receipts/test_actual_frozen_input_check9/service/runs/repository_c60b0983739241638bd8f4ea18d9d070/environment_cleanup.json": "498696df53209fb6da5907f9dc3cc737769230b2a04980b82a53077b02b95a92",
+    "final_native_receipts/test_actual_strict_service_rel0/service/runs/repository_772929238de144c9a3bede193dfca163/environment_cleanup.json": "65a34cc81864aff01f6ee06b79421b37554b13dc37a0135f5561440ddf74d6fd",
+    "final_native_receipts/test_actual_strict_service_rel0/service/runs/repository_772929238de144c9a3bede193dfca163/execution.json": "58de30963a05b9206b702e9d52f4458a117576a57d602a28abdd531eea07522e",
+    "final_native_receipts/test_actual_strict_service_rel0/service/runs/repository_772929238de144c9a3bede193dfca163/strict_execution_verification.json": "d920a8c40a9bcf54a8df4cff623cff0fa80ce8bff2e38d1759e1f6b1756dc78c",
+    "final_native_receipts/test_actual_strict_service_rel0/service/runs/repository_772929238de144c9a3bede193dfca163/strict_validation.json": "e7f4ec3f30b656d263dcdfda309ca79ce231694f558a2bf6d862ec33c6b316d1",
+    "final_native_receipts/test_actual_strict_service_rel1/service/runs/repository_3f52bc730f474ee9a792b0258fa78c57/environment_cleanup.json": "6fd6322812d2235adcf8c06c5284f572f622762645669deb76c38831ea31c9fc",
+    "final_native_receipts/test_actual_strict_service_rel1/service/runs/repository_3f52bc730f474ee9a792b0258fa78c57/execution.json": "99b81d4dd8da7e4c6b30af40e056d17dc7170d806635a01976f3f889e82fba9c",
+    "final_native_receipts/test_actual_strict_service_rel1/service/runs/repository_3f52bc730f474ee9a792b0258fa78c57/strict_execution_verification.json": "5eccd9a1b9733b13c688cdc2e15593045c9921743c5138b9404a33a1ef7a26e2",
+    "final_native_receipts/test_actual_strict_service_rel1/service/runs/repository_3f52bc730f474ee9a792b0258fa78c57/strict_validation.json": "eab3ce1ba066fac2db50301235275ca8032b8537c84843eaedfdc736e3feefe0",
+    "final_native_receipts/test_actual_unsupported_strict0/service/runs/repository_1597801c306a45258436db1dcf42f547/author_execution_verification.json": "a6e6179da0ffd37611757e428ef1c2cd7f29aaedbbac10d022ba668a8e722137",
+    "final_native_receipts/test_actual_unsupported_strict0/service/runs/repository_1597801c306a45258436db1dcf42f547/environment_cleanup.json": "bae9edf71b16ca1719915d54b941260793753f65b76247697ac88b6f769cae0a",
+    "final_native_receipts/test_actual_unsupported_strict0/service/runs/repository_1597801c306a45258436db1dcf42f547/execution.json": "1bac34027a574861aa437995634e212574e44cb076333fa1832deaf2e5aa41da",
+    "final_native_receipts/test_actual_unsupported_strict0/service/runs/repository_1597801c306a45258436db1dcf42f547/strict_validation.json": "08dcec88f21cc3ce5ae916ee66626a13b1be5ec82ffd9e0ac782a22f9b2c63d2",
+    "prior_failure/final_native_long_path.log": "3754ff1097e0af0e8a9060325e831b17d3b97a258e7962f7730e650edbbb98e8",
+    "prior_failure/final_native_long_path.xml": "db912983ed22f9e9224e5e340b25538c77443227d3a9269dc63f16ac2698afa6",
+    "regression/test_repository_long_paths.py": "06c26ef62bff15cdcf820b344067a70f27f0676dca5360d71481f6c2a11186a1"
+  },
+  "archive": {
+    "path": "docs/evidence/strict_followup_20261021_logs.zip",
+    "sha256": "cc19fdd3c9ea3d20a77b6d891f1c3d50e7893126d8230d005a470a85a0110d87",
+    "bytes": 59298
+  }
+}

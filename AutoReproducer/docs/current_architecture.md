@@ -81,3 +81,13 @@ app.py
 Windows 验证需要覆盖中文路径、UTF-8 输出、创建与结束所属子进程，以及取消后的日志保存和文件句柄释放。训练退出、所属进程清理及报告归档是不同步骤，不能仅凭界面停止刷新判断完成。严格核验的机制测试和原生算子测试也要与真实 API、新论文的完整训练及数值验收分开记录。
 
 2026-10-21 已完成两次真实模型 API / PDF 的准备回归，使用已有 PyG 回归论文并显式设置 `prepare_only`。两次均在严格协议不可用后继续普通作者命令规划，最终为 `prepared`、未执行训练；第二次已自动读取 8 个确切 import 来源，最终因总源码预算不足记录 `unavailable`。测试代际、源码指纹、原生机制及清理摘要见 [本轮证据](evidence/strict_validation_20261021.json)；它们不构成作者训练完成或新论文严格验收通过证据。
+
+后续 Windows 深路径修复在冻结版本上通过 **165 passed / 7 skipped / 0 failed** 的合并定向验证；其中两项严格合成实验实际使用最长 270 字符的日志路径，分别完成训练、独立进程重载与复算。最终批次 19 份清理记录全部释放，无剩余和错误，详见 [跟进证据](evidence/strict_followup_20261021.json)。[新论文候选审计](strict_candidate_audit_20261021.md) 仍为静态结果，没有新论文训练或严格验收通过记录。
+
+### PR #54 合并后的内部记录路径跟进
+
+[PR #54](https://github.com/Yukikazct/AutoReproducer/pull/54) 已合并，页面展示的 16 条 Windows、Linux、PyG 和 DGL 检查均为 `SUCCESS`。其后的路径修复另以本地专项验证，原先深目录触发 `WinError 206` 的记录仍保留在上一代证据中。
+
+`RepositoryRunner` 当前将内部 records 根目录和 run_dir 统一为 Windows extended-length 路径，日志、启动 gate、环境准备目录与产物副本继承同一格式；作者 workspace、cwd、argv 保持原语义。记录目录的 symlink / junction 会在执行前拒绝，本次未修改系统 LongPaths 设置。这是内部运行记录路径修复，不表示任意深作者目录、依赖缓存或第三方工具均已兼容。
+
+路径及相关运行专项 `runtime_paths_final` 为 **63 passed**；仍在深层临时目录运行的 `native_deep` 为 **3 passed / 30 deselected**，包括两项严格合成实验的重载与独立复算，以及一项严格不可用后的普通作者运行。三项服务的环境清理记录均为 `released`，无剩余依赖或清理错误。后续记录单列于 [strict_followup_20261021.json](evidence/strict_followup_20261021.json)，不替换前一代证据，也不新增真实论文严格验收成功的结论。

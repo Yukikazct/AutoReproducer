@@ -20,7 +20,7 @@ from pathlib import Path
 from src.agents.code_executor import CodeExecutorAgent, DEPS_CACHE_ROOT, reqs_digest
 from src.execution_artifacts import collect_images
 from src.execution_plan import declared_paths, plan_steps
-from src.safety.paths import is_link, relative_path, workspace_path
+from src.safety.paths import filesystem_path, is_link, relative_path, workspace_path
 from src.dependency_cache import DependencyCacheBusy
 from src.process_lifecycle import CREATE_SUSPENDED, ProcessJob, termination_signals, validate_windows_venv
 from src.runtime_platform import runtime_fingerprint
@@ -450,9 +450,12 @@ class RepositoryRunner:
             self._check_tree(root)
             self.executor.env_config = dict(env_config or {})
             planned = self._plan(root, plan_steps(steps))
-            records_root = root.parent / ".autorepro_repository_runs"
-            if records_root.is_symlink():
-                raise ValueError("execution records directory must not be a symlink")
+            # Logs, process gates and captured evidence can exceed MAX_PATH even
+            # when the author's cwd and script fit. Only format our owned record
+            # tree; preserve the reviewed author paths and command unchanged.
+            records_root = Path(filesystem_path(root.parent / ".autorepro_repository_runs"))
+            if is_link(records_root):
+                raise ValueError("execution records directory must not be a symlink or junction")
             records_root.mkdir(exist_ok=True)
             run_dir = records_root / uuid.uuid4().hex
             run_dir.mkdir()
