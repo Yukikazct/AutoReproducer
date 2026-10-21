@@ -277,16 +277,24 @@ def test_method_success_is_not_paper_table_reproduction(app):
     assert not any("论文数值验收通过" in item.value for item in app.success)
 
 
-def test_repository_preset_docker_is_explicitly_rejected(app, monkeypatch):
+def test_repository_preset_clears_stale_docker_and_starts_locally(app, monkeypatch):
     start = Mock()
     monkeypatch.setattr(pipeline, "run_pipeline_background", start)
     app.sidebar.toggle[0].set_value(False).run()
     app.sidebar.radio(key="input_mode").set_value("官方仓库预设").run()
-    app.sidebar.toggle[1].set_value(True).run()
+    docker = next(toggle for toggle in app.sidebar.toggle if "Docker" in toggle.label)
+    assert docker.disabled is True and docker.value is False
+    app.session_state["use_docker"] = True
+    app.run()
+    assert app.session_state["use_docker"] is False
+    docker = next(toggle for toggle in app.sidebar.toggle if "Docker" in toggle.label)
+    assert docker.disabled is True and docker.value is False
     next(b for b in app.sidebar.button if "开始复现" in b.label).click().run()
     assert not app.exception
-    start.assert_not_called()
-    assert any("使用本地执行" in error.value for error in app.sidebar.error)
+    start.assert_called_once()
+    assert start.call_args.kwargs["experiment_profile"] == "dlinear_etth1_reference"
+    assert start.call_args.kwargs["use_docker"] is False
+    assert not app.sidebar.error
 
 
 @pytest.mark.parametrize("terminal", ["COMPLETED", "ERROR"])

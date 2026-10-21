@@ -1,10 +1,10 @@
 # AutoReproducer
 
-面向 **PC 桌面浏览器**的论文复现实验工作台。使用 Streamlit 提供界面，由多 Agent 组织论文阅读、代码定位、环境准备和执行，并保存命令、日志、指标与报告。
+面向 **Windows 桌面浏览器**的论文复现实验工作台。使用 Streamlit 提供界面，由多 Agent 组织论文阅读、代码定位、环境准备和执行，并保存命令、日志、指标与报告。
 
 当前主要入口是**上传论文 PDF 运行作者代码**，也提供固定实验预设和无需 API 的 Mock 演示。
 
-> **当前能力范围**：真实运行显示“代码运行完成”时，表示所选代码正常结束、所属进程完成清理；仅准备源码或环境不代表训练完成。PDF 作者仓库流程会在运行后尝试对比作者输出与论文指标，独立数值验收与自动优化尚未开放。
+> **当前能力范围**：真实运行显示“代码运行完成”时，表示所选代码正常结束、所属进程完成清理；仅准备源码或环境不代表训练完成。PDF 作者仓库流程会在运行后尝试对比作者输出与论文指标，独立数值验收与自动优化尚未开放。当前网页任务使用本地受控进程，Docker 开关暂不可用。模块与实际调用链见[当前架构](AutoReproducer/docs/current_architecture.md)。
 
 [快速开始](#快速开始) · [模型配置](#模型配置) · [使用流程](#使用流程) · [固定实验预设](#固定实验预设) · [依赖与文件管理](#依赖与文件管理) · [开发与测试](#开发与测试) · [更多文档](#更多文档)
 
@@ -12,80 +12,12 @@
 
 ### 环境要求
 
-- 推荐 **64 位 CPython 3.12**，也支持 3.11；当前预设运行环境按这两个版本准备。
+- 当前支持与验收目标为 **Windows**，推荐 **64 位 CPython 3.12**，也支持 3.11；其他系统不在当前交付范围。
 - 安装 Git；首次取得作者源码、数据和依赖需要联网。
 - DLinear、Neural ODE 使用 CPU；SIREN、ReZero 的现有预设需要 NVIDIA GPU 和可用的 CUDA 环境，不能在普通 CPU 或 Apple GPU 上直接运行。
-- PDF 作者仓库和固定预设使用本地受控进程，启动时保持 Docker 关闭。
+- PDF 作者仓库和固定预设使用本地受控进程；网页的 Docker 选项暂未开放。
 
-### macOS / Linux
-
-选符合你情况的一段，完整复制执行。本 README 位于仓库根目录（外层）；应用目录是其下包含 `app.py` 的 `AutoReproducer/`。除注明“当前在外层目录”的示例外，后文命令均在应用目录中执行。
-
-**情况 1：已经安装过，当前在 `AutoReproducer` 目录（也适用于这里再次 `cd AutoReproducer` 报错后）。**
-
-```bash
-.venv/bin/python -m streamlit run app.py --server.port 8501
-```
-
-**情况 2：已经安装过，当前在外层目录。**
-
-```bash
-cd AutoReproducer &&
-.venv/bin/python -m streamlit run app.py --server.port 8501
-```
-
-**情况 3：第一次安装，当前在 `AutoReproducer` 目录。缺少 `.venv/bin/python` 或 `streamlit` 时也用这段。**
-
-```bash
-python3.12 -m venv .venv &&
-.venv/bin/python -m pip install -r requirements.txt &&
-.venv/bin/python -m streamlit run app.py --server.port 8501
-```
-
-**情况 4：第一次安装，当前在外层目录。**
-
-```bash
-cd AutoReproducer &&
-python3.12 -m venv .venv &&
-.venv/bin/python -m pip install -r requirements.txt &&
-.venv/bin/python -m streamlit run app.py --server.port 8501
-```
-
-**情况 5：没有 Python 3.12，已安装 Python 3.11。**
-
-当前在 `AutoReproducer` 目录：
-
-```bash
-python3.11 -m venv .venv &&
-.venv/bin/python -m pip install -r requirements.txt &&
-.venv/bin/python -m streamlit run app.py --server.port 8501
-```
-
-当前在外层目录：
-
-```bash
-cd AutoReproducer &&
-python3.11 -m venv .venv &&
-.venv/bin/python -m pip install -r requirements.txt &&
-.venv/bin/python -m streamlit run app.py --server.port 8501
-```
-
-**情况 6：8501 端口被占用，改用 8502。** 如果 <http://localhost:8501> 已经是本应用，直接使用该页面即可。需要另开服务时执行下面对应的一段。
-
-当前在 `AutoReproducer` 目录：
-
-```bash
-.venv/bin/python -m streamlit run app.py --server.port 8502
-```
-
-当前在外层目录：
-
-```bash
-cd AutoReproducer &&
-.venv/bin/python -m streamlit run app.py --server.port 8502
-```
-
-改用 8502 后打开 <http://localhost:8502>。Python 3.11 和 3.12 都没有安装时，先安装 [Python 3.12](https://www.python.org/downloads/release/python-31210/)，再执行情况 3 或 4。
+本 README 位于仓库根目录（外层）；应用目录是其下包含 `app.py` 的 `AutoReproducer\`。除注明“当前在外层目录”的示例外，后文命令均在应用目录中执行。
 
 ### Windows PowerShell
 
@@ -153,7 +85,7 @@ Set-Location AutoReproducer -ErrorAction Stop
 .\.venv\Scripts\python.exe -m streamlit run app.py --server.port 8502
 ```
 
-PowerShell 安装步骤逐行执行，上一行成功后再执行下一行。改用 8502 后打开 <http://localhost:8502>。
+PowerShell 安装步骤逐行执行，上一行成功后再执行下一行。改用 8502 后打开 <http://localhost:8502>。Python 3.11 和 3.12 都没有安装时，先安装 [Python 3.12](https://www.python.org/downloads/release/python-31210/)，再执行情况 3 或 4。
 
 ### 打开页面与停止服务
 
@@ -208,14 +140,6 @@ $env:LLM_API_KEY = "替换为你的 API Key"
 $env:LLM_MODEL = "deepseek-flash"
 ```
 
-macOS / Linux：
-
-```bash
-export LLM_BASE_URL="https://api.deepseek.com"
-export LLM_API_KEY="替换为你的 API Key"
-export LLM_MODEL="deepseek-flash"
-```
-
 网页配置优先级为：**非空界面输入 → 已有环境变量 → 本地 `secrets.toml` → 网页内置默认值**。已有环境变量不会被本地文件覆盖；界面输入留空会回退配置来源。
 
 | 可选环境变量 | 默认值 | 作用 |
@@ -232,10 +156,12 @@ export LLM_MODEL="deepseek-flash"
 | 输入方式 | 适用场景与实际行为 |
 | --- | --- |
 | 上传 PDF | 推荐的通用入口。提取正文及仓库链接；匹配已支持论文时进入预设，否则尝试定位作者仓库并运行其命令。当前没有扫描件 OCR。 |
-| 论文标题 | DLinear、SIREN、Neural ODE 的完整标题可匹配预设；未匹配标题会进入通用分析流程，不能保证获取全文或执行作者代码，建议改为上传 PDF。 |
+| 论文标题 | DLinear、SIREN、Neural ODE 的完整标题可匹配预设；未匹配标题仅用于分析和仓库发现，保留候选后提示上传 PDF。当前不会自动检索全文，也不会仅凭标题生成替代代码执行。 |
 | 官方仓库预设 | 按固定源码、数据和参数运行下表中的实验，当前无需 LLM API。 |
 
 上传 PDF 后，确认解析提示，点击“开始复现”。如果自动定位仓库失败，页面出现“补充 GitHub 仓库”入口时，可填入地址并重试。手动指定仓库会被记录为用户提供，不代表系统已经确认作者归属。
+
+普通作者仓库执行需要可读取正文的原始 PDF，用于构建来源包、固定证据和运行后的论文指标比较。标题发现得到仓库候选不代表已经具备执行依据；请补充对应 PDF。仅运行上传论文时，将“语料对照”设为“无”；显式语料对照仍走兼容路径，不等同于普通 PDF 作者仓库执行。
 
 普通 PDF 流程中，模型用于论文阅读、仓库发现和原作者命令规划。README 不必给出逐步命令：模型可以根据固定源码目录、训练入口、参数解析器和数据加载代码规划原作者命令，并按需补读源码、根据实际错误纠正工作目录。字面量 README/启动脚本提取用于模型不可用或规划失败后的回退。当前作者执行器支持 Python 脚本、`python -m` 模块和 Notebook；同一仓库最多四次规划提案、两轮源码补读。当前实现不可运行时，最多检查三个仓库；手动指定的仓库与版本保持锁定。Notebook 使用选定训练 Python 的 kernel 顺序执行全部代码单元，保存输出副本和失败单元，不跳过失败单元。
 
@@ -262,7 +188,7 @@ export LLM_MODEL="deepseek-flash"
 
 网页默认真实模式，Mock 开关位于“运行环境”。Mock 不调用真实 LLM、不训练论文实验，但会执行本地演示脚本；固定预设要求关闭 Mock。
 
-当前 PDF 作者仓库和固定预设使用**本地受控子进程**。依赖目录隔离用于管理 Python 包，不等于容器沙箱。Docker 仅用于其他已支持的通用代码执行路线；开启侧栏 Docker 开关不能让上述作者仓库路线自动容器化。
+当前 PDF 作者仓库和固定预设使用**本地受控子进程**。依赖目录隔离用于管理 Python 包，不等于容器沙箱。网页 Docker 控件固定关闭；底层其他代码执行器保留 Docker 实现，尚未接入当前网页的作者仓库流程。
 
 当前流程已移除论文身份、Agent 输出和实验协议等审核关卡，也不执行独立数值验收与参数优化。旧的审核／优化参数仅作调用兼容，`author_execution_only=False` 不会重新启用数值验收，`--budget-seconds` 不限制代码执行时间。PDF 作者仓库流程在作者命令完成后，使用已配置的模型从原 PDF 中定位对应指标，经引文和实测来源校验后展示数值差值、实验设置与比较限制，并保存 `author_claim_comparison.json`。该比较使用作者输出，尚未独立复算；参考值缺失、设置不一致或模型调用失败均不改变代码完成状态。固定实验预设仍无需 LLM API。**代码运行完成或达到比较参考值，均不代表论文数值复现成功。**
 
@@ -284,23 +210,23 @@ PDF 数字粘连或小数被拆开时，程序会尝试从同一份 PDF 的页�
 
 这些预设覆盖所列实验范围；名称中的 `reference` 或“完整实验”不表示当前流程已经完成论文数值验收。CUDA 预设使用固定的 PyTorch CUDA 12.1 依赖，需要兼容驱动和硬件。
 
-以下及后文的 `python` 均指项目虚拟环境解释器：Windows 使用 `.\.venv\Scripts\python.exe`，macOS/Linux 使用 `.venv/bin/python`。
+以下命令使用项目虚拟环境解释器，无需激活环境。
 
-```bash
+```powershell
 # CPU 快速诊断
-python scripts/reproduce_repository.py --profile dlinear_etth1_smoke
+.\.venv\Scripts\python.exe scripts/reproduce_repository.py --profile dlinear_etth1_smoke
 
 # 完整 DLinear 单项实验
-python scripts/reproduce_repository.py --profile dlinear_etth1_reference
+.\.venv\Scripts\python.exe scripts/reproduce_repository.py --profile dlinear_etth1_reference
 
 # 仅准备源码、数据与命令，不安装论文依赖、不训练
-python scripts/reproduce_repository.py --profile dlinear_etth1_reference --prepare-only
+.\.venv\Scripts\python.exe scripts/reproduce_repository.py --profile dlinear_etth1_reference --prepare-only
 
 # SIREN / Neural ODE 可单独准备环境，不训练
-python scripts/reproduce_repository.py --profile siren_camera_quick --prepare-environment
+.\.venv\Scripts\python.exe scripts/reproduce_repository.py --profile siren_camera_quick --prepare-environment
 
 # 使用已有代码、数据及可用安装资源；缺失时失败，不能依赖上次运行的实验环境
-python scripts/reproduce_repository.py --profile neural_ode_spiral --offline
+.\.venv\Scripts\python.exe scripts/reproduce_repository.py --profile neural_ode_spiral --offline
 ```
 
 首次准备环境会下载依赖，环境就绪不代表训练完成。`--prepare-environment` 保存准备结果后也会释放本次环境，下一次运行需要重新安装依赖。作者命令和固定预设不设执行时间上限；更完整的来源与参数见 [预设定义](AutoReproducer/src/repository_profiles.py)、[方法实验定义](AutoReproducer/src/method_profiles.py)和 [ReZero 定义](AutoReproducer/src/rezero_profiles.py)。
@@ -345,17 +271,17 @@ $env:AUTOREPRO_DATA_ROOT = "E:\AutoReproducer-data"
 $env:AUTOREPRO_DEPS_ROOT = "E:\AutoReproducer-deps"
 ```
 
-macOS/Linux 使用 `export AUTOREPRO_DATA_ROOT="/绝对路径"`。修改配置只改变后续读写位置，不会迁移已有文件；需要完整迁移时，先停止任务，再复制数据目录及独立配置的依赖目录。
+修改配置只改变后续读写位置，不会迁移已有文件；需要完整迁移时，先停止任务，再复制数据目录及独立配置的依赖目录。
 
 论文运行环境默认自动释放：同一依赖根的任务串行使用一套实验依赖，报告和结构化结果保存后删除论文包、补装包、托管训练 Python 及其下载缓存；异常和中断也执行清理。启动下一次任务前先清除遗留环境，清理失败则停止创建新环境。应用自身的 Python 与生产依赖保留，报告、图表和日志保留。详见 [依赖环境管理](AutoReproducer/docs/dependency_management.md)。
 
 ### 查看与清理
 
-```bash
-python scripts/resource_cli.py status
-python scripts/resource_cli.py resources --json
-python scripts/resource_cli.py deps-prune          # 仅预览依赖回收计划
-python scripts/resource_cli.py deps-prune --yes    # 执行依赖回收
+```powershell
+.\.venv\Scripts\python.exe scripts/resource_cli.py status
+.\.venv\Scripts\python.exe scripts/resource_cli.py resources --json
+.\.venv\Scripts\python.exe scripts/resource_cli.py deps-prune          # 仅预览依赖回收计划
+.\.venv\Scripts\python.exe scripts/resource_cli.py deps-prune --yes    # 执行依赖回收
 ```
 
 完整复现任务按上述规则在报告保存后释放环境，不保留最近使用的实验依赖。下面的容量与保留策略用于历史缓存、手动 `deps-prune` 和单独调用底层依赖执行器时的维护。底层执行器取得缓存锁、安装前及安装／执行结束时均会维护，缓存命中也会触发，且不依赖健康检查开关。统计覆盖各 Python／平台目录和增量环境，保护在用环境及完整基础环境引用链。
@@ -372,8 +298,8 @@ pip 下载、解压和下载缓存统一放在依赖根的 `.pip-temporary/` 所
 
 `deps-prune` 使用同一保留策略，默认仅预览，加 `--yes` 才删除；可用 `--keep-recent 0` 取消最近环境保护。维护记录列出删除／保留原因、文件字节数和维护前后磁盘余量；在用、被引用或最近保留的环境使容量仍超限时会明确记录原因，CLI 返回 2。历史记录页显示容量目标、当前磁盘余量和最近维护结果。资源 CLI 的 `--data-root` 应放在子命令前，例如：
 
-```bash
-python scripts/resource_cli.py --data-root E:/AutoReproducer-data status
+```powershell
+.\.venv\Scripts\python.exe scripts/resource_cli.py --data-root 'E:\AutoReproducer-data' status
 ```
 
 `archive PAPER_ID` / `restore ZIP路径` 用于单篇资源归档与恢复；`prune --yes` 在资源超配额时先归档再清理。**资源归档只包含已登记的代码、数据、本地权重及清单，不包含报告、运行日志或依赖环境。**目录迁移、归档校验和 Windows 文件占用处理见 [文件与存储管理](AutoReproducer/docs/file_management.md)。
@@ -411,16 +337,16 @@ AutoReproducer/                  # 仓库根目录（外层）
 
 在与应用相同的虚拟环境中执行：
 
-```bash
-python -m pip install -r requirements-test.txt
-python -m pip check
-python -m pytest tests/ -q -ra
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-test.txt
+.\.venv\Scripts\python.exe -m pip check
+.\.venv\Scripts\python.exe -m pytest tests/ -q -ra
 
 # Windows 另验证 UTF-8 模式
-python -X utf8 -m pytest tests/ -q -ra
+.\.venv\Scripts\python.exe -X utf8 -m pytest tests/ -q -ra
 ```
 
-[GitHub Actions](.github/workflows/tests.yml) 配置为 Ubuntu / Windows × Python 3.11 / 3.12，Windows 另跑 UTF-8 模式。回归测试无需真实 LLM API；CI 配置和历史通过记录不能代替当前提交的测试结果，也不能证明真实论文训练完成。当前测试已迁移到作者代码执行和报告流程；本地全量结果、Windows 并发修复及真实 PDF 验证状态见 [测试跟进记录](AutoReproducer/docs/test_followup_20261013.md)。
+[GitHub Actions](.github/workflows/tests.yml) 仍保留 Ubuntu / Windows × Python 3.11 / 3.12 的兼容回归，Windows 另跑 UTF-8 模式；当前交付验收以 Windows 为目标。回归测试无需真实 LLM API；CI 配置和历史通过记录不能代替当前提交的测试结果，也不能证明真实论文训练完成。当前测试已迁移到作者代码执行和报告流程；本地全量结果、Windows 并发修复及真实 PDF 验证状态见 [测试跟进记录](AutoReproducer/docs/test_followup_20261013.md)。
 
 可选原生依赖测试只读取显式配置的专用测试缓存：`AUTOREPRO_TEST_CPU_DEPS` 或 `AUTOREPRO_TEST_CUDA_DEPS`，目录格式为 `deps/repository/<运行时指纹>/<依赖摘要>`，并具有匹配版本的包和 `.ready` 标记。未配置时相应测试跳过；不会自动借用应用 `data/deps` 中会在报告后释放的运行依赖。测试缓存放在应用 `data/` 目录之外。
 
@@ -448,6 +374,7 @@ print(result["data"].get("validation"))
 
 | 文档 | 内容 |
 | --- | --- |
+| [当前架构](AutoReproducer/docs/current_architecture.md) | 当前入口、作者仓库与预设调用链、运行结果边界，以及暂未开放的功能 |
 | [指标比较与 R-FCN 实测](AutoReproducer/docs/issue27_progress_20261015.md) | 最终统计、真实 API/浏览器回归、GPU 环境检查及未完成的验收范围 |
 | [PDF 样本归档](AutoReproducer/examples/papers/README.md) | 论文来源、版本与 SHA-256；收录不代表运行通过 |
 | [依赖环境管理](AutoReproducer/docs/dependency_management.md) | 应用清单、缓存复用条件及回收机制 |

@@ -1,165 +1,83 @@
-"""侧边栏 Docker 引擎门禁的端到端测试（AppTest 驱动真实 app.py）。
-
-背景（用户实测踩到）：原判定是 `shutil.which("docker") is not None`——
-只证明 **CLI 二进制在 PATH**，不证明 **Docker Desktop 的引擎在跑**。
-于是侧边栏显示「✅ Docker 已就绪」，`docker run` 随后失败，报告里出现
-`failed to connect to the docker API at npipe:////./pipe/dockerDesktopLinuxEngine`。
-
-本文件锁死四件事：
-1. 引擎不可用时**不谎报就绪**：文案给出原因 + 本地隔离兜底，开关拉回关闭；
-2. 引擎可用时仍报「已就绪」，开关可用；
-3. 「重新检测」按钮能刷新探测结果（启动 Docker Desktop 后无需刷新页面）；
-4. Mock 模式**不做**探测（不执行代码、用不上 Docker，也不该让 Mock
-   用例背上真实子进程探测）。
-
-引擎探测本身经 `BaseAgent.docker_engine_available` 打桩——真实探测问的是
-本机 Docker Desktop 在不在跑，用例结果不该随机器状态漂移；探测函数自身
-的行为（version/info 选择、超时、无 CLI）由 tests/test_architecture.py 覆盖。
-
-运行: python -m pytest tests/test_app_docker_gate.py -v
-"""
-import sys
+"""Current web routes stay on local author execution, including old sessions."""
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
+from streamlit.testing.v1 import AppTest
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-from src.base_agent import BaseAgent  # noqa: E402
-import frontend.history_manager as hm  # noqa: E402
+from src.base_agent import BaseAgent
+from frontend import backend_pipeline, history_manager
 
 APP_PATH = str(Path(__file__).parent.parent / "app.py")
-DOWN_REASON = "Docker 引擎未启动或不可用（daemon 连接失败）"
-
-
-class _Probe:
-    """可变的探测桩：记录调用次数，结果可中途翻转（模拟用户启动引擎）。"""
-
-    def __init__(self, ok: bool = False):
-        self.ok = ok
-        self.calls = 0
-
-    def __call__(self, *args, **kwargs):
-        self.calls += 1
-        return (True, None) if self.ok else (False, DOWN_REASON)
 
 
 @pytest.fixture
-def at_app(tmp_path, monkeypatch):
-    """返回 (AppTest 工厂, 探测器)；数据目录指向 tmp_path。"""
-    monkeypatch.setattr(hm, "get_project_data_dir", lambda: tmp_path)
-    probe = _Probe()
-    monkeypatch.setattr(BaseAgent, "docker_engine_available",
-                        staticmethod(probe))
+def app_factory(tmp_path, monkeypatch):
+    monkeypatch.setattr(history_manager, "get_project_data_dir", lambda: tmp_path)
+    probe = Mock(return_value=(True, None))
+    monkeypatch.setattr(BaseAgent, "docker_engine_available", staticmethod(probe))
 
-    def _make():
-        from streamlit.testing.v1 import AppTest
-        return AppTest.from_file(APP_PATH, default_timeout=120)
+    def make(input_mode="论文标题", *, mock_mode=False):
+        app = AppTest.from_file(APP_PATH, default_timeout=30)
+        app.session_state["input_mode"] = input_mode
+        app.session_state["mock_mode"] = mock_mode
+        # Sessions created before the route change may still request Docker.
+        app.session_state["use_docker"] = True
+        app.session_state["docker_probe"] = (True, None)
+        return app.run()
 
-    return _make, probe
-
-
-def _captions(at) -> str:
-    return " ".join(c.value for c in at.sidebar.caption)
-
-
-def _docker_toggle(at):
-    return next(t for t in at.sidebar.toggle if "Docker" in t.label)
+    return make, probe
 
 
-def _to_real_mode(at):
-    """切到真实模式（Mock 开关是侧边栏第一个 toggle）。"""
-    at.sidebar.toggle[0].set_value(False)
-    at.run()
-    assert not at.exception, at.exception
+def docker_toggle(app):
+    return next(toggle for toggle in app.sidebar.toggle if "Docker" in toggle.label)
 
 
-# ---------------- 1. 引擎不可用：不谎报就绪 ----------------
-
-def test_engine_down_does_not_claim_ready(at_app):
-    make, probe = at_app
-    at = make()
-    at.run()
-    _to_real_mode(at)
-
-    caps = _captions(at)
-    assert "已就绪" not in caps, "引擎没在跑就不能报「已就绪」"
-    assert "未启动" in caps                    # 原因是人话
-    assert "本地隔离" in caps                  # 兜底去向明确
+@pytest.mark.parametrize("input_mode", ["论文标题", "上传PDF", "官方仓库预设"])
+def test_author_inputs_disable_docker_even_when_engine_is_available(app_factory, input_mode):
+    make, probe = app_factory
+    app = make(input_mode)
+    assert not app.exception, app.exception
+    assert docker_toggle(app).disabled is True
+    assert docker_toggle(app).value is False
+    assert app.session_state["use_docker"] is False
+    assert "本地受控进程" in " ".join(item.value for item in app.sidebar.caption)
+    probe.assert_not_called()
 
 
-def test_engine_down_disables_toggle_and_forces_off(at_app):
-    """显示开着却跑不了是最坏的组合：引擎不在时开关必须关且不可点。"""
-    make, _ = at_app
-    at = make()
-    at.run()
-    _to_real_mode(at)
-
-    toggle = _docker_toggle(at)
-    assert toggle.disabled is True
-    assert toggle.value is False
-    assert at.session_state["use_docker"] is False
+def test_mock_mode_clears_stale_docker_selection_without_probe(app_factory):
+    make, probe = app_factory
+    app = make(mock_mode=True)
+    assert not app.exception, app.exception
+    assert docker_toggle(app).disabled is True
+    assert app.session_state["use_docker"] is False
+    assert any("Mock 模式不执行真实代码" in item.value for item in app.sidebar.caption)
+    probe.assert_not_called()
 
 
-# ---------------- 2. 引擎可用：仍然报就绪 ----------------
-
-def test_engine_up_reports_ready_and_offers_opt_in(at_app):
-    """引擎可用：报就绪、开关可点，但沙箱**默认关闭**（显式开启才进容器）。
-
-    默认关的理由：容器沙箱每次运行都要在容器里现装依赖（tmpfs 随 `--rm`
-    清空），首跑慢且难以解释；本地隔离执行才是开箱即跑的那条路。判据是
-    「默认关 + 打开后真的改口说要进容器」，缺一半都会让用户以为沙箱开着。
-    """
-    make, probe = at_app
-    probe.ok = True
-    at = make()
-    at.run()
-    _to_real_mode(at)
-
-    assert "已就绪" in _captions(at)
-    assert "本地隔离" in _captions(at)            # 默认去向写在文案里
-    toggle = _docker_toggle(at)
-    assert toggle.disabled is False
-    assert toggle.value is False
-    assert at.session_state["use_docker"] is False
-
-    toggle.set_value(True)                        # 显式打开 -> 容器沙箱
-    at.run()
-    assert not at.exception, at.exception
-    assert at.session_state["use_docker"] is True
-    assert "容器沙箱" in _captions(at)
+def test_title_start_keeps_local_execution_after_stale_docker_selection(app_factory, monkeypatch):
+    make, probe = app_factory
+    app = make()
+    start = Mock()
+    monkeypatch.setattr(backend_pipeline, "run_pipeline_background", start)
+    app.sidebar.text_input(key="paper_title_input").set_value("A new paper title").run()
+    app.session_state["use_docker"] = True
+    next(button for button in app.sidebar.button if "开始复现" in button.label).click().run()
+    assert not app.exception, app.exception
+    start.assert_called_once()
+    assert start.call_args.kwargs["use_docker"] is False
+    assert start.call_args.kwargs["author_execution_only"] is True
+    probe.assert_not_called()
 
 
-# ---------------- 3. 重新检测：启动引擎后无需刷新页面 ----------------
-
-def test_recheck_button_refreshes_probe(at_app):
-    make, probe = at_app
-    at = make()
-    at.run()
-    _to_real_mode(at)
-    assert "未启动" in _captions(at)
-    first_calls = probe.calls
-
-    # 用户去启动 Docker Desktop，然后点「重新检测」
-    probe.ok = True
-    recheck = next(b for b in at.sidebar.button if "重新检测" in b.label)
-    recheck.click()
-    at.run()
-
-    assert not at.exception, at.exception
-    assert probe.calls > first_calls, "重新检测必须真的重新探测"
-    assert "已就绪" in _captions(at)
-    assert _docker_toggle(at).disabled is False
-
-
-# ---------------- 4. Mock 模式不探测 ----------------
-
-def test_mock_mode_skips_probe(at_app):
-    make, probe = at_app
-    at = make()
-    at.session_state["mock_mode"] = True
-    at.run()
-
-    assert not at.exception, at.exception
-    assert probe.calls == 0, "Mock 模式不该触发 Docker 探测"
-    assert "Mock 模式不执行真实代码" in _captions(at)
+def test_unmatched_title_explains_pdf_requirement_and_report_action(app_factory):
+    make, _ = app_factory
+    app = make()
+    assert any("运行作者代码需上传 PDF" in item.value for item in app.sidebar.caption)
+    action = "请上传该论文的原始 PDF，再运行发现的作者仓库。"
+    app.session_state["result"] = {"state": "ERROR", "error": "缺少论文正文", "data": {
+        "source_request": {"status": "needs_pdf", "next_action": action},
+    }}
+    app.run()
+    assert not app.exception, app.exception
+    assert any(item.value == action for item in app.info)

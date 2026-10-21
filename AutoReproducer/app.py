@@ -29,7 +29,6 @@ from src.orchestrator import Orchestrator
 from src.llm.llm_client import LLMClient
 from src.audit.audit_logger import AuditLogger
 from src.project_paths import get_data_root
-from src.base_agent import BaseAgent
 from src.corpus import list_papers
 from src.repository_profiles import PAPER_TITLE
 from src.title_routing import resolve_title_request
@@ -282,6 +281,8 @@ def render_paper_input():
             st.caption("将取得固定版本并运行：" + selected["label"])
             if selected.get("adapter_id"):
                 st.caption("结论限于选定官方方法实验；论文完整基准需要另行适配。")
+        elif not st.session_state.mock_mode:
+            st.caption("未匹配预设时先定位仓库，运行作者代码需上传 PDF。")
     elif input_mode == "上传PDF":
         uploaded_file = st.file_uploader(
             "上传PDF文件", type=["pdf"], key="pdf_uploader",
@@ -380,60 +381,21 @@ with st.sidebar:
             value=st.session_state.mock_mode,
             help="演示界面与流程，不执行真实论文实验或调用模型服务")
 
-        # Docker 沙箱执行开关（真实模式生效）。
-        # 默认**关闭**：容器沙箱的代价是每次运行都要在容器里现装依赖（tmpfs 随
-        # `--rm` 清空，numpy 级别约 20 秒、torch 级别几分钟），默认开着会让用户
-        # 的第一次真实运行无声地落在容器里、慢且难解释；本地隔离执行（依赖装进
-        # data/deps/<hash>/，多论文共享）才是开箱即跑的那条路。
-        # 要用容器随时手动打开——今天它已在真实容器里实测跑通。
-        if "use_docker" not in st.session_state:
-            st.session_state.use_docker = False
-        if "docker_probe" not in st.session_state:
-            st.session_state.docker_probe = None       # None = 尚未探测
-
-        # 引擎存活探测：CLI 二进制在 PATH 上 ≠ Docker Desktop 的引擎在跑。
-        # 只看 `shutil.which("docker")` 会把「装了没启动」报成「已就绪」，
-        # 随后 `docker run` 甩出 npipe 原始报错（用户实测踩到）。
-        # 只在真实模式探测：Mock 模式不执行代码、用不上 Docker，也不必让
-        # Mock 用例背上真实探测。结果缓存进 session_state —— 每轮 rerun 都
-        # 跑一次探测不划算，而引擎可能被用户中途启动，所以留「重新检测」按钮
-        # 作为显式刷新路径。
-        if st.session_state.mock_mode:
-            docker_available, docker_reason = False, ""
-        else:
-            if st.session_state.docker_probe is None:
-                st.session_state.docker_probe = BaseAgent.docker_engine_available()
-            docker_available, docker_reason = st.session_state.docker_probe
-            if not docker_available:
-                # 引擎不在就把开关拉回关闭：显示开着却跑不了是最坏的组合
-                st.session_state.use_docker = False
-
-        st.session_state.use_docker = st.toggle(
-            "Docker 沙箱执行（真实模式）",
-            value=st.session_state.use_docker,
-            disabled=st.session_state.mock_mode or not docker_available,
-            help="真实模式下启用 Docker 隔离执行：依赖在容器内安装，"
-                 "不污染本机环境；未安装 Docker 或 Mock 模式时自动降级为本地隔离执行")
+        # Current web inputs use author repositories. Engine availability alone
+        # does not make those execution paths support Docker; normalize old sessions.
+        st.session_state.use_docker = False
+        st.toggle("Docker 沙箱执行（暂未开放）", value=False, disabled=True,
+                  help="当前网页的作者仓库与固定预设使用本地受控进程；Docker 执行尚未接通。")
         if st.session_state.mock_mode:
             st.caption("Mock 模式不执行真实代码，无需 Docker")
-        elif not docker_available:
-            st.caption(f"{docker_reason}，将使用本地隔离执行（依赖安装在隔离目录）")
-            if st.button("重新检测 Docker", key="docker_recheck",
-                         use_container_width=True,
-                         help="启动 Docker Desktop 后点此重新探测，无需刷新页面"):
-                st.session_state.docker_probe = None
-                st.rerun()
         else:
-            st.caption("Docker 已就绪 ("
-                       + ("将使用容器沙箱，首跑会在容器内安装依赖，偏慢"
-                          if st.session_state.use_docker
-                          else "未启用容器沙箱，将使用本地隔离执行")
-                       + ")")
+            st.caption("作者仓库和固定预设使用本地受控进程，依赖安装在隔离目录；"
+                       "依赖隔离不等于容器沙箱。")
 
         # 预留可选入口；当前版本不执行优化，也不消耗优化预算。
         st.session_state.enable_optimization = False
         st.checkbox("启用智能优化（预留）", key="enable_optimization", disabled=True)
-        st.caption("通用流程暂不执行优化；SIREN 与 Neural ODE 预设提供真实建议和参数验证选项。")
+        st.caption("当前所有流程均未开放智能优化；固定预设也只执行所选作者实验。")
 
     render_llm_settings()
     base_url = st.session_state.llm_base_url
@@ -545,8 +507,6 @@ if start_btn and not st.session_state.running:
         st.sidebar.error("官方仓库预设需要关闭 Mock 模式，才能执行真实论文代码。")
     elif manual_repo_error:
         st.sidebar.error(manual_repo_error)
-    elif experiment_profile and st.session_state.use_docker:
-        st.sidebar.error("本轮官方仓库预设使用本地执行；请关闭 Docker 开关后运行。")
     elif not experiment_profile and not pt and not uploaded_file:
         st.sidebar.error("请先上传PDF文件" if input_mode == "上传PDF"
                          else "请先输入论文标题")
@@ -595,9 +555,7 @@ if start_btn and not st.session_state.running:
             api_key=api_key,
             mock_mode=st.session_state.mock_mode,
             enable_optimization=False,
-            use_docker=(not st.session_state.mock_mode
-                        and docker_available
-                        and st.session_state.use_docker),
+            use_docker=False,
             cleanup_pdf=True)   # 临时 PDF 由后台线程负责删除
         st.session_state.workspace_tabs = "流水线状态"
         st.rerun()
@@ -927,7 +885,7 @@ with tab1:
                                     for row in optimization.get("confirmation", []))
                     st.caption(f"候选训练：已尝试 {tried} 个、已完成 {completed} 个；"
                                f"两种子留出确认：已完成 {confirmed}/2。上方指标来自基线，不能据此判断优化有效。")
-                    st.info("如需完成参数验证，请调整总预算（建议120分钟）后重新开始。预算是上限，不会强制运行到时限。")
+                    st.info("此为历史优化记录；当前版本未开放参数优化，重新运行只执行所选作者实验。")
                 elif optimization.get("status") == "suggested":
                     st.info("智能建议已生成，尚未通过训练验证。")
                 elif optimization.get("mode") in {"suggest", "validate"}:
@@ -978,6 +936,9 @@ with tab1:
 # ===== Tab 2: 复现报告 =====
 with tab2:
     st.markdown('<div class="section-heading"><div><span class="section-kicker">02 / REPRODUCTION REPORT</span><h2>复现报告</h2><p>查看实验结论、执行证据与验证结果。</p></div></div>', unsafe_allow_html=True)
+    source_request = ((st.session_state.result or {}).get("data") or {}).get("source_request") or {}
+    if source_request.get("status") == "needs_pdf":
+        st.info(source_request.get("next_action") or "请上传对应论文的原始 PDF 后运行作者代码。")
     if st.session_state.result and st.session_state.result.get("data", {}).get("report"):
         st.session_state.result = report_upgrade_controls(st.session_state.result, key="upgrade_current_report")
         report = st.session_state.result["data"]["report"]

@@ -36,7 +36,8 @@ def pipeline(tmp_path):
 def test_all_generic_review_agents_and_stages_are_removed(pipeline, mock_mode):
     pipeline.mock_mode = mock_mode
     events = []
-    result = pipeline.run({'paper_title': 'Public paper', 'use_llm_review': True}, on_event=events.append)
+    result = pipeline.run({'paper_title': 'Public paper', 'use_llm_review': True,
+                           'code': "print('explicit test program')"}, on_event=events.append)
     assert result['state'] == 'COMPLETED', result['error']
     assert 'verifier' not in pipeline.agents and 'validator' not in pipeline.agents
     assert not hasattr(pipeline, '_verify_step')

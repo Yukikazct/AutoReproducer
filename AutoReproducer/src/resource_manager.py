@@ -24,7 +24,7 @@ import json
 import os
 import shutil
 import stat
-import subprocess
+import sys
 import tempfile
 import time
 import unicodedata
@@ -38,6 +38,7 @@ from src.project_paths import get_data_root
 from src.resource_events import ResourceEventLogger
 from src.safety.files import remove_tree
 from src.safety.paths import is_link, workspace_path
+from src.runtime_preparation import run_owned_process
 
 # src/resource_manager.py -> parents[1] 为仓库内 AutoReproducer 包根
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -439,9 +440,10 @@ class ResourceManager:
                 script = entry.split(":", 1)[1]
                 target_dir = ds_dir / "dataset_full"
                 os.makedirs(target_dir, exist_ok=True)
-                proc = subprocess.run(
-                    [script, str(target_dir), str(_SMOKE_ROWS * 8)],
-                    capture_output=True, text=True, timeout=1800)
+                command = ([sys.executable, script] if Path(script).suffix.casefold() == ".py"
+                           else [script])
+                proc = run_owned_process(
+                    [*command, str(target_dir), str(_SMOKE_ROWS * 8)], timeout_s=1800)
                 if proc.returncode != 0:
                     return {"state": "unavailable",
                             "detail": f"数据集脚本失败: {(proc.stderr or '')[-200:]}"}
@@ -452,10 +454,10 @@ class ResourceManager:
                         "level": "full", "rows": max(rows, 0)}
             if entry.startswith("url:"):
                 target_file = ds_dir / entry.split(":", 1)[1].rsplit("/", 1)[-1]
-                proc = subprocess.run(
+                proc = run_owned_process(
                     ["curl", "-L", "--fail", "-sS", "-o", str(target_file),
                      entry.split(":", 1)[1]],
-                    capture_output=True, text=True, timeout=1800)
+                    timeout_s=1800)
                 if proc.returncode != 0:
                     return {"state": "unavailable",
                             "detail": f"数据集下载失败: {(proc.stderr or '')[-200:]}"}
@@ -618,9 +620,9 @@ class ResourceManager:
             try:
                 fname = ref.rsplit("/", 1)[-1] or "weights.bin"
                 target = target_dir / fname
-                proc = subprocess.run(
+                proc = run_owned_process(
                     ["curl", "-L", "--fail", "-sS", "-o", str(target), ref],
-                    capture_output=True, text=True, timeout=1800)
+                    timeout_s=1800)
                 if proc.returncode == 0 and target.stat().st_size > 0:
                     info.update(path=str(target), state="downloaded",
                                 detail=f"下载权重: {fname}")

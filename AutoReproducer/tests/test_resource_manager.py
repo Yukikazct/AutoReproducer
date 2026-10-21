@@ -195,7 +195,7 @@ def test_fetch_weights_http_offline(mgr, monkeypatch):
     def fake_run(cmd, **kw):
         return type("P", (), {"returncode": 3, "stderr": "404", "stdout": ""})()
 
-    monkeypatch.setattr("src.resource_manager.subprocess.run", fake_run)
+    monkeypatch.setattr("src.resource_manager.run_owned_process", fake_run)
     info = mgr.fetch_weights(pid, "https://example.com/w.bin")
     assert info["state"] == "skipped"
     assert info["path"] == ""
