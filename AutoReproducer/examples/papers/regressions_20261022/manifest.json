@@ -1,0 +1,14 @@
+{
+  "title": "Classic GNNs are Strong Baselines: Reassessing GNNs for Node Classification",
+  "role": "regression",
+  "source_url": "https://proceedings.neurips.cc/paper_files/paper/2024/file/b10ed15ff1aa864f1be3a75f1ffc021b-Paper-Datasets_and_Benchmarks_Track.pdf",
+  "final_url": "https://proceedings.neurips.cc/paper_files/paper/2024/file/b10ed15ff1aa864f1be3a75f1ffc021b-Paper-Datasets_and_Benchmarks_Track.pdf",
+  "downloaded_at_utc": "2026-10-22T02:02:50.947508+00:00",
+  "file": "tunedgnn.pdf",
+  "sha256": "1756d6d6c976e34fe668340551145f135de2c32a7cd16e5e046e4686ee9a4fb6",
+  "bytes": 3807686,
+  "pages": 20,
+  "repository_url": "https://github.com/LUOyk1999/tunedGNN",
+  "repository_revision": "23f9604e8b13a9a6d3faa2f691cd844006979153",
+  "scope": "GCN* / Cora; engineering regression, not an unused independent acceptance paper"
+}

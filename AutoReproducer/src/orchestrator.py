@@ -156,6 +156,7 @@ class Orchestrator:
             "code": input_data.get("code", "") or "",
             "corpus_paper": input_data.get("corpus_paper"),
             "preferred_repo_url": input_data.get("preferred_repo_url", ""),
+            "experiment_request": input_data.get("experiment_request", {}),
             "author_execution_only": input_data.get("author_execution_only") is True,
             "strict_validation": input_data['strict_validation'],
             "code_repo_url": input_data.get("code_repo_url", ""),

@@ -1,8 +1,9 @@
-"""Upload a PDF through the browser and audit author execution and release.
+"""Upload a PDF through the browser and audit execution, metrics and release.
 
 Credentials are supplied by a hidden prompt or JSON on stdin, never a secrets file.
 Use data/dependency roots that match the running application.
-Independent acceptance additionally requires a paper-bound freeze and shared registry.
+Strict validation checks independent numerical evidence; unused-paper eligibility
+is a separate opt-in requiring a paper-bound freeze and shared registry.
 """
 import argparse
 from contextlib import ExitStack
@@ -62,7 +63,7 @@ def configure_page(page, args, credential):
     mock = page.get_by_label("Mock 演示模式（无需 API）", exact=True)
     if mock.is_checked():
         mock.set_checked(False)
-    docker = page.get_by_label("Docker 沙箱执行（真实模式）", exact=True)
+    docker = page.get_by_label("Docker 沙箱执行（暂未开放）", exact=True)
     if docker.is_checked():
         docker.set_checked(False)
     page.get_by_text("LLM API 配置", exact=True).click()
@@ -86,6 +87,59 @@ def configure_page(page, args, credential):
     page.get_by_text(re.compile(re.escape(message))).wait_for(timeout=45000)
     assert password.input_value() == credential, "Credential changed after connection test"
     return config
+
+
+def configure_execution_mode(page, strict_validation):
+    """Set the real PDF controls, including when a browser session has old state."""
+    repair = page.get_by_label("兼容性源码修复：失败后自动重试", exact=True)
+    if repair.is_checked():
+        repair.press("Space")
+    strict = page.get_by_label("严格核验：重载模型并独立复算指标", exact=True)
+    if strict.is_checked() is not strict_validation:
+        # Streamlit's accessible React-Aria checkbox is covered by its label.
+        # Use its supported keyboard interaction instead of clicking the input.
+        strict.press("Space")
+    assert strict.is_checked() is strict_validation, "The browser strict-validation checkbox differs from the requested mode"
+    assert repair.is_checked() is False, "Source repair and strict acceptance must not run together"
+
+
+def configure_experiment_request(page, args):
+    from src.experiment_request import normalize_experiment_request
+    requested = normalize_experiment_request({
+        'method': getattr(args, 'experiment_method', None) or '',
+        'dataset': getattr(args, 'experiment_dataset', None) or ''})
+    for name, label in [('method', '实验方法 / 模型（可选）'), ('dataset', '实验数据集（可选）')]:
+        field = page.get_by_label(label, exact=True)
+        field.fill(requested.get(name, ''))
+        field.press('Enter')
+        assert field.input_value() == requested.get(name, '')
+    return requested
+
+
+def verify_experiment_request(result, requested, strict_validation):
+    data = result.get('data') or {}
+    assert data.get('experiment_request', {}) == requested, 'The backend received a different experiment request'
+    if strict_validation and requested:
+        from src.experiment_request import bind_experiment_request
+        bind_experiment_request(data['grounded_repository_plan']['experiment_protocol'], requested)
+
+
+def terminal_outcome(result):
+    """Describe the service's reported outcome; evidence is audited separately."""
+    data = result.get('data') or {}
+    strict = data.get('strict_validation') or {}
+    validation = data.get('validation') or {}
+    if result.get('state') != 'COMPLETED':
+        return 'execution_failed'
+    if strict.get('requested') is not True:
+        return 'ordinary_completed'
+    if strict.get('status') == 'unavailable':
+        return 'strict_unavailable'
+    if strict.get('status') == 'failed':
+        return 'strict_failed'
+    if strict.get('status') == 'verified' and type(validation.get('is_reproduced')) is bool:
+        return 'strict_verified_reference_met' if validation['is_reproduced'] else 'strict_verified_reference_not_met'
+    return 'strict_incomplete'
 
 
 def cleanup_evidence(result, data_root, deps_root):
@@ -212,6 +266,58 @@ def verify_author_completion(result, pdf_hash, expected_repo):
     return validation
 
 
+def verify_strict_completion(result, pdf_hash, expected_repo):
+    """Replay the formal verifier against retained source, models and receipts.
+
+    A recorded service request, separate inference process, complete native runs
+    and frozen numerical comparison are required. Printed author comparisons
+    cannot substitute for these artifacts. Missing the numerical target remains
+    a completed strict verification, with is_reproduced=False.
+    """
+    from src.strict_validation import verify_strict_execution
+
+    data = result.get('data') or {}
+    strict = data.get('strict_validation') or {}
+    assert strict.get('requested') is True, 'The backend did not receive strict_validation=true'
+    assert result.get('state') == 'COMPLETED', result.get('error') or terminal_outcome(result)
+    assert strict.get('status') == 'verified', (
+        'Strict acceptance did not complete: ' + terminal_outcome(result) + ': ' + str(strict.get('reason', '')))
+    assert (data.get('source_repair') or {}).get('requested') is False, 'Strict acceptance cannot include source repair'
+    validation = data.get('validation') or {}
+    assert strict.get('result') == validation.get('status')
+    assert validation.get('status') in {'reproduced', 'reference_not_met'}
+    assert validation.get('is_reproduced') is (validation['status'] == 'reproduced')
+    assert validation.get('strict_validation') is True and validation.get('paper_metrics_verified') is True
+    assert validation.get('protocol_pass') is True and validation.get('independent_metrics_pass') is True
+    assert data.get('reproduction_scope') == 'selected_paper_experiment'
+    assert data.get('execution_source') == 'author_repository' and data.get('repository_executed') is True
+    assert data['pdf_input']['sha256'] == pdf_hash
+    assert repository_key(data['resources']['code_repo_url']) == repository_key(expected_repo)
+
+    run_dir = Path(data['run_dir'])
+    frozen = json.loads((run_dir / 'experiment_spec.json').read_text('utf-8'))
+    plan = frozen['spec']
+    digest = hashlib.sha256(json.dumps(plan, sort_keys=True, ensure_ascii=False,
+                                      separators=(',', ':')).encode()).hexdigest()
+    assert frozen['sha256'] == data['spec_sha256'] == digest
+    assert plan.get('scope') == 'selected_paper_experiment' and plan.get('pdf_sha256') == pdf_hash
+    repository = data['repository']
+    assert repository_key(repository['url']) == repository_key(expected_repo)
+    assert plan['repository'] == {key: repository[key] for key in ('url', 'revision')}
+    packet = json.loads((run_dir / 'source_packet.json').read_text('utf-8'))
+    workspace = Path(repository['path'])
+    # Replays source/AST bindings, complete required process records, model and
+    # tensor hashes, all run receipts and the frozen numerical rule; no training
+    # or model calls are performed here.
+    replayed = verify_strict_execution(plan, packet, workspace, data['execution'], digest)
+    assert all(validation.get(key) == value for key, value in replayed.items()), 'Strict validation differs from artifact replay'
+    assert strict.get('binding') == replayed['strict_plan_verification'], 'Strict request receipt lost its source binding'
+    assert data['execution'].get('strict_execution_verification') == validation
+    for name, expected in [('strict_validation.json', strict), ('strict_execution_verification.json', validation)]:
+        assert json.loads((run_dir / name).read_text('utf-8')) == expected, 'Saved strict receipt differs: ' + name
+    return validation
+
+
 def verify_trial_repository(result, freeze):
     """Bind the real export and executed plan to the pre-registered author commit."""
     paper = freeze['paper']
@@ -269,18 +375,103 @@ def verify_saved_report(result, downloaded):
     for path in (run_dir / 'result.json', report.with_suffix('.result.json')):
         saved = json.loads(path.read_text('utf-8'))
         assert saved.get('state') == result.get('state'), 'Saved terminal state differs'
-        for key in ('validation', 'execution', 'pdf_input', 'spec_sha256',
+        for key in ('validation', 'execution', 'pdf_input', 'spec_sha256', 'strict_validation',
+                    'source_repair', 'reproduction_scope',
                     'report', 'report_length', 'runtime_preparation'):
             assert saved.get('data', {}).get(key) == result['data'].get(key), 'Saved result differs: ' + key
+    if (result['data'].get('strict_validation') or {}).get('requested') is True:
+        verify_strict_report(text, result['data']['validation'])
     return {'saved_reports_identical': True, 'structured_records_identical': True}
+
+
+def strict_comparison_rows(validation):
+    """Expected cells use the report renderer's unrounded values and explicit units."""
+    from src.metric_keys import norm_metric_key
+    from src.runtime_metrics import metric_unit
+
+    comparisons = validation.get('comparisons')
+    assert isinstance(comparisons, list) and comparisons, 'Strict report requires verified numerical comparisons'
+    assert type(validation.get('is_reproduced')) is bool
+    assert all(type(row.get('pass')) is bool for row in comparisons)
+    assert all(row['pass'] for row in comparisons) is validation['is_reproduced']
+    assert validation.get('status') == ('reproduced' if validation['is_reproduced'] else 'reference_not_met')
+    names = [norm_metric_key(row['name']) for row in comparisons]
+    assert len(names) == len(set(names)), 'Strict comparison metric names must be unique'
+
+    def cell(value, unit):
+        assert type(value) in (int, float) and math.isfinite(value)
+        unit = metric_unit(value, unit)
+        suffix = {'percent': '%', 'fraction': ' (比例)'}.get(unit, ' ' + unit if unit else '')
+        return str(value) + suffix
+
+    return [[row['name'], cell(row['reference'], row['unit']), cell(row['actual'], row['unit'])]
+            for row in sorted(comparisons, key=lambda row: norm_metric_key(row['name']))]
+
+
+def verify_strict_report(report, validation):
+    """Reject consistently stale files: bind report conclusion and rows to formal metrics."""
+    from frontend.display_text import display_text
+
+    # Ignore quoted code examples: neither an example status nor an example
+    # table can stand in for the generated conclusion and comparison section.
+    lines, fence = [], None
+    for line in report.splitlines():
+        marker = re.match(r'^\s{0,3}(`{3,}|~{3,})', line)
+        if marker:
+            token = marker.group(1)
+            if fence is None:
+                fence = token
+            elif token[0] == fence[0] and len(token) >= len(fence):
+                fence = None
+        elif fence is None:
+            lines.append(line.strip())
+    states = [display_text(line).strip() for line in lines if line.startswith('- **复现状态**:')]
+    expected_state = ('选定论文实验数值复现通过' if validation['is_reproduced'] else
+                      '选定论文实验已完成，数值参考未达到')
+    assert states == ['- **复现状态**: ' + expected_state], 'Downloaded strict report has a stale numerical conclusion'
+    assert [line for line in lines if line.startswith('- **严格验收**:')] == [
+        '- **严格验收**: 完整独立复算证据已核验'], 'Downloaded report has no verified strict conclusion'
+    headings = [index for index, line in enumerate(lines) if line == '### 指标对比']
+    assert len(headings) == 1, 'Strict report requires one unambiguous numerical comparison table'
+    rows = []
+    for line in lines[headings[0] + 1:]:
+        if not line and not rows:
+            continue
+        if not line.startswith('|'):
+            break
+        cells = [value.strip() for value in line.strip('|').split('|')]
+        if all(re.fullmatch(r':?-{3,}:?', value) for value in cells):
+            continue
+        rows.append(cells)
+    expected = [['指标', '论文声明', '实际运行'], *strict_comparison_rows(validation)]
+    assert rows == expected, 'Downloaded strict metric values or units differ from independently verified comparisons'
+    return expected
+
+
+def verify_strict_table(table, validation):
+    """Inspect real DOM cells, including units, before accepting the live/reloaded UI."""
+    rows = [[re.sub(r'\s+', ' ', cell).strip() for cell in row.locator('th, td').all_inner_texts()]
+            for row in table.locator('tr').all()]
+    assert rows == [['指标', '论文声明', '实际运行'], *strict_comparison_rows(validation)], (
+        'Displayed strict metric values or units differ from independently verified comparisons')
 
 
 def verify_report_reconnect(page, args, progress, runtime, result):
     """Real browser downloads and a reload must retain the saved comparison."""
+    strict = getattr(args, 'strict_validation', False)
+
     def show_report():
         page.get_by_role('tab', name=re.compile('复现报告')).click()
-        table = page.get_by_role('table').filter(has_text='论文宣称').filter(has_text='作者运行输出').first
+        table = page.get_by_role('table')
+        table = (table.filter(has_text='论文声明').filter(has_text='实际运行') if strict else
+                 table.filter(has_text='论文宣称').filter(has_text='作者运行输出')).first
         table.wait_for(timeout=30000)
+        if strict:
+            verify_strict_table(table, result['data']['validation'])
+            state_text = ('选定论文实验数值复现通过' if result['data']['validation']['is_reproduced'] else
+                          '选定论文实验已完成，数值参考未达到')
+            for marker in ('完整独立复算证据已核验', state_text):
+                page.get_by_text(re.compile(re.escape(marker))).first.wait_for(timeout=30000)
         return table.inner_text()
     displayed = show_report()
     content = []
@@ -297,7 +488,11 @@ def verify_report_reconnect(page, args, progress, runtime, result):
         attachment = report_path.with_name(report_path.stem + '_execution.txt')
         assert archive.read(attachment.name) == attachment.read_bytes()
         assert (Path(result['data']['run_dir']) / attachment.name).read_bytes() == attachment.read_bytes()
-    assert '作者输出与论文宣称对比' in content[0].decode('utf-8')
+    report_text = content[0].decode('utf-8')
+    if strict:
+        assert '完整独立复算证据已核验' in report_text and '### 指标对比' in report_text
+    else:
+        assert '作者输出与论文宣称对比' in report_text
     saved = verify_saved_report(result, content[0])
     before = set(runtime.glob('progress_*.jsonl'))
     page.goto(f'http://localhost:{args.port}/?run={progress.name}', wait_until='domcontentloaded')
@@ -307,6 +502,24 @@ def verify_report_reconnect(page, args, progress, runtime, result):
             'full_output_attachment_identical': True,
             'report_sha256': hashlib.sha256(content[0]).hexdigest(), 'reconnect_preserved_comparison': True,
             **saved}
+
+
+def verify_terminal_page(page, validation, strict_validation=False):
+    """Wait for the actual terminal conclusion rather than a generic success."""
+    if strict_validation:
+        if validation['is_reproduced']:
+            page.get_by_text('完整实验已完成，论文数值验收通过。', exact=True).wait_for(timeout=30000)
+        else:
+            page.get_by_text(re.compile(re.escape('选定论文实验已完成，独立评估数值未达到固定参考：'))).wait_for(timeout=30000)
+    else:
+        page.get_by_text('所选仓库代码已运行完成，命令已正常退出。', exact=True).wait_for(timeout=30000)
+        caption = ('已对比作者输出与论文宣称，详见报告中的差值和实验设置；本次未进行论文数值审核。'
+                   if (validation.get('author_claim_comparison') or {}).get('comparisons') else
+                   '本次完成的是代码运行，论文数值未做验收。')
+        page.get_by_text(caption, exact=True).wait_for(timeout=30000)
+        if validation['training_observed'] is False:
+            page.get_by_text('本次未记录到优化器更新；详见作者程序输出。', exact=True).wait_for(timeout=30000)
+    page.get_by_text('任务完成', exact=True).wait_for(timeout=30000)
 
 
 def main(args):
@@ -323,6 +536,7 @@ def main(args):
     pdf = Path(args.pdf).resolve(strict=True)
     pdf_hash = hashlib.sha256(pdf.read_bytes()).hexdigest()
     credential = ""
+    strict_requested = getattr(args, 'strict_validation', False)
 
     def verify_frozen():
         return verify_acceptance_source(args, freeze, pdf_hash)
@@ -359,6 +573,8 @@ def main(args):
                 page.screenshot(path=str(runtime / f"{args.tag}_preview_failed.png"), full_page=True)
                 save("preview_failed", {"body_text": page.locator("body").inner_text(), "task_submitted": False})
                 raise
+            configure_execution_mode(page, strict_requested)
+            experiment_request = configure_experiment_request(page, args)
             page.screenshot(path=str(runtime / f"{args.tag}_preview.png"), full_page=True)
             assert page.get_by_label("API Key", exact=True).input_value() == credential, "Credential changed during PDF upload"
             before = set(runtime.glob("progress_*.jsonl"))
@@ -372,7 +588,9 @@ def main(args):
             assert len(created) == 1, "Exactly one browser-submitted task must be created; check --data-root"
             progress = created.pop()
             save("request", {"progress_file": str(progress), "input": "real_browser_pdf_upload",
-                             "author_execution_only": True, "llm": config,
+                             "author_execution_only": not strict_requested,
+                             "strict_validation": strict_requested, "source_repair": False, "llm": config,
+                             "experiment_request": experiment_request,
                              "repository_preview_required": not args.allow_no_preview_link,
                              "data_root": str(data_root), "deps_root": str(deps_root),
                              "pdf_sha256": pdf_hash, "freeze": freeze, "eligibility": eligibility,
@@ -407,14 +625,25 @@ def main(args):
                 if snapshot["done"]:
                     result = snapshot["result"] or {}
                     save("full_result", result)
+                    save("terminal_observation", {"reported_outcome": terminal_outcome(result),
+                        "backend_strict_request": (result.get('data', {}).get('strict_validation') or {}).get('requested'),
+                        "strict_validation_required": strict_requested, "evidence_audited": False})
                     cleanup = cleanup_evidence(result, data_root, deps_root)
                     save("cleanup", cleanup)
                     eligibility = verify_frozen()
-                    validation = verify_author_completion(result, pdf_hash, args.repo)
-                    if getattr(args, 'require_independent', False):
-                        assert validation.get('training_observed') is True, 'Independent acceptance requires actual training updates'
+                    validation = (verify_strict_completion(result, pdf_hash, args.repo) if strict_requested else
+                                  verify_author_completion(result, pdf_hash, args.repo))
+                    verify_experiment_request(result, experiment_request, strict_requested)
+                    if strict_requested and freeze.get('paper'):
                         eligibility['repository'] = verify_trial_repository(result, freeze)
-                    comparison = verify_claim_comparison(result) if args.require_comparison else None
+                    if getattr(args, 'require_independent', False):
+                        observed = ((validation.get('training_summary') or {}).get('optimizer_steps')
+                                    if strict_requested else validation.get('training_observed'))
+                        assert observed is True or type(observed) is int and observed > 0, 'Independent acceptance requires actual training updates'
+                        if not strict_requested:
+                            eligibility['repository'] = verify_trial_repository(result, freeze)
+                    comparison = (validation.get('comparisons') if strict_requested else
+                                  verify_claim_comparison(result) if args.require_comparison else None)
                     if args.require_install_progress:
                         assert all(installation_checks[key] for key in
                                    ('heartbeat_seen', 'measured_download_seen', 'live_panel_seen')), installation_checks
@@ -429,14 +658,7 @@ def main(args):
                     assert all(event["status"] in {"success", "error"} for event in ends)
                     assert ends[-1]["status"] == "success"
                     assert sorted(event["execution_id"] for event in starts) == sorted(event["execution_id"] for event in ends)
-                    page.get_by_text("所选仓库代码已运行完成，命令已正常退出。", exact=True).wait_for(timeout=30000)
-                    caption = ("已对比作者输出与论文宣称，详见报告中的差值和实验设置；本次未进行论文数值审核。"
-                               if (validation.get("author_claim_comparison") or {}).get("comparisons") else
-                               "本次完成的是代码运行，论文数值未做验收。")
-                    page.get_by_text(caption, exact=True).wait_for(timeout=30000)
-                    if validation["training_observed"] is False:
-                        page.get_by_text("本次未记录到优化器更新；详见作者程序输出。", exact=True).wait_for(timeout=30000)
-                    page.get_by_text("任务完成", exact=True).wait_for(timeout=30000)
+                    verify_terminal_page(page, validation, strict_requested)
                     report_check = verify_report_reconnect(page, args, progress, runtime, result) if comparison else None
                     page.screenshot(path=str(runtime / f"{args.tag}_final.png"), full_page=True)
                     record = {"input": "real_browser_pdf_upload", "state": result["state"], "progress_file": str(progress),
@@ -446,8 +668,12 @@ def main(args):
                               "execution_run_ends": len(ends), "observations": observations,
                               "cleanup": cleanup, "live_page_completed": True,
                               "claim_comparison_required": args.require_comparison, "report_checks": report_check,
+                              "strict_validation_required": strict_requested,
+                              "backend_strict_request": (result['data'].get('strict_validation') or {}).get('requested'),
+                              "audited_outcome": terminal_outcome(result),
                               "installation_checks": installation_checks,
-                              "live_page_paper_accepted": False, "live_page_author_code_completed": True}
+                              "live_page_paper_accepted": strict_requested and validation.get('is_reproduced') is True,
+                              "live_page_author_code_completed": True}
                     save("acceptance", record)
                     emit({"state": result["state"], "validation": validation["status"],
                           "run_dir": result["data"]["run_dir"], "environment_cleanup": cleanup["passed"]})
@@ -462,8 +688,8 @@ def main(args):
 
 def verify_acceptance_source(args, freeze, pdf_hash):
     independent = getattr(args, 'require_independent', False)
-    if independent and not args.require_comparison:
-        raise ValueError('--require-independent also requires --require-comparison')
+    if independent and not (args.require_comparison or getattr(args, 'strict_validation', False)):
+        raise ValueError('--require-independent also requires --require-comparison or --strict-validation')
     return verify_freeze(ROOT, freeze, paper_id=getattr(args, 'paper_id', None),
                          pdf_sha256=pdf_hash, repository=args.repo, require_independent=independent)
 
@@ -475,8 +701,11 @@ def build_parser():
     parser.add_argument("--port", type=int, default=8501)
     parser.add_argument("--paper-id", help="Paper identity in the shared acceptance registry")
     parser.add_argument("--require-independent", action="store_true",
-                        help="Require an unused registry paper, matching PDF and unchanged source/dependency freeze")
-    parser.add_argument("--execution-only", action="store_true", help="Compatibility flag; author execution is always used")
+                        help="Require unused-paper eligibility; separate from independent numerical validation")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--execution-only", action="store_true", help="Compatibility flag for default author execution")
+    mode.add_argument("--strict-validation", action="store_true",
+                      help="Request the real browser strict mode and require complete independent numerical evidence and matching reports; regression papers are allowed")
     parser.add_argument("--allow-no-preview-link", action="store_true")
     parser.add_argument("--require-comparison", action="store_true",
                         help="Require verified paper comparisons, matching downloads and browser reconnect")
@@ -485,6 +714,8 @@ def build_parser():
     parser.add_argument("--credential-stdin", action="store_true", help='Read {"api_key": "..."} from stdin instead of hidden input')
     parser.add_argument("--base-url", help="Override the API URL shown on the page")
     parser.add_argument("--model", help="Override the model shown on the page")
+    parser.add_argument("--experiment-method", help="Select an original method/model through the real PDF page")
+    parser.add_argument("--experiment-dataset", help="Select an original dataset through the real PDF page")
     browser = parser.add_mutually_exclusive_group()
     browser.add_argument("--browser-executable", help="Browser executable; defaults to Playwright Chromium")
     browser.add_argument("--browser-channel", help="Installed Playwright browser channel, e.g. chrome or msedge")

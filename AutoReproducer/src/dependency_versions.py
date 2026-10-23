@@ -13,6 +13,7 @@ CPU_COMPATIBILITY_PINS = {
     "matplotlib": "3.9.2", "pillow": "10.4.0", "networkx": "2.8.8",
     "tqdm": "4.67.1", "hyperopt": "0.2.7", "seaborn": "0.13.2", "tensorboardx": "2.6.2.2",
     "googledrivedownloader": "0.4", "requests": "2.32.3",
+    "gdown": "5.2.0",
     "torch-geometric": "2.6.1", "pyyaml": "6.0.2", "absl-py": "2.1.0", "tensorboard": "2.18.0",
     "torch-scatter": "2.1.2+pt25cpu",
     "torch-sparse": "0.6.18+pt25cpu", "dgl": "1.1.2", "setuptools": "69.5.1", "packaging": "24.2",

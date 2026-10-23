@@ -14,6 +14,7 @@ import re
 import uuid
 
 from src.agents.code_executor import CodeExecutorAgent, _safe_install_diagnostic
+from src.author_self_repair import failure_diagnostic
 from src.safety.patch_policy import PatchPolicy
 from src.safety.patch_transaction import PatchTransaction
 from src.safety.paths import filesystem_path, is_link, workspace_path
@@ -94,7 +95,7 @@ class RepositoryRepairer:
         self.runner, self.llm, self.policy, self.max_rounds = runner, llm, policy, max_rounds
 
     def _context(self, root, execution, steps, previous):
-        error = str(execution.get("final", {}).get("stderr") or execution.get("reason") or "")
+        error = failure_diagnostic(execution)
         traceback_paths = re.findall(r'File "([^"]+)"', error)
         preferred = set()
         for name in traceback_paths:
@@ -126,7 +127,7 @@ class RepositoryRepairer:
             remaining -= len(raw)
         if not sources:
             raise ValueError("no editable UTF-8 source fits the repair context budget")
-        return _private({"diagnostic": error[-8000:], "steps": steps, "sources": sources,
+        return _private({"diagnostic": error, "steps": steps, "sources": sources,
                          "available_source_paths": available[:200], "previous_attempts": previous})
 
     def run(self, workspace, steps, env_config, *, on_event=None,
@@ -299,4 +300,6 @@ class RepositoryRepairer:
         final = execution.get("final") or {}
         return (execution.get("executed") is True and execution.get("success") is not True
                 and not execution.get("cancelled") and not final.get("cancelled")
+                and not execution.get("timed_out") and not execution.get("interrupted")
+                and not final.get("interrupted")
                 and not final.get("timed_out") and final.get("exit_code") not in (None, 0, 124, 130))

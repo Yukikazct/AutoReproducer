@@ -1,8 +1,26 @@
 {
   "version": 1,
-  "updated_on": "2026-10-21",
+  "updated_on": "2026-10-22",
   "policy": "Paper identity spans aliases and PDF versions. Trial outcomes never imply independent numerical verification.",
   "papers": [
+    {
+      "id": "classic-gnns-are-strong-baselines-reassessing-gnns-for-node-classification",
+      "title": "Classic GNNs are Strong Baselines: Reassessing GNNs for Node Classification",
+      "aliases": ["tunedGNN"],
+      "source_ids": ["https://proceedings.neurips.cc/paper_files/paper/2024/file/b10ed15ff1aa864f1be3a75f1ffc021b-Paper-Datasets_and_Benchmarks_Track.pdf"],
+      "pdf_sha256": ["1756d6d6c976e34fe668340551145f135de2c32a7cd16e5e046e4686ee9a4fb6"],
+      "repository_url": "https://github.com/LUOyk1999/tunedGNN",
+      "repository_revision": "23f9604e8b13a9a6d3faa2f691cd844006979153",
+      "status": "regression",
+      "retirement_reason": "Static source audit identified mixed stored-field/key selectors and single-column integer labels that informed generic capture development. This paper is an engineering regression, never an unused independent acceptance sample.",
+      "history": [
+        {
+          "outcome": "registered_development_regression",
+          "frozen_commit": "0d57bd7f92c6d79a73126d6d6c5a9d3809e340c1",
+          "evidence": "docs/strict_candidate_audit_20261021.md"
+        }
+      ]
+    },
     {
       "id": "adaptive-universal-generalized-pagerank-graph-neural-network",
       "title": "Adaptive Universal Generalized PageRank Graph Neural Network",

@@ -86,6 +86,26 @@ def test_list_sessions_empty(fake_data: Path):
     assert list_sessions() == []
 
 
+def test_history_waits_for_owner_then_uses_final_result(fake_data: Path):
+    from frontend.backend_pipeline import ProgressStore
+    sid = '20261023_123456'
+    _mk_real_ledger(fake_data, sid, state='COMPLETED')
+    report = fake_data / 'reports' / ('Example_' + sid + '.md')
+    report.parent.mkdir()
+    report.write_text('# Evidence', encoding='utf-8')
+    result = {'state': 'ERROR', 'session_id': sid, 'data': {'report': '# Evidence'}}
+    report.with_suffix('.result.json').write_text(json.dumps(result), encoding='utf-8')
+    progress = fake_data / 'runtime' / 'progress_example.jsonl'
+    store = ProgressStore(str(progress))
+    store.emit({'type': 'pipeline_worker', 'worker_id': 'owned', 'status': 'running'})
+    store.emit({'type': 'done', 'result': result})
+    assert list_sessions()[0]['state'] == 'RUNNING'
+    store.emit({'type': 'pipeline_worker', 'worker_id': 'owned', 'status': 'error', 'cleanup_confirmed': True})
+    assert list_sessions()[0]['state'] == 'ERROR'
+    progress.unlink()
+    assert list_sessions()[0]['state'] == 'ERROR'
+
+
 def test_list_sessions_detects_ledger(fake_data: Path):
     _mk_ledger(fake_data, "20260910_100000", "梯度下降实验")
     sessions = list_sessions()

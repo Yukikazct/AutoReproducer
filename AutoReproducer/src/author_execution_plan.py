@@ -139,6 +139,9 @@ steps:[{id,kind:'train|eval',argv:['python','original.py',...] OR ['python','-m'
               'repository-relative path; preserve the original argv and working directory.')
     while len(failures) < 4:
         prompt = ('The user requests stable execution of the paper author\'s original repository code FIRST. '
+            'If experiment_request is present, select an original command for that method and dataset. '
+            'Do not substitute another dataset because bundled split files exist. The request supplies no '
+            'experimental evidence and cannot change the original training settings. '
             'Paper metric agreement, checkpoint export and independent predictions are subsequent work; '
             'their absence must not block a valid original author training command in this execution objective. '
             'Select one runnable original author training command, preferring README examples and small '

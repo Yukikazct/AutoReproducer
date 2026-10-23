@@ -88,7 +88,10 @@ def capture_return(namespace, index, observers, script, config, retained=None):
     inputs = retained['inputs'] if retained is not None else tuple(
         resolve_author_value(namespace, key) for key in contract['forward_args'])
     raw_labels = retained['labels'] if retained is not None else resolve_author_value(namespace, contract['labels'])
-    labels = author_integer_tensor(raw_labels)
+    labels, saved_raw_labels, label_metadata = _support.normalize_author_labels(raw_labels)
+    # Evaluation stays on the author's original device until the CPU export.
+    if isinstance(raw_labels, torch.Tensor):
+        labels = labels.to(raw_labels.device)
     raw_indices = retained['indices'] if retained is not None else (None if contract['test_indices'] is None
         else resolve_author_value(namespace, contract['test_indices']))
     indices = None if raw_indices is None else author_integer_tensor(raw_indices)
@@ -121,7 +124,8 @@ def capture_return(namespace, index, observers, script, config, retained=None):
             raise ValueError("Export changed the captured author's forward path")
         model_file, tensor_file = artifact_names(index)
         torch.jit.save(traced, str(ROOT / model_file))
-        torch.save({"inputs": tuple(tensors), 'input_layouts': layouts, "labels": labels, "test_indices": indices,
+        torch.save({"inputs": tuple(tensors), 'input_layouts': layouts, "labels": labels,
+                    'raw_labels': saved_raw_labels, 'label_normalization': label_metadata, "test_indices": indices,
                     "outputs": outputs.detach()}, ROOT / tensor_file)
     for key, _ in relevant:
         del observers[key]
@@ -129,6 +133,7 @@ def capture_return(namespace, index, observers, script, config, retained=None):
               "author_epoch_counter": counter, "parameters_changed": True,
               "test_samples": expected, "total_samples": len(labels), "classes": outputs.shape[1],
               "author_label_dtype": str(raw_labels.dtype),
+              'label_normalization': label_metadata,
               "output_alignment": contract.get('output_alignment', 'full_dataset'),
               "model_source": name, "model_source_sha256": config["source_files"][name],
               "files_sha256": {name: sha(ROOT / name) for name in artifact_names(index)}}
@@ -330,6 +335,7 @@ def evaluate(config):
             if captured["files_sha256"][name] != sha(ROOT / name):
                 raise ValueError("Native series artifact changed before fresh evaluation")
         tensors = torch.load(ROOT / tensor_file, map_location="cpu", weights_only=True)
+        label_metadata = _support.verify_label_normalization(tensors, captured)
         expected_samples, census = _support.expected_test_count(contract, index, tensors['labels'])
         if census is not None and census != captured.get('split_census'):
             raise ValueError('Independent complete-label census differs from training')
@@ -351,6 +357,8 @@ def evaluate(config):
                 raise ValueError("Independent native-run NumPy metrics disagree with PyTorch")
         runs.append({"index": index, "test_samples": len(labels), "accuracy": accuracy, "cross_entropy": loss,
                      "predictions_match": True, "numpy_torch_crosscheck": True})
+        if label_metadata is not None:
+            runs[-1]['label_normalization'] = label_metadata
         if census is not None:
             runs[-1]['split_census'] = census
         print(f"INDEPENDENT_NATIVE_RUN_EVALUATED index={index} accuracy={accuracy}", flush=True)

@@ -2,7 +2,7 @@
 import json
 import sys
 
-from src.process_lifecycle import termination_signals, watch_parent_session
+from src.process_lifecycle import termination_signals, watch_parent_session, watch_cancellation_file
 
 
 @watch_parent_session()
@@ -16,7 +16,9 @@ def main():
     if not isinstance(request, dict) or request.get("_managed_runtime") is not True:
         raise ValueError("A prepared preset worker requires a managed request")
     from frontend.backend_pipeline import run_pipeline_core
-    result = run_pipeline_core(**request)
+    cancel_file, cancel_token = request.pop("_cancel_file", None), request.pop("_cancel_token", None)
+    with watch_cancellation_file(cancel_file, cancel_token):
+        result = run_pipeline_core(**request)
     return 0 if result.get("state") == "COMPLETED" and not result.get("error") else 1
 
 

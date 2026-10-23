@@ -2,6 +2,11 @@
 import ast
 import re
 
+if __package__:
+    from .author_values import selector_parts
+else:
+    from author_values import selector_parts
+
 _NAME = re.compile(r'[A-Za-z][A-Za-z0-9_]{0,127}')
 _COMPARISONS = {'lt': ast.Lt, 'le': ast.LtE, 'gt': ast.Gt, 'ge': ast.GtE}
 
@@ -15,18 +20,40 @@ def owned_nodes(node):
 
 
 def selector_expression(selector):
-    if isinstance(selector, str) and _NAME.fullmatch(selector):
-        return ast.Name(id=selector, ctx=ast.Load())
-    if (not isinstance(selector, dict) or set(selector) != {'name', 'keys'}
-            or not isinstance(selector['name'], str) or not _NAME.fullmatch(selector['name'])
-            or not isinstance(selector['keys'], list) or not 1 <= len(selector['keys']) <= 8):
-        raise ValueError('Validation metric must be an original identifier or fixed key selector')
-    expression = ast.Name(id=selector['name'], ctx=ast.Load())
-    for key in selector['keys']:
-        if not (type(key) is str and 1 <= len(key) <= 128 or type(key) is int and 0 <= key < 10000000):
-            raise ValueError('Validation metric key must be a fixed literal, without calls or slicing')
-        expression = ast.Subscript(value=expression, slice=ast.Constant(value=key), ctx=ast.Load())
+    """Build an AST for source identity comparison only; never execute it."""
+    name, steps = selector_parts(selector)
+    expression = ast.Name(id=name, ctx=ast.Load())
+    for kind, key in steps:
+        if kind == 'attribute':
+            expression = ast.Attribute(value=expression, attr=key, ctx=ast.Load())
+        else:
+            expression = ast.Subscript(value=expression, slice=ast.Constant(value=key), ctx=ast.Load())
     return expression
+
+
+def selector_from_expression(node):
+    """Read only a fixed original AST chain, keeping legacy homogeneous shapes."""
+    steps = []
+    while isinstance(node, (ast.Attribute, ast.Subscript)):
+        if isinstance(node, ast.Attribute):
+            steps.insert(0, {'attribute': node.attr})
+        elif isinstance(node.slice, ast.Constant):
+            steps.insert(0, {'key': node.slice.value})
+        else:
+            raise ValueError('Not an original fixed validation selector')
+        node = node.value
+    if not isinstance(node, ast.Name):
+        raise ValueError('Not an original fixed validation selector')
+    if not steps:
+        value = node.id
+    elif all('key' in step for step in steps):
+        value = {'name': node.id, 'keys': [step['key'] for step in steps]}
+    elif all('attribute' in step for step in steps):
+        value = {'name': node.id, 'attributes': [step['attribute'] for step in steps]}
+    else:
+        value = {'name': node.id, 'path': steps}
+    selector_parts(value)
+    return value
 
 
 def resolve_module_loop(source, scope):
@@ -126,16 +153,6 @@ def resolve_function_selection(source, scope):
 def discover_native_selections(files):
     """Expose source-resolved capture options, never an experiment acceptance."""
     result = []
-    def selector(node):
-        keys = []
-        while isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Constant):
-            keys.insert(0, node.slice.value)
-            node = node.value
-        if not isinstance(node, ast.Name):
-            raise ValueError('Not an original fixed validation selector')
-        value = {'name': node.id, 'keys': keys} if keys else node.id
-        selector_expression(value)
-        return value
     for path, source in sorted(files.items()):
         if not path.endswith('.py'):
             continue
@@ -158,7 +175,7 @@ def discover_native_selections(files):
                     if comparison is None:
                         continue
                     try:
-                        validation = selector(guard.test.left)
+                        validation = selector_from_expression(guard.test.left)
                     except ValueError:
                         continue
                     best = guard.test.comparators[0].id
@@ -189,7 +206,7 @@ def discover_native_selections(files):
                     if comparison is None:
                         continue
                     try:
-                        validation = selector(guard.test.left)
+                        validation = selector_from_expression(guard.test.left)
                     except ValueError:
                         continue
                     best = guard.test.comparators[0].id

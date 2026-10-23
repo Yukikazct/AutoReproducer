@@ -52,7 +52,8 @@ def test_report_and_evidence_are_saved_before_release(root, tmp_path):
             assert deps.exists()
             events.append("report saved")
         assert all(path.name == ".autorepro-cache.lock" for path in root.iterdir())
-        assert report.read_text("utf-8") == "# Finished report"
+        assert report.read_text("utf-8").startswith("# Finished report")
+        assert "**环境释放**: 已释放" in report.read_text("utf-8")
         assert artifact.read_bytes() == b"retained evidence"
         saved = json.loads((run / "result.json").read_text("utf-8"))
         assert saved["data"]["environment_cleanup"]["status"] == "released"
@@ -231,6 +232,169 @@ def test_backend_done_and_archive_follow_release(root, tmp_path, monkeypatch):
     result = backend.run_pipeline_core(progress_path=str(progress), paper_title="Example", mock_mode=True)
     archive = Path(result["report_path"]).with_suffix(".result.json")
     assert json.loads(archive.read_text("utf-8"))["data"]["environment_cleanup"]["status"] == "released"
+
+
+def test_backend_finish_and_history_use_cleanup_failure(root, tmp_path, monkeypatch):
+    import frontend.backend_pipeline as backend
+    from frontend.history_manager import list_sessions
+    from src.safety import files
+    from src.project_paths import get_data_root
+
+    class Pipeline:
+        def __init__(self, **kwargs):
+            pass
+
+        def run(self, request, on_event=None):
+            payload(root / "locked")
+            return {"state": "COMPLETED", "error": None, "data": {
+                "paper_title": "Example", "report": "# Finished numerical evidence",
+                "validation": {"is_reproduced": True}}}
+
+    def locked(path):
+        ledger_dir = get_data_root() / "experiment_ledger"
+        for ledger in ledger_dir.glob("ledger_*.jsonl"):
+            assert not any(json.loads(line).get("phase") == "FINISH"
+                           for line in ledger.read_text("utf-8").splitlines())
+        raise PermissionError("still open")
+
+    monkeypatch.setattr(backend, "Orchestrator", Pipeline, raising=False)
+    monkeypatch.setattr(files, "remove_tree", locked)
+    progress = get_data_root() / "runtime" / "progress_example.jsonl"
+    result = backend.run_pipeline_core(str(progress), paper_title="Example", mock_mode=True)
+    assert result["state"] == "ERROR" and result["data"]["validation"]["is_reproduced"] is True
+    ledger = get_data_root() / "experiment_ledger" / ("ledger_" + result["session_id"] + ".jsonl")
+    finish = json.loads(ledger.read_text("utf-8").splitlines()[-1])
+    assert finish["phase"] == "FINISH" and finish["result"]["state"] == "ERROR"
+    assert finish["result"]["environment_cleanup"] == "error"
+    assert list_sessions()[0]["state"] == "ERROR"
+    assert "**环境释放**: 失败" in result["data"]["report"]
+
+
+@pytest.mark.parametrize("state,cleanup", [("COMPLETED", "released"), ("COMPLETED", "error"),
+                                          ("ERROR", "released"), ("ERROR", "error")])
+def test_final_report_downloads_and_saved_results_preserve_numeric_evidence(root, tmp_path, state, cleanup):
+    from copy import deepcopy
+    import io
+    import zipfile
+    from frontend.report_renderer import build_report_bundle
+    from src.report_revisions import regenerate_report, resolve_report_revision
+
+    run = tmp_path / "run"
+    run.mkdir()
+    report = tmp_path / "report.md"
+    original = ("# Evidence\n\n## Numeric result\nIndependent numerical validation passed.\n\n---\n\n"
+                "> 📎 **完整执行输出附件**: `report_execution.txt`（同一目录下，未被截断）\n")
+    report.write_text(original, encoding="utf-8")
+    (run / "report.md").write_text(original, encoding="utf-8")
+    (tmp_path / "report_execution.txt").write_text("original full output", encoding="utf-8")
+    numeric = {"status": "validated", "is_reproduced": True, "paper_metrics_verified": True,
+               "metrics": {"accuracy": 0.84}}
+    result = {"state": state, "error": "original failure" if state == "ERROR" else None,
+              "report_path": str(report), "data": {"run_dir": str(run), "report": original,
+                  "model_settings": {"api_key": "private-test-fixture"},
+                  "validation": deepcopy(numeric), "execution": {"final": {"success": True, "exit_code": 0}}}}
+    for path in (run / "result.json", report.with_suffix(".result.json")):
+        path.write_text(json.dumps(result), encoding="utf-8")
+    # A pre-cleanup presentation revision must never revive an old success view.
+    regenerate_report(result)
+    receipt = {"status": cleanup, "errors": [{"path": "deps", "reason": "still open"}] if cleanup == "error" else [],
+               "removed": [], "remaining": ["deps"] if cleanup == "error" else []}
+    lifecycle.record_environment_cleanup(result, receipt)
+    lifecycle.record_environment_cleanup(result, receipt)
+    expected_state = "ERROR" if state == "ERROR" or cleanup == "error" else "COMPLETED"
+    text = result["data"]["report"]
+    assert result["state"] == expected_state
+    assert result["data"]["validation"] == numeric
+    assert text.count("<!-- autoreproducer-run-finalization:start -->") == 1
+    assert "Independent numerical validation passed." in text
+    assert "**环境释放**: " + ("失败" if cleanup == "error" else "已释放") in text
+    assert "**总任务状态**: " + ("异常结束" if expected_state == "ERROR" else "已完成") in text
+    if state == "ERROR":
+        assert result["error"].startswith("original failure")
+    assert result["data"]["report_length"] == len(text)
+    assert resolve_report_revision(result)["data"]["report"] == text
+    assert regenerate_report(result)["data"]["report"].count("### 任务收尾") == 1
+    for path in (report, run / "report.md"):
+        assert path.read_text("utf-8") == text
+    for path in (run / "result.json", report.with_suffix(".result.json")):
+        saved = json.loads(path.read_text("utf-8"))
+        assert saved["state"] == expected_state and saved["data"]["report"] == text
+        assert saved["data"]["validation"] == numeric
+        assert saved["data"]["model_settings"]["api_key"] == "[REDACTED]"
+    with zipfile.ZipFile(io.BytesIO(build_report_bundle(text, report))) as archive:
+        assert archive.read("report.md").decode("utf-8") == text
+        assert archive.read("report_execution.txt").decode("utf-8") == "original full output"
+
+
+def test_cleanup_time_markdown_write_failure_marks_readable_archives_failed(root, tmp_path, monkeypatch):
+    run = tmp_path / "run"
+    run.mkdir()
+    report = tmp_path / "report.md"
+    report.write_text("# Original evidence", encoding="utf-8")
+    result = {"state": "COMPLETED", "error": None, "report_path": str(report),
+              "data": {"run_dir": str(run), "report": "# Original evidence"}}
+    for path in (run / "result.json", report.with_suffix(".result.json")):
+        path.write_text(json.dumps(result), encoding="utf-8")
+    write = lifecycle._write_text
+
+    def locked(path, text):
+        if Path(path) == report:
+            raise PermissionError("report is locked")
+        return write(path, text)
+
+    monkeypatch.setattr(lifecycle, "_write_text", locked)
+    with pytest.raises(PermissionError, match="report is locked"):
+        lifecycle.record_environment_cleanup(result, {"status": "released", "errors": []})
+    assert result["state"] == "ERROR"
+    for path in (run / "result.json", report.with_suffix(".result.json")):
+        saved = json.loads(path.read_text("utf-8"))
+        assert saved["state"] == "ERROR"
+        assert saved["data"]["report_publication"]["status"] == "error"
+        assert "report is locked" in saved["error"]
+
+
+def test_finalization_does_not_rewrite_markers_or_headings_inside_author_output():
+    from src.run_finalization import finalize_report_text
+    output = ("```text\n<!-- autoreproducer-run-finalization:start -->\n"
+              "## author output that must remain verbatim\n"
+              "<!-- autoreproducer-run-finalization:end -->\n```\n")
+    original = "# Original\n\n" + output
+    data = {"environment_cleanup": {"status": "released"}, "run_finalization": {"state": "COMPLETED"}}
+    text = finalize_report_text(original, data)
+    assert output in text
+    assert text.index("### 任务收尾") > text.index(output)
+    assert finalize_report_text(text, data) == text
+
+
+def test_direct_backend_publication_exception_closes_history_as_failed(root, monkeypatch):
+    import frontend.backend_pipeline as backend
+    from frontend.history_manager import list_sessions
+    from src.project_paths import get_data_root
+
+    class Pipeline:
+        def __init__(self, **kwargs):
+            pass
+
+        def run(self, request, on_event=None):
+            return {"state": "COMPLETED", "error": None,
+                    "data": {"paper_title": "Example", "report": "# Original evidence"}}
+
+    write = lifecycle._write_text
+
+    def locked(path, text):
+        if Path(path).suffix == ".md":
+            raise PermissionError("report is locked")
+        return write(path, text)
+
+    monkeypatch.setattr(backend, "Orchestrator", Pipeline, raising=False)
+    monkeypatch.setattr(lifecycle, "_write_text", locked)
+    progress = get_data_root() / "runtime" / "progress_example.jsonl"
+    with pytest.raises(PermissionError, match="report is locked"):
+        backend.run_pipeline_core(str(progress), paper_title="Example", mock_mode=True)
+    snapshot = backend.ProgressStore.read_snapshot(str(progress))
+    assert snapshot["done"] and not snapshot["running"] and snapshot["state"] == "ERROR"
+    assert "report is locked" in snapshot["result"]["error"]
+    assert list_sessions()[0]["state"] == "ERROR"
 
 
 def test_crashed_owner_leaves_one_environment_until_next_owner_recovers(root, tmp_path):

@@ -132,6 +132,32 @@ def list_sessions() -> List[Dict[str, Any]]:
                     title_guess = stem[:len(stem)-len(sid)-1]  # 去掉 _{sid}
                     sessions[sid]["paper_title"] = title_guess.replace("_", " ")
 
+    # A report/inner runner can finish while its outer owner is still releasing
+    # resources. Progress owns liveness; saved final results outlive progress.
+    from frontend.progress_state import read_progress_snapshot
+    for session in sessions.values():
+        progress = session.get("progress_file")
+        if progress:
+            snapshot = read_progress_snapshot(progress)
+            if snapshot.get("running"):
+                session["state"] = "RUNNING"
+                continue
+            final = snapshot.get("result") or {}
+            if snapshot.get("state") == "ERROR":
+                session["state"] = "ERROR"
+                continue
+            if final.get("state") in {"COMPLETED", "ERROR"}:
+                session["state"] = final["state"]
+                continue
+        report = session.get("report_path")
+        if report:
+            try:
+                final = json.loads(Path(report).with_suffix(".result.json").read_text(encoding="utf-8"))
+                if final.get("state") in {"COMPLETED", "ERROR"}:
+                    session["state"] = final["state"]
+            except (OSError, ValueError, AttributeError):
+                pass
+
     # 按时间倒序排列
     return sorted(sessions.values(), key=lambda s: s["session_id"], reverse=True)
 

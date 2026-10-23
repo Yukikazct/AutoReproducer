@@ -164,6 +164,11 @@ def validate_experiment_protocol(payload, packet, workspace):
     if alignment.get('status') not in {'matched','conflict','insufficient'}:
         raise PlanEvidenceError('Protocol must distinguish match, conflict and missing information')
     accepted = deepcopy(payload)
+    from src.experiment_request import bind_experiment_request
+    try:
+        bind_experiment_request(accepted, packet.get('experiment_request'))
+    except ValueError as exc:
+        raise PlanEvidenceError(str(exc)) from exc
     accepted['citations'] = list(citations.values())
     accepted['pdf_sha256'] = packet['pdf']['sha256']
     accepted['repository'] = {key:packet['repository'][key] for key in ('url','revision')}
@@ -218,9 +223,17 @@ class ExperimentProtocolAgent(BaseAgent):
         automatic_source_reads = 0
         while len(failures) < 2:
             prompt = ('Select one complete experimental protocol before generating any execution steps. '
+                'If experiment_request is present, select its requested method and dataset rather than another '
+                'smaller experiment. Use those names in method.name/dataset.name, retaining the source variant '
+                'and exact table context. The request is a selection preference, never evidence or permission '
+                'to change the published protocol. If unavailable, explain why with original sources. '
                 'If paper_reading is present, its full-paper notes navigate separate main-table/appendix '
                 'protocols and have original PDF evidence_ids. Verify them against the original excerpts; '
                 'notes are not authoritative source claims. '
+                'Distinguish model-initialization repetitions from data-split generation. Trace whether '
+                'the original seed and split calls occur before or inside the repetition loop and whether '
+                'that loop reuses one split. N initializations do not imply N independently generated '
+                'splits or N independent seed settings. Describe the actual original control flow. '
                 'Different tables and appendices may use different splits and hyperparameters; select exactly one '
                 'and bind the method row, dataset column, split and script to that table. Do not describe alternative '
                 'branches as the selected dataset split. A split filename containing ratios is NOT numerical proof: '
@@ -252,7 +265,13 @@ class ExperimentProtocolAgent(BaseAgent):
                 'This scope:{path,function,selection} completes ONE native run per original function invocation; '
                 'trace the actual callers and require every paper repetition. An epoch loop is not a repetition loop. '
                 'When paper and code conflict or required information is absent, use alignment.status=conflict or insufficient '
-                'and explain exactly why. For these rejected cases return only version and alignment with PDF and '
+                'and keep the reason consistent with that status. To establish a split conflict, cite what '
+                'actually specifies incompatible sample membership or construction; a benchmark setting name '
+                'alone does not prove a fixed-mask identity. Preserve every explicit split requirement. '
+                'Absence of an explicit conflict does not establish alignment: if a material requirement '
+                'inherited from a cited setting remains unresolved, use insufficient and identify the missing '
+                'fact. Do not invent paper membership or change the original author split. '
+                'For these rejected cases return only version and alignment with PDF and '
                 'repository citations; do not invent the missing positive protocol fields. '
                 'Do not supply compatibility dependencies or invent training code. '
                 'The repository file_inventory is complete, but only bounded source files have been read. '

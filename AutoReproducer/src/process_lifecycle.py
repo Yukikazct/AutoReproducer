@@ -13,6 +13,35 @@ CREATE_SUSPENDED = 0x00000004
 
 
 @contextmanager
+def watch_cancellation_file(path=None, token=None):
+    """Interrupt only this worker's main thread when its owner requests stop."""
+    if not path or not token:
+        yield
+        return
+    stopped = threading.Event()
+
+    def watch():
+        while not stopped.wait(.05):
+            try:
+                requested = Path(path).read_text(encoding="ascii") == token
+            except OSError:
+                requested = False
+            if requested:
+                # One interrupt only: repeated signals could interrupt finally
+                # blocks while they release installer jobs and dependency locks.
+                _thread.interrupt_main()
+                return
+
+    watcher = threading.Thread(target=watch, name="task-cancellation", daemon=True)
+    watcher.start()
+    try:
+        yield
+    finally:
+        stopped.set()
+        watcher.join(timeout=1)
+
+
+@contextmanager
 def termination_signals():
     """Turn catchable termination signals into the normal cancellation path."""
     previous = {}
