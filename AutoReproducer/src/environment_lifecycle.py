@@ -27,12 +27,16 @@ def _key(root):
 
 
 def _write_json(path, value):
+    _write_text(path, json.dumps(value, ensure_ascii=False, indent=2))
+
+
+def _write_text(path, value):
     temporary = None
     try:
         with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent,
                                          suffix=".tmp", delete=False) as output:
             temporary = Path(output.name)
-            json.dump(value, output, ensure_ascii=False, indent=2)
+            output.write(value)
         os.replace(temporary, path)
     finally:
         if temporary is not None:
@@ -167,15 +171,58 @@ class _EnvironmentRun:
     def record(self, receipt):
         result = self.result if isinstance(self.result, dict) else None
         data = result.setdefault("data", {}) if result is not None else {}
+        run_dir = data.get("run_dir") or self.run_dir
+        # Cancellation can save a failure result before raising to the lease.
+        if result is None and run_dir:
+            from src.safety.paths import workspace_path
+            path = workspace_path(run_dir, "result.json", "run result")
+            if path.is_file():
+                result = json.loads(path.read_text(encoding="utf-8"))
+                data = result.setdefault("data", {})
         if result is not None:
             data["environment_cleanup"] = receipt
             if receipt["status"] == "error":
                 reason = "运行环境自动释放失败；详情见 environment_cleanup"
                 result["state"] = "ERROR"
-                result["error"] = "; ".join(filter(None, [result.get("error"), reason]))
-        run_dir = data.get("run_dir") or self.run_dir
+                if reason not in (result.get("error") or ""):
+                    result["error"] = "; ".join(filter(None, [result.get("error"), reason]))
+            self.result = result
+            data["run_finalization"] = {"state": result.get("state"), "error": result.get("error")}
+            from src.run_finalization import finalize_report_text
+            if data.get("report"):
+                data["report"] = finalize_report_text(data["report"], data)
+                data["report_length"] = len(data["report"])
+        try:
+            self._persist(receipt, result, data, run_dir)
+        except Exception as exc:
+            if result is not None:
+                reason = "运行收尾报告与归档保存失败: " + str(exc)
+                result.update(state="ERROR", error="; ".join(filter(None, [result.get("error"), reason])))
+                data["report_publication"] = {"status": "error", "reason": reason}
+                data["run_finalization"] = {"state": "ERROR", "error": result["error"]}
+                if data.get("report"):
+                    data["report"] = finalize_report_text(data["report"], data)
+                    data["report_length"] = len(data["report"])
+                # Keep readable JSON copies honest even if a Markdown path is locked.
+                try:
+                    self._persist(receipt, result, data, run_dir, write_report=False)
+                except Exception:
+                    pass
+            raise
+
+    def _persist(self, receipt, result, data, run_dir, *, write_report=True):
+        from src.safety.paths import workspace_path
+        from src.report_revisions import sanitize_report_result
+
+        report = (result.get("report_path") or data.get("report_path")) if result is not None else None
+        if write_report and data.get("report"):
+            paths = {Path(report)} if report else set()
+            if run_dir:
+                paths.add(workspace_path(run_dir, "report.md", "run report"))
+            for path in paths:
+                if path.is_file():
+                    _write_text(path, data["report"])
         if run_dir:
-            from src.safety.paths import workspace_path
             directory = Path(run_dir)
             _write_json(workspace_path(directory, "environment_cleanup.json", "cleanup receipt"), receipt)
             path = workspace_path(directory, "result.json", "run result")
@@ -183,25 +230,25 @@ class _EnvironmentRun:
                 saved = json.loads(path.read_text(encoding="utf-8"))
                 saved["data"]["environment_cleanup"] = receipt
                 if result is not None:
+                    saved["data"].update(data)
                     saved["error"] = result.get("error")
                     if result.get("state") is not None:
                         saved["state"] = result["state"]
                 elif receipt["status"] == "error":
                     saved["state"] = "ERROR"
-                _write_json(path, saved)
+                _write_json(path, sanitize_report_result(saved))
             status_path = workspace_path(directory, "run_status.json", "run status")
             if status_path.is_file():
                 status = json.loads(status_path.read_text(encoding="utf-8"))
                 status["environment_cleanup"] = receipt["status"]
-                if receipt["status"] == "error":
+                if receipt["status"] == "error" or ((result or {}).get("state") == "ERROR"
+                                                     and status.get("status") == "completed"):
                     status["status"] = "failed"
                 _write_json(status_path, status)
-        report = result.get("report_path") if result is not None else None
         if report:
             archive = Path(report).with_suffix(".result.json")
             if archive.is_file():
-                from src.report_revisions import sanitize_report_result
-                _write_json(archive, sanitize_report_result(self.result))
+                _write_json(archive, sanitize_report_result(result))
 
 
 def bind_environment_run(directory):

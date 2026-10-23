@@ -6,14 +6,16 @@ import json
 import math
 from pathlib import Path
 import re
+import sys
 
 from src.method_adapters import digest, read_json, write_json
 from src.safety.paths import workspace_path
+from src.author_values import selector_parts
 
 
 SINGLE_CAPTURE_SCHEMA = {
-    "kind": "torch_classification", "model": "author_identifier_or_fixed_key_selector",
-    "forward_args": ["author_identifier_or_fixed_key_selector"], "labels": "author_integer_tensor_or_array_selector",
+    "kind": "torch_classification", "model": "author_identifier_or_fixed_storage_path_selector",
+    "forward_args": ["author_identifier_or_fixed_storage_path_selector"], "labels": "author_integer_tensor_or_array_selector",
     "test_indices": "author_selector_or_null_for_complete_labels",
     "output_alignment": "full_dataset|selected_test (selected_test requires test_indices also in forward_args)",
     "expected_optimizer_steps": "positive_source_cited_integer",
@@ -24,7 +26,7 @@ SINGLE_CAPTURE_SCHEMA = {
 SERIES_CAPTURE_SCHEMA = {
     **SINGLE_CAPTURE_SCHEMA,
     "kind": "torch_classification_series", "device": "cpu|cuda",
-    "scope": "{path, function, selection?} for one complete native run per unique top-level function's natural return, optionally retaining weights at an original validation selection; OR {path, function?:'unique top-level function containing the repetition loop', loop_counter:'original identifier (including _) ', selection:{validation_metric:'original identifier OR {name,keys} fixed dict/list selector',comparison:'lt|le|gt|ge',best_metric,result,result_unit:'fraction|percent'}} for an original repetition loop",
+    "scope": "{path, function, selection?} for one complete native run per unique top-level function's natural return, optionally retaining weights at an original validation selection; OR {path, function?:'unique top-level function containing the repetition loop', loop_counter:'original identifier (including _) ', selection:{validation_metric:'original identifier OR fixed storage path selector',comparison:'lt|le|gt|ge',best_metric,result,result_unit:'fraction|percent'}} for an original repetition loop",
     "forward_args": ["author_local_or_global_tensor_tree_or_scalar_selector"],
     "expected_runs": "positive_source_cited_integer",
     "expected_test_samples": "ordered source-cited integer list OR {kind:'stratified_remainder',mode:'dense|sparse',rate_source:{path,function},sampler_source:{path,function}}; the complete original split functions must be cited, fractions are compiled from their source",
@@ -41,20 +43,30 @@ _IDENTIFIER = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,127}")
 
 
 def _selector_names(selector):
-    if isinstance(selector, str):
-        return [selector]
-    if (isinstance(selector, dict) and set(selector) == {'name', 'attributes'}
-            and isinstance(selector['name'], str) and isinstance(selector['attributes'], list)
-            and 1 <= len(selector['attributes']) <= 8
-            and all(isinstance(key, str) and _IDENTIFIER.fullmatch(key) for key in selector['attributes'])):
-        return [selector['name']]
-    if (not isinstance(selector, dict) or set(selector) != {'name', 'keys'}
-            or not isinstance(selector['name'], str) or not isinstance(selector['keys'], list)
-            or not 1 <= len(selector['keys']) <= 8
-            or any(not (isinstance(key, str) and 1 <= len(key) <= 128
-                        or type(key) is int and 0 <= key < 10000000) for key in selector['keys'])):
-        raise ValueError('Author selectors must be identifiers or fixed key/stored-field paths')
-    return [selector['name']]
+    name, _ = selector_parts(selector)
+    return [name]
+
+
+def _source_selector_paths(files):
+    """Collect fixed AST chains without evaluating any author Python source."""
+    from src.native_loop import selector_from_expression
+    paths = set()
+    for name, item in files.items():
+        if not name.endswith('.py'):
+            continue
+        try:
+            tree = ast.parse(item['text'])
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.Attribute, ast.Subscript)):
+                continue
+            try:
+                root, steps = selector_parts(selector_from_expression(node))
+            except ValueError:
+                continue
+            paths.add((root, tuple(steps)))
+    return paths
 
 
 def _normalize_stored_selector(selector):
@@ -119,12 +131,19 @@ def validate_capture(capture, packet, workspace, *, selected_steps=None, selecte
         names.append(capture["test_indices"])
     source = "\n".join(item["text"] for name, item in packet["repository"]["files"].items()
                        if name.endswith(".py"))
+    source_paths = None
     for selector in names:
         for name in _selector_names(selector):
             if (not _IDENTIFIER.fullmatch(name)
                     or not re.search(r"(?<!\w)" + re.escape(name) + r"(?!\w)", source)):
                 raise ValueError("Capture selectors must identify values present in author Python source")
         if isinstance(selector, dict):
+            if 'path' in selector:
+                if source_paths is None:
+                    source_paths = _source_selector_paths(packet['repository']['files'])
+                root, steps = selector_parts(selector)
+                if (root, tuple(steps)) not in source_paths:
+                    raise ValueError('Capture ordered storage path is absent from the pinned author source')
             for key in selector.get('keys', []):
                 if isinstance(key, str) and not re.search(r"['\"]" + re.escape(key) + r"['\"]", source):
                     raise ValueError('Capture dictionary key is absent from the pinned author source')
@@ -339,6 +358,39 @@ def _reported_accuracy(plan, execution, independent_metrics):
     return result
 
 
+def verify_label_layout_receipts(captured, evaluated):
+    """Reconcile the lossless label evidence recomputed by the fresh evaluator."""
+    metadata = captured.get('label_normalization')
+    independent = evaluated.get('label_normalization')
+    if metadata is None and independent is None:
+        return  # Backwards-compatible, one-dimensional legacy evidence.
+    keys = {'version', 'original_shape', 'original_dtype', 'original_numpy_dtype', 'original_sha256',
+            'normalized_shape', 'normalized_dtype', 'normalized_sha256', 'transformation'}
+    if not isinstance(metadata, dict) or set(metadata) != keys or metadata != independent:
+        raise ValueError('Training and independent label normalization evidence disagree')
+    shape = metadata['original_shape']
+    dtype = metadata['original_numpy_dtype']
+    dtype_match = re.fullmatch(r'([<>])([iu])(2|4|8)|([|])([iu])1', dtype) if isinstance(dtype, str) else None
+    original_dtype = ('torch.' + ('uint' if (dtype_match[2] or dtype_match[5]) == 'u' else 'int')
+                      + str(int(dtype_match[3] or 1) * 8)) if dtype_match else None
+    if (type(metadata['version']) is not int or metadata['version'] != 2
+            or not isinstance(shape, list) or len(shape) not in {1, 2}
+            or any(type(n) is not int or n <= 0 for n in shape)
+            or len(shape) == 2 and shape[1] != 1
+            or shape[0] != captured.get('total_samples')
+            or metadata['normalized_shape'] != [shape[0]]
+            or type(metadata['normalized_shape']) is not list
+            or any(type(n) is not int for n in metadata['normalized_shape'])
+            or original_dtype is None or metadata['original_dtype'] != original_dtype
+            or metadata['normalized_dtype'] != 'torch.int64'
+            or metadata['transformation'] != ('squeeze_column' if len(shape) == 2 else 'identity')
+            or any(not isinstance(metadata[k], str) or not re.fullmatch(r'[0-9a-f]{64}', metadata[k])
+                   for k in ('original_sha256', 'normalized_sha256'))
+            or dtype == ('<i8' if sys.byteorder == 'little' else '>i8')
+               and metadata['original_sha256'] != metadata['normalized_sha256']):
+        raise ValueError('Label normalization lacks a complete lossless integer layout receipt')
+
+
 def verify_capture(plan, workspace, execution, spec_hash):
     """Accept only completed owned processes and their independently checked files."""
     expected_ids = [step["id"] for step in plan["steps"]] + ["independent_evaluation"]
@@ -363,6 +415,8 @@ def verify_capture(plan, workspace, execution, spec_hash):
     series = plan["capture"]["kind"] == "torch_classification_series"
     if series:
         verify_series_receipts(plan["capture"], root, capture, metrics)
+    else:
+        verify_label_layout_receipts(capture, metrics)
     if ((not series and capture.get("optimizer_steps") != plan["capture"]["expected_optimizer_steps"])
             or (not (series and isinstance(plan['capture']['expected_test_samples'], dict))
                 and capture.get("test_samples") != plan["capture"]["expected_test_samples"])
@@ -433,6 +487,7 @@ def verify_series_receipts(contract, root, capture, metrics):
             or not isinstance(independent, list) or len(independent) != expected):
         raise ValueError("Every declared native repetition must have training and fresh evaluation evidence")
     for index, (run, evaluated) in enumerate(zip(runs, independent)):
+        verify_label_layout_receipts(run, evaluated)
         steps = run.get("optimizer_steps")
         rule = contract["completion"]
         loop = 'loop_counter' in contract['scope']

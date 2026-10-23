@@ -162,12 +162,20 @@ def test_visible_completion_already_has_matching_supervisor_receipts(
         recover, tmp_path, monkeypatch, worker_state, exit_code, cleanup_status):
     """Polling at any publication boundary must never expose the child result."""
     import src.environment_lifecycle as lifecycle
+    from frontend.history_manager import list_sessions
+    from src.project_paths import get_data_root
+
+    monkeypatch.setenv('AUTOREPRO_DATA_ROOT', str(tmp_path))
 
     path = tmp_path / 'publication.jsonl'
     run = tmp_path / 'run'
     run.mkdir()
-    report = tmp_path / 'report.md'
+    reports = tmp_path / 'reports'
+    reports.mkdir()
+    session_id = '20261023_123456'
+    report = reports / ('Example_' + session_id + '.md')
     report.write_text('# Author report', encoding='utf-8')
+    (run / 'report.md').write_text('# Author report', encoding='utf-8')
     files = [run / 'environment_cleanup.json', run / 'result.json',
              report.with_suffix('.result.json')]
     observations = []
@@ -182,6 +190,9 @@ def test_visible_completion_already_has_matching_supervisor_receipts(
             saved = [json.loads(filename.read_text('utf-8')) for filename in files]
             observations.append((view, [saved[0], saved[1]['data']['environment_cleanup'],
                                         saved[2]['data']['environment_cleanup']]))
+            assert report.read_text('utf-8') == view['result']['data']['report']
+            assert (run / 'report.md').read_text('utf-8') == view['result']['data']['report']
+            assert list_sessions()[0]['state'] == view['result']['state']
 
     original_emit, original_write = ProgressStore.emit, lifecycle._write_json
 
@@ -202,8 +213,13 @@ def test_visible_completion_already_has_matching_supervisor_receipts(
                    'remaining': [], 'errors': []}
         result = {'state': worker_state,
                   'error': 'author command failed' if worker_state == 'ERROR' else None,
+                  'session_id': session_id,
                   'data': {'run_dir': str(run), 'report': '# Author report',
+                           'validation': {'is_reproduced': True, 'paper_metrics_verified': True},
                            'environment_cleanup': receipt}, 'report_path': str(report)}
+        ledger = get_data_root() / 'experiment_ledger' / ('ledger_' + session_id + '.jsonl')
+        ledger.parent.mkdir(exist_ok=True)
+        ledger.write_text(json.dumps({'phase': 'FINISH', 'result': {'state': worker_state}}) + '\n', encoding='utf-8')
         for filename, value in zip(files, (receipt, result, result)):
             filename.write_text(json.dumps(value), encoding='utf-8')
         child.emit({'type': 'done', 'result': result})
@@ -232,9 +248,17 @@ def test_visible_completion_already_has_matching_supervisor_receipts(
     assert result['state'] == expected_state
     assert json.loads(files[1].read_text('utf-8'))['state'] == expected_state
     assert json.loads(files[2].read_text('utf-8'))['state'] == expected_state
+    text = result['data']['report']
+    assert '# Author report' in text
+    assert text.count('### 任务收尾') == 1
+    assert '**总任务状态**: ' + ('异常结束' if expected_state == 'ERROR' else '已完成') in text
+    assert '**环境释放**: ' + ('失败' if cleanup_status == 'error' else '已释放') in text
+    assert result['data']['validation'] == {'is_reproduced': True, 'paper_metrics_verified': True}
+    ledger = get_data_root() / 'experiment_ledger' / ('ledger_' + session_id + '.jsonl')
+    assert json.loads(ledger.read_text('utf-8').splitlines()[-1])['result']['state'] == expected_state
     if exit_code in {'timeout', 'cancel'}:
         assert 'after child result' in result['error']
-        assert result['data']['report'] == '# Author report'
+        assert '# Author report' in result['data']['report']
 
 
 @pytest.mark.parametrize('confirmed', [True, False])
@@ -281,7 +305,8 @@ def test_supervisor_cleanup_failure_preserves_the_workers_report(recover, tmp_pa
         'status': 'error', 'errors': [{'path': 'dependencies', 'reason': 'still open'}]})
     result = run_pipeline_core(str(path), experiment_profile='neural_ode_spiral')
     assert result['state'] == 'ERROR' and result['error']
-    assert result['data']['report'] == 'saved experiment report'
+    assert 'saved experiment report' in result['data']['report']
+    assert '**环境释放**: 失败' in result['data']['report']
     assert result['data']['environment_cleanup']['status'] == 'error'
     assert ProgressStore.read_snapshot(str(path))['done']
 

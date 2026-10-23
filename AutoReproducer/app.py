@@ -58,7 +58,7 @@ PROFILE_LABELS = repository_entrypoint.profile_labels()
 get_profile = repository_entrypoint.get_profile
 
 # Only refresh the small loader. Older active pipeline modules keep their globals.
-if pipeline_entrypoint.BACKEND_API_VERSION != 8:
+if pipeline_entrypoint.BACKEND_API_VERSION != 9:
     pipeline_entrypoint = importlib.reload(pipeline_entrypoint)
 
 _pipeline_backend = pipeline_entrypoint.load_backend_pipeline()
@@ -260,9 +260,8 @@ def _cached_preview_pdf_input(payload: bytes, mock_mode: bool, source_fingerprin
                 pass
 
 
-@st.fragment
 def render_paper_input():
-    """只刷新论文输入；点击启动时主页面重新读取最新选项。"""
+    """论文输入变化时刷新页面，同步显示适用的执行和核验选项。"""
     st.markdown('<div class="sidebar-section-label"><span>01</span> 论文输入</div>',
                 unsafe_allow_html=True)
     input_mode = st.radio("输入方式", ["论文标题", "上传PDF", "官方仓库预设"], key="input_mode")
@@ -461,10 +460,20 @@ with st.sidebar:
         author_execution_only = True
 
     strict_validation = False
+    experiment_request = {}
     source_repair = False
     source_repair_editable = []
     if (input_mode == "上传PDF" and uploaded_file and not st.session_state.mock_mode
             and not experiment_profile and not corpus_paper):
+        requested_method = st.text_input(
+            "实验方法 / 模型（可选）", key="pdf_requested_method", max_chars=128,
+            disabled=st.session_state.running,
+            help="填写论文或作者代码中的名称；留空时自动选择完整实验。不会据此修改作者训练设置。")
+        requested_dataset = st.text_input(
+            "实验数据集（可选）", key="pdf_requested_dataset", max_chars=128,
+            disabled=st.session_state.running)
+        experiment_request = {name: text.strip() for name, text in
+            (("method", requested_method), ("dataset", requested_dataset)) if text.strip()}
         def _select_pdf_execution_mode(selected, alternative):
             if st.session_state.get(selected):
                 st.session_state[alternative] = False
@@ -581,6 +590,7 @@ if start_btn and not st.session_state.running:
             paper_title=pt, pdf_path=tmp_pdf,
             **({'author_execution_only': True} if author_execution_only else {}),
             strict_validation=strict_validation,
+            experiment_request=experiment_request,
             source_repair=source_repair,
             source_repair_editable=source_repair_editable,
             **({"preferred_repo_url": manual_repo_url} if manual_repo_url else {}),

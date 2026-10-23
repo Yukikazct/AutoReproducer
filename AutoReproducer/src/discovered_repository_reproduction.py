@@ -356,6 +356,7 @@ class DiscoveredRepositoryReproduction:
                   "status": status, "reason": reason or title})
         data = {"run_dir": str(run_dir.resolve()), "report_path": str((run_dir / "report.md").resolve()),
                 "paper_info": deepcopy(request.get("paper_info") or {}), "resources": deepcopy(request.get("resources") or {}),
+                "experiment_request": deepcopy(request['experiment_request']),
                 "verifications": deepcopy(request.get("verifications") or []),
                 "fix_records": deepcopy(request.get("fix_records") or []), "repository_executed": False,
                 "reproduction_scope": "author_code_execution", "execution_source": "author_repository",
@@ -489,6 +490,8 @@ class DiscoveredRepositoryReproduction:
                     self.logger.log("ResourceFinder", phase, "RUNNING", "源码已就绪；正在读取 README、依赖声明与论文运行线索")
                     packet = build_evidence_packet(request["pdf_path"], workspace, snapshot, for_identity_review=True)
                     packet['author_execution_only'] = not strict_requested
+                    if request['experiment_request']:
+                        packet['experiment_request'] = deepcopy(request['experiment_request'])
                     if not strict_requested:
                         packet['limits']['training_timeout_s'] = None
                     bind_full_paper_notes(packet, request)
@@ -503,6 +506,8 @@ class DiscoveredRepositoryReproduction:
                         materialize_submodules(self.root, snapshot, offline=offline)
                         packet = build_evidence_packet(request['pdf_path'], workspace, snapshot, for_identity_review=True)
                         packet['author_execution_only'] = not strict_requested
+                        if request['experiment_request']:
+                            packet['experiment_request'] = deepcopy(request['experiment_request'])
                         if not strict_requested:
                             packet['limits']['training_timeout_s'] = None
                         bind_full_paper_notes(packet, request)

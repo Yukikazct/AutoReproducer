@@ -1362,4 +1362,5 @@ class ReportGeneratorAgent(BaseAgent):
                   "",
                   "---",
                   "*报告由 AutoReproducer 自动生成*"]
-        return "\n".join(lines)
+        from src.run_finalization import finalize_report_text
+        return finalize_report_text("\n".join(lines), data)

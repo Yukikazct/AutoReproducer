@@ -26,6 +26,35 @@ def validate(fixture, proposal=None):
     return planner.validate_plan(proposal or fixture["proposal"], fixture["packet"], fixture["workspace"])
 
 
+def test_original_downloader_import_uses_reviewed_pin_only_when_required(tmp_path):
+    from src.agents.experiment_protocol import ExperimentProtocolAgent
+    from src.audit.audit_logger import AuditLogger
+
+    fixture = make_experiment(tmp_path)
+
+    def selected_packet():
+        packet = planner.build_evidence_packet(fixture['pdf'], fixture['workspace'], fixture['snapshot'])
+        packet['experiment_protocol'] = ExperimentProtocolAgent(
+            PlannedLLM(fixture['proposal']), AuditLogger()).run(packet, fixture['workspace'])
+        return packet
+
+    packet = selected_packet()
+    plain = planner.propose_plan(PlannedLLM(fixture['proposal']), packet, fixture['workspace'])
+    assert 'gdown==5.2.0' not in plain['requirements']['compatibility']
+    path = fixture['workspace'] / 'train.py'
+    source = 'import gdown\n' + path.read_text('utf-8')
+    path.write_text(source, 'utf-8')
+    fixture['snapshot']['files']['train.py'] = hashlib.sha256(path.read_bytes()).hexdigest()
+    next(item for item in fixture['proposal']['citations'] if item.get('path') == 'train.py')['quote'] = source
+    packet = selected_packet()
+    plan = planner.propose_plan(PlannedLLM(fixture['proposal']), packet, fixture['workspace'])
+    assert 'gdown==5.2.0' in plan['requirements']['compatibility']
+    assert any(item['package'] == 'gdown' and item['statement'] == 'import gdown'
+               for item in plan['requirements']['import_evidence'])
+    assert any(item.get('dependency_of') == 'gdown' and item['package'] == 'requests'
+               for item in plan['requirements']['import_evidence'])
+
+
 def test_protocol_evidence_reuses_reader_recovered_pages_without_reparsing(tmp_path, monkeypatch):
     import src.pdf_input as pdf_input
     fixture = make_experiment(tmp_path)

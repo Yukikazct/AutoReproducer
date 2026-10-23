@@ -18,6 +18,7 @@ read_snapshot() 聚合以上事件为前端可直接渲染的视图：
 """
 import json
 import os
+import re
 import shutil
 import tempfile
 import threading
@@ -34,7 +35,7 @@ from src.project_paths import get_data_root
 
 
 # Contract checked by the web loader before starting a new background thread.
-BACKEND_API_VERSION = 8
+BACKEND_API_VERSION = 9
 
 
 def __getattr__(name):
@@ -144,6 +145,25 @@ def _sync_run_report(result: dict) -> None:
                        json.dumps(sanitize_report_result(result), ensure_ascii=False, indent=2).encode("utf-8"))
 
 
+def _record_pipeline_finish(result, *, logger=None):
+    """Append the final lifecycle outcome, retaining earlier experiment records."""
+    if logger is None:
+        session_id = result.get("session_id") or ""
+        if not re.fullmatch(r"\d{8}_\d{6}", session_id):
+            return
+        logger = AuditLogger()
+        logger.session_id = session_id
+    data = result.get("data") or {}
+    stats = result.get("audit_stats") or {}
+    logger.log_experiment(
+        "FINISH", "流水线与运行环境收尾完成",
+        inputs={"paper_title": data.get("paper_title", "")},
+        outputs={"title": (data.get("paper_info") or {}).get("title") or data.get("paper_title", "")},
+        result={"state": result.get("state"), "error": result.get("error"),
+                "environment_cleanup": (data.get("environment_cleanup") or {}).get("status"),
+                "duration_sec": stats.get("duration_sec", 0), "llm_calls": stats.get("llm_calls", 0)})
+
+
 # ---------------- 后台流水线执行 ----------------
 
 def _emit_state(store: ProgressStore, state: str, agent: str,
@@ -186,6 +206,7 @@ def run_pipeline_core(progress_path: str,
                       title_resolution: Optional[dict] = None,
                       pdf_resolution: Optional[dict] = None,
                       preferred_repo_url: str = "",
+                      experiment_request: Optional[dict] = None,
                       author_execution_only: bool = True,
                       strict_validation: bool = False,
                       source_repair: bool = False,
@@ -207,9 +228,15 @@ def run_pipeline_core(progress_path: str,
     # Disabled repair controls must not reuse paths from an earlier PDF task.
     source_repair_editable = source_repair_editable if source_repair is True else []
     store = ProgressStore(progress_path, reset=not _append_progress)
+    from src.experiment_request import normalize_experiment_request
+    try:
+        experiment_request = normalize_experiment_request(experiment_request)
+    except ValueError as exc:
+        return _reject_pdf_input(store, str(exc))
     from src.title_routing import resolve_title_request
     resolved = {"paper_title": paper_title, "pdf_path": pdf_path,
                 "preferred_repo_url": preferred_repo_url,
+                "experiment_request": experiment_request,
                 "corpus_paper": corpus_paper, "mock_mode": mock_mode,
                 "author_execution_only": author_execution_only,
                 "strict_validation": strict_validation,
@@ -252,6 +279,7 @@ def run_pipeline_core(progress_path: str,
                 "progress_path": str(Path(progress_path).resolve()),
                 "paper_title": paper_title, "pdf_path": pdf_path,
                 "preferred_repo_url": preferred_repo_url,
+                "experiment_request": experiment_request,
                 "corpus_paper": corpus_paper, "model_name": model_name,
                 "author_execution_only": author_execution_only,
                 "strict_validation": strict_validation,
@@ -271,8 +299,10 @@ def run_pipeline_core(progress_path: str,
             }
             return _run_prepared_pipeline(store, request, reason)
 
+    pipeline_logger = None
+
     def execute():
-        nonlocal pdf_path
+        nonlocal pdf_path, pipeline_logger
         state: Dict[str, Any] = {"current": "INIT"}
         running: Dict[str, Any] = {"value": True}
         pdf_path = pdf_path or ""
@@ -287,7 +317,7 @@ def run_pipeline_core(progress_path: str,
             running["value"] = False
             return result
 
-        logger = AuditLogger()
+        logger = pipeline_logger = AuditLogger()
         error_msg: Optional[str] = None
         emitted = 0
         log_emit_lock = threading.RLock()
@@ -339,6 +369,7 @@ def run_pipeline_core(progress_path: str,
             outcome = orchestrator.run({
                 "paper_title": paper_title, "pdf_path": pdf_path,
                 "preferred_repo_url": preferred_repo_url,
+                "experiment_request": experiment_request,
                 "corpus_paper": corpus_paper, "experiment_profile": experiment_profile,
                 "author_execution_only": author_execution_only,
                 "strict_validation": strict_validation,
@@ -453,24 +484,32 @@ def run_pipeline_core(progress_path: str,
             finally:
                 if temporary is not None:
                     temporary.unlink(missing_ok=True)
-        # Publish history's terminal state only after report persistence succeeds
-        # or records its failure; completed training alone is not a saved report.
-        logger.log_experiment(
-            "FINISH", "流水线终止",
-            inputs={"paper_title": paper_title},
-            outputs={"title": (data.get("paper_info") or {}).get("title") or paper_title},
-            result={"state": _current(),
-                    "duration_sec": stats["duration_sec"],
-                    "llm_calls": stats["llm_calls"]})
-        _emit_state(store, _current(), "", "success")
         return _mark_result(result)
 
     # Runtime recovery above may launch a different interpreter. Only its worker
     # takes this lease, avoiding a parent/child deadlock on the dependency lock.
     from src.environment_lifecycle import managed_environment
-    with managed_environment() as environment:
-        environment.result = execute()
+    environment = None
+    try:
+        with managed_environment() as environment:
+            environment.result = execute()
+    except BaseException as exc:
+        # Direct callers need the same persisted failed outcome as the background
+        # wrapper when cleanup/report publication raises after execution ended.
+        result = environment.result if environment is not None else None
+        if isinstance(result, dict) and result.get("state") == "ERROR":
+            try:
+                _record_pipeline_finish(result, logger=pipeline_logger)
+            except Exception:
+                pass  # Keep the original cancellation/publication exception.
+            store.emit({"type": "done", "result": result})
+        else:
+            from src.runtime_preparation import safe_runtime_diagnostic
+            store.emit({"type": "error", "error": safe_runtime_diagnostic(exc)})
+        raise
     result = environment.result
+    _record_pipeline_finish(result, logger=pipeline_logger)
+    _emit_state(store, result["state"], "", "error" if result["state"] == "ERROR" else "success")
     store.emit({"type": "done", "result": result})
     return result
 
@@ -548,6 +587,7 @@ def _run_prepared_pipeline(store: ProgressStore, request: dict, reason: str) -> 
                             receipt["status"] = "error"
                             receipt.setdefault("errors", []).extend(supervisor_cleanup["errors"])
                     record_environment_cleanup(result, receipt)
+                    _record_pipeline_finish(result)
                     store.emit({"type": "done", "result": result})
         except Exception as exc:
             status = "error"
@@ -642,6 +682,7 @@ def run_pipeline_background(progress_path: str, *,
                             title_resolution: Optional[dict] = None,
                             pdf_resolution: Optional[dict] = None,
                             preferred_repo_url: str = "",
+                            experiment_request: Optional[dict] = None,
                             author_execution_only: bool = True,
                             strict_validation: bool = False,
                             source_repair: bool = False,
@@ -659,6 +700,7 @@ def run_pipeline_background(progress_path: str, *,
             result = run_pipeline_core(
                 progress_path, paper_title=paper_title, pdf_path=pdf_path,
                 preferred_repo_url=preferred_repo_url,
+                experiment_request=experiment_request,
                 author_execution_only=author_execution_only,
                 strict_validation=strict_validation,
                 source_repair=source_repair,

@@ -1,8 +1,10 @@
 """Run the frozen original loader and record its actual framework downloads."""
+import ast
 import hashlib
 import importlib.util
 import inspect
 import json
+import os
 from pathlib import Path
 import sys
 from urllib.parse import urlsplit
@@ -32,6 +34,65 @@ def checked(relative, *, exists=False):
         if current.is_symlink() or getattr(current, 'is_junction', lambda: False)():
             raise ValueError('Original dataset loader path uses a filesystem link')
     return target
+
+
+def original_slice(source, declaration, module):
+    """Compile only hash-bound, unchanged original definitions and imports."""
+    if declaration.get('version') != 1:
+        raise ValueError('Original loading slice has an unsupported version')
+    text = source.read_text('utf-8')
+    tree = ast.parse(text, filename=str(source))
+    available = {(type(node).__name__, node.lineno): node for node in tree.body}
+    retained, seen = [], set()
+    for statement in declaration['statements']:
+        identity = (statement['kind'], statement['line'])
+        node = available.get(identity)
+        if (identity in seen or node is None or not isinstance(node, (ast.Import, ast.ImportFrom, ast.FunctionDef, ast.ClassDef))
+                or hashlib.sha256(ast.get_source_segment(text, node).encode()).hexdigest() != statement['sha256']):
+            raise ValueError('Original loading slice changed or contains unsupported statements')
+        seen.add(identity)
+        retained.append(node)
+    if not retained or [node.lineno for node in retained] != sorted(node.lineno for node in retained):
+        raise ValueError('Original loading slice must retain its original statement order')
+    exec(compile(ast.Module(body=retained, type_ignores=[]), str(source), 'exec'), module.__dict__)
+
+
+def verify_record(result, declaration, module, data):
+    """Read direct plain storage only, without author attribute/index hooks."""
+    cls = module.__dict__.get(declaration['class'])
+    if not isinstance(cls, type) or type(result) is not cls or cls.__bases__ != (object,):
+        raise ValueError('Original loader returned another record class')
+    fields = object.__getattribute__(result, '__dict__')
+    if type(fields) is not dict or set(fields) != set(declaration['fields']):
+        raise ValueError('Original record stored fields disagree with the frozen loading contract')
+
+    def compare(actual, expected):
+        if set(expected) == {'literal'}:
+            value = expected['literal']
+            return type(value) in (str, int, float, bool, type(None)) and type(actual) is type(value) and actual == value
+        if set(expected) == {'dictionary'}:
+            values = expected['dictionary']
+            return (type(actual) is dict and set(actual) == set(values)
+                    and all(compare(actual[key], value) for key, value in values.items()))
+        if set(expected) == {'data_field'}:
+            name = expected['data_field']
+            if name not in {'x', 'y', 'edge_index', 'num_nodes', 'train_mask', 'val_mask', 'test_mask'}:
+                return False
+            value = getattr(data, name)
+        elif set(expected) == {'mask_indices'}:
+            name = expected['mask_indices']
+            if name not in {'train_mask', 'val_mask', 'test_mask'}:
+                return False
+            value = torch.where(getattr(data, name))[0]
+        else:
+            return False
+        if type(value) is torch.Tensor:
+            return (type(actual) is torch.Tensor and actual.dtype == value.dtype and actual.shape == value.shape
+                    and actual.device == value.device and torch.equal(actual, value))
+        return type(actual) is type(value) and type(value) in (int, bool) and actual == value
+
+    if not all(compare(fields[name], value) for name, value in declaration['fields'].items()):
+        raise ValueError('Original record changed framework features, labels, edges, masks or metadata')
 
 
 def prepare(config):
@@ -72,16 +133,45 @@ def prepare(config):
         spec = importlib.util.spec_from_file_location('_autorepro_original_data_' + str(index), source)
         module = importlib.util.module_from_spec(spec)
         sys.modules[spec.name] = module
+        original_init = Planetoid.__init__
+        constructed = []
+        def observe_constructor(instance, *args, **kwargs):
+            if type(instance) is not Planetoid or constructed:
+                raise ValueError('Original loader must construct exactly one native Planetoid dataset')
+            constructed.append(instance)
+            return original_init(instance, *args, **kwargs)
+        previous_cwd = Path.cwd()
         try:
             fs.cp = observe
-            spec.loader.exec_module(module)
-            dataset = module.__dict__[loader['function']](**loader['arguments'])
+            Planetoid.__init__ = observe_constructor
+            if loader.get('source_slice'):
+                original_slice(source, loader['source_slice'], module)
+                os.chdir(checked(loader['source_slice']['cwd'], exists=True))
+            else:
+                spec.loader.exec_module(module)
+                if loader.get('cwd') is not None:
+                    os.chdir(checked(loader['cwd'], exists=True))
+            result = module.__dict__[loader['function']](**loader['arguments'])
+            if len(constructed) == 1:
+                native = constructed[0]
+                observed_root = Path(native.root).resolve()
+                observed_raw_dir = Path(native.raw_dir).resolve()
+                observed_raw_paths = [Path(path).resolve() for path in native.raw_paths]
+                observed_processed_paths = [Path(path).resolve() for path in native.processed_paths]
         finally:
             fs.cp = original_cp
+            Planetoid.__init__ = original_init
+            os.chdir(previous_cwd)
             sys.modules.pop(spec.name, None)
+        if len(constructed) != 1:
+            raise ValueError('Original loader did not construct one native framework dataset')
+        dataset = constructed[0]
+        record = loader.get('source_slice', {}).get('returned_record')
+        if record is None and result is not dataset:
+            raise ValueError('Original loader did not return its original framework dataset')
         if type(dataset) is not Planetoid or dataset.name != loader['name'] or dataset.split != 'public':
             raise ValueError('Original loader did not return the frozen framework dataset')
-        if Path(dataset.root).resolve() != root or Path(dataset.raw_dir).resolve() != raw_dir:
+        if observed_root != root or observed_raw_dir != raw_dir:
             raise ValueError('Original loader used another dataset storage root')
         expected_transform = loader['transform']
         if not ((expected_transform is None and dataset.transform is None)
@@ -89,10 +179,10 @@ def prepare(config):
             raise ValueError('Original loader changed the frozen preprocessing transform')
         if dataset.pre_transform is not None or dataset.pre_filter is not None:
             raise ValueError('Original loader used an unreviewed preprocessing/filter')
-        if len(dataset) != 1 or set(Path(path).name for path in dataset.raw_paths) != set(names):
+        if len(dataset) != 1 or set(path.name for path in observed_raw_paths) != set(names):
             raise ValueError('Original loader does not expose the complete reviewed graph dataset')
         raw_records = []
-        for path in dataset.raw_paths:
+        for path in observed_raw_paths:
             target = checked(Path(path).relative_to(WORKSPACE).as_posix(), exists=True)
             raw_records.append({'url': Planetoid.url + '/' + target.name,
                 'path': target.relative_to(WORKSPACE).as_posix(), 'sha256': sha(target), 'bytes': target.stat().st_size})
@@ -102,6 +192,8 @@ def prepare(config):
             # A fresh run cannot assign guessed provenance to pre-existing bytes.
             raise ValueError('Original real data has no observed download provenance in this fresh workspace')
         data = dataset[0]
+        if record is not None:
+            verify_record(result, record, module, data)
         masks = [data.train_mask, data.val_mask, data.test_mask]
         if (any(mask.dtype != torch.bool or mask.ndim != 1 or len(mask) != data.num_nodes for mask in masks)
                 or any(torch.any(masks[a] & masks[b]) for a, b in ((0, 1), (0, 2), (1, 2)))
@@ -119,7 +211,7 @@ def prepare(config):
             if size <= 0 or total > 1024**3:
                 raise ValueError('Original dataset file tree exceeds the reviewed preparation size')
             files[name] = {'sha256': sha(target), 'bytes': size}
-        if not files or any(Path(path).relative_to(WORKSPACE).as_posix() not in files for path in dataset.processed_paths):
+        if not files or any(path.relative_to(WORKSPACE).as_posix() not in files for path in observed_processed_paths):
             raise ValueError('Original loader did not create its complete processed data')
         records.append({'kind': 'author_loader', 'verified': True, 'loader': loader,
             'framework_version': torch_geometric.__version__,

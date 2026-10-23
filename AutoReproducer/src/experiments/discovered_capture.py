@@ -7,6 +7,7 @@ import hashlib
 import inspect
 import importlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -91,6 +92,74 @@ def author_integer_tensor(value):
         if value.dtype.kind == 'b':
             return torch.from_numpy(value.copy())
     raise ValueError('Author labels/indices must be actual integer tensors or arrays without rounding')
+
+
+_LABEL_DTYPES = {'|i1': 'torch.int8', '|u1': 'torch.uint8', **{
+    endian + code + str(size): 'torch.' + ('uint' if code == 'u' else 'int') + str(size * 8)
+    for endian in ('<', '>') for code in ('i', 'u') for size in (2, 4, 8)}}
+
+
+def normalize_author_labels(value):
+    """Copy integer labels, preserving original bytes in portable uint8 storage.
+
+    Training inputs remain untouched. Raw bytes preserve even nonnative NumPy
+    byte order and unsigned dtypes unsupported by the pinned torch serializer.
+    """
+    if isinstance(value, torch.Tensor):
+        if str(value.dtype) not in _LABEL_DTYPES.values() or value.layout != torch.strided:
+            raise ValueError('Author labels require actual dense integer tensors without rounding')
+        array = value.detach().cpu().clone().numpy()
+    elif isinstance(value, np.ndarray):
+        array = np.array(value, copy=True, order='C', subok=False)
+    else:
+        raise ValueError('Author labels must be actual integer tensors or arrays')
+    if (array.dtype.str not in _LABEL_DTYPES or array.ndim not in {1, 2}
+            or array.ndim == 2 and array.shape[1] != 1 or not array.size
+            or array.dtype.kind == 'u' and int(array.max()) > np.iinfo(np.int64).max):
+        raise ValueError('Author labels require nonempty integer [N] or [N,1] values without rounding or overflow')
+    original_bytes = array.tobytes(order='C')
+    raw = torch.from_numpy(np.frombuffer(original_bytes, dtype=np.uint8).copy())
+    labels = torch.from_numpy(array.astype(np.int64, copy=True).reshape(-1))
+    metadata = {
+        'version': 2, 'original_shape': list(array.shape),
+        'original_dtype': _LABEL_DTYPES[array.dtype.str], 'original_numpy_dtype': array.dtype.str,
+        'original_sha256': hashlib.sha256(original_bytes).hexdigest(),
+        'normalized_shape': list(labels.shape), 'normalized_dtype': str(labels.dtype),
+        'normalized_sha256': hashlib.sha256(labels.numpy().tobytes()).hexdigest(),
+        'transformation': 'squeeze_column' if array.ndim == 2 else 'identity',
+    }
+    return labels, raw, metadata
+
+
+def verify_label_normalization(tensors, receipt):
+    """Recompute layout evidence from raw artifact values in the fresh evaluator."""
+    keys = {'raw_labels', 'label_normalization'}
+    present = keys.intersection(tensors)
+    metadata = receipt.get('label_normalization')
+    if not present and metadata is None:
+        # Legacy captures only allowed one-dimensional int64 labels.
+        labels = tensors['labels']
+        if not isinstance(labels, torch.Tensor) or labels.ndim != 1 or labels.dtype != torch.int64:
+            raise ValueError('Legacy capture lacks verifiable one-dimensional labels')
+        return None
+    if present != keys or not isinstance(metadata, dict):
+        raise ValueError('Captured label normalization evidence is incomplete')
+    raw, shape, dtype = tensors['raw_labels'], metadata.get('original_shape'), metadata.get('original_numpy_dtype')
+    if (not isinstance(raw, torch.Tensor) or raw.dtype != torch.uint8 or raw.ndim != 1
+            or raw.device.type != 'cpu' or type(dtype) is not str or dtype not in _LABEL_DTYPES
+            or type(shape) is not list or len(shape) not in {1, 2}
+            or any(type(size) is not int or size <= 0 for size in shape)
+            or len(shape) == 2 and shape[1] != 1
+            or raw.numel() != math.prod(shape) * np.dtype(dtype).itemsize):
+        raise ValueError('Captured label normalization differs: invalid original integer byte storage')
+    original = np.frombuffer(raw.numpy().tobytes(), dtype=np.dtype(dtype)).reshape(shape)
+    labels, _, recomputed = normalize_author_labels(original)
+    if (recomputed != metadata or recomputed != tensors['label_normalization']
+            or not isinstance(tensors['labels'], torch.Tensor)
+            or tensors['labels'].dtype != torch.int64 or tensors['labels'].shape != labels.shape
+            or not torch.equal(tensors['labels'], labels)):
+        raise ValueError('Captured label normalization differs from original label values')
+    return recomputed
 
 
 def select(output, labels, indices, expected, output_alignment='full_dataset'):
@@ -317,7 +386,7 @@ def capture(config):
         raise ValueError('Training updates outside the captured author model remain unaccounted')
     inputs = tuple(resolve_author_value(namespace, name) for name in contract['forward_args'])
     raw_labels = resolve_author_value(namespace, contract['labels'])
-    labels = cpu_tensor(author_integer_tensor(raw_labels))
+    labels, saved_raw_labels, label_metadata = normalize_author_labels(raw_labels)
     indices = None if contract['test_indices'] is None else cpu_tensor(
         author_integer_tensor(resolve_author_value(namespace, contract['test_indices'])))
     model.eval()
@@ -335,7 +404,8 @@ def capture(config):
         if not torch.allclose(traced(*tensors), outputs, atol=1e-6, rtol=1e-5):
             raise ValueError("Exported author forward path differs from the trained model")
         torch.jit.save(traced, str(ROOT / "model.pt"))
-        torch.save({"inputs": tuple(tensors), 'input_layouts': layouts, "labels": labels, "test_indices": indices,
+        torch.save({"inputs": tuple(tensors), 'input_layouts': layouts, "labels": labels,
+                    'raw_labels': saved_raw_labels, 'label_normalization': label_metadata, "test_indices": indices,
                     "outputs": outputs.detach()}, ROOT / "tensors.pt")
     check_sources(config)
     write("capture.json", {"version": 1, "pass": True, "spec_sha256": config["spec_sha256"],
@@ -343,6 +413,7 @@ def capture(config):
           "test_samples": contract["expected_test_samples"], "total_samples": len(labels),
           "classes": outputs.shape[1], "model_source": name,
           "author_label_dtype": str(raw_labels.dtype),
+          'label_normalization': label_metadata,
           "output_alignment": contract.get('output_alignment', 'full_dataset'),
           "model_source_sha256": config["source_files"][name],
           "model_type": type(model).__module__ + "." + type(model).__qualname__,
@@ -367,6 +438,7 @@ def evaluate(config):
         if receipt["files_sha256"][name] != sha(ROOT / name):
             raise ValueError("Captured training artifact changed before fresh evaluation")
     tensors = torch.load(ROOT / "tensors.pt", map_location="cpu", weights_only=True)
+    label_metadata = verify_label_normalization(tensors, receipt)
     model = torch.jit.load(str(ROOT / "model.pt"), map_location="cpu").eval()
     with torch.no_grad():
         outputs = model(*tensors["inputs"])
@@ -392,6 +464,8 @@ def evaluate(config):
               "numpy_torch_crosscheck": True, "process_pid": os.getpid(),
               "capture_process_pid": receipt['process_pid']}
     result['numeric_compatibility'] = numeric_repairs
+    if label_metadata is not None:
+        result['label_normalization'] = label_metadata
     write("independent_metrics.json", result)
     print("INDEPENDENT_EVALUATION_COMPLETE " + json.dumps(result), flush=True)
 
