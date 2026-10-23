@@ -58,7 +58,7 @@ PROFILE_LABELS = repository_entrypoint.profile_labels()
 get_profile = repository_entrypoint.get_profile
 
 # Only refresh the small loader. Older active pipeline modules keep their globals.
-if pipeline_entrypoint.BACKEND_API_VERSION != 9:
+if pipeline_entrypoint.BACKEND_API_VERSION != 10:
     pipeline_entrypoint = importlib.reload(pipeline_entrypoint)
 
 _pipeline_backend = pipeline_entrypoint.load_backend_pipeline()
@@ -81,6 +81,7 @@ from frontend.history_manager import (
     get_session_report_result,
     get_project_data_dir,
 )
+from frontend.task_control import request_cancel, task_status as pipeline_task_status, recover_orphaned_task
 
 # 页面配置
 st.set_page_config(
@@ -131,6 +132,9 @@ if "pipeline_note" not in st.session_state:
 # 先读取后台状态，再渲染侧边栏和主区域。终态时停止轮询后也能立即
 # 更新「开始复现」按钮、系统状态和顶部提示，避免留在上一阶段。
 pf = st.session_state.progress_file
+if pf:
+    recover_orphaned_task(pf, ProgressStore)
+_task_control_status = pipeline_task_status(pf)
 _progress_signature = progress_signature(pf)
 snap = ProgressStore.read_snapshot(pf) if pf else None
 if pf and resolve_progress_run(get_project_data_dir(), Path(pf).name) == str(Path(pf).resolve()):
@@ -139,7 +143,8 @@ if pf and resolve_progress_run(get_project_data_dir(), Path(pf).name) == str(Pat
 if snap:
     # 每次使用当前任务的完整快照，避免切换进度文件时残留上次的完成状态。
     st.session_state.result = snap["result"]
-    st.session_state.running = snap["running"]
+    st.session_state.running = (snap["running"] or _task_control_status["active"]
+                                or _task_control_status.get("cleanup_failed", False))
     st.session_state.agent_status = snap.get("agent_status", {})
     st.session_state.pipeline_stages = snap.get("pipeline_stages", [])
     st.session_state.current_state = snap["state"]
@@ -462,6 +467,7 @@ with st.sidebar:
     strict_validation = False
     experiment_request = {}
     source_repair = False
+    source_repair_auto = False
     source_repair_editable = []
     if (input_mode == "上传PDF" and uploaded_file and not st.session_state.mock_mode
             and not experiment_profile and not corpus_paper):
@@ -478,6 +484,8 @@ with st.sidebar:
             if st.session_state.get(selected):
                 st.session_state[alternative] = False
 
+        if "pdf_source_repair" not in st.session_state:
+            st.session_state["pdf_source_repair"] = not st.session_state.get("pdf_strict_validation", False)
         if (st.session_state.get("pdf_source_repair")
                 and st.session_state.get("pdf_strict_validation")):
             st.session_state["pdf_strict_validation"] = False
@@ -494,17 +502,18 @@ with st.sidebar:
             disabled=st.session_state.running,
             on_change=_select_pdf_execution_mode,
             args=("pdf_source_repair", "pdf_strict_validation"),
-            help="仅允许修改下方列出的 Python 文件，最多两轮修复；保留补丁和失败日志，失败时整体回滚，不得改变实验协议。")
+            help="按真实报错定位兼容性问题，最多两轮隔离修复和原命令重试；保留补丁与日志，不得改变实验协议。")
         if source_repair:
             strict_validation = False
             editable_text = st.text_area(
-                "允许修复的 Python 文件（每行一个仓库相对路径）",
+                "限定修复文件（可选，每行一个仓库相对路径）",
                 key="pdf_source_repair_editable",
                 placeholder="src/model.py\ntrain.py",
                 disabled=st.session_state.running,
-                help="请根据作者仓库填写明确的文件路径；不接受目录、通配符或仓库外路径。")
+                help="留空时从实际报错自动定位最多 3 个冻结 Python 文件；填写后仅允许修复这些文件，不接受目录或通配符。")
             source_repair_editable = list(dict.fromkeys(
                 line.strip() for line in editable_text.splitlines() if line.strip()))
+            source_repair_auto = not source_repair_editable
             st.caption("源码修复与严格核验互斥：修复会改变源码，严格核验要求冻结源码。修复不能改变模型、数据划分、训练轮数或评价方法。")
 
     # 启动 / 重置按钮
@@ -514,10 +523,15 @@ with st.sidebar:
                               use_container_width=True,
                               disabled=st.session_state.running)
     with col2:
+        stop_btn = False
+        if st.session_state.running:
+            stop_btn = st.button("正在停止…" if _task_control_status["cancelling"] else "停止任务",
+                                 use_container_width=True, key="stop_pipeline",
+                                 disabled=_task_control_status["cancelling"])
         reset_btn = st.button("重置", use_container_width=True,
                               disabled=st.session_state.running)
         if st.session_state.running:
-            st.caption("任务结束后可重置")
+            st.caption("停止会中断本任务的下载、安装和执行；清理完成后可重置，日志与报告保留。")
 
     # 系统状态
     _sidebar_state_label = ("运行中" if st.session_state.running else
@@ -530,6 +544,14 @@ with st.sidebar:
 
 
 # ========== 事件处理 ==========
+if stop_btn:
+    if request_cancel(st.session_state.progress_file):
+        st.session_state.pipeline_note = "已请求停止，正在结束本任务的子进程并释放环境；清理完成后可重置。"
+        st.rerun()
+    else:
+        st.sidebar.error("无法确认这个旧任务的后台持有者，不能安全停止。请先停止启动此任务的旧服务，再刷新恢复；日志已保留。")
+
+
 def _save_uploaded_pdf(uploaded_file) -> str:
     """将上传的 PDF 保存为临时文件，返回路径。"""
     suffix = os.path.splitext(uploaded_file.name or "paper.pdf")[1] or ".pdf"
@@ -554,8 +576,6 @@ if start_btn and not st.session_state.running:
         st.sidebar.error("官方仓库预设需要关闭 Mock 模式，才能执行真实论文代码。")
     elif manual_repo_error:
         st.sidebar.error(manual_repo_error)
-    elif source_repair and not source_repair_editable:
-        st.sidebar.error("启用源码修复时，请至少填写一个允许修复的 Python 文件相对路径。")
     elif not experiment_profile and not pt and not uploaded_file:
         st.sidebar.error("请先上传PDF文件" if input_mode == "上传PDF"
                          else "请先输入论文标题")
@@ -576,6 +596,9 @@ if start_btn and not st.session_state.running:
                        "建议先在侧边栏填写 Key 并点击「测试 AI 连接」验证。")
         tmp_pdf = _save_uploaded_pdf(uploaded_file) if uploaded_file else ""
         progress_file = _new_progress_file()
+        previous_monitor = {key: st.session_state.get(key) for key in (
+            "progress_file", "running", "result", "logs", "agent_status",
+            "pipeline_stages", "current_state", "pipeline_note")}
         st.session_state.progress_file = progress_file
         st.session_state.running = True
         st.session_state.result = None
@@ -585,33 +608,54 @@ if start_btn and not st.session_state.running:
         st.session_state.current_state = "INIT"
         st.session_state.pipeline_note = (
             "复现流水线已在后台启动，进度实时刷新中…")
-        run_pipeline_background(
-            progress_file,
-            paper_title=pt, pdf_path=tmp_pdf,
-            **({'author_execution_only': True} if author_execution_only else {}),
-            strict_validation=strict_validation,
-            experiment_request=experiment_request,
-            source_repair=source_repair,
-            source_repair_editable=source_repair_editable,
-            **({"preferred_repo_url": manual_repo_url} if manual_repo_url else {}),
-            corpus_paper=corpus_paper,
-            experiment_profile=experiment_profile,
-            title_resolution=title_resolution,
-            prepare_only=False if title_resolution or tmp_pdf else (st.session_state.get("method_action") == "仅准备源码和命令" if method_selected else
-                          bool(st.session_state.get("repository_prepare_only")) if experiment_profile else False),
-            prepare_environment=method_selected and st.session_state.get("method_action") == "准备实验环境",
-            optimization_mode="off",
-            max_candidates=int(st.session_state.get("method_max_candidates", 3)),
-            budget_seconds=7200,  # Legacy argument; current execution has no deadline.
-            use_llm_review=False, allow_result_summary_review=False,
-            model_name=model_name, base_url=base_url,
-            api_key=api_key,
-            mock_mode=st.session_state.mock_mode,
-            enable_optimization=False,
-            use_docker=False,
-            cleanup_pdf=True)   # 临时 PDF 由后台线程负责删除
-        st.session_state.workspace_tabs = "流水线状态"
-        st.rerun()
+        try:
+            run_pipeline_background(
+                progress_file,
+                paper_title=pt, pdf_path=tmp_pdf,
+                **({'author_execution_only': True} if author_execution_only else {}),
+                strict_validation=strict_validation,
+                experiment_request=experiment_request,
+                source_repair=source_repair,
+                source_repair_auto=source_repair_auto,
+                source_repair_editable=source_repair_editable,
+                **({"preferred_repo_url": manual_repo_url} if manual_repo_url else {}),
+                corpus_paper=corpus_paper,
+                experiment_profile=experiment_profile,
+                title_resolution=title_resolution,
+                prepare_only=False if title_resolution or tmp_pdf else (st.session_state.get("method_action") == "仅准备源码和命令" if method_selected else
+                              bool(st.session_state.get("repository_prepare_only")) if experiment_profile else False),
+                prepare_environment=method_selected and st.session_state.get("method_action") == "准备实验环境",
+                optimization_mode="off",
+                max_candidates=int(st.session_state.get("method_max_candidates", 3)),
+                budget_seconds=7200,  # Legacy argument; current execution has no deadline.
+                use_llm_review=False, allow_result_summary_review=False,
+                model_name=model_name, base_url=base_url,
+                api_key=api_key,
+                mock_mode=st.session_state.mock_mode,
+                enable_optimization=False,
+                use_docker=False,
+                cleanup_pdf=True)   # 临时 PDF 由后台线程负责删除
+        except Exception as exc:
+            from src.runtime_preparation import safe_runtime_diagnostic
+            message = safe_runtime_diagnostic(exc)
+            if api_key:
+                message = message.replace(api_key, "[REDACTED]")
+            for key, value in previous_monitor.items():
+                st.session_state[key] = value
+            if tmp_pdf:
+                try:
+                    Path(tmp_pdf).unlink(missing_ok=True)
+                except OSError:
+                    pass
+            if Path(progress_file).is_file():
+                try:
+                    ProgressStore(progress_file, reset=False).emit({"type": "error", "error": "任务未启动：" + message})
+                except OSError:
+                    pass
+            st.sidebar.error("任务未启动：" + message)
+        else:
+            st.session_state.workspace_tabs = "流水线状态"
+            st.rerun()
 
 # 重置按钮处理
 if reset_btn and not st.session_state.running:
@@ -679,7 +723,8 @@ def poll_live_progress():
     global _poll_initialized
     # Always finish the initial page render, even if a busy worker appends
     # between the snapshot read and this fragment. Only timer ticks rerun it.
-    if _poll_initialized and pf and progress_signature(pf) != _progress_signature:
+    if _poll_initialized and pf and (progress_signature(pf) != _progress_signature
+                                     or pipeline_task_status(pf) != _task_control_status):
         st.rerun()
     _poll_initialized = True
     if pf:

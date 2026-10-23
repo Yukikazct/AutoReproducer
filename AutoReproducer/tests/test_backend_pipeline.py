@@ -263,7 +263,8 @@ def test_background_forwards_reserved_optimization(tmp_path, monkeypatch):
         return {"state": "COMPLETED"}
 
     monkeypatch.setattr(backend, "run_pipeline_core", core)
-    thread = backend.run_pipeline_background(str(tmp_path / "reserved.jsonl"), enable_optimization=True)
+    thread = backend.run_pipeline_background(str(tmp_path / "reserved.jsonl"), enable_optimization=True,
+                                             mock_mode=True)
     thread.join(timeout=5)
     assert not thread.is_alive()
     assert captured["enable_optimization"] is True

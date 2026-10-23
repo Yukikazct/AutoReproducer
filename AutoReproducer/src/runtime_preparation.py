@@ -58,6 +58,10 @@ class RuntimePreparationError(RuntimeError):
     """Recovery exhausted its bounded safe options."""
 
 
+class ProcessCleanupError(KeyboardInterrupt):
+    """Unconfirmed process cleanup must abort retries and automatic repairs."""
+
+
 class RuntimePreparationTimeout(RuntimePreparationError):
     def __init__(self, message, *, stdout=None, stderr=None):
         super().__init__(message)
@@ -202,23 +206,35 @@ def run_owned_process(argv, *, cwd=None, env=None, input=None, timeout_s=900,
         except RuntimePreparationTimeout as exc:
             timeout_error = exc
         finally:
-            if job:
-                job.close()
-            if process:
-                if os.name == "posix":
-                    try:
-                        os.killpg(process.pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
-                if process.poll() is None:
-                    process.kill()
-                process.wait(timeout=5)
-                if writer:
-                    writer.join(timeout=1)
-                if process.stdin and not process.stdin.closed:
-                    process.stdin.close()
-            if on_cleanup:
-                on_cleanup()
+            active_failure = sys.exc_info()[1]
+            try:
+                if job:
+                    job.close()
+                if process:
+                    if os.name == "posix":
+                        try:
+                            os.killpg(process.pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                    if process.poll() is None:
+                        process.kill()
+                    process.wait(timeout=5)
+                    if writer:
+                        writer.join(timeout=1)
+                    if process.stdin and not process.stdin.closed:
+                        process.stdin.close()
+                if on_cleanup:
+                    on_cleanup()
+            except BaseException as cleanup_failure:
+                # Do not turn cancellation into an ordinary installer failure
+                # that a mirror fallback or source repair might retry.
+                failure = active_failure if isinstance(active_failure, (KeyboardInterrupt, SystemExit)) else ProcessCleanupError(
+                    "本任务子进程回收未确认，已阻止后续安装和修复")
+                failure.process_cleanup_confirmed = False
+                failure.cleanup_receipt = {"status": "error", "process_cleanup_confirmed": False,
+                    "errors": [{"reason": safe_runtime_diagnostic(cleanup_failure)}]}
+                failure.add_note("子进程清理失败：" + safe_runtime_diagnostic(cleanup_failure))
+                raise failure from cleanup_failure
         def captured(stream):
             if max_output_bytes is None:
                 stream.seek(0)
@@ -413,8 +429,16 @@ def _download_installer(destination, *, cancel_check, deadline):
                         raise RuntimePreparationError("Python 安装程序重定向到非官方地址，已停止自动安装")
                     total = 0
                     with partial.open("wb") as output:
-                        while chunk := response.read(65536):
+                        read_chunk = getattr(response, "read1", None) or response.read
+                        while True:
                             _check(cancel_check, deadline)
+                            # HTTPResponse.read(n) can wait for n bytes forever
+                            # on a slowly streaming peer. read1 performs one
+                            # socket read, bounded by the existing 10 s timeout.
+                            chunk = read_chunk(65536)
+                            _check(cancel_check, deadline)
+                            if not chunk:
+                                break
                             total += len(chunk)
                             if total > 64*1024*1024:
                                 raise RuntimePreparationError("Python 安装程序超过大小限制")
@@ -667,11 +691,18 @@ def _cleanup_failed_preparation(root):
     try:
         yield
     except BaseException as failure:
+        # A live installer may still be writing into these folders. Keep both
+        # process and filesystem ownership unresolved instead of deleting them.
+        if getattr(failure, "process_cleanup_confirmed", True) is False:
+            raise
         try:
             receipt = _release_runtime_downloads_locked(root)
+            failure.cleanup_receipt = receipt
             if receipt["errors"]:
                 failure.add_note("运行环境准备失败后的下载清理失败：" + str(receipt["errors"]))
-        except Exception as exc:
+        except BaseException as exc:
+            failure.cleanup_receipt = {"status": "error", "errors": [
+                {"reason": safe_runtime_diagnostic(exc)}]}
             failure.add_note("运行环境准备失败后的下载清理失败：" + str(exc))
         raise
 

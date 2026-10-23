@@ -29,17 +29,20 @@ def _sensitive(name):
 
 def normalize_source_repair_request(request):
     enabled = request.get('source_repair', False)
+    automatic = request.get('source_repair_auto', False)
     if type(enabled) is not bool:
         raise ValueError('source_repair must be an explicit boolean')
+    if type(automatic) is not bool:
+        raise ValueError('source_repair_auto must be an explicit boolean')
     if not enabled:
-        return {**request, 'source_repair': False, 'source_repair_editable': []}
+        return {**request, 'source_repair': False, 'source_repair_auto': False, 'source_repair_editable': []}
     if (not request.get('pdf_path') or request.get('mock_mode') or request.get('code')
             or request.get('corpus_paper') or request.get('experiment_profile')):
         raise ValueError('源码修复需要普通真实 PDF 与隔离作者仓库，不能用于标题、Mock、外部代码或预设。')
     if request.get('strict_validation'):
         raise ValueError('源码修复与严格核验不能同时启用；修改后执行须单独记录，不能作为原始源码严格验收。')
-    values = request.get('source_repair_editable')
-    if not isinstance(values, list) or not 1 <= len(values) <= 32:
+    values = request.get('source_repair_editable', [] if automatic else None)
+    if not isinstance(values, list) or not (0 if automatic else 1) <= len(values) <= 32:
         raise ValueError('源码修复需要明确列出 1–32 个允许修改的现存 Python 文件。')
     selected, seen = [], set()
     for value in values:
@@ -52,7 +55,81 @@ def normalize_source_repair_request(request):
             raise ValueError('修复白名单包含重复文件：' + name)
         seen.add(name.casefold())
         selected.append(name)
-    return {**request, 'source_repair': True, 'source_repair_editable': selected}
+    return {**request, 'source_repair': True, 'source_repair_auto': automatic,
+            'source_repair_editable': selected}
+
+
+def _automatic_repair_sources(execution, workspace, snapshot, allowed=()):
+    """Select a small source scope from a terminal, real Python compatibility error.
+
+    A log mentioning an API is insufficient: the terminal traceback must name it,
+    and a traced, frozen Python file must actually use that attribute/keyword.
+    The selected files remain subject to the existing full AST proposal validator.
+    """
+    from src.author_self_repair import failure_diagnostic, traceback_sources
+    diagnostic = failure_diagnostic(execution).replace('\r\n', '\n')
+    traces = list(re.finditer(r'(?m)^Traceback \(most recent call last\):$', diagnostic))
+    result = {'mode': 'terminal_traceback', 'max_files': 3, 'selected': [],
+              'missing_names': [], 'traceback_frames': [], 'rejected': []}
+    if not traces:
+        result['reason'] = '实际输出没有完整 Python traceback，不能自动圈定兼容修复范围。'
+        return result
+    trace = diagnostic[traces[-1].start():]
+    exceptions = list(re.finditer(r'(?m)^(?:\w+\.)*\w*(?:Error|Exception|Interrupt|Exit):[^\n]*', trace))
+    terminal = exceptions[-1].group() if exceptions else ''
+    if not exceptions or trace[exceptions[-1].end():].strip():
+        result['reason'] = 'traceback 后仍有其他输出，不能确认所引兼容错误是最终失败。'
+        return result
+    attribute = re.fullmatch(r"AttributeError: .+ has no attribute ['\"]([A-Za-z_]\w*)['\"](?:[. ].*)?", terminal)
+    keyword = re.fullmatch(r"TypeError: .+ got an unexpected keyword argument ['\"]([A-Za-z_]\w*)['\"](?:[. ].*)?", terminal)
+    matched = attribute or keyword
+    if matched is None or _sensitive(matched[1]):
+        result['reason'] = '最终报错不是可自动修复的非协议敏感属性或关键字兼容错误。'
+        return result
+    symbol = matched[1]
+    result.update(missing_names=[symbol], exception=terminal,
+                  compatibility_kind='attribute' if attribute else 'keyword')
+    inventory = snapshot.get('files') or {}
+    frames = traceback_sources(trace, workspace, inventory)
+    result['traceback_frames'] = [{'path': name, 'line': line} for name, line in frames]
+    seen = set()
+    allowed = set(allowed)
+    for name, line in reversed(frames):
+        if name in seen:
+            continue
+        seen.add(name)
+        reason = ''
+        if Path(name).suffix.lower() != '.py':
+            reason = 'not_python_source'
+        elif allowed and name not in allowed:
+            reason = 'outside_explicit_scope'
+        elif not PatchPolicy(editable=[name]).decide(name, workspace=str(workspace)).allowed:
+            reason = 'protected_or_oversized_source'
+        else:
+            try:
+                path = workspace_path(workspace, name, 'automatic compatibility source',
+                                      must_exist=True, forbid_git=True)
+                raw = path.read_bytes()
+                if hashlib.sha256(raw).hexdigest() != inventory[name]:
+                    reason = 'source_hash_changed'
+                else:
+                    tree = ast.parse(raw)
+                    present = any((isinstance(node, ast.Attribute) and node.attr == symbol)
+                                  if attribute else (isinstance(node, ast.keyword) and node.arg == symbol)
+                                  for node in ast.walk(tree))
+                    if not present:
+                        reason = 'missing_api_not_in_source'
+            except (OSError, ValueError, SyntaxError):
+                reason = 'source_unreadable_or_invalid'
+        if reason:
+            result['rejected'].append({'path': name, 'line': line, 'reason': reason})
+        elif len(result['selected']) < 3:
+            result['selected'].append(name)
+        else:
+            result['rejected'].append({'path': name, 'line': line, 'reason': 'file_budget'})
+    result['reason'] = ('已从最终 traceback 与固定源码派生兼容补丁范围。' if result['selected'] else
+                        '最终 traceback 中没有同时满足固定哈希、兼容 API 与补丁策略的可修改源码。')
+    return result
 
 
 def validate_repair_sources(request, workspace, snapshot):
@@ -201,6 +278,15 @@ def _repair_author_failure(runner, llm, request, plan, snapshot, workspace, run_
         state.update(status='not_applicable', reason='原失败运行的动态数据尚无完整冻结凭据，不能在副本重新下载后当作相同输入修复。')
         return execution
     verify_inputs()
+    if request.get('source_repair_auto'):
+        selection = _automatic_repair_sources(execution, workspace, snapshot,
+                                               request.get('source_repair_editable') or [])
+        state.update(auto=True, auto_selection=selection, editable=selection['selected'])
+        if not selection['selected']:
+            state.update(status='not_applicable', reason=selection['reason'])
+            return execution
+        request = {**request, 'source_repair_editable': selection['selected']}
+        validate_repair_sources(request, workspace, snapshot)
     target = run_dir / 'repair_workspace'
     initial_files = dict(snapshot['files'])
     frozen_data = _frozen_data(data['dataset_provenance'])
@@ -248,8 +334,9 @@ def _repair_author_failure(runner, llm, request, plan, snapshot, workspace, run_
     observed_diagnostics = []
 
     def validate_patches(_root, files, failure):
+        from src.author_self_repair import failure_diagnostic
         verify_inputs()
-        observed_diagnostics.append(str((failure.get('final') or {}).get('stderr') or failure.get('reason') or ''))
+        observed_diagnostics.append(failure_diagnostic(failure))
         # Every failed round restores the original tree. A later candidate
         # therefore needs the earlier observed compatibility fix as well.
         validate_compatibility_proposal(workspace, files, '\n'.join(observed_diagnostics))

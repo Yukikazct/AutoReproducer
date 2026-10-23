@@ -129,6 +129,46 @@ def _metric_value_text(node, suffix=''):
     return value + deviation + suffix
 
 
+def _outcome_diagnosis_lines(data):
+    diagnosis = data.get('outcome_diagnosis')
+    if not isinstance(diagnosis, dict) or not diagnosis:
+        return []
+    from src.author_claim_comparison import _redact_evidence
+    diagnosis = _redact_evidence(diagnosis, '')
+    lines = ['', '### 数值结果与证据自动诊断', '',
+             '- **诊断状态**: ' + {'evidence_limited': '比较证据仍有限',
+                                    'unavailable': '暂不可用'}.get(diagnosis.get('status'), '已生成诊断'),
+             '- **说明**: ' + _markdown_text(_txt(diagnosis.get('reason'))),
+             '- 本诊断核查已有结果与冻结设置；未修改实验参数、源码、参考值或重新训练。']
+    known = {item.get('id'): item for item in diagnosis.get('evidence', []) if isinstance(item, dict)}
+
+    def references(item):
+        return '；依据：' + ', '.join(_markdown_text(ref) for ref in item.get('evidence_ids', []) if ref in known)
+
+    for key, label in (('facts', '已观察事实与缺失证据'), ('hypotheses', '待核实假设')):
+        rows = diagnosis.get(key) or []
+        if rows:
+            lines += ['', '**' + label + '**', '']
+            for item in rows:
+                lines.append('- ' + _markdown_text(_txt(item.get('message'))) + references(item))
+    if diagnosis.get('next_steps'):
+        lines += ['', '**下一步具体核查**', '']
+        for item in diagnosis['next_steps']:
+            lines.append('- ' + _markdown_text(_txt(item.get('check'))) + references(item))
+    model = diagnosis.get('model_analysis') or {}
+    if model.get('status') != 'completed':
+        lines += ['', '- **模型补充分析**: ' + _markdown_text(_txt(model.get('reason'), '未运行'))]
+    if known:
+        lines += ['', '**诊断证据索引**', '']
+        for identifier, item in known.items():
+            lines.append('- ' + _markdown_text(_txt(identifier)) + '：' + _markdown_text(_txt(item.get('source'))))
+    if diagnosis.get('path'):
+        lines.append('- **结构化诊断记录**: ' + _markdown_text(_txt(diagnosis['path'])))
+    if diagnosis.get('storage_error'):
+        lines.append('- **诊断文件保存失败**: ' + _markdown_text(_txt(diagnosis['storage_error'])))
+    return lines
+
+
 def _comparison_column_lines(reference):
     """Display recorded column evidence without deriving a path from prose."""
     evidence = reference.get('column_evidence')
@@ -1182,6 +1222,7 @@ class ReportGeneratorAgent(BaseAgent):
                     lines.append(f"| {name} | {pv} | {av} |")
         lines += _runtime_dataset_lines(validation.get('runtime_dataset_evidence'))
         lines += _author_claim_comparison_lines(validation.get('author_claim_comparison'))
+        lines += _outcome_diagnosis_lines(data)
         records = validation.get("metric_records") or []
         if records:
             lines += ["", "### 实际指标证据", "| 指标 | 实测值 | 单位 | 数据划分 | 阶段 | 来源 |",

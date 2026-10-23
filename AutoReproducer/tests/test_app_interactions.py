@@ -345,7 +345,8 @@ def test_running_task_rejects_reset_even_for_a_stale_button_event(app, tmp_path,
     assert next(b for b in app.sidebar.button if "开始复现" in b.label).disabled
     reset = next(b for b in app.sidebar.button if "重置" in b.label)
     assert reset.disabled
-    assert any("任务结束后可重置" in caption.value for caption in app.sidebar.caption)
+    assert not app.sidebar.button(key="stop_pipeline").disabled
+    assert any("清理完成后可重置" in caption.value for caption in app.sidebar.caption)
     # Inject an already-delivered event; recent AppTest versions block disabled clicks.
     import streamlit as st
     original_button = st.button
@@ -361,6 +362,121 @@ def test_running_task_rejects_reset_even_for_a_stale_button_event(app, tmp_path,
     assert app.session_state["progress_file"] == str(progress)
     assert app.session_state["current_state"] == "EXECUTE_CODE"
     start.assert_not_called()
+
+
+def test_stop_download_remains_pending_until_cleanup_then_reset_preserves_log(app, tmp_path):
+    from frontend.task_control import register_task
+    progress = tmp_path / "cancel-download.jsonl"
+    control = register_task(progress)
+    store = pipeline.ProgressStore(str(progress))
+    store.emit({"type": "dependency_install_progress", "installation_id": "silent-pip",
+                "status": "running", "phase": "download", "message": "preserve installer output"})
+    try:
+        app.session_state["progress_file"] = str(progress)
+        app.run()
+        app.sidebar.button(key="stop_pipeline").click().run()
+        assert not app.exception
+        assert control.cancelled()
+        assert app.sidebar.button(key="stop_pipeline").disabled
+        assert next(b for b in app.sidebar.button if b.label == "重置").disabled
+        app.run()  # A browser refresh must retain cancellation and reset protection.
+        assert app.sidebar.button(key="stop_pipeline").disabled
+        store.emit({"type": "error", "error": "用户已停止本任务"})
+        app.run()
+        assert next(b for b in app.sidebar.button if b.label == "重置").disabled
+    finally:
+        control.finish()
+    app.run()
+    reset = next(b for b in app.sidebar.button if b.label == "重置")
+    assert not reset.disabled
+    reset.click().run()
+    assert not app.exception
+    assert app.session_state["progress_file"] is None
+    assert "preserve installer output" in progress.read_text(encoding="utf-8")
+
+
+def test_progress_timer_fragment_can_run_again_after_stage_summary(app, tmp_path, monkeypatch):
+    import inspect
+    from dataclasses import replace
+    from streamlit.testing.v1.local_script_runner import LocalScriptRunner
+    from frontend.task_control import register_task
+    progress = tmp_path / "fragment-download.jsonl"
+    control = register_task(progress)
+    store = pipeline.ProgressStore(str(progress))
+    store.emit({"type": "pipeline_plan", "stages": [{"id": "install", "title": "安装依赖", "agent": "EnvBuilder"}]})
+    store.emit({"type": "state", "phase_id": "install", "state": "BUILD_ENV", "status": "running"})
+    try:
+        app.session_state["progress_file"] = str(progress)
+        app.run()
+        assert not app.exception
+        fragment_ids = [identifier for identifier, fragment in app._fragment_storage._fragments.items()
+                        if getattr(inspect.getclosurevars(fragment).nonlocals.get("non_optional_func"),
+                                   "__name__", "") == "poll_live_progress"]
+        assert len(fragment_ids) == 1
+        original = LocalScriptRunner.request_rerun
+
+        def timer_tick(runner, data):
+            return original(runner, replace(data, fragment_id_queue=fragment_ids,
+                                             is_auto_rerun=True))
+
+        monkeypatch.setattr(LocalScriptRunner, "request_rerun", timer_tick)
+        # Execute the actual stored fragment closure twice, without rerunning
+        # the app imports that would otherwise hide overwritten global names.
+        for _ in range(2):
+            app.run()
+            assert not app.exception
+            assert any("监控每 2 秒" in item.value for item in app.caption)
+    finally:
+        control.finish()
+
+
+@pytest.mark.parametrize("existing_monitor", [False, True])
+def test_start_rejected_by_cleanup_gate_restores_monitor_state(app, tmp_path, monkeypatch, existing_monitor):
+    from frontend import task_control
+    monkeypatch.setattr(task_control, "_blocked_roots", {})
+    blocked = task_control.register_task(tmp_path / "blocked.jsonl")
+    blocked.finish(cleanup_failed=True)
+    app.sidebar.toggle[0].set_value(True).run()
+    app.sidebar.text_input(key="paper_title_input").set_value("gate fixture").run()
+    if existing_monitor:
+        previous = tmp_path / "previous.jsonl"
+        pipeline.ProgressStore(str(previous)).emit({"type": "done", "result": {
+            "state": "COMPLETED", "data": {"preserved": True}}})
+        app.session_state["progress_file"] = str(previous)
+        app.run()
+    keys = ("progress_file", "running", "result", "logs", "agent_status", "pipeline_stages", "current_state", "pipeline_note")
+    before = {key: app.session_state[key] for key in keys}
+    next(button for button in app.sidebar.button if "开始复现" in button.label).click().run()
+    assert not app.exception
+    assert any("任务未启动" in item.value and "恢复原任务" in item.value for item in app.sidebar.error)
+    assert {key: app.session_state[key] for key in keys} == before
+    assert app.session_state["running"] is False
+
+
+def test_background_start_failure_cleans_new_uploaded_pdf(app, monkeypatch):
+    from types import SimpleNamespace
+    import streamlit as st
+    saved = []
+    app.sidebar.toggle[0].set_value(True).run()
+    upload = SimpleNamespace(name="fixture.pdf", size=27, getvalue=lambda: b"%PDF-1.4 cancellation fixture")
+    def uploaded(*args, **kwargs):
+        st.session_state[kwargs["key"]] = upload
+        return upload
+    monkeypatch.setattr(st, "file_uploader", uploaded)
+    app.sidebar.radio(key="input_mode").set_value("上传PDF").run()
+
+    def fail(path, **request):
+        saved.append(Path(request["pdf_path"]))
+        assert saved[-1].is_file()
+        raise RuntimeError("background thread could not start")
+
+    monkeypatch.setattr(pipeline, "run_pipeline_background", fail)
+    next(button for button in app.sidebar.button if "开始复现" in button.label).click().run()
+    assert not app.exception
+    assert len(saved) == 1 and not saved[0].exists()
+    assert app.session_state["running"] is False
+    assert app.session_state["progress_file"] is None
+    assert any("background thread could not start" in item.value for item in app.sidebar.error)
 
 
 @pytest.mark.parametrize("terminal", ["COMPLETED", "ERROR"])

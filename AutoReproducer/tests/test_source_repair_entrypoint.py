@@ -41,6 +41,25 @@ def test_backend_default_does_not_grant_source_repair_permission(monkeypatch, tm
     assert request['source_repair_editable'] == []
 
 
+@pytest.mark.parametrize('extra', [{}, {'source_repair_editable': []}])
+def test_backend_forwards_automatic_failure_selection_to_worker(monkeypatch, tmp_path, extra):
+    pdf = write_pdf(tmp_path / 'paper.pdf', [GENERIC_TITLE, 'Abstract'])
+    monkeypatch.setattr(runtime, 'runtime_requirement', lambda: 'fixture worker')
+    handoff = Mock(return_value={'state': 'COMPLETED', 'data': {}})
+    monkeypatch.setattr(backend, '_run_prepared_pipeline', handoff)
+    backend.run_pipeline_core(str(tmp_path / 'progress.jsonl'), pdf_path=str(pdf),
+                              source_repair=True, source_repair_auto=True,
+                              **extra)
+    request = handoff.call_args.args[1]
+    assert request['source_repair_auto'] is True
+    service = SimpleNamespace(run=Mock(return_value={'state': 'COMPLETED', 'data': {}}))
+    monkeypatch.setattr(backend, '_create_orchestrator', lambda **kwargs: service)
+    request['_managed_runtime'] = True
+    backend.run_pipeline_core(**request)
+    assert service.run.call_args.args[0]['source_repair_auto'] is True
+    assert service.run.call_args.args[0]['source_repair_editable'] == []
+
+
 def test_backend_rejects_conflicting_modes_before_orchestration(monkeypatch, tmp_path):
     pdf = write_pdf(tmp_path / 'paper.pdf', [GENERIC_TITLE, 'Abstract'])
     create = Mock(side_effect=AssertionError('invalid modes must not start'))
@@ -95,7 +114,7 @@ def test_cached_backend_without_source_repair_gets_private_upgrade(monkeypatch):
     old.run_pipeline_background = Mock()
     monkeypatch.setitem(sys.modules, 'frontend.backend_pipeline', old)
     upgraded = loader.load_backend_pipeline()
-    assert upgraded is not old and upgraded.BACKEND_API_VERSION == 9
+    assert upgraded is not old and upgraded.BACKEND_API_VERSION == loader.BACKEND_API_VERSION
     assert sys.modules['frontend.backend_pipeline'] is old
     old.run_pipeline_background.assert_not_called()
 
@@ -105,25 +124,25 @@ def _start(app):
     assert not app.exception
 
 
-def test_pdf_source_repair_default_requires_explicit_opt_in(strict_app):
+def test_pdf_source_repair_defaults_to_bounded_automatic_selection(strict_app):
     make, capture = strict_app
     app = make()
-    assert app.sidebar.checkbox(key='pdf_source_repair').value is False
+    assert app.sidebar.checkbox(key='pdf_source_repair').value is True
     _start(app)
     request = capture.call_args.kwargs
-    assert request['source_repair'] is False
+    assert request['source_repair'] is True
+    assert request['source_repair_auto'] is True
     assert request['source_repair_editable'] == []
 
 
-def test_pdf_source_repair_requires_nonempty_editable_list(strict_app):
+def test_pdf_source_repair_blank_list_uses_failure_traceback(strict_app):
     make, capture = strict_app
     app = make()
     app.sidebar.checkbox(key='pdf_source_repair').check().run()
     app.sidebar.text_area(key='pdf_source_repair_editable').set_value('  \n\n').run()
     _start(app)
-    capture.assert_not_called()
-    assert app.session_state['running'] is False
-    assert any('至少填写一个' in row.value for row in app.sidebar.error)
+    assert capture.call_args.kwargs['source_repair_auto'] is True
+    assert capture.call_args.kwargs['source_repair_editable'] == []
 
 
 def test_pdf_source_repair_sends_only_explicit_file_paths(strict_app):
@@ -136,6 +155,7 @@ def test_pdf_source_repair_sends_only_explicit_file_paths(strict_app):
     request = capture.call_args.kwargs
     assert request['source_repair'] is True
     assert request['source_repair_editable'] == ['src/model.py', 'train.py']
+    assert request['source_repair_auto'] is False
     assert request['strict_validation'] is False
     assert request['author_execution_only'] is True
     assert request['experiment_profile'] is None
@@ -163,6 +183,7 @@ def test_pdf_execution_modes_are_mutually_exclusive(strict_app, last_selected):
 def test_disabled_pdf_repair_does_not_reuse_old_editable_paths(strict_app):
     make, capture = strict_app
     app = make()
+    app.sidebar.checkbox(key='pdf_source_repair').uncheck().run()
     app.session_state['pdf_source_repair_editable'] = 'old.py'
     app.run()
     _start(app)

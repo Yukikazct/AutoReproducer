@@ -499,9 +499,11 @@ def test_owned_process_does_not_confirm_cleanup_after_native_job_close_fails(mon
     monkeypatch.setattr(runtime.subprocess, "Popen", Mock(return_value=process))
     cleaned = Mock()
 
-    with pytest.raises(OSError) as raised:
+    with pytest.raises(runtime.ProcessCleanupError) as raised:
         runtime.run_owned_process(["owned-test-process"], on_cleanup=cleaned)
-    assert raised.value is failure
+    assert raised.value.__cause__ is failure
+    assert raised.value.process_cleanup_confirmed is False
+    assert raised.value.cleanup_receipt["status"] == "error"
     assert job.handle == 123
     job.api.CloseHandle.assert_called_once_with(123)
     cleaned.assert_not_called()

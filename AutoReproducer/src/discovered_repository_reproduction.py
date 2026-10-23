@@ -34,6 +34,37 @@ _REF = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_./-]{0,200}")
 _SHA = re.compile(r"[0-9a-f]{40}")
 
 
+def _diagnose_outcome(llm, plan, packet, workspace, execution, validation, run_dir, data, emit):
+    """Auxiliary analysis must not turn completed author work into failure."""
+    from src.result_diagnosis import diagnose_experiment_result
+    try:
+        repaired = data.get('source_repair') or {}
+        if repaired.get('status') == 'succeeded':
+            # Numerical output belongs to the approved repair copy. Do not
+            # explain it using the original, now different source snapshot.
+            workspace = Path(repaired['workspace'])
+            inventory = packet.get('file_inventory') or {}
+            packet = {**packet, 'file_inventory': {
+                name: {**inventory.get(name, {}), 'sha256': sha}
+                for name, sha in repaired['effective_source_files'].items()}}
+        return diagnose_experiment_result(llm, plan, packet, workspace, execution,
+                                          validation, run_dir, data, emit)
+    except Exception as exc:
+        # Keep raw exception text out of the artifact: a provider may include
+        # credentials or submitted source in its error message.
+        data['outcome_diagnosis'] = {
+            'version': 1, 'status': 'unavailable',
+            'reason': '辅助结果诊断暂不可用；已完成的作者执行与核验结论保留。',
+            'error_type': type(exc).__name__,
+            'actions': {'mutated': False, 'retrained': False},
+        }
+        try:
+            write_json(run_dir / 'outcome_diagnosis.json', data['outcome_diagnosis'])
+        except OSError:
+            pass
+        return data['outcome_diagnosis']
+
+
 @contextmanager
 def _frozen_input_validation():
     """A changed frozen input must never become an environment fallback."""
@@ -366,6 +397,7 @@ class DiscoveredRepositoryReproduction:
         data['strict_validation'] = {'requested': strict_requested,
             'status': 'pending' if strict_requested else 'not_requested'}
         data['source_repair'] = {'requested': request['source_repair'],
+            'auto': request.get('source_repair_auto', False),
             'editable': request['source_repair_editable'], 'max_rounds': 2,
             'status': 'pending' if request['source_repair'] else 'not_requested'}
         for key in ('reading_coverage', 'reading_batches', 'reading_originals'):
@@ -1141,6 +1173,8 @@ class DiscoveredRepositoryReproduction:
                 write_json(run_dir / 'execution.json', execution)
                 event(phase, 'success', validation['reason'])
                 event('compare_author_claims', 'success', '已使用独立复算结果对比冻结的论文参考值')
+                _diagnose_outcome(self.llm, plan, packet, workspace, execution,
+                                  validation, run_dir, data, emit)
                 return
             from src.author_execution_plan import verify_author_execution
             repaired = data['source_repair']['status'] == 'succeeded'
@@ -1232,6 +1266,8 @@ class DiscoveredRepositoryReproduction:
                     comparison['persistence_error'] = str(exc)
                     validation.setdefault('warnings', []).append(f'论文指标对比记录保存失败（{name}）：{exc}')
             event(phase, 'success' if comparison['comparisons'] else 'skipped', comparison['reason'])
+            _diagnose_outcome(self.llm, plan, packet, workspace, execution,
+                              validation, run_dir, data, emit)
         except BaseException as exc:
             if data.get('strict_validation', {}).get('status') == 'eligible':
                 data['strict_validation'].update(status='failed', failure_phase=phase,
