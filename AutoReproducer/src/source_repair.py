@@ -278,10 +278,13 @@ def _repair_author_failure(runner, llm, request, plan, snapshot, workspace, run_
         state.update(status='not_applicable', reason='原失败运行的动态数据尚无完整冻结凭据，不能在副本重新下载后当作相同输入修复。')
         return execution
     verify_inputs()
-    if request.get('source_repair_auto'):
+    automatic = request.get('source_repair_auto')
+    explicit_scope = request.get('source_repair_editable') or []
+    if automatic:
         selection = _automatic_repair_sources(execution, workspace, snapshot,
-                                               request.get('source_repair_editable') or [])
+                                               explicit_scope)
         state.update(auto=True, auto_selection=selection, editable=selection['selected'])
+        state['auto_selections'] = [deepcopy(selection)]
         if not selection['selected']:
             state.update(status='not_applicable', reason=selection['reason'])
             return execution
@@ -332,6 +335,37 @@ def _repair_author_failure(runner, llm, request, plan, snapshot, workspace, run_
     write_json(run_dir / 'source_repair_execution_plan.json', repaired_plan)
     current_files = dict(initial_files)
     observed_diagnostics = []
+    selection_calls = 0
+
+    def select_sources(root, failure):
+        nonlocal selection_calls
+        selection_calls += 1
+        if selection_calls == 1 or failure == execution:
+            # A rejected proposal has not executed a new candidate. Its real
+            # traceback still points at the original workspace, whose approved
+            # scope remains valid for the next proposal.
+            return list(state['editable'])
+        verify_inputs()
+        # The prior transaction has restored the frozen tree. The new real
+        # traceback refers to this copy, so validate its files against original
+        # source hashes before extending the bounded, cumulative repair scope.
+        selected = _automatic_repair_sources(failure, root, snapshot, explicit_scope)
+        cumulative = list(state['editable'])
+        accepted = []
+        for name in selected['selected']:
+            if name not in cumulative and len(cumulative) >= 3:
+                selected['rejected'].append({'path': name, 'reason': 'session_file_budget'})
+                continue
+            if name not in cumulative:
+                cumulative.append(name)
+            accepted.append(name)
+        selected['selected'] = accepted
+        state['auto_selections'].append(selected)
+        state['editable'] = cumulative
+        write_json(run_dir / 'source_repair.json', state)
+        # Unsupported or out-of-scope new failures do not consume another
+        # model call just to reapply a fix already proven insufficient.
+        return cumulative if accepted else []
 
     def validate_patches(_root, files, failure):
         from src.author_self_repair import failure_diagnostic
@@ -353,8 +387,17 @@ def _repair_author_failure(runner, llm, request, plan, snapshot, workspace, run_
     try:
         on_event({'type': 'log', 'log': {'agent': 'CodeExecutor', 'action': 'source_repair',
             'status': 'RUNNING', 'detail': '正在独立副本中尝试最多两轮兼容性源码修复；完整原命令将重跑。'}})
+        # The policy is an outer source ceiling. In automatic mode the callback
+        # exposes only files justified by actual tracebacks, at most three in
+        # the entire session; unselected files never reach the model context.
+        editable = request['source_repair_editable']
+        if automatic:
+            editable = explicit_scope or [name for name in snapshot['files']
+                if Path(name).suffix.lower() == '.py' and PatchPolicy(editable=[name]).decide(
+                    name, workspace=str(target)).allowed]
+        options = {'select_sources': select_sources} if automatic else {}
         result = runner.run_with_repairs(target, repaired_plan, environment, llm=llm,
-            editable=request['source_repair_editable'], max_rounds=2,
+            editable=editable, max_rounds=2, **options,
             initial_execution=execution, verify_candidate=verify_candidate,
             validate_patches=validate_patches, on_event=on_event)
         state.update(status=result.get('repair_status', 'not_applicable'),

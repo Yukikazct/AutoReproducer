@@ -38,6 +38,10 @@ def safe_handoff(monkeypatch, tmp_path):
 
     def worker(command, **kwargs):
         request = json.loads(kwargs["input"])
+        # Background tasks now parse inside the owned worker. Emulate that
+        # boundary instead of assuming the host has already parsed the upload.
+        if request.get('pdf_path'):
+            request = pdf_input.resolve_pdf_request(request)
         requests.append(request)
         assert command[0] == prepared.executable
         assert "LLM_API_KEY" not in kwargs["env"]
@@ -290,7 +294,7 @@ def test_actual_upload_start_verifies_bytes_and_ignores_stale_preset_controls(mo
         assert not Path(request["pdf_path"]).exists(), "Background owner must clean its upload copy"
         host_factory.assert_not_called()
         prepare.assert_called_once()
-        requirement.assert_called_once()
+        requirement.assert_not_called()
         app.run()
         assert not app.exception
         assert app.session_state["running"] is False

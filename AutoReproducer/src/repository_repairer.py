@@ -36,6 +36,11 @@ data loading, splits, evaluation logic, metrics, target values or run counts.
 Do not add commands, dependencies, files, downloads or credential handling.
 The original complete command plan will be rerun unchanged. If this failure
 cannot be repaired under these constraints, return {"reason":"...","patches":[]}.
+Every failed candidate is fully rolled back before the next round. The supplied
+sources are the original baseline, not the previous candidate. Each proposal
+must be a complete patch set: reapply earlier required fixes as well as the fix
+for the latest failure. Use initial_diagnostic and previous_attempts to retain
+those fixes even when a newer failure no longer mentions the earlier API.
 """
 
 
@@ -94,7 +99,7 @@ class RepositoryRepairer:
             raise ValueError("repository repairs allow at most two rounds")
         self.runner, self.llm, self.policy, self.max_rounds = runner, llm, policy, max_rounds
 
-    def _context(self, root, execution, steps, previous):
+    def _context(self, root, execution, steps, previous, selected_sources=None, initial_execution=None):
         error = failure_diagnostic(execution)
         traceback_paths = re.findall(r'File "([^"]+)"', error)
         preferred = set()
@@ -110,6 +115,8 @@ class RepositoryRepairer:
                                          path.relative_to(root).as_posix()))
         for path in files:
             relative = path.relative_to(root).as_posix()
+            if selected_sources is not None and relative not in selected_sources:
+                continue
             if (path.suffix.lower() != ".py" or not self.policy.decide(relative, workspace=str(root)).allowed
                     or path.stat().st_size > self.policy.max_patchable_file_bytes):
                 continue
@@ -127,11 +134,15 @@ class RepositoryRepairer:
             remaining -= len(raw)
         if not sources:
             raise ValueError("no editable UTF-8 source fits the repair context budget")
-        return _private({"diagnostic": error, "steps": steps, "sources": sources,
+        return _private({"diagnostic": error,
+                         "initial_diagnostic": failure_diagnostic(initial_execution or execution),
+                         "candidate_workspace_state": "original_baseline_after_rollback",
+                         "steps": steps, "sources": sources,
                          "available_source_paths": available[:200], "previous_attempts": previous})
 
     def run(self, workspace, steps, env_config, *, on_event=None,
-            initial_execution=None, verify_candidate=None, validate_patches=None):
+            initial_execution=None, verify_candidate=None, validate_patches=None,
+            select_sources=None):
         root = workspace_path(workspace, ".", "repair workspace", must_exist=True)
         if (root / ".git").exists():
             raise ValueError("source repair requires an exported isolated workspace, not a Git checkout")
@@ -142,6 +153,8 @@ class RepositoryRepairer:
             raise ValueError("verify_candidate must be callable")
         if validate_patches is not None and not callable(validate_patches):
             raise ValueError("validate_patches must be callable")
+        if select_sources is not None and not callable(select_sources):
+            raise ValueError("select_sources must be callable")
         if initial_execution is None:
             execution = self.runner.run(root, steps, deepcopy(environment), on_event=on_event)
         else:
@@ -189,7 +202,19 @@ class RepositoryRepairer:
                 baseline = None
                 try:
                     _check_workspace_budget(root)
-                    context = self._context(root, execution, steps, attempts[:-1])
+                    selected = None
+                    if select_sources is not None:
+                        selected = select_sources(root, deepcopy(execution))
+                        if (not isinstance(selected, list) or len(selected) > 3
+                                or any(not isinstance(name, str) or not self.policy.decide(
+                                    name, workspace=str(root)).allowed for name in selected)):
+                            raise ValueError("selected repair sources exceed the approved source scope")
+                        attempt['selected_sources'] = selected
+                        if not selected:
+                            attempt['status'] = 'not_applicable'
+                            attempt['reason'] = 'No supported compatibility source in the latest real failure.'
+                            break
+                    context = self._context(root, execution, steps, attempts[:-1], selected, initial)
                     llm_calls += 1
                     response = self.llm.chat(json.dumps(context, ensure_ascii=False),
                         system_prompt=_SYSTEM, temperature=0, task="repository_repair")

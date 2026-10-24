@@ -24,6 +24,13 @@ class ComparisonLLM(PlannedLLM):
         self.outcome = outcome
 
     def chat(self, prompt, **kwargs):
+        if kwargs['task'] == 'result_diagnosis':
+            self.calls.append((prompt, kwargs))
+            evidence = json.loads(prompt)['evidence']
+            reference = next(item['id'] for item in evidence if item['kind'] == 'comparison')
+            return json.dumps({'hypotheses': [{'category': 'metric',
+                'message': '现有输出与参考存在差异，尚需核对指标对应关系。',
+                'evidence_ids': [reference]}]})
         if kwargs['task'] != 'author_claim_comparison':
             return super().chat(prompt, **kwargs)
         self.calls.append((prompt, kwargs))
@@ -129,7 +136,14 @@ def test_completed_pipeline_compares_real_records_and_persists_report_evidence(t
     stage = next(stage for stage in progress['pipeline_stages'] if stage['id'] == 'compare_author_claims')
     assert stage['status'] == 'success' and stage['completion_confirmed'] is True
     assert progress['done'] is True and progress['running'] is False
-    assert result['data']['total_llm_calls'] == 2
+    assert [options['task'] for _, options in runner.llm.calls] == [
+        'author_execution_plan', 'author_claim_comparison', 'result_diagnosis']
+    assert result['data']['total_llm_calls'] == len(runner.llm.calls) == 3
+    diagnosis = result['data']['outcome_diagnosis']
+    assert diagnosis['model_analysis']['status'] == 'completed'
+    assert diagnosis['actions'] == {'mutated': False, 'retrained': False}
+    assert read_json(run_dir / 'outcome_diagnosis.json') == diagnosis
+    assert diagnosis['hypotheses'][0]['evidence_ids'] == ['comparison_1']
 
 
 @pytest.mark.parametrize('observed', [True, False])

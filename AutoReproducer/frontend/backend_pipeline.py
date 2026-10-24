@@ -35,7 +35,7 @@ from src.project_paths import get_data_root
 
 
 # Contract checked by the web loader before starting a new background thread.
-BACKEND_API_VERSION = 11
+BACKEND_API_VERSION = 12
 WORKER_CANCEL_GRACE_SECONDS = 5
 
 
@@ -244,6 +244,40 @@ def run_pipeline_core(progress_path: str,
         experiment_request = normalize_experiment_request(experiment_request)
     except ValueError as exc:
         return _reject_pdf_input(store, str(exc))
+
+    def handoff(reason):
+        request = {
+            "progress_path": str(Path(progress_path).resolve()),
+            "paper_title": paper_title, "pdf_path": pdf_path,
+            "preferred_repo_url": preferred_repo_url,
+            "experiment_request": experiment_request,
+            "corpus_paper": corpus_paper, "model_name": model_name,
+            "author_execution_only": author_execution_only,
+            "strict_validation": strict_validation,
+            "source_repair": source_repair,
+            "source_repair_auto": source_repair_auto,
+            "source_repair_editable": source_repair_editable,
+            "base_url": base_url, "api_key": api_key, "mock_mode": mock_mode,
+            "max_trials": max_trials, "use_docker": use_docker,
+            "workspace_dir": workspace_dir, "experiment_profile": experiment_profile,
+            "use_llm_review": use_llm_review,
+            "allow_result_summary_review": allow_result_summary_review,
+            "enable_optimization": enable_optimization,
+            "prepare_environment": prepare_environment, "optimization_mode": optimization_mode,
+            "max_candidates": max_candidates, "budget_seconds": budget_seconds,
+            "prepare_only": prepare_only, "offline": offline,
+            "title_resolution": title_resolution,
+            "pdf_resolution": pdf_resolution,
+        }
+        return _run_prepared_pipeline(store, request, reason)
+
+    if not mock_mode and not use_docker and not _managed_runtime:
+        from frontend.task_control import current_task
+        if current_task() is not None:
+            # Parsing can hang inside a native PDF library. Start the owned
+            # worker before parsing or title routing so Stop also covers those
+            # stages and a refresh retains the same cancellation ownership.
+            return handoff("正在核验可中断的独立后台运行环境")
     from src.title_routing import resolve_title_request
     resolved = {"paper_title": paper_title, "pdf_path": pdf_path,
                 "preferred_repo_url": preferred_repo_url,
@@ -286,35 +320,9 @@ def run_pipeline_core(progress_path: str,
         store.emit({"type": "pdf_resolution", **pdf_resolution})
     if not mock_mode and not use_docker and not _managed_runtime:
         from src.runtime_preparation import runtime_requirement
-        from frontend.task_control import current_task
         reason = pdf_parser_reason or runtime_requirement()
-        if not reason and current_task() is not None:
-            reason = "正在核验可中断的独立后台运行环境"
         if reason:
-            request = {
-                "progress_path": str(Path(progress_path).resolve()),
-                "paper_title": paper_title, "pdf_path": pdf_path,
-                "preferred_repo_url": preferred_repo_url,
-                "experiment_request": experiment_request,
-                "corpus_paper": corpus_paper, "model_name": model_name,
-                "author_execution_only": author_execution_only,
-                "strict_validation": strict_validation,
-                "source_repair": source_repair,
-                "source_repair_auto": source_repair_auto,
-                "source_repair_editable": source_repair_editable,
-                "base_url": base_url, "api_key": api_key, "mock_mode": mock_mode,
-                "max_trials": max_trials, "use_docker": use_docker,
-                "workspace_dir": workspace_dir, "experiment_profile": experiment_profile,
-                "use_llm_review": use_llm_review,
-                "allow_result_summary_review": allow_result_summary_review,
-                "enable_optimization": enable_optimization,
-                "prepare_environment": prepare_environment, "optimization_mode": optimization_mode,
-                "max_candidates": max_candidates, "budget_seconds": budget_seconds,
-                "prepare_only": prepare_only, "offline": offline,
-                "title_resolution": title_resolution,
-                "pdf_resolution": pdf_resolution,
-            }
-            return _run_prepared_pipeline(store, request, reason)
+            return handoff(reason)
 
     pipeline_logger = None
 
@@ -807,8 +815,8 @@ def run_pipeline_background(progress_path: str, *,
                 title_resolution=title_resolution, pdf_resolution=pdf_resolution)
             if control.cancelled():
                 raise KeyboardInterrupt("用户已停止本任务")
-            # Keep PDF/request validation before the handoff. The bound task
-            # forces real work into an owned process even on a healthy host.
+            # Normalize requests before the handoff; the owned worker performs
+            # PDF parsing and execution even on a healthy host.
             result = run_pipeline_core(**request)
             if on_done:
                 try:

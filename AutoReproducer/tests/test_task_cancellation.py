@@ -173,6 +173,57 @@ def test_cancel_while_worker_installer_is_silent_closes_job_before_done(tmp_path
     assert snapshot["result"]["data"]["environment_cleanup"]["status"] == "released"
 
 
+@pytest.mark.skipif(os.name != 'nt', reason='forced native parser cancellation uses Windows jobs')
+def test_hung_pdf_parser_runs_in_owned_worker_and_can_be_stopped(tmp_path, monkeypatch):
+    import src.pdf_input as pdf_input
+    progress, ready = tmp_path / 'parse.jsonl', tmp_path / 'pids.json'
+    source = tmp_path / 'paper.pdf'
+    source.write_bytes(b'%PDF-parser-fixture')
+    host_parser = Mock(side_effect=AssertionError('PDF parsing must be owned by the cancellable worker'))
+    monkeypatch.setattr(pdf_input, 'resolve_pdf_request', host_parser)
+    monkeypatch.setattr(runtime, 'prepare_runtime', Mock(return_value=runtime.RuntimePreparation(
+        sys.executable, True, False, 'fixture', 'fixture')))
+    script = tmp_path / 'hung_parser.py'
+    script.write_text(
+        "import ctypes,json,os,runpy,subprocess,sys\nfrom pathlib import Path\n"
+        "import src.pdf_input as pdf_input\n"
+        "def blocked(request):\n"
+        "    child=subprocess.Popen([sys.executable,'-I','-c','import time;time.sleep(60)'])\n"
+        f"    Path({str(ready)!r}).write_text(json.dumps([os.getpid(),child.pid]))\n"
+        "    ctypes.windll.kernel32.Sleep(60000)\n"
+        "    raise AssertionError('parser should have been stopped')\n"
+        "pdf_input.resolve_pdf_request=blocked\n"
+        "runpy.run_module('frontend.preset_worker',run_name='__main__')\n", encoding='utf-8')
+    original = runtime.run_owned_process
+    def execute(argv, **kwargs):
+        program = "import sys,runpy;sys.path.insert(0,sys.argv[1]);runpy.run_path(sys.argv[2],run_name='__main__')"
+        return original([sys.executable, '-c', program, str(Path(backend.__file__).parents[1]), str(script)], **kwargs)
+    monkeypatch.setattr(runtime, 'run_owned_process', execute)
+    cleanup = Mock(return_value={'status': 'released', 'errors': []})
+    monkeypatch.setattr(runtime, 'release_worker_environment', cleanup)
+    thread = backend.run_pipeline_background(str(progress), pdf_path=str(source), cleanup_pdf=False)
+    try:
+        wait_for(ready.is_file)
+        host_parser.assert_not_called()
+        assert task_control.request_cancel(progress)
+        thread.join(timeout=12)
+        assert not thread.is_alive()
+        for pid in json.loads(ready.read_text()):
+            assert_stopped(pid)
+        snapshot = backend.ProgressStore.read_snapshot(str(progress))
+        assert not snapshot['running']
+        assert snapshot['active_workers'] == snapshot['active_runs'] == []
+        assert snapshot['result']['data']['run_status'] == 'interrupted'
+        assert not task_control.task_status(progress)['active']
+        cleanup.assert_called_once()
+        # Once cleanup is confirmed a new task can use the same progress slot.
+        next_task = task_control.register_task(progress)
+        next_task.finish()
+    finally:
+        task_control.request_cancel(progress)
+        thread.join(timeout=12)
+
+
 def test_old_token_and_unknown_task_cannot_cancel_new_owner(tmp_path):
     path = tmp_path / "progress.jsonl"
     old = task_control.register_task(path)

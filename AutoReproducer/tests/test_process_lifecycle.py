@@ -56,6 +56,7 @@ def test_failed_native_job_close_retains_handle_until_successful_retry(monkeypat
     job = lifecycle.ProcessJob.__new__(lifecycle.ProcessJob)
     job.handle = 123
     job.api = SimpleNamespace(CloseHandle=Mock(side_effect=[0, 1]))
+    job._terminate_and_wait = Mock()
 
     with pytest.raises(OSError) as raised:
         job.close()
@@ -67,6 +68,40 @@ def test_failed_native_job_close_retains_handle_until_successful_retry(monkeypat
     assert job.handle is None
     job.close()
     assert job.api.CloseHandle.call_args_list == [((123,), {}), ((123,), {})]
+
+
+@pytest.mark.parametrize('failure', [None, 'terminate', 'query', 'timeout'])
+def test_job_close_confirms_all_descendants_before_releasing_handle(monkeypatch, failure):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    import src.process_lifecycle as lifecycle
+
+    active_counts = iter([2, 1, 0])
+    def query(handle, kind, pointer, size, returned):
+        pointer._obj.ActiveProcesses = next(active_counts)
+        return failure != 'query'
+    job = lifecycle.ProcessJob.__new__(lifecycle.ProcessJob)
+    job.handle = 123
+    job.api = SimpleNamespace(TerminateJobObject=Mock(return_value=failure != 'terminate'),
+                              QueryInformationJobObject=Mock(side_effect=query),
+                              CloseHandle=Mock(return_value=1))
+    job._process_ids = Mock(return_value=[])
+    monkeypatch.setattr(lifecycle.ctypes, 'get_last_error', lambda: 6, raising=False)
+    monkeypatch.setattr(lifecycle.ctypes, 'WinError', lambda code: OSError(code, 'native failure'), raising=False)
+    clock = iter([0, 6]) if failure == 'timeout' else iter([0, 1, 2])
+    monkeypatch.setattr(lifecycle.time, 'monotonic', lambda: next(clock))
+    monkeypatch.setattr(lifecycle.time, 'sleep', Mock())
+    if failure:
+        with pytest.raises(TimeoutError if failure == 'timeout' else OSError):
+            job.close()
+        assert job.handle == 123
+        job.api.CloseHandle.assert_not_called()
+    else:
+        job.close()
+        assert job.handle is None
+        assert job.api.QueryInformationJobObject.call_count == 3
+        assert lifecycle.time.sleep.call_count == 2
+        job.api.CloseHandle.assert_called_once_with(123)
 
 
 def wait_file(path,timeout=12):

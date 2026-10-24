@@ -58,7 +58,17 @@ def test_failed_command_keeps_error_state_and_generates_failure_report(pipeline,
     assert result['state'] == 'ERROR' and 'Actual author error' in result['error']
     pipeline.agents['reporter'].run.assert_called_once()
     assert result['data']['validation']['status'] == 'execution_failed'
-    assert result['data']['report'] == 'Actual command output'
+    report = result['data']['report']
+    original, marker, summary = report.partition('\n\n<!-- autoreproducer-run-finalization:start -->\n')
+    assert original == 'Actual command output'
+    assert marker and report.count('<!-- autoreproducer-run-finalization:start -->') == 1
+    assert report.count('<!-- autoreproducer-run-finalization:end -->') == 1
+    assert '**总任务状态**: 异常结束' in summary
+    assert '**环境释放**: 已释放' in summary
+    assert 'Actual author error' in summary
+    assert result['data']['run_finalization'] == {'state': result['state'], 'error': result['error']}
+    assert result['data']['environment_cleanup']['status'] == 'released'
+    assert result['data']['report_length'] == len(report)
     assert any(e.get('phase_id') == 'execute_code' and e.get('status') == 'error' for e in events)
 
 
