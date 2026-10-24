@@ -1,0 +1,24 @@
+{
+  "endpoint": "https://api.deepseek.com",
+  "model": "deepseek-chat",
+  "connectivity": true,
+  "connectivity_seconds": 1.14,
+  "repair_success": true,
+  "repair_status": "succeeded",
+  "repair_calls": 2,
+  "selections": [
+    [
+      "model.py"
+    ],
+    [
+      "adapter.py"
+    ]
+  ],
+  "output": "7\n7",
+  "original_sources_unchanged": true,
+  "command_unchanged": true,
+  "paper_metrics_verified": false,
+  "is_reproduced": null,
+  "test_kind": "synthetic_python_fixture_with_live_api",
+  "base_revision": "9f22a8b8fcbe625db3ab5e286b7fde146fb36ffd"
+}

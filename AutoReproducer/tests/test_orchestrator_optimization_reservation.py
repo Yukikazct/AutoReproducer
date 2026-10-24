@@ -50,7 +50,16 @@ def test_reserved_flag_never_runs_optimization_or_creates_workspace(tmp_path, re
         "status": "not_implemented" if requested else "disabled",
         "reason": "智能优化接口已预留，当前版本尚未开放。" if requested else "智能优化未启用；当前版本仅保留未来接口。",
     }
-    assert result["data"]["report"] == "Reserved optimization interface"
+    report = result["data"]["report"]
+    original, marker, summary = report.partition("\n\n<!-- autoreproducer-run-finalization:start -->\n")
+    assert original == "Reserved optimization interface"
+    assert marker and report.count("<!-- autoreproducer-run-finalization:start -->") == 1
+    assert report.count("<!-- autoreproducer-run-finalization:end -->") == 1
+    assert "**总任务状态**: 已完成" in summary
+    assert "**环境释放**: 已释放" in summary
+    assert result["data"]["run_finalization"] == {"state": result["state"], "error": result["error"]}
+    assert result["data"]["environment_cleanup"]["status"] == "released"
+    assert result["data"]["report_length"] == len(report)
     orch.agents["optimizer"].run.assert_not_called()
     orch.agents["optimizer"].simulator.assert_not_called()
     orch._materialize_workspace.assert_not_called()

@@ -492,6 +492,7 @@ def test_owned_process_does_not_confirm_cleanup_after_native_job_close_fails(mon
     job = lifecycle.ProcessJob.__new__(lifecycle.ProcessJob)
     job.handle = 123
     job.api = SimpleNamespace(CloseHandle=Mock(return_value=0))
+    job._terminate_and_wait = Mock()
     job.assign, job.resume = Mock(), Mock()
     monkeypatch.setattr(runtime, "ProcessJob", lambda: job)
     process = SimpleNamespace(returncode=0, poll=Mock(return_value=0),
@@ -533,3 +534,46 @@ def test_owned_cleanup_notification_occurs_after_process_is_reaped(mode):
         with pytest.raises(runtime.RuntimePreparationTimeout if mode == 'timeout' else KeyboardInterrupt):
             run()
     assert notifications == [True]
+
+
+@pytest.mark.skipif(os.name != 'nt', reason='Windows job descendant termination')
+@pytest.mark.parametrize('cancelled', [False, True])
+def test_owned_cleanup_notification_observes_descendants_already_stopped(tmp_path, cancelled):
+    from src.process_lifecycle import _windows_api
+    api = _windows_api()
+    ready = tmp_path / 'descendants.json'
+    child = ("import json,os,subprocess,sys,time;from pathlib import Path;"
+             "grandchild=subprocess.Popen([sys.executable,'-I','-c','import time;time.sleep(60)']);"
+             f"Path({str(ready)!r}).write_text(json.dumps([os.getpid(),grandchild.pid]));"
+             "time.sleep(60)")
+    owner = ("import subprocess,sys,time;from pathlib import Path;"
+             f"subprocess.Popen([sys.executable,'-I','-c',{child!r}]);\n"
+             f"while not Path({str(ready)!r}).exists(): time.sleep(.01)\n"
+             f"time.sleep({30 if cancelled else .5})")
+    handles, notifications = [], []
+    def observe(process):
+        if not handles and ready.is_file():
+            try:
+                pids = json.loads(ready.read_text())
+            except ValueError:
+                return
+            for pid in pids:
+                handle = api.OpenProcess(0x00100000, False, pid)
+                assert handle, 'descendant must be running before cleanup'
+                handles.append(handle)
+    def cleaned():
+        assert len(handles) == 2
+        assert all(api.WaitForSingleObject(handle, 0) == 0 for handle in handles)
+        notifications.append(True)
+    try:
+        options = dict(on_poll=observe, on_cleanup=cleaned, timeout_s=10)
+        if cancelled:
+            options['cancel_check'] = lambda: len(handles) == 2
+            with pytest.raises(KeyboardInterrupt):
+                runtime.run_owned_process([sys.executable, '-I', '-c', owner], **options)
+        else:
+            assert runtime.run_owned_process([sys.executable, '-I', '-c', owner], **options).returncode == 0
+        assert notifications == [True]
+    finally:
+        for handle in handles:
+            api.CloseHandle(handle)

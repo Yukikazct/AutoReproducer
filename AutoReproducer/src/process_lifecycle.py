@@ -5,6 +5,7 @@ import os
 import signal
 import sys
 import threading
+import time
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -69,6 +70,9 @@ def _windows_api():
         ("CreateJobObjectW", [ctypes.c_void_p, wintypes.LPCWSTR], wintypes.HANDLE),
         ("SetInformationJobObject", [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD], wintypes.BOOL),
         ("AssignProcessToJobObject", [wintypes.HANDLE, wintypes.HANDLE], wintypes.BOOL),
+        ("TerminateJobObject", [wintypes.HANDLE, wintypes.UINT], wintypes.BOOL),
+        ("QueryInformationJobObject", [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p,
+                                       wintypes.DWORD, ctypes.c_void_p], wintypes.BOOL),
         ("OpenProcess", [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD], wintypes.HANDLE),
         ("WaitForSingleObject", [wintypes.HANDLE, wintypes.DWORD], wintypes.DWORD),
         ("CloseHandle", [wintypes.HANDLE], wintypes.BOOL),
@@ -262,11 +266,81 @@ class ProcessJob:
 
     def close(self):
         if self.handle:
-            # Keep ownership until Windows confirms that closing the job worked.
-            # Otherwise a caller must not announce that descendants were cleaned.
+            # KILL_ON_JOB_CLOSE starts termination asynchronously. Keep the job
+            # handle until its entire tree has exited before releasing files or
+            # dependency locks and publishing a confirmed cleanup receipt.
+            self._terminate_and_wait()
             if not self.api.CloseHandle(self.handle):
                 raise ctypes.WinError(ctypes.get_last_error())
             self.handle = None
+
+    def _terminate_and_wait(self):
+        from ctypes import wintypes
+        class Accounting(ctypes.Structure):
+            _fields_ = [("TotalUserTime", ctypes.c_int64), ("TotalKernelTime", ctypes.c_int64),
+                        ("PeriodUserTime", ctypes.c_int64), ("PeriodKernelTime", ctypes.c_int64),
+                        ("PageFaultCount", wintypes.DWORD), ("TotalProcesses", wintypes.DWORD),
+                        ("ActiveProcesses", wintypes.DWORD), ("TerminatedProcesses", wintypes.DWORD)]
+        deadline = time.monotonic() + 5
+        processes = {}
+
+        def capture_processes():
+            for pid in self._process_ids():
+                if pid in processes:
+                    continue
+                handle = self.api.OpenProcess(0x00100000, False, pid)  # SYNCHRONIZE
+                if handle:
+                    processes[pid] = handle
+                elif ctypes.get_last_error() != 87:  # ERROR_INVALID_PARAMETER: already gone
+                    raise ctypes.WinError(ctypes.get_last_error())
+
+        try:
+            capture_processes()
+            if not self.api.TerminateJobObject(self.handle, 1):
+                raise ctypes.WinError(ctypes.get_last_error())
+            while True:
+                capture_processes()
+                accounting = Accounting()
+                if not self.api.QueryInformationJobObject(self.handle, 1, ctypes.byref(accounting),
+                                                           ctypes.sizeof(accounting), None):
+                    raise ctypes.WinError(ctypes.get_last_error())
+                if not accounting.ActiveProcesses:
+                    # The job count can reach zero before individual process
+                    # objects become signalled. Wait on handles captured before
+                    # termination as well as any descendants discovered during it.
+                    for handle in processes.values():
+                        remaining_ms = max(0, int((deadline - time.monotonic()) * 1000))
+                        status = self.api.WaitForSingleObject(handle, remaining_ms)
+                        if status == 0xFFFFFFFF:
+                            raise ctypes.WinError(ctypes.get_last_error())
+                        if status != 0:
+                            raise TimeoutError("Windows child process has not finished terminating")
+                    if not self._process_ids():
+                        return
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("Windows job still has active child processes after termination")
+                time.sleep(.01)
+        finally:
+            for handle in processes.values():
+                self.api.CloseHandle(handle)
+
+    def _process_ids(self):
+        from ctypes import wintypes
+        capacity = 64
+        while True:
+            class ProcessIds(ctypes.Structure):
+                _fields_ = [("Assigned", wintypes.DWORD), ("Count", wintypes.DWORD),
+                            ("Ids", ctypes.c_size_t * capacity)]
+            information = ProcessIds()
+            if self.api.QueryInformationJobObject(self.handle, 3, ctypes.byref(information),
+                                                  ctypes.sizeof(information), None):
+                return list(information.Ids[:information.Count])
+            error = ctypes.get_last_error()
+            if error != 234:  # ERROR_MORE_DATA
+                raise ctypes.WinError(error)
+            capacity = max(capacity * 2, information.Assigned)
+            if capacity > 65536:
+                raise OSError("Windows job process inventory exceeds the cleanup limit")
 
 
 @contextmanager

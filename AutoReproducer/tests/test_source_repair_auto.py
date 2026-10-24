@@ -88,6 +88,91 @@ def test_auto_scope_does_not_expand_an_explicit_allowlist(repair_case):
     case['verify']()
 
 
+def staged_failure(case, next_path='adapter.py'):
+    """A second source/API is reached only after the first real failure is fixed."""
+    caller = ("from model import Model\nprint(list(Model().value())[0][1])\n"
+              f"from {Path(next_path).stem} import values\nprint(list(values())[0][1])\n")
+    following = "def values():\n    return dict(answer=7).viewitems()\n"
+    (case['workspace'] / 'train.py').write_text(caller, encoding='utf-8')
+    (case['workspace'] / next_path).write_text(following, encoding='utf-8')
+    for name in ('train.py', next_path):
+        case['snapshot']['files'][name] = digest(case['workspace'] / name)
+    initial = case['runner'].run(case['workspace'], case['data']['execution_plan'], {})
+    assert not initial['success'] and 'iteritems' in initial['final']['stderr']
+    case['initial'].clear()
+    case['initial'].update(initial)
+    return following
+
+
+def test_auto_second_round_selects_new_traceback_source_after_real_compatibility_progress(repair_case):
+    case = repair_case
+    following = staged_failure(case)
+    enable_auto(case)
+    def propose(context, number):
+        changes = {'model.py': MODEL_SOURCE.replace('.iteritems()', '.items()')}
+        if number == 1:
+            assert set(context['sources']) == {'model.py'}
+        else:
+            assert 'viewitems' in context['diagnostic']
+            assert 'iteritems' in context['initial_diagnostic']
+            assert set(context['sources']) == {'model.py', 'adapter.py'}
+            assert context['sources']['model.py']['content'] == MODEL_SOURCE
+            changes['adapter.py'] = following.replace('.viewitems()', '.items()')
+        return changes
+    llm = CompatibilityLLM(propose)
+    result = case['run'](llm)
+    assert result['success'], result
+    assert result['final']['stdout'].strip() == '7\n7'
+    assert len(llm.calls) == 2
+    state = case['data']['source_repair']
+    assert state['editable'] == ['model.py', 'adapter.py']
+    assert [item['selected'] for item in state['auto_selections']] == [['model.py'], ['adapter.py']]
+    assert {item['path'] for item in state['changed_files']} == {'model.py', 'adapter.py'}
+    assert read_json(case['run_dir'] / 'source_repair.json')['auto_selections'] == state['auto_selections']
+    case['verify']()
+    repair.verify_repaired_execution(case['plan'], case['data'], result)
+
+
+def test_auto_second_round_keeps_manual_file_boundary_and_skips_unjustified_model_call(repair_case):
+    case = repair_case
+    staged_failure(case)
+    enable_auto(case, ['model.py'])
+    llm = CompatibilityLLM(lambda *_: {'model.py': MODEL_SOURCE.replace('.iteritems()', '.items()')})
+    result = case['run'](llm)
+    assert not result['success'] and len(llm.calls) == 1
+    state = case['data']['source_repair']
+    assert state['editable'] == ['model.py']
+    assert any(item['path'] == 'adapter.py' and item['reason'] == 'outside_explicit_scope'
+               for item in state['auto_selections'][1]['rejected'])
+    assert all(digest(Path(state['workspace']) / name) == sha for name, sha in case['snapshot']['files'].items())
+    case['verify']()
+
+
+def test_auto_cumulative_scope_cannot_exceed_three_files_across_rounds(repair_case):
+    case = repair_case
+    staged_failure(case)
+    bridge = ("from model import Model\ndef invoke():\n"
+              "    if False: dict(answer=7).iteritems()\n    return Model().value()\n")
+    caller = ("from bridge import invoke\nif False: dict(answer=7).iteritems()\n"
+              "print(list(invoke())[0][1])\nfrom adapter import values\nprint(list(values())[0][1])\n")
+    for name, content in [('bridge.py', bridge), ('train.py', caller)]:
+        (case['workspace'] / name).write_text(content, encoding='utf-8')
+        case['snapshot']['files'][name] = digest(case['workspace'] / name)
+    latest = case['runner'].run(case['workspace'], case['data']['execution_plan'], {})
+    case['initial'].clear()
+    case['initial'].update(latest)
+    enable_auto(case)
+    llm = CompatibilityLLM(lambda *_: {'model.py': MODEL_SOURCE.replace('.iteritems()', '.items()')})
+    result = case['run'](llm)
+    assert not result['success'] and len(llm.calls) == 1
+    state = case['data']['source_repair']
+    assert set(state['editable']) == {'model.py', 'bridge.py', 'train.py'}
+    assert any(item['path'] == 'adapter.py' and item['reason'] == 'session_file_budget'
+               for item in state['auto_selections'][1]['rejected'])
+    assert all(digest(Path(state['workspace']) / name) == sha for name, sha in case['snapshot']['files'].items())
+    case['verify']()
+
+
 @pytest.mark.parametrize('flag,where', [('cancelled', 'top'), ('cancelled', 'final'),
                                      ('timed_out', 'top'), ('timed_out', 'final'),
                                      ('interrupted', 'top'), ('interrupted', 'final')])
