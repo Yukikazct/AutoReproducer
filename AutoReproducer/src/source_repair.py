@@ -21,10 +21,28 @@ _SENSITIVE = re.compile(r'(?:train|valid|test|split|seed|epoch|repeat|fold|loss|
                         r'optim|backward|shuffle|sampl|batch|label|target|mask|indices|weight|bias)', re.I)
 _PROTOCOL_NAMES = {'acc', 'auc', 'ap', 'map', 'f1', 'precision', 'recall', 'lr', 'mse', 'rmse',
                    'forward', 'sum', 'mean', 'max', 'min', 'argmax', 'argmin', 'median', 'std', 'var'}
+_HYPERPARAMETER_TOKENS = {
+    'random', 'learning', 'rate', 'dropout', 'momentum', 'decay', 'patience', 'warmup',
+    'schedule', 'scheduler', 'estimator', 'estimators', 'iter', 'iters', 'iteration', 'iterations',
+    'layer', 'layers', 'hidden', 'channel', 'channels', 'feature', 'features', 'class', 'classes',
+    'head', 'heads', 'embedding', 'embeddings', 'dimension', 'dimensions', 'dim', 'dims',
+    'depth', 'width', 'alpha', 'beta', 'gamma', 'epsilon', 'eps', 'eta', 'clipnorm', 'clipvalue',
+    'activation', 'reduction', 'normalization', 'normalisation', 'augment', 'augmentation',
+    'transform', 'transforms', 'size', 'workers', 'jobs', 'prob', 'probability', 'temperature',
+    'regularization', 'regularisation', 'penalty', 'solver', 'criterion', 'kernel',
+    'component', 'components', 'leaf', 'leaves', 'perplexity', 'tol', 'tolerance', 'c',
+    'bagging', 'fraction', 'bootstrap',
+}
 
 
 def _sensitive(name):
-    return _SENSITIVE.search(name) or name.casefold() in _PROTOCOL_NAMES
+    # Keyword renaming can silently turn a seed or learning rate into an
+    # unrelated option without changing its literal value or the AST shape.
+    # Recognize common author parameter spellings, preserving compatibility
+    # APIs such as iteritems/viewitems whose names are not protocol tokens.
+    words = re.sub(r'([a-z0-9])([A-Z])', r'\1_\2', name).casefold().split('_')
+    return (_SENSITIVE.search(name) or name.casefold() in _PROTOCOL_NAMES
+            or bool(set(words) & _HYPERPARAMETER_TOKENS))
 
 
 def normalize_source_repair_request(request):
@@ -207,6 +225,27 @@ def _verify_files(root, expected):
             raise ValueError('修复副本的固定输入或已批准源码改变：' + name)
 
 
+def _prepared_runtime(execution):
+    """Bind source repair to the interpreter and dependencies actually prepared."""
+    record = execution.get('environment') or {}
+    runtime = {key: record.get(key) for key in ('executable', 'runtime', 'requirements_txt')}
+    if (record.get('status') != 'success'
+            or any(not isinstance(value, str) for value in runtime.values())
+            or not runtime['executable'] or not runtime['runtime']):
+        raise ValueError('原命令缺少已准备解释器与依赖环境的完整执行凭据。')
+    return runtime
+
+
+def _verify_repair_runtime(execution, expected):
+    if _prepared_runtime(execution) != expected:
+        raise ValueError('修复运行改变了已准备解释器、运行环境指纹或依赖清单。')
+    executable = Path(expected['executable']).resolve()
+    for step in execution.get('steps', []):
+        argv = step.get('argv') or []
+        if not argv or Path(argv[0]).resolve() != executable:
+            raise ValueError('修复后的原命令未使用冻结的已准备解释器。')
+
+
 def repair_author_failure(runner, llm, request, plan, snapshot, workspace, run_dir,
                           data, execution, verify_inputs, on_event):
     """Run at most one two-round source repair session after actual execution."""
@@ -270,6 +309,12 @@ def _repair_author_failure(runner, llm, request, plan, snapshot, workspace, run_
         state.update(status='not_applicable', reason='安装失败、未运行、取消或超时不触发源码修复。')
         write_json(run_dir / 'source_repair.json', state)
         return execution
+    try:
+        prepared_runtime = _prepared_runtime(execution)
+        _verify_repair_runtime(execution, prepared_runtime)
+    except ValueError as exc:
+        state.update(status='not_applicable', reason=str(exc))
+        return execution
     if any(step.get('entrypoint', {}).get('kind') == 'notebook' for step in plan['steps']):
         state.update(status='not_applicable', reason='当前源码兼容修复仅支持原始 Python 命令，不转换 notebook 执行方式。')
         write_json(run_dir / 'source_repair.json', state)
@@ -329,6 +374,11 @@ def _repair_author_failure(runner, llm, request, plan, snapshot, workspace, run_
         for output in step.get('output_directories', []):
             workspace_path(target, output['path'], 'original output directory').mkdir(parents=True, exist_ok=True)
     environment = deepcopy(execution.get('effective_env_config') or data['env_config'])
+    # Retry using the interpreter recorded by the actual original invocation,
+    # including callers that relied on the runner's default Python selection.
+    environment['python_executable'] = prepared_runtime['executable']
+    environment['runtime_fingerprint'] = prepared_runtime['runtime']
+    environment['requirements_txt'] = prepared_runtime['requirements_txt']
     repaired_plan = build_plan(profile='source_repair_author_experiment', spec_sha256=data['spec_sha256'],
         workspace=target, repository=plan['repository'], dataset=data['dataset_provenance'], steps=steps)
     state['execution_plan_path'] = str(run_dir / 'source_repair_execution_plan.json')
@@ -377,6 +427,7 @@ def _repair_author_failure(runner, llm, request, plan, snapshot, workspace, run_
 
     def verify_candidate(root, files, _execution):
         verify_inputs()
+        _verify_repair_runtime(_execution, prepared_runtime)
         validate_compatibility_changes(workspace, root, files)
         expected = {**initial_files, **{change['path']: change['sha256'] for change in files}}
         _verify_files(root, expected)
@@ -418,6 +469,7 @@ def _repair_author_failure(runner, llm, request, plan, snapshot, workspace, run_
                 'scope': 'patched_author_code_execution', 'repository': plan['repository'],
                 'original_source_files': snapshot['files'], 'effective_source_files': state['effective_source_files'],
                 'changed_files': state['changed_files'], 'spec_sha256': data['spec_sha256'],
+                'prepared_runtime': prepared_runtime,
                 'execution_plan': repaired_plan, 'frozen_input_files': frozen_data})
             state['manifest_sha256'] = digest(run_dir / 'source_repair_manifest.json')
             data['original_execution_plan'] = data['execution_plan']
@@ -457,6 +509,7 @@ def verify_repaired_execution(plan, data, execution):
         raise ValueError('源码修复清单与本次冻结实验不一致')
     if read_json(state['execution_plan_path']) != frozen['execution_plan']:
         raise ValueError('修复执行计划发生变化')
+    _verify_repair_runtime(execution, frozen.get('prepared_runtime'))
     _verify_files(state['workspace'], frozen['effective_source_files'])
     _verify_files(state['workspace'], {name: record['sha256'] for name, record in frozen['frozen_input_files'].items()})
     records = execution.get('steps', [])

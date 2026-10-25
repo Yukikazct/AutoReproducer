@@ -112,6 +112,37 @@ def test_failed_candidate_is_fully_restored_before_second_proposal(runner, works
     assert not (workspace / "failed-output").exists()
 
 
+def test_second_repair_context_bounds_large_logs_without_truncating_audit_evidence(runner, workspace):
+    def propose(context, call):
+        if call == 1:
+            candidate = valid_proposal(context, call)
+            candidate['patches'][1]['content'] += "print('progress ' * 25000)\nraise RuntimeError('new terminal failure')\n"
+            return candidate
+        assert len(json.dumps(context).encode('utf-8')) < 64 * 1024
+        assert 'new terminal failure' in context['previous_attempts'][0]['diagnostic']
+        return valid_proposal(context, call)
+    llm = RepairLLM(propose)
+    result = runner.run_with_repairs(workspace, plan(), {}, llm=llm,
+                                    editable=['model.py', 'train.py'])
+    assert result['success'], result
+    assert len(llm.calls) == 2
+    first = result['repair_attempts'][0]['execution']
+    assert len(first['final']['stdout']) > 200000
+    assert Path(first['final']['stdout_path']).stat().st_size > 200000
+    record = json.loads(Path(result['repair_records']).read_text(encoding='utf-8'))
+    assert record['attempts'][0]['execution']['final']['stdout'] == first['final']['stdout']
+
+
+def test_context_bounds_reason_fallback_when_execution_streams_are_empty(runner, workspace):
+    execution = {'success': False, 'executed': True, 'reason': 'failure ' * 40000,
+                 'final': {'exit_code': 1, 'stdout': '', 'stderr': ''}}
+    repairer = RepositoryRepairer(runner, None, PatchPolicy(editable=['model.py', 'train.py']))
+    context = repairer._context(workspace, execution, plan(),
+        [{'round': 1, 'status': 'failed', 'execution': execution}], initial_execution=execution)
+    assert len(json.dumps(context).encode('utf-8')) < 64 * 1024
+    assert len(execution['reason']) > 250000  # Only the model view is abbreviated.
+
+
 def test_budget_exhaustion_restores_both_files_and_writes_failure_report(runner, workspace):
     before = snapshot_workspace(workspace)
     llm = RepairLLM(lambda context, _: proposal(context, {

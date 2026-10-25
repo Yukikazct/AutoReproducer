@@ -23,6 +23,7 @@ from src.safety.workspace_snapshot import iter_workspace_files, snapshot_workspa
 MAX_REPAIR_ROUNDS = 2
 MAX_CONTEXT_FILES = 8
 MAX_CONTEXT_BYTES = 48 * 1024
+MAX_DIAGNOSTIC_CHARS = 12 * 1024
 MAX_REPAIR_WORKSPACE_FILES = 4096
 MAX_REPAIR_WORKSPACE_BYTES = 256 * 1024 * 1024
 
@@ -100,7 +101,7 @@ class RepositoryRepairer:
         self.runner, self.llm, self.policy, self.max_rounds = runner, llm, policy, max_rounds
 
     def _context(self, root, execution, steps, previous, selected_sources=None, initial_execution=None):
-        error = failure_diagnostic(execution)
+        error = failure_diagnostic(execution)[-MAX_DIAGNOSTIC_CHARS:]
         traceback_paths = re.findall(r'File "([^"]+)"', error)
         preferred = set()
         for name in traceback_paths:
@@ -134,11 +135,26 @@ class RepositoryRepairer:
             remaining -= len(raw)
         if not sources:
             raise ValueError("no editable UTF-8 source fits the repair context budget")
+        # Execution records retain complete logs through several aliases
+        # (steps/stages/attempts/final). Sending them back verbatim can turn
+        # ordinary training progress into an unbounded second-round request.
+        # Keep full records on disk and supply only bounded failure summaries.
+        history = []
+        for attempt in previous[-MAX_REPAIR_ROUNDS:]:
+            summary = {key: attempt.get(key) for key in ('round', 'status')}
+            for key in ('reason', 'error'):
+                if key in attempt:
+                    summary[key] = str(attempt[key])[:2000]
+            prior_execution = attempt.get('execution') or {}
+            if prior_execution:
+                summary['diagnostic'] = failure_diagnostic(prior_execution)[-MAX_DIAGNOSTIC_CHARS:]
+                summary['execution_dir'] = prior_execution.get('run_dir', '')
+            history.append(summary)
         return _private({"diagnostic": error,
-                         "initial_diagnostic": failure_diagnostic(initial_execution or execution),
+                         "initial_diagnostic": failure_diagnostic(initial_execution or execution)[-MAX_DIAGNOSTIC_CHARS:],
                          "candidate_workspace_state": "original_baseline_after_rollback",
                          "steps": steps, "sources": sources,
-                         "available_source_paths": available[:200], "previous_attempts": previous})
+                         "available_source_paths": available[:200], "previous_attempts": history})
 
     def run(self, workspace, steps, env_config, *, on_event=None,
             initial_execution=None, verify_candidate=None, validate_patches=None,

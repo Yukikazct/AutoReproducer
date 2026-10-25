@@ -257,6 +257,17 @@ def test_keyword_scope_uses_ast_keyword_evidence_not_a_comment(tmp_path):
     assert not repair._automatic_repair_sources(execution, tmp_path, snapshot)['selected']
 
 
+@pytest.mark.parametrize('symbol', ['random_state', 'learning_rate', 'dropout', 'n_estimators',
+                                    'max_iter', 'num_layers', 'hidden_channels', 'momentum',
+                                    'randomState', 'learningRate', 'numLayers', 'maxIter',
+                                    'n_components', 'num_leaves', 'perplexity', 'tol', 'C', 'bagging_fraction'])
+@pytest.mark.parametrize('kind', ['attribute', 'keyword'])
+def test_hyperparameter_names_do_not_enter_automatic_compatibility_scope(tmp_path, symbol, kind):
+    execution, snapshot = selection_fixture(tmp_path, ['model.py'], symbol=symbol, kind=kind)
+    selected = repair._automatic_repair_sources(execution, tmp_path, snapshot)
+    assert not selected['selected'] and '协议敏感' in selected['reason']
+
+
 def test_unlisted_traceback_files_never_enter_auto_scope(tmp_path):
     execution, snapshot = selection_fixture(tmp_path, ['known.py', 'not_frozen.py'])
     snapshot['files'].pop('not_frozen.py')
