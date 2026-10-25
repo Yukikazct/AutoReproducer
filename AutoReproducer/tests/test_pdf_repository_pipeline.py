@@ -140,8 +140,10 @@ def test_actual_later_page_author_link_beats_wrong_model_repo_through_report(
     data, reader, report = evidence_pipeline(path, tmp_path, llm)
     fingerprint = {"sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
                    "pages": 3, "bytes": path.stat().st_size, "readable": True}
-    assert reader["pdf_input"] == fingerprint
-    assert data["pdf_input"] == fingerprint
+    assert {key: reader['pdf_input'][key] for key in fingerprint} == fingerprint
+    assert data['pdf_input'] == reader['pdf_input']
+    assert reader['pdf_input']['extraction']['pdf_sha256'] == fingerprint['sha256']
+    assert reader['pdf_input']['extraction']['page_count'] == fingerprint['pages']
     assert data["raw_text"] == reader["raw_text"]
     assert data["extracted_repository_links"] == reader["extracted_repository_links"]
     assert data["extracted_code_urls"] == reader["extracted_code_urls"]

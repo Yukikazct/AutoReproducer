@@ -327,11 +327,15 @@ print(json.dumps(record), flush=True)
 '''
 
 
+from src.agent_collaboration import collaborative_run, current_collaboration
+
+
 class DiscoveredRepositoryReproduction:
     def __init__(self, root, logger, use_docker=False, llm=None):
         self.root, self.logger, self.use_docker, self.llm = Path(root), logger, use_docker, llm
         self.runner = RepositoryRunner(logger=logger)
 
+    @collaborative_run
     @termination_signals()
     @release_run_environment
     def run(self, request, on_event=None):
@@ -355,6 +359,8 @@ class DiscoveredRepositoryReproduction:
             finally:
                 status["finished_at"] = time.time()
                 write_json(run_dir / "run_status.json", status)
+                if current_collaboration():
+                    current_collaboration().persist(run_dir)
 
     def _run(self, request, on_event, run_dir):
         from src.agents.report_generator import ReportGeneratorAgent
@@ -394,6 +400,9 @@ class DiscoveredRepositoryReproduction:
                 "optimization": {"mode": "off", "available": False, "optimized": False,
                                  "status": "disabled", "reason": "运行已冻结作者实验协议"}}
         data['reproduction_scope'] = 'author_code_execution'
+        collaboration = current_collaboration()
+        if collaboration:
+            collaboration.attach(data)
         data['strict_validation'] = {'requested': strict_requested,
             'status': 'pending' if strict_requested else 'not_requested'}
         data['source_repair'] = {'requested': request['source_repair'],
@@ -418,7 +427,10 @@ class DiscoveredRepositoryReproduction:
                     repository_identity={"status": "user_supplied_unconfirmed", "source": "user_supplied_repository",
                         "author_identity_confirmed": False, "reason": "用户补充的仓库，论文与实现关系尚未核验", "evidence": deepcopy(evidence)})
             data["pdf_input"] = {"sha256": document.sha256, "pages": document.page_count,
-                                 "bytes": document.byte_size, "readable": True}
+                                 "bytes": document.byte_size, "readable": True,
+                                 "extraction": document.extraction}
+            from src.pdf_markdown import write_markdown_evidence
+            data['paper_markdown'] = write_markdown_evidence(run_dir, document)
             pin = (data["resources"].get("repo_discovery") or {}).get("pinned_revision", "")
             offline = bool(request.get("offline"))
             unique = repository_candidates(document, evidence, data['resources'], execution_only=execution_only)
@@ -472,6 +484,7 @@ class DiscoveredRepositoryReproduction:
                 data["paper_info"]["metrics"] = {item["name"]: item["reference"] for item in candidate_plan["metrics"]}
                 data["paper_info"]["required_metrics"] = [item["name"] for item in candidate_plan["metrics"]]
                 candidate_environment = environment_for_plan(candidate_plan)
+                self._receive_author_plan('EnvBuilder', candidate_plan)
                 candidate_environment["offline"] = offline
                 data["env_config"] = deepcopy(candidate_environment)
                 data["experiment_spec"] = {"id": "discovered_author_experiment", "adapter_id": "discovered",
@@ -549,6 +562,17 @@ class DiscoveredRepositoryReproduction:
                     phase = 'plan_repository'; event(phase, 'running')
                     data['resources']['selected_repo'] = candidate_url
                     write_json(run_dir / 'source_packet.json', packet)
+                    if collaboration:
+                        collaboration.send('ResourceFinder', 'AuthorPlanner', 'handoff', {
+                            'repository': {'url': candidate_url, 'revision': revision},
+                            'selection': candidate.get('source'),
+                            'experiment_request': request['experiment_request'],
+                            'pdf_sha256': packet['pdf']['sha256']})
+                        collaboration.send('SourceReader', 'AuthorPlanner', 'evidence', {
+                            'source_paths': list(packet.get('repository', {}).get('files') or {})[:40],
+                            'inventory_count': len(packet.get('file_inventory') or {}),
+                            'source_packet': 'source_packet.json',
+                            'rule': 'Only hash-validated original source and paper evidence authorize a plan.'})
                     from src.author_execution_plan import propose_author_execution_plan
                     try:
                         if strict_requested:
@@ -558,6 +582,11 @@ class DiscoveredRepositoryReproduction:
                             try:
                                 protocol = ExperimentProtocolAgent(self.llm, self.logger).run(packet, workspace)
                                 packet['experiment_protocol'] = protocol
+                                if collaboration:
+                                    collaboration.send('ExperimentProtocol', 'AuthorPlanner', 'protocol', {
+                                        'status': protocol.get('status'),
+                                        'protocol': protocol,
+                                        'authority': 'The frozen protocol is validated separately from messages.'})
                                 write_json(run_dir / 'experiment_protocol.json', protocol)
                                 plan = propose_plan(self.llm, packet, workspace)
                                 from src.strict_validation import assert_strict_plan
@@ -679,6 +708,9 @@ class DiscoveredRepositoryReproduction:
                                       "reason": "实验已中断，未完成的训练和指标不能当作成功"}
                 reason = data['validation']['reason']
             event(phase, "interrupted", reason)
+            if collaboration:
+                collaboration.attach(data)
+                collaboration.persist(run_dir)
             write_json(run_dir / "result.json", {"state": "ERROR", "data": data, "error": "interrupted"})
             raise
         except Exception as exc:
@@ -708,6 +740,15 @@ class DiscoveredRepositoryReproduction:
         self.logger.add_llm_calls(data["total_llm_calls"])
         data["audit_stats"] = self.logger.get_stats()
         data["run_elapsed_s"] = time.monotonic() - started
+        if collaboration:
+            collaboration.send('CodeExecutor', 'ReportGenerator', 'result', {
+                'execution': {key: (data.get('execution') or {}).get(key) for key in
+                    ('success', 'executed', 'cancelled', 'timed_out', 'cleanup_confirmed')},
+                'validation_status': (data.get('validation') or {}).get('status'),
+                'error': error,
+                'rule': 'Command completion does not establish independent numerical reproduction.'})
+            collaboration.attach(data)
+            collaboration.persist(run_dir)
         event("generate_report", "running")
         try:
             data["report"] = ReportGeneratorAgent(self.logger).run(data, report_path=data["report_path"])["report"]
@@ -738,8 +779,33 @@ class DiscoveredRepositoryReproduction:
                 pass
             return result
 
+    @staticmethod
+    def _receive_author_plan(role, plan):
+        """Acknowledge the planner's evidence against the actual frozen input.
+
+        The program receives a validated plan, not model-authored instructions
+        from a mailbox. Stale or mismatched messages cannot replace that plan.
+        """
+        collaboration = current_collaboration()
+        if collaboration is None:
+            return
+        from src.discovered_repository_plan import _canonical
+        import hashlib
+        expected = hashlib.sha256(_canonical(plan).encode('utf-8')).hexdigest()
+        for message in collaboration.context(role):
+            content = message.get('content')
+            if (message['sender'] != 'AuthorPlanner' or message['kind'] != 'handoff'
+                    or not isinstance(content, dict)):
+                continue
+            matched = content.get('plan_sha256') == expected
+            collaboration.reply(message, role, {
+                'status': 'accepted' if matched else 'ignored', 'plan_sha256': expected,
+                'reason': ('交接与本次已校验的原始作者计划一致，按该计划处理。' if matched else
+                           '交接不属于本次冻结计划，保留当前计划并忽略该消息。')}, kind='acknowledgement')
+
     def _execute_frozen(self, request, data, plan, snapshot, workspace, run_dir, environment, emit, event):
         """Materialize project capture utilities, then run and independently check."""
+        self._receive_author_plan('CodeExecutor', plan)
         from src.discovered_repository_runtime import CAPTURE_DIR
         phase = "prepare_environment"
         try:

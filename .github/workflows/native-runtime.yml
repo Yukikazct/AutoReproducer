@@ -44,7 +44,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $scriptsDirectory = if ($IsWindows) { 'Scripts' } else { 'bin' }
           $ciPython = Join-Path (Join-Path $ciEnvironment $scriptsDirectory) $(if ($IsWindows) { 'python.exe' } else { 'python' })
-          & $ciPython -m pip install --no-user -r requirements-test.txt
+          # Resolve the application against the same NumPy as the native
+          # overlay. Otherwise new pandas/contourpy wheels can require NumPy 2.
+          & $ciPython -m pip install --no-user -r requirements-test.txt -c requirements-native-app-constraints.txt
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           "VIRTUAL_ENV=$ciEnvironment" >> $env:GITHUB_ENV
           (Join-Path $ciEnvironment $scriptsDirectory) >> $env:GITHUB_PATH
@@ -60,7 +62,7 @@ jobs:
           --find-links https://data.pyg.org/whl/torch-2.5.1+cpu.html
           --report native-install.json
           -r requirements-native-${{ matrix.family }}.txt
-      - name: Check actual native operations and record dependencies
+      - name: Check native and application operations and record dependencies
         run: |
           python scripts/verify_native_runtime.py --family ${{ matrix.family }} --deps "$env:NATIVE_DEPS" --output native-health.json
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -68,6 +70,8 @@ jobs:
           "AUTOREPRO_TEST_DGL_DEPS=$env:NATIVE_DEPS" >> $env:GITHUB_ENV
           "AUTOREPRO_TEST_DGL_PYTHON=$((Get-Command python).Source)" >> $env:GITHUB_ENV
           "PYTHONPATH=$env:NATIVE_DEPS" >> $env:GITHUB_ENV
+      - name: Check application and native dependency metadata together
+        run: python -m pip check
       - name: Run PyG native selection
         if: matrix.family == 'pyg'
         run: >-

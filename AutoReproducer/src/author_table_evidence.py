@@ -18,6 +18,7 @@ _MAX_PAGE = 2 * 1024 * 1024
 _MISSING = re.compile(r'(?:N/A|NA|nan|[-—–])(?=$|\s|[,|)])', re.I)
 _SCALAR = re.compile(r'(?P<value>' + NUMBER_PATTERN + r')\s*(?P<percent>%)?'
                      r'(?:\s*(?:±|\+/-|\x06)\s*(?P<std>' + NUMBER_PATTERN + r')\s*(?P<std_percent>%)?)?'
+                     r'(?P<footnote>[†‡*]+)?'
                      r'(?=$|\s|[,|)])', re.I)
 _METRIC_LABEL = re.compile(r'(?:'
     r'(?:macro|micro|weighted)[_\s-]?f1(?:[_\s-]?score)?|'
@@ -49,14 +50,30 @@ def _whole_lines(text, span):
             and not text[end:text.find('\n', end) if '\n' in text[end:] else len(text)].strip())
 
 
+def _markdown_separator_width(line):
+    if '|' not in line:
+        return None
+    cells = [cell.strip() for cell in line.strip().strip('|').split('|')]
+    if len(cells) >= 2 and all(re.fullmatch(r':?-{3,}:?', cell) for cell in cells):
+        return len(cells)
+    return None
+
+
 def _header_levels(header):
     levels = []
     for line in header.splitlines():
         line = line.strip()
         if not line:
             continue
+        width = _markdown_separator_width(line)
+        if width is not None:
+            if not levels or width not in {len(levels[-1]), len(levels[-1]) + 1}:
+                return None
+            continue
         if '|' in line:
             columns = [part.strip() for part in line.strip('|').split('|')]
+            if columns and not columns[0]:
+                columns = columns[1:]  # Explicit empty method-header corner.
         elif '\t' in line or re.search(r'\S {2,}\S', line):
             columns = [part.strip() for part in re.split(r'\t+| {2,}', line)]
         else:
@@ -117,6 +134,7 @@ def _one_cell(text, start):
             return None, start
         return {'missing': False, 'value': value, 'std': std,
                 'percent': bool(match['percent']), 'std_percent': bool(match['std_percent']),
+                'footnote': match['footnote'],
                 'span': [start, match.end()]}, match.end()
     if start < len(text) and text[start] == '(':
         end = text.find(')', start + 1)
@@ -180,7 +198,7 @@ def _method_tail(method, row):
         return None
     # A model variant cannot be shortened to another row label. The method
     # must start the quoted row and end before whitespace or a cell delimiter.
-    pattern = (r'^\s*' + r'\s+'.join(re.escape(x) for x in method.split())
+    pattern = (r'^\s*\|?\s*' + r'\s+'.join(re.escape(x) for x in method.split())
                + r'(?:\s+\((?:ours|our method|this work)\))?(?=$|\s|\|)')
     match = re.match(pattern, row, re.I)
     if match and re.match(r'\s*\([A-Za-z]', row[match.end():]):
@@ -245,6 +263,23 @@ def _between_rows(text, expected):
             continue
         if re.match(r'^\s*(?:table|figure|section)\b', line, re.I):
             return False
+        width = _markdown_separator_width(line)
+        if width is not None:
+            if width != expected + 1:
+                return False
+            continue
+        if '|' in line:
+            columns = [column.strip() for column in line.strip().strip('|').split('|')]
+            if len(columns) != expected + 1 or not re.search(r'[^\W\d]', columns[0]):
+                return False
+            if (columns[0].endswith(':') and not re.search(r'\d', columns[0])
+                    and not any(columns[1:])
+                    and not re.match(r'^(?:table|figure|section)\b', columns[0], re.I)):
+                continue  # An explicit section row preserves the same columns.
+            cells, _ = _cells('|'.join(columns[1:]), allow_prefix=False)
+            if cells is None or len(cells) != expected:
+                return False
+            continue
         cells, prefix = _cells(line)
         if cells is None or len(cells) != expected or prefix == 0:
             return False
@@ -338,6 +373,8 @@ def locate_table_value(reference, quote, header, *, page_text=None):
     evidence = {'column_index': index, 'column_labels': paths[index], 'column_count': len(paths),
                 'row_span': row_span, 'header_span': header_span, 'basis': rules,
                 'cell_span': selected['span'], 'cell_quote': quote[slice(*selected['span'])]}
+    if selected.get('footnote'):
+        return _result('unknown', 'Selected value has a footnote requiring its original condition', **evidence)
     if selected.get('missing'):
         return _result('rejected', 'Quoted dataset/metric column has no reported value', **evidence)
     if 'parts' in selected:

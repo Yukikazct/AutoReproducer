@@ -40,6 +40,34 @@ def _markdown_text(value: str) -> str:
                   value.replace("\n", " ").replace("\r", " "))
 
 
+def _collaboration_summary(content):
+    """Keep the report readable; the run artifact retains full message payloads."""
+    if isinstance(content, dict):
+        if content.get('reason'):
+            summary = str(content['reason'])
+        else:
+            labels = {'action': '动作', 'status': '状态', 'validation_status': '核验状态',
+                      'scope': '范围', 'error': '错误'}
+            parts = [label + '：' + str(content[key]) for key, label in labels.items() if content.get(key)]
+            paths = content.get('source_paths') or content.get('paths')
+            if isinstance(paths, list):
+                parts.append('来源：' + '、'.join(str(path) for path in paths[:6]))
+            commands = content.get('commands') or content.get('steps')
+            if isinstance(commands, list):
+                parts.append(f'交接 {len(commands)} 个步骤')
+            files = content.get('files')
+            if isinstance(files, list):
+                parts.append(f'补读 {len(files)} 个来源文件')
+            repository = content.get('repository')
+            if isinstance(repository, dict) and repository.get('url'):
+                parts.append('仓库：' + str(repository['url']))
+            summary = '；'.join(parts) or '已交接结构化记录；完整内容保存在运行目录。'
+    else:
+        summary = str(content)
+    summary = re.sub(r'\b[0-9a-f]{32,64}\b', lambda match: match[0][:12] + '…', summary)
+    return _markdown_text(summary[:180] + ('…' if len(summary) > 180 else ''))
+
+
 def _numeric_compatibility_lines(validation):
     """Disclose adopted source-bound operations from verified runtime receipts."""
     labels = {
@@ -711,6 +739,14 @@ class ReportGeneratorAgent(BaseAgent):
 
     def run(self, input_data: dict, *, report_path=None) -> dict:
         """生成完整复现报告（含优化与审计信息）。"""
+        from src.agent_collaboration import current_collaboration
+        collaboration = current_collaboration()
+        if collaboration:
+            for message in self.collaboration_context():
+                collaboration.reply(message, self.name, {
+                    'status': 'received',
+                    'reason': '已接收结果交接；报告以实际执行记录和核验字段为准。'}, kind='acknowledgement')
+            collaboration.attach(input_data)
         self.log("generate_report", "START", "开始生成复现报告", input_data)
 
         report = self._build_report(input_data, report_path=report_path)
@@ -754,6 +790,21 @@ class ReportGeneratorAgent(BaseAgent):
                   f"- **{'作者公开参考指标' if is_rezero else '声明指标'}**: {paper_info.get('metrics', {})}",
                   ""]
         coverage = data.get('reading_coverage') or {}
+        extraction = (data.get('pdf_input') or {}).get('extraction') or {}
+        if extraction:
+            labels = {'converted': '全部页面已转换', 'partial': '部分页面使用原提取文本',
+                      'fallback': '已回退到原提取文本'}
+            lines += ['- **PDF 读取格式**: Markdown（MarkItDown）；'
+                      + labels.get(extraction.get('status'), '转换状态未知')
+                      + f"，转换 {extraction.get('converted_pages', 0)}/{extraction.get('page_count', 0)} 页。",
+                      f"- **表格结构补充**: {extraction.get('table_pages', 0)} 页保留完整原文并附带按 PDF 坐标核对的 Markdown 表格；重复展示不算新增证据。",
+                      '- **数值来源**: 保留原 PDF 哈希与页码；逐页核对数值和可读内容，转换异常时使用完整原文。', '']
+            from src.pdf_markdown import report_markdown_targets
+            try:
+                lines += report_markdown_targets(data, report_path)
+            except (OSError, ValueError, KeyError):
+                lines += ['- **论文 Markdown 附件**: 未能核对附件，原运行目录与读取结果保留。']
+            lines.append('')
         if coverage:
             title_only = coverage.get('scope') == 'provided_title'
             lines += [f"- **{'标题输入阅读' if title_only else '论文全文阅读'}**: {'完成' if coverage.get('complete') else '未完成'}；"
@@ -1391,6 +1442,29 @@ class ReportGeneratorAgent(BaseAgent):
                 lines.append(f"| {r.get('arm')} | {r.get('improvement'):.4f} "
                              f"| {basis} | {mark} |")
         lines.append("")
+
+        collaboration = data.get('agent_collaboration') or {}
+        messages = collaboration.get('messages') or []
+        if messages:
+            lines += ['## Agent 协作记录', '',
+                      '以下记录本次任务的证据交接、补充请求和校验反馈；消息本身不是实验核验结论。', '',
+                      '完整消息保存在运行目录的 `agent_collaboration.json` 中。', '']
+            positions = {message.get('id'): message.get('sequence', index)
+                         for index, message in enumerate(messages, 1) if message.get('id')}
+            kinds = {'request': '请求', 'response': '回复', 'handoff': '交接', 'evidence': '证据',
+                     'feedback': '反馈', 'acknowledgement': '确认', 'result': '结果'}
+            for message in messages[-40:]:
+                route = _markdown_text(f"{message.get('sender', '')} → {message.get('recipient', '')}")
+                kind = message.get('kind', '')
+                detail = kinds.get(kind, _markdown_text(str(kind)))
+                if message.get('reply_to'):
+                    reply = positions.get(message['reply_to'])
+                    detail += f'；回复 #{reply}' if reply is not None else '；回复较早消息'
+                lines += [f"**{message.get('sequence', '')}. {route}**（{detail}）", '',
+                          _collaboration_summary(message.get('content')), '']
+            if collaboration.get('dropped_messages'):
+                lines += ['', '部分消息已达到协作记录预算；完整执行与修复证据另行保存。']
+            lines.append('')
 
         # 8. 审计与用量统计
         lines += ["## 7. 运行与用量统计",

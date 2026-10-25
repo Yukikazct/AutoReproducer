@@ -30,6 +30,7 @@ def preserve_selected_tab_in_apptest(monkeypatch):
 
 @pytest.fixture
 def app(tmp_path, monkeypatch):
+    monkeypatch.setenv("AUTOREPRO_DEPS_ROOT", str(tmp_path / "dependencies"))
     monkeypatch.setattr(history, "get_project_data_dir", lambda: tmp_path)
     at = AppTest.from_file(str(Path(__file__).parents[1] / "app.py"),
                            default_timeout=30)

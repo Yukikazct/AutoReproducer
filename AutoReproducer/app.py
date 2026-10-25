@@ -903,6 +903,18 @@ with tab1:
         st.info("正在准备实验，阶段状态将在这里更新。")
     if snap:
         render_activity(snap, st_module=st)
+    collaboration_messages = (snap or {}).get('agent_messages', [])
+    if not collaboration_messages and st.session_state.result:
+        result_data = st.session_state.result.get('data') or {}
+        collaboration_messages = (result_data.get('agent_collaboration') or {}).get('messages', [])
+    if collaboration_messages:
+        with st.expander(f"Agent 协作记录（{len(collaboration_messages)} 条）", expanded=False):
+            st.caption("查看证据交接、补充请求和校验反馈。协作消息不代表实验已核验通过。")
+            for message in collaboration_messages[-40:]:
+                st.markdown(f"**{message['sender']} → {message['recipient']}** · {message['kind']}")
+                if message.get('reply_to'):
+                    st.caption('回复：' + str(message['reply_to']))
+                st.json(message.get('content'), expanded=False)
     if snap and snap.get("execution_output"):
         with st.expander("代码执行输出（最近16000字符）", expanded=True):
             if active_executions:

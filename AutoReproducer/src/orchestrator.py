@@ -18,6 +18,7 @@ from src.agents.report_generator import ReportGeneratorAgent
 from src.agents.optimizer import OptimizerAgent
 from src.resource_manager import ResourceManager
 from src.environment_lifecycle import release_run_environment
+from src.agent_collaboration import collaborative_run, current_collaboration
 
 # EnvBuilder 真实构建时使用的镜像名；成功构建后通过 env_config.image_tag
 # 透传给 CodeExecutor，让复现代码在本镜像内运行（含论文依赖）
@@ -81,6 +82,7 @@ class Orchestrator:
         self.data: Dict[str, Any] = {}
         self.error: Optional[str] = None
 
+    @collaborative_run
     @release_run_environment
     def run(self, input_data: dict, on_event=None) -> dict:
         """执行复现、验证与报告；智能优化接口当前尚未开放。
@@ -211,6 +213,7 @@ class Orchestrator:
             try:
                 result = agent.run(self.data)
                 self._merge_result(state_name, result)
+                self._handoff_result(state_name)
                 self._accumulate_llm_calls(result)
 
                 # Docker 真实模式：BUILD_ENV 产出配置后即真实构建镜像，
@@ -277,6 +280,8 @@ class Orchestrator:
             self._emit_state(self.state, "ReportGenerator", "running", phase_id="generate_report", attempt=1)
             self.logger.begin_plan("GENERATE_REPORT")
             self.data["audit_stats"] = self.logger.get_stats()
+            if current_collaboration():
+                current_collaboration().attach(self.data)
             try:
                 self.data["report"] = self.agents["reporter"].run(self.data) \
                     .get("report", "")
@@ -403,6 +408,32 @@ class Orchestrator:
                 "status": "not_implemented" if requested else "disabled",
                 "reason": ("智能优化接口已预留，当前版本尚未开放。" if requested
                            else "智能优化未启用；当前版本仅保留未来接口。")}
+
+    def _handoff_result(self, state_name):
+        """Deliver the preceding role's actual result to the next role's prompt."""
+        session = current_collaboration()
+        if session is None:
+            return
+        if state_name == 'READ_PAPER':
+            paper = self.data.get('paper_info') or {}
+            session.send('PaperReader', 'ResourceFinder', 'handoff', {
+                'paper': {key: paper.get(key) for key in ('title', 'method', 'dataset', 'dependencies')},
+                'reading_coverage': self.data.get('reading_coverage', {}),
+                'objective': 'Locate the original implementation using paper evidence.'})
+        elif state_name == 'FIND_RESOURCES':
+            resources = self.data.get('resources') or {}
+            session.send('ResourceFinder', 'EnvBuilder', 'handoff', {
+                key: resources.get(key) for key in
+                ('code_repo_url', 'selected_repo', 'selection_evidence', 'repository_identity')})
+        elif state_name == 'BUILD_ENV':
+            environment = self.data.get('env_config') or {}
+            session.send('EnvBuilder', 'CodeExecutor', 'handoff', {
+                key: environment.get(key) for key in ('required_packages', 'python_version', 'requirements_txt')})
+        elif state_name == 'EXECUTE_CODE':
+            execution = self.data.get('execution') or {}
+            session.send('CodeExecutor', 'ReportGenerator', 'result', {
+                key: execution.get(key) for key in ('success', 'executed', 'exit_code', 'cancelled', 'timed_out')})
+        session.attach(self.data)
 
     def _merge_result(self, state_name: str, result: dict) -> None:
         """将 Agent 输出合并进数据上下文。"""

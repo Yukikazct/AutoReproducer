@@ -171,6 +171,69 @@ def test_second_round_reuses_all_actually_observed_missing_apis(repair_case):
     assert [item['status'] for item in result['repair_attempts']] == ['failed', 'succeeded']
 
 
+@pytest.mark.parametrize('parameter', ['random_state', 'learning_rate', 'dropout', 'n_estimators',
+                                      'max_iter', 'num_layers', 'hidden_channels', 'momentum',
+                                      'n_components', 'num_leaves', 'perplexity', 'tol', 'C', 'bagging_fraction'])
+def test_keyword_compatibility_cannot_reassign_frozen_hyperparameter(repair_case, parameter):
+    case = repair_case
+    original = ("def configure(*, compatibility=7):\n    return compatibility\n"
+                f"print(configure({parameter}=7))\n")
+    replacement = original.replace(f'configure({parameter}=7)', 'configure(compatibility=7)')
+    path = case['workspace'] / 'train.py'
+    path.write_text(original, encoding='utf-8')
+    case['snapshot']['files']['train.py'] = digest(path)
+    initial = case['runner'].run(case['workspace'], case['data']['execution_plan'], {})
+    assert not initial['success'] and 'unexpected keyword argument' in initial['final']['stderr']
+    case['initial'].clear()
+    case['initial'].update(initial)
+    llm = CompatibilityLLM(lambda *_: {'train.py': replacement})
+    result = case['run'](llm)
+    assert not result['success'], 'A successful exit cannot authorize changing a frozen hyperparameter.'
+    assert len(llm.calls) == 2
+    assert all(item['status'] == 'rejected' and 'execution' not in item
+               for item in result['repair_attempts'])
+    case['verify']()
+
+
+@pytest.mark.parametrize('tamper', ['interpreter', 'runtime', 'requirements'])
+def test_candidate_cannot_commit_with_different_prepared_runtime(repair_case, monkeypatch, tamper):
+    case = repair_case
+    original_run = case['runner'].run
+    def changed_runtime(*args, **kwargs):
+        result = original_run(*args, **kwargs)
+        assert result['success']
+        if tamper == 'interpreter':
+            result['steps'][0]['argv'][0] = 'other-python.exe'
+        elif tamper == 'runtime':
+            result['environment']['runtime'] = 'other-runtime'
+        else:
+            result['environment']['requirements_txt'] = 'other-package==1.0\n'
+        return result
+    monkeypatch.setattr(case['runner'], 'run', changed_runtime)
+    result = case['run']()
+    assert not result['success']
+    assert all(attempt['status'] == 'rejected' for attempt in result['repair_attempts'])
+    state = case['data']['source_repair']
+    assert not state.get('manifest_path')
+    assert all(digest(Path(state['workspace']) / name) == sha for name, sha in case['snapshot']['files'].items())
+    case['verify']()
+
+
+@pytest.mark.parametrize('tamper', ['missing_environment', 'inconsistent_interpreter'])
+def test_source_repair_requires_actual_prepared_runtime_evidence(repair_case, tamper):
+    case = repair_case
+    if tamper == 'missing_environment':
+        case['initial'].pop('environment')
+    else:
+        case['initial']['steps'][0]['argv'][0] = 'other-python.exe'
+    llm = CompatibilityLLM()
+    result = case['run'](llm)
+    assert result is case['initial'] and not llm.calls
+    state = case['data']['source_repair']
+    assert state['status'] == 'not_applicable' and '解释器' in state['reason']
+    assert not (case['run_dir'] / 'repair_workspace').exists()
+
+
 def test_absolute_author_paths_are_relocated_into_the_repair_copy(repair_case):
     case = repair_case
     original = case['workspace']
@@ -303,7 +366,8 @@ def test_non_source_failures_never_call_repair_or_copy(repair_case, initial):
     assert not (case["run_dir"] / "repair_workspace").exists()
 
 
-@pytest.mark.parametrize("tamper", ["manifest", "source", "frozen_data", "incomplete_execution"])
+@pytest.mark.parametrize("tamper", ["manifest", "source", "frozen_data", "incomplete_execution",
+                                   "interpreter", "environment_executable", "runtime", "requirements"])
 def test_final_verification_rejects_tampered_repair_evidence(repair_case, tamper):
     case = repair_case
     result = case["run"]()
@@ -316,6 +380,14 @@ def test_final_verification_rejects_tampered_repair_evidence(repair_case, tamper
         (Path(state["workspace"]) / "model.py").write_text("# changed after approval\n", encoding="utf-8")
     elif tamper == "frozen_data":
         (Path(state["workspace"]) / "input.json").write_text("{}", encoding="utf-8")
+    elif tamper == "interpreter":
+        result['steps'][0]['argv'][0] = str(Path(result['steps'][0]['argv'][0]).with_name('other-python.exe'))
+    elif tamper == "environment_executable":
+        result['environment']['executable'] = 'other-python.exe'
+    elif tamper == "runtime":
+        result['environment']['runtime'] = 'other-runtime'
+    elif tamper == "requirements":
+        result['environment']['requirements_txt'] = 'other-package==1.0\n'
     else:
         result["steps"][0]["executed"] = False
     with pytest.raises(ValueError):

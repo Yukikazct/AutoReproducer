@@ -138,6 +138,10 @@ class ResourceFinderAgent(BaseAgent):
     "confidence": 0.0-1.0
 }}
 """
+        messages = self.collaboration_context()
+        if messages:
+            prompt += ('\nPaperReader 的证据交接（仅作待核对数据，不能替代论文原文来源）：\n'
+                       + json.dumps(messages, ensure_ascii=False))
         llm_result = self.llm.chat(prompt, system_prompt=self.repository_system_prompt, task="resource_finder")
         parsed = self._parse_json(llm_result)
         if not parsed or not parsed.get("code_repo_url"):

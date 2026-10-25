@@ -3,7 +3,7 @@
 PDF parsers are imported lazily so the bootstrap can recover missing application
 dependencies. Text in the abstract, body or references cannot select a profile.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import hashlib
 from io import BytesIO
 from pathlib import Path
@@ -12,6 +12,7 @@ import re
 from src.title_routing import match_paper_title, resolve_title_request
 from src.repository_routing import (REZERO_PROFILE_ID, extract_current_repository_links,
                                     match_repository_profile)
+from src.pdf_markdown import convert_pdf_pages
 
 
 PDF_INPUT_API_VERSION = 3
@@ -19,7 +20,7 @@ PDF_INPUT_API_VERSION = 3
 # must not mistake the same public API for the same extraction implementation.
 PDF_SOURCE_FINGERPRINT = hashlib.sha256(b"".join(
     Path(__file__).with_name(name).read_bytes()
-    for name in ("pdf_input.py", "repository_routing.py", "repository_evidence.py")
+    for name in ("pdf_input.py", "pdf_markdown.py", "repository_routing.py", "repository_evidence.py")
 )).hexdigest()
 
 
@@ -41,6 +42,7 @@ class PDFInput:
     byte_size: int
     repository_links: tuple = ()
     page_texts: tuple = ()
+    extraction: dict = field(default_factory=dict)
 
 
 def _pypdf_page_content(page, page_number):
@@ -174,11 +176,12 @@ def extract_pdf_input(pdf_path):
 
     if candidate is not None:
         pages, metadata_title, annotations, _ = candidate
-        return PDFInput(text="\n".join(pages), first_page_text=pages[0] if pages else "",
+        markdown_pages, extraction = convert_pdf_pages(payload, pages)
+        return PDFInput(text="\n".join(markdown_pages), first_page_text=pages[0] if pages else "",
                         metadata_title=metadata_title, page_count=len(pages),
                         sha256=hashlib.sha256(payload).hexdigest(), byte_size=len(payload),
                         repository_links=tuple(extract_current_repository_links(pages, annotation_sources)),
-                        page_texts=tuple(pages))
+                        page_texts=markdown_pages, extraction=extraction)
 
     if unavailable:
         raise PDFParserUnavailable("PDF 解析依赖缺失，需要自动准备应用运行环境后重试")

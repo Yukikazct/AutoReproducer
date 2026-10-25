@@ -132,6 +132,8 @@ def _sync_run_report(result: dict) -> None:
     report = Path(result["report_path"])
     from src.source_repair_evidence import report_evidence_bytes
     repair_evidence = report_evidence_bytes(report.read_text(encoding='utf-8'), report)
+    from src.pdf_markdown import report_markdown_bytes
+    repair_evidence.update(report_markdown_bytes(report.read_text(encoding='utf-8'), report))
     assets = report.with_name(report.stem + "_assets")
     if assets.exists():
         for image in assets.iterdir():
@@ -382,7 +384,7 @@ def run_pipeline_core(progress_path: str,
                 if event.get("phase_id"):
                     state["phase_id"] = event["phase_id"]
                 store.emit({**event, "agent": display_names.get(event.get("agent"), event.get("agent", ""))})
-            elif event.get("type") in {"repository_step", "repository_output", "execution_step", "execution_output", "execution_run", "repository_environment", "dependency_install_progress"}:
+            elif event.get("type") in {"repository_step", "repository_output", "execution_step", "execution_output", "execution_run", "repository_environment", "dependency_install_progress", "agent_message"}:
                 store.emit(event)
             elif event.get("type") == "pipeline_plan":
                 store.emit({**event, "stages": [

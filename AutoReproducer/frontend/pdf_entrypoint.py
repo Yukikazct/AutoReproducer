@@ -22,7 +22,7 @@ def _compatible(module):
 def _source_fingerprint():
     return hashlib.sha256(b"".join(
         (_project_root / "src" / name).read_bytes()
-        for name in ("pdf_input.py", "repository_routing.py", "repository_evidence.py")
+        for name in ("pdf_input.py", "pdf_markdown.py", "repository_routing.py", "repository_evidence.py")
     )).hexdigest()
 
 
@@ -56,6 +56,8 @@ def load_pdf_input():
             return upgraded
         routing = _load_private("src._pdf_routing_" + fingerprint[:16],
                                 _project_root / "src" / "repository_routing.py")
+        markdown = _load_private("src._pdf_markdown_" + fingerprint[:16],
+                                 _project_root / "src" / "pdf_markdown.py")
         upgraded = _load_private(name, _project_root / "src" / "pdf_input.py")
         try:
             if not _compatible(upgraded):
@@ -64,6 +66,7 @@ def load_pdf_input():
             # imported functions and globals until their actual run finishes.
             upgraded.extract_current_repository_links = routing.extract_current_repository_links
             upgraded.match_repository_profile = routing.match_repository_profile
+            upgraded.convert_pdf_pages = markdown.convert_pdf_pages
         except BaseException:
             sys.modules.pop(name, None)
             raise

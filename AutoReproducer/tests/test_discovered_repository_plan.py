@@ -65,6 +65,9 @@ def test_protocol_evidence_reuses_reader_recovered_pages_without_reparsing(tmp_p
     secondary_parser = Mock(return_value=(secondary, title, annotations))
     monkeypatch.setattr(pdf_input, '_extract_pypdf', primary_parser)
     monkeypatch.setattr(pdf_input, '_extract_pdfplumber', secondary_parser)
+    # Isolate the pre-Markdown glyph-recovery contract. Canonical Markdown
+    # sharing and its page hashes are exercised in test_pdf_markdown.py.
+    monkeypatch.setattr(pdf_input, 'convert_pdf_pages', lambda _raw, pages: (tuple(pages), {}))
     packet = planner.build_evidence_packet(fixture['pdf'], fixture['workspace'], fixture['snapshot'])
     assert [p['text'] for p in packet['pdf']['pages']] == secondary
     assert all(p['sha256'] == hashlib.sha256(p['text'].encode()).hexdigest() for p in packet['pdf']['pages'])
@@ -303,7 +306,9 @@ def test_quote_whitespace_is_reconciled_to_exact_original_without_editing_propos
     citation["quote"] = "\n\t".join(original.split())
     accepted = validate(experiment, proposal)
     evidence = next(item for item in accepted["citations"] if item["id"] == citation["id"])
-    assert evidence["quote"] == original
+    canonical = experiment['packet']['pdf']['pages'][citation['page'] - 1]['text']
+    assert evidence['quote'] == canonical.strip()
+    assert evidence['quote'].split() == original.split()
     assert evidence["proposed_quote"] == citation["quote"]
     assert citation["quote"] != original
     assert planner._citations({'citations': accepted['citations']},
