@@ -63,6 +63,25 @@ def test_changed_report_companion_prevents_zip_export(paper_data, tmp_path):
         build_report_bundle(text, report)
 
 
+@pytest.mark.parametrize('suffix', ['.md', '.json'])
+def test_missing_report_companion_is_a_recoverable_download_error(paper_data, tmp_path, suffix):
+    report = tmp_path / 'report.md'
+    text = ReportGeneratorAgent._build_report(paper_data, report_path=report)
+    companion = next(name for name in report_markdown_bytes(text, report) if name.endswith(suffix))
+    (tmp_path / companion).unlink()
+    with pytest.raises(ValueError, match='附件缺失'):
+        report_markdown_bytes(text, report)
+    with pytest.raises(ValueError, match='附件缺失'):
+        build_report_bundle(text, report)
+    from frontend.report_renderer import report_downloads
+    ui = Mock()
+    report_downloads({'data': {'report': text, 'report_path': str(report)}},
+                     key='missing_paper', st_module=ui)
+    ui.warning.assert_called_once()
+    assert '附件缺失' in ui.warning.call_args.args[0]
+    assert ui.download_button.call_count == 1  # The report itself is still available.
+
+
 def test_web_uses_downloads_and_hides_metadata_without_changing_offline_evidence(paper_data, tmp_path):
     path = tmp_path / 'report.md'
     report = ReportGeneratorAgent._build_report(paper_data, report_path=path)

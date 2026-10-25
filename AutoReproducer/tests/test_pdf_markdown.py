@@ -47,6 +47,20 @@ def test_changed_missing_or_duplicated_numbers_do_not_replace_original(monkeypat
     assert receipt['pages'][0]['reason'] == 'numeric_content_changed'
 
 
+@pytest.mark.parametrize('original,converted', [
+    ('acc81.5', 'acc8.15'),
+    ('result 81.5.', 'result 8.15.'),
+    ('coefficient1e-3', 'coefficient1e3'),
+    ('x.125', 'x1.25'),
+    ('version2.5.1 score81.5', 'version2.5.1 score8.15'),
+])
+def test_joined_labels_and_sentence_periods_cannot_hide_changed_numbers(monkeypatch, original, converted):
+    converter(monkeypatch, [converted])
+    pages, receipt = markdown.convert_pdf_pages(b'pdf', [original])
+    assert pages == (original,)
+    assert receipt['pages'][0]['reason'] == 'numeric_content_changed'
+
+
 @pytest.mark.parametrize('converted,reason', [
     ('Signal 79.4 81.5', 'numeric_order_changed'),
     ('Baseline 81.5\nSignal 79.4', 'readable_content_reordered'),
@@ -77,6 +91,11 @@ def test_dependency_failure_keeps_complete_pages_without_parser_error_leaks(monk
     ('Signal 81.5† Baseline 70.0', 'Signal 81.5 Baseline 70.0†'),
     ('Signal 81.5*', 'Signal 81.5'),
     ('Difference - 0.6', 'Difference + 0.6'),
+    ('Interval 0.1–0.5', 'Interval 0.1 0.5'),
+    ('Interval 0.1–0.5', 'Interval 0.1—0.5'),
+    ('Rate 0.5‰', 'Rate 0.5'),
+    ('Rate 0.5‱', 'Rate 0.5'),
+    ('Temperature 30°', 'Temperature 30'),
 ])
 def test_equal_digits_cannot_erase_or_move_scientific_conditions(monkeypatch, original, converted):
     converter(monkeypatch, [converted])

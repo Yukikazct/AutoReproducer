@@ -128,6 +128,31 @@ def test_validator_rejection_returns_to_second_prompt_after_full_rollback(reposi
     assert (repository / 'data' / 'split.csv').read_bytes() == original['data/split.csv']['content']
 
 
+@pytest.mark.parametrize('full_plan', [False, True])
+@pytest.mark.parametrize('reuse_failure', [False, True])
+def test_repair_handoff_accepts_both_runner_plan_forms_without_changing_commands(
+        repository, runner, monkeypatch, full_plan, reuse_failure):
+    command = {'version': 1, 'mode': 'repository', 'steps': steps()} if full_plan else steps()
+    original = deepcopy(command)
+    initial = runner.run(repository, command, {}) if reuse_failure else None
+    run = Mock(wraps=runner.run)
+    monkeypatch.setattr(runner, 'run', run)
+    session = CollaborationSession()
+    with session.scope():
+        result = runner.run_with_repairs(repository, command, {}, llm=ScriptedLLM(valid_patch),
+            editable=['train.py'], initial_execution=initial)
+    assert result['success'], result
+    assert result['final']['stdout'].strip() == '7'
+    assert command == original
+    assert run.call_count == (1 if reuse_failure else 2)
+    assert all(call.args[1] == original for call in run.call_args_list)
+    messages = session.snapshot()['messages']
+    request = next(item for item in messages if item['kind'] == 'rerun_original_plan')
+    assert request['content']['step_ids'] == ['train']
+    outcome = next(item for item in messages if item['reply_to'] == request['id'])
+    assert outcome['kind'] == 'execution_result' and outcome['content']['success'] is True
+
+
 def test_failed_rerun_is_sent_back_as_concrete_execution_feedback(repository, runner):
     initial_source = (repository / 'train.py').read_bytes()
 

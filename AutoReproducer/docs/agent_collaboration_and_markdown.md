@@ -51,3 +51,5 @@ Windows owner 退出、Job 活跃计数为零或 Job 消失均不足以单独证
 `tests/test_pdf_markdown.py` 包含真实 MarkItDown 与仓库内 SGC、SSGC PDF 的回归：核验 SGC 第 6 页的 Cora、Citeseer、Pubmed 均值和标准差，以及 SSGC 第 10 页的 R52 数值，并拒绝邻近方法或数据集的错误数值。这些样本经过原 PDF 页面视觉核对；不调用模型，也不运行训练。
 
 `test_agent_collaboration.py`、`test_agent_collaboration_integration.py`、`test_author_plan_collaboration.py` 和 `test_repair_collaboration.py` 验证消息消费、来源约束、拒绝反馈、真实本地命令重跑、取消和预算。全量测试使用显式的项目 `tests/test_*.py` 列表，避免收集数据目录中下载的作者仓库测试。
+
+原生 CPU 验收另用独立环境：PyG 使用 Python 3.12，DGL 使用 Python 3.11。测试应用安装时加上 `-c requirements-native-app-constraints.txt`，使应用与原生包共用已审核的 NumPy 版本，并避开与 NumPy 1 不兼容的 PyArrow 26。`scripts/verify_native_runtime.py` 实际运行图计算、表格转换和图像渲染；CI 还执行 `pip check`，原生测试不允许跳过。源码修复回归同时覆盖完整计划对象与步骤列表，确认协作消息不会改变原命令或阻止合法补丁重跑。

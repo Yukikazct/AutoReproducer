@@ -16,6 +16,7 @@ import uuid
 from src.agents.code_executor import CodeExecutorAgent, _safe_install_diagnostic
 from src.agent_collaboration import current_collaboration
 from src.author_self_repair import failure_diagnostic
+from src.execution_plan import plan_steps
 from src.safety.patch_policy import PatchPolicy
 from src.safety.patch_transaction import PatchTransaction
 from src.safety.paths import filesystem_path, is_link, workspace_path
@@ -322,7 +323,7 @@ class RepositoryRepairer:
                         if collaboration is not None:
                             execution_request = collaboration.send(
                                 "RepositoryRepairer", "CodeExecutor", "rerun_original_plan",
-                                {"round": index + 1, "step_ids": [step.get("id") for step in steps],
+                                {"round": index + 1, "step_ids": [step.get("id") for step in plan_steps(steps)],
                                  "command_plan_unchanged": True,
                                  "reason": "Run the original complete plan in the isolated repair workspace."})
                         candidate = self.runner.run(root, deepcopy(steps), deepcopy(environment), on_event=on_event)

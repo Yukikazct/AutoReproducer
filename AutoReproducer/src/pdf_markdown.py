@@ -17,7 +17,10 @@ import unicodedata
 MAX_PDF_BYTES = 30 * 1024 * 1024
 MAX_PAGES = 200
 MAX_MARKDOWN_CHARS = 1000000
-_NUMBER = re.compile(r'(?<![\w.])[+\-\u2212]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+\-]?\d+)?%?(?![\w.])')
+# PDF extraction can join a label to its value or leave a sentence period
+# immediately after a decimal. Word/period boundaries would hide those values
+# and let a moved decimal point pass the separate readable-character check.
+_NUMBER = re.compile(r'[+\-\u2212]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+\-]?\d+)?%?')
 
 
 def _sha(text):
@@ -205,8 +208,8 @@ def _rejection(original, markdown):
     # to the labels/numbers, ignoring only generated Markdown table rules.
     def scientific_sequence(text):
         text = re.sub(r'^\s*\|?(?:\s*:?-{3,}:?\s*\|)+\s*:?-{3,}:?\s*\|?\s*$', '', text, flags=re.M)
-        return ''.join(c for c in text if c.isalnum() or c in '+-/%^†‡*'
-                       or (unicodedata.category(c) == 'Sm' and c != '|'))
+        return ''.join(c for c in text if c.isalnum() or c in '+-/%^†‡*‰‱°'
+                       or (unicodedata.category(c) in {'Sm', 'Pd'} and c != '|'))
     if scientific_sequence(original) != scientific_sequence(markdown):
         return 'scientific_notation_changed'
     if markdown.count('\ufffd') > original.count('\ufffd'):
@@ -358,10 +361,13 @@ def report_markdown_bytes(report, report_path):
         if (len(relative.parts) != 2 or not relative.parts[0].endswith('_assets')
                 or relative.parts[1] != f'paper_markdown_{digest}{suffix}'):
             raise ValueError('论文 Markdown 附件路径无效')
-        path = workspace_path(root, name, 'report paper Markdown', must_exist=True)
-        if not path.is_file() or path.stat().st_size > 32 * 1024 * 1024:
-            raise ValueError('论文 Markdown 附件缺失或超限')
-        raw = path.read_bytes()
+        try:
+            path = workspace_path(root, name, 'report paper Markdown', must_exist=True)
+            if not path.is_file() or path.stat().st_size > 32 * 1024 * 1024:
+                raise ValueError('论文 Markdown 附件缺失或超限')
+            raw = path.read_bytes()
+        except OSError as exc:
+            raise ValueError('论文 Markdown 附件缺失或无法读取') from exc
         if hashlib.sha256(raw).hexdigest() != digest:
             raise ValueError('论文 Markdown 附件哈希不一致')
         result[name] = raw

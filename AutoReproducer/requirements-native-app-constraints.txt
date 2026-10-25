@@ -1,0 +1,4 @@
+# Native test processes share the reviewed NumPy ABI with the application.
+-c requirements-native-common.txt
+# PyArrow 26 imports require NumPy 2 even though wheel metadata permits 1.26.
+pyarrow<26
