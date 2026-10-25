@@ -64,6 +64,8 @@ def test_upgrade_is_local_and_keeps_original_evidence(legacy_result, tmp_path, f
     assert "UNCHANGED LOG TAIL" in upgraded["data"]["report"]
     assert upgraded["state"] == before["state"]
     assert upgraded["data"]["validation"] == before["data"]["validation"]
+    assert upgraded["data"]["reproduction_conclusion"]["is_reproduced"] is None
+    assert "## 本次复现结论" in upgraded["data"]["report"]
     assert upgraded["data"]["execution"] == before["data"]["execution"]
     assert upgraded["data"]["audit_stats"] == before["data"]["audit_stats"]
     assert load_report_revision_source(tmp_path / "report.md") == before

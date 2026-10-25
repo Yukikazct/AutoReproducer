@@ -4,6 +4,8 @@ import re
 
 _START = "<!-- autoreproducer-run-finalization:start -->"
 _END = "<!-- autoreproducer-run-finalization:end -->"
+_CONCLUSION_START = "<!-- autoreproducer-conclusion:start -->"
+_CONCLUSION_END = "<!-- autoreproducer-conclusion:end -->"
 
 def _lines_outside_fences(report):
     fence = None
@@ -21,12 +23,12 @@ def _lines_outside_fences(report):
         offset += len(line)
 
 
-def _remove_summary(report):
+def _remove_summary(report, start_marker=_START, end_marker=_END):
     start = None
     for offset, line in _lines_outside_fences(report):
-        if line.strip() == _START:
+        if line.strip() == start_marker:
             start = offset
-        elif start is not None and line.strip() == _END:
+        elif start is not None and line.strip() == end_marker:
             end = offset + len(line)
             while end < len(report) and report[end] == "\n":
                 end += 1
@@ -39,12 +41,36 @@ def _text(value):
     return re.sub(r"([\\`*_\[\]<>])", r"\\\1", value)
 
 
+def _insert_block(report, lines, *, before_markers=()):
+    visible = list(_lines_outside_fences(report))
+    position = next((offset for offset, line in visible
+                     if line.startswith("## ") or line.strip() in before_markers), None)
+    if position is None:
+        position = next((offset for offset, line in visible
+                         if line.startswith("> 📎 **完整执行输出附件**:")
+                         and not report[offset + len(line):].strip()), None)
+    if position is None:
+        return report.rstrip() + "\n\n" + "\n".join(lines)
+    return report[:position].rstrip() + "\n\n" + "\n".join(lines) + "\n" + report[position:]
+
+
+def _with_conclusion(report, data):
+    from src.result_conclusion import build_reproduction_conclusion, conclusion_markdown
+    conclusion = build_reproduction_conclusion(data)
+    data["reproduction_conclusion"] = conclusion
+    lines = [_CONCLUSION_START, conclusion_markdown(conclusion), _CONCLUSION_END, ""]
+    return _insert_block(report, lines, before_markers=(_START,))
+
+
 def finalize_report_text(report, data):
-    """Replace only the lifecycle summary, retaining output, assets and footer."""
+    """Refresh current conclusions, retaining original evidence, assets and footer."""
     receipt = data.get("environment_cleanup") or {}
     finalization = data.get("run_finalization") or {}
-    if not report or not receipt:
+    if not report:
         return report
+    report = _remove_summary(report, _CONCLUSION_START, _CONCLUSION_END)
+    if not receipt:
+        return _with_conclusion(report, data)
     state = finalization.get("state")
     lines = [_START, "### 任务收尾", "",
              "- **总任务状态**: " + {"COMPLETED": "已完成", "ERROR": "异常结束"}.get(state, "已结束"),
@@ -62,12 +88,4 @@ def finalize_report_text(report, data):
     lines += ["- 实验执行与论文数值结论保留在下方核验记录中。", _END, ""]
     report = _remove_summary(report)
     # Keep the execution attachment footer at the end so ZIP export includes it.
-    visible = list(_lines_outside_fences(report))
-    position = next((offset for offset, line in visible if line.startswith("## ")), None)
-    if position is None:
-        position = next((offset for offset, line in visible
-                         if line.startswith("> 📎 **完整执行输出附件**:")
-                         and not report[offset + len(line):].strip()), None)
-    if position is None:
-        return report.rstrip() + "\n\n" + "\n".join(lines)
-    return report[:position].rstrip() + "\n\n" + "\n".join(lines) + "\n" + report[position:]
+    return _with_conclusion(_insert_block(report, lines), data)

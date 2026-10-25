@@ -94,6 +94,7 @@ def test_web_uses_downloads_and_hides_metadata_without_changing_offline_evidence
     assert 'report_assets/paper_markdown_' not in visible and '<!-- sha256:' not in visible
     assert visible.count('<!-- autoreproducer-report-format: 3 -->') == 1  # Code remains literal.
     assert '<!-- autoreproducer-run-finalization:' not in visible
+    assert '<!-- autoreproducer-conclusion:' not in visible
     with zipfile.ZipFile(io.BytesIO(build_report_bundle(report, path))) as archive:
         assert archive.read('report.md').decode('utf-8') == report
         assert len(archive.namelist()) == 3

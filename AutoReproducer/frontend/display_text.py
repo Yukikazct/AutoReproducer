@@ -10,7 +10,7 @@ _DECORATIONS = re.compile(
 )
 _FENCE = re.compile(r"^\s{0,3}(`{3,}|~{3,})")
 _REPORT_METADATA = re.compile(
-    r"<!-- autoreproducer-(?:report-format: \d+|run-finalization:(?:start|end)) -->"
+    r"<!-- autoreproducer-(?:report-format: \d+|(?:run-finalization|conclusion):(?:start|end)) -->"
 )
 _PAPER_ATTACHMENT = re.compile(
     r"\[(论文 Markdown|PDF 转换依据)\]\([^\r\n)]+\) <!-- sha256:[0-9a-f]{64} -->"
