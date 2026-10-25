@@ -64,7 +64,7 @@ app.py
 
 这些 Agent 按阶段执行，使用同一运行中的角色收件箱交换证据和反馈。Reader 的来源摘要进入 Finder，Planner 的源码请求交给 SourceReader，PlanValidator 的具体拒绝原因进入下一轮规划；执行失败交给 FailureAnalyst，其结论进入修复提示，PatchValidator 与 CodeExecutor 的校验或重跑结果反馈给下一轮修复。命令、哈希、修复白名单和实验协议仍由确定性规则核验。消息通道本身不调用模型，也不调度并行模型进程。
 
-消息包含发送者、接收者、类型、关联 ID 和消费标记，最终保存为 `agent_collaboration.json`，网页与报告显示协作记录。每次运行独立隔离，最多 128 条、128 KiB；预算满时停止添加消息，不延长已有规划或修复次数。详见 [Agent 协作与 PDF Markdown](agent_collaboration_and_markdown.md)。
+消息包含发送者、接收者、类型、关联 ID 和消费标记，最终保存为 `agent_collaboration.json`，网页与报告显示协作记录。每次运行独立隔离，最多 128 条、JSON 序列化后总计最多 131072 字符；预算满时停止添加消息，不延长已有规划或修复次数。详见 [Agent 协作与 PDF Markdown](agent_collaboration_and_markdown.md)。
 
 ## 当前开放范围
 

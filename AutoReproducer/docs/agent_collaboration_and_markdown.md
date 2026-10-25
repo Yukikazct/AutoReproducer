@@ -36,7 +36,7 @@
 | PatchValidator / CodeExecutor → RepositoryRepairer | 校验拒绝或重跑错误进入下一轮修复，失败先回滚 |
 | 执行结果 → ReportGenerator | 消费最终结果上下文并附上协作轨迹 |
 
-协作使用进程内、单次运行隔离的 `CollaborationSession`。它提供 `send`、`reply`、`context`、`snapshot`、`persist`，不创建无限对话或独立常驻模型。消息存储最多 128 条、总计 128 KiB，单条最多 8192 字符，收件上下文最多 16 KiB。已知 API 凭据、授权头和常见密钥字段先脱敏，再进入事件、日志和产物。
+协作使用进程内、单次运行隔离的 `CollaborationSession`。它提供 `send`、`reply`、`context`、`snapshot`、`persist`，不创建无限对话或独立常驻模型。消息存储最多 128 条，JSON 序列化后总计最多 131072 字符，单条最多 8192 字符，收件上下文最多 16384 字符。已知 API 凭据、授权头和常见密钥字段先脱敏，再进入事件、日志和产物。
 
 网页的“Agent 协作记录”展示消息内容，历史结果与报告保存同一轨迹；收到消息不会令执行阶段自动完成。报告用短摘要和消息序号展示交接及回复关系，完整负载保存在 `agent_collaboration.json`，避免长摘要和哈希撑宽页面。异常中止仍保留已发生的交流，分析被打断时记录 `analysis_interrupted`，不向修复器发布未完成的分析结论。
 
