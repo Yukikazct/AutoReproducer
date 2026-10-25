@@ -12,6 +12,7 @@ from pathlib import Path
 import re
 
 from src.execution_plan import build_plan
+from src.agent_collaboration import current_collaboration
 from src.method_adapters import digest, read_json, write_json
 from src.safety.patch_policy import PatchPolicy
 from src.safety.paths import filesystem_path, relative_path, workspace_path
@@ -262,6 +263,9 @@ def repair_author_failure(runner, llm, request, plan, snapshot, workspace, run_d
         raise
     finally:
         try:
+            collaboration = current_collaboration()
+            if collaboration is not None:
+                collaboration.attach(data)
             write_json(run_dir / 'source_repair.json', state)
             from src.source_repair_evidence import archive_repair_evidence
             archive_repair_evidence(run_dir, data)
@@ -435,7 +439,16 @@ def _repair_author_failure(runner, llm, request, plan, snapshot, workspace, run_
         current_files.update(expected)
 
     result = None
+    collaboration = current_collaboration()
+    repair_request = None
     try:
+        if collaboration is not None:
+            from src.author_self_repair import failure_diagnostic
+            repair_request = collaboration.send('CodeExecutor', 'RepositoryRepairer', 'repair_failure',
+                {'selected_sources': list(state['editable']), 'max_rounds': 2,
+                 'original_failure': failure_diagnostic(execution)[-1800:],
+                 'original_spec_sha256': data['spec_sha256'],
+                 'constraints': 'Only isolated compatibility repairs; preserve original argv, runtime, inputs and protocol.'})
         on_event({'type': 'log', 'log': {'agent': 'CodeExecutor', 'action': 'source_repair',
             'status': 'RUNNING', 'detail': '正在独立副本中尝试最多两轮兼容性源码修复；完整原命令将重跑。'}})
         # The policy is an outer source ceiling. In automatic mode the callback
@@ -493,6 +506,14 @@ def _repair_author_failure(runner, llm, request, plan, snapshot, workspace, run_
                 state.update(status=record['status'], attempts=record['attempts'], records_path=str(path),
                              report_path=str(path.with_name('repair_report.md')))
                 break
+        if collaboration is not None:
+            collaboration.reply(repair_request, 'RepositoryRepairer',
+                {'status': state['status'], 'rounds': len(state.get('attempts', [])),
+                 'changed_files': [item['path'] for item in state.get('changed_files', [])],
+                 'reason': state.get('reason') or '',
+                 'paper_metrics_verified': False, 'is_reproduced': None},
+                kind='repair_result')
+            collaboration.attach(data)
         write_json(run_dir / 'source_repair.json', state)
 
 

@@ -104,6 +104,8 @@ def build_report_bundle(report, report_path):
     buffer = io.BytesIO()
     from src.source_repair_evidence import report_evidence_bytes
     repair_evidence = report_evidence_bytes(report, report_file)
+    from src.pdf_markdown import report_markdown_bytes
+    reading_evidence = report_markdown_bytes(report, report_file)
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         archive.writestr(report_file.name, report)
         for target, raw in figures.items():
@@ -111,6 +113,8 @@ def build_report_bundle(report, report_path):
         if attachment is not None:
             archive.write(attachment, attachment_name)
         for name, raw in repair_evidence.items():
+            archive.writestr(name, raw)
+        for name, raw in reading_evidence.items():
             archive.writestr(name, raw)
     return buffer.getvalue()
 
@@ -128,6 +132,11 @@ def report_downloads(result, *, key, st_module=None, data_root=None):
     st_module.download_button("下载报告", data=report, file_name=path.name,
                               mime="text/markdown", key=f"{key}_markdown")
     try:
+        from src.pdf_markdown import report_markdown_bytes
+        for name, raw in report_markdown_bytes(report, path).items():
+            if name.endswith('.md'):
+                st_module.download_button('下载论文 Markdown', data=raw, file_name='paper_markdown.md',
+                                          mime='text/markdown', key=f'{key}_paper_markdown')
         st_module.download_button("下载报告和图片（ZIP）", data=build_report_bundle(report, path),
                                   file_name=path.stem + ".zip", mime="application/zip",
                                   key=f"{key}_zip")

@@ -51,6 +51,20 @@ class BaseAgent(ABC):
     def __repr__(self) -> str:
         return f"Agent({self.name})"
 
+    def collaboration_context(self):
+        """Receive bounded, run-local peer evidence; messages cannot authorize actions."""
+        from src.agent_collaboration import current_collaboration
+        session = current_collaboration()
+        return session.context(self.name) if session else []
+
+    def send_message(self, recipient, kind, content, *, evidence=None):
+        """Route a structured handoff inside the current invocation only."""
+        from src.agent_collaboration import current_collaboration
+        session = current_collaboration()
+        if session:
+            return session.send(self.name, recipient, kind, content, evidence=evidence)
+        return None
+
     @staticmethod
     def _resolve_docker_cmd() -> Optional[str]:
         """解析可用的 docker CLI 路径。

@@ -46,6 +46,8 @@ app.py
 | `app.py`、`frontend/` | 输入、LLM 配置、后台任务、进度、历史、报告展示与下载 |
 | `orchestrator.py` | 解析请求并分流至预设、作者仓库或兼容路径 |
 | `agents/paper_reader.py`、`paper_reading.py` | 读取 PDF、分批整理全文、保存阅读覆盖情况和原始依据 |
+| `pdf_input.py`、`pdf_markdown.py` | 从同一 PDF 字节提取正文并用 MarkItDown 转换；逐页检查内容完整性，保留原文回退及受坐标约束的表格视图 |
+| `agent_collaboration.py` | 单次运行内的角色消息、请求与回复关联、收件上下文、脱敏和有界协作记录 |
 | `agents/resource_finder.py`、`agents/repo_discovery.py` | 结合论文链接、用户输入及搜索定位仓库候选 |
 | `discovered_repository_reproduction.py` | 动态作者仓库的来源固定、计划、数据、环境、执行和结果组织 |
 | `author_execution_plan.py`、`author_entrypoints.py` | 从固定源码规划原始 Python 脚本、模块或 Notebook 命令 |
@@ -60,7 +62,9 @@ app.py
 | `agents/report_generator.py`、`report_revisions.py` | 生成报告，保留来源、执行诊断、指标与历史报告版本 |
 | `environment_lifecycle.py`、`resource_manager.py`、`audit/` | 实验依赖释放、资源清单、归档及审计记录 |
 
-这些 Agent 按阶段执行，并非并行的独立模型进程。模型用于阅读、发现、规划、有限失败分析和信息比较；命令执行、哈希校验、进程清理及结果落盘由程序完成。
+这些 Agent 按阶段执行，使用同一运行中的角色收件箱交换证据和反馈。Reader 的来源摘要进入 Finder，Planner 的源码请求交给 SourceReader，PlanValidator 的具体拒绝原因进入下一轮规划；执行失败交给 FailureAnalyst，其结论进入修复提示，PatchValidator 与 CodeExecutor 的校验或重跑结果反馈给下一轮修复。命令、哈希、修复白名单和实验协议仍由确定性规则核验。消息通道本身不调用模型，也不调度并行模型进程。
+
+消息包含发送者、接收者、类型、关联 ID 和消费标记，最终保存为 `agent_collaboration.json`，网页与报告显示协作记录。每次运行独立隔离，最多 128 条、128 KiB；预算满时停止添加消息，不延长已有规划或修复次数。详见 [Agent 协作与 PDF Markdown](agent_collaboration_and_markdown.md)。
 
 ## 当前开放范围
 
@@ -68,7 +72,7 @@ app.py
 - 原始作者命令不设训练时间上限；严格捕获保留全部原作者步骤，并将这些步骤的 `timeout_s` 设为 `None`。追加的独立模型推理与指标复算步骤单独限制为 300 秒；下载、安装和模型请求保留各自的超时，错误修复有次数上限。缺少 CUDA、依赖或可支持入口时保留具体阻塞原因。
 - `author_code_completed` 表示所需命令正常返回且所属进程完成处理。仅准备源码或环境属于准备状态；Mock 属于演示状态。
 - 普通 PDF 作者仓库执行完成后尝试比较作者输出与论文宣称。比较保留引用、差值和限制，失败不改变已经保存的命令完成事实；它不替代独立复算和整篇论文验收。
-- `source_repair` 默认 `False`。网页仅对普通真实 PDF 提供选项，并要求明确填写 1–32 个已存在的 Python 相对路径；不接受目录、通配符、数据、评测或权重文件。请求经后台与独立 worker 传递，默认执行不修改作者源码；标题、Mock、语料对照、外部代码、固定预设和 Notebook 计划不进入该修复路径。
+- 编程接口的 `source_repair` 默认 `False`；普通真实 PDF 网页默认勾选有界兼容性修复，可关闭。文件列表留空时启用 `source_repair_auto`，根据最终真实 traceback、固定源码摘要和缺失 API 自动定位最多三个 Python 文件；也可填写 1–32 个已存在的 Python 相对路径，实际每轮修改仍最多三个。不接受目录、通配符、数据、评测或权重文件。标题、Mock、语料对照、外部代码、固定预设和 Notebook 计划不进入该修复路径。
 - 显式源码修复在原命令真实失败后只创建一次独立会话，最多两轮、每轮最多三个文件；拒绝也消耗轮数。副本只包含固定作者源码与冻结输入，原工作区、来源与观测器保持独立。候选保留原 argv、cwd、依赖顺序、步骤环境及已准备依赖；在应用前核对 AST 结构、训练/划分/评测敏感名称与会话已观测的真实报错中的缺失 API，再按原命令完整重跑。复制和快照前用元数据检查 4096 文件 / 256 MiB 上限，超限保留 `resource_limit` 诊断；失败或后验校验异常全树回滚，恢复失败立即停止并标记 `rollback_failed`。
 - 源码修复对作者环境中的工作区绝对路径做有记录的副本重定位；尚无冻结凭据的动态 `author_runtime` 数据不进入修复。2026-10-21 的 248 项合成机制验证及来源指纹见 [入口证据](evidence/issue20_web_repairs_20261021.json)。2026-10-23 新增真实模型 API 的自动定位、兼容补丁和数值诊断验证，以及下载卡住后的停止与清理机制，见 [紧急修复记录](p0_cancellation_self_repair_20261023.md)。
 - 修复成功保存原失败、独立修复计划、逐轮提案 / diff / 日志 / 回滚结果及原/实际源码摘要清单。结果明确标记 `patched_author_repository`、`patched_author_code_execution` 和 `source_modified=true`；仍为 `paper_metrics_verified=false`、`is_reproduced=null`、`training_observed=false`。参考比较使用修复后的来源摘要并标记 `patched_author_output`。此入口与严格核验互斥，细节见 [显式仓库兼容修复](repository_repairs.md)；实现接入不等于网页完整验收或真实论文严格通过。
