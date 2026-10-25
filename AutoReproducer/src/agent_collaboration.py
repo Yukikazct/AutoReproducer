@@ -30,6 +30,8 @@ MAX_CONTEXT_CHARS = 16 * 1024
 MAX_CONTENT_CHARS = 6000
 MAX_DEPTH = 6
 MAX_ITEMS = 32
+MAX_EVIDENCE_CACHE_ENTRIES = 2
+MAX_EVIDENCE_CACHE_CHARS = 2000000
 
 _CURRENT: ContextVar[CollaborationSession | None] = ContextVar(
     "autoreproducer_agent_collaboration", default=None)
@@ -61,6 +63,11 @@ class CollaborationSession:
         self._dropped_messages = 0
         self._storage_error = ""
         self._lock = RLock()
+        self._evidence_cache_lock = RLock()
+        self._evidence_cache = {}
+        self._evidence_cache_chars = 0
+        self._evidence_cache_stats = {name: 0 for name in
+            ('hits', 'misses', 'stores', 'evictions', 'rejected')}
 
     def _text(self, value):
         if self._credential:
@@ -208,6 +215,94 @@ class CollaborationSession:
                     length += size
             return deepcopy(list(reversed(selected)))
 
+    @contextmanager
+    def evidence_cache_scope(self):
+        """Coalesce concurrent reads without blocking message delivery or UI events."""
+        with self._evidence_cache_lock:
+            yield
+
+    def cached_evidence(self, identity):
+        """Return a detached record for an opaque, caller-verified source identity."""
+        if type(identity) is not str or not re.fullmatch(r'[0-9a-f]{64}', identity):
+            raise ValueError('evidence identity must be a SHA-256 digest')
+        with self._lock:
+            encoded = self._evidence_cache.pop(identity, None)
+            if encoded is None:
+                self._evidence_cache_stats['misses'] += 1
+                return None
+            self._evidence_cache[identity] = encoded  # Most recently consumed.
+            self._evidence_cache_stats['hits'] += 1
+        return json.loads(encoded)
+
+    def reject_evidence_cache(self):
+        """Count an ineligible record without retaining its content or diagnostics."""
+        with self._lock:
+            self._evidence_cache_stats['rejected'] += 1
+
+    def cache_evidence(self, identity, record):
+        """Retain bounded plain JSON only; never persist cache payloads or keys."""
+        if type(identity) is not str or not re.fullmatch(r'[0-9a-f]{64}', identity):
+            raise ValueError('evidence identity must be a SHA-256 digest')
+        # Inspect built-in containers before serialization: a custom mapping,
+        # getter, encoder or repr must not run while inspecting source evidence.
+        pending, nodes, characters = [(record, 0)], 0, 0
+        eligible = type(record) is dict
+        while eligible and pending:
+            item, depth = pending.pop()
+            nodes += 1
+            kind = type(item)
+            if nodes > 100000 or depth > 32:
+                eligible = False
+            elif kind is str:
+                characters += len(item)
+            elif item is None or kind in (bool, int):
+                pass
+            elif kind is float:
+                eligible = math.isfinite(item)
+            elif kind is dict:
+                if len(item) + len(pending) + nodes > 100000:
+                    eligible = False
+                    break
+                for key, value in item.items():
+                    if type(key) is not str or _SECRET_NAME.search(key):
+                        eligible = False
+                        break
+                    characters += len(key)
+                    pending.append((value, depth + 1))
+            elif kind in (list, tuple):
+                if len(item) + len(pending) + nodes > 100000:
+                    eligible = False
+                    break
+                pending.extend((value, depth + 1) for value in item)
+            else:
+                eligible = False
+            if characters > MAX_EVIDENCE_CACHE_CHARS:
+                eligible = False
+        encoded = None
+        if eligible:
+            try:
+                encoded = json.dumps(record, ensure_ascii=False, allow_nan=False)
+            except (TypeError, ValueError):
+                pass
+        if (encoded is None or len(encoded) > MAX_EVIDENCE_CACHE_CHARS
+                or self._text(encoded) != encoded or MAX_EVIDENCE_CACHE_ENTRIES < 1):
+            self.reject_evidence_cache()
+            return False
+        with self._lock:
+            previous = self._evidence_cache.pop(identity, None)
+            if previous is not None:
+                self._evidence_cache_chars -= len(previous)
+            while self._evidence_cache and (
+                    len(self._evidence_cache) >= MAX_EVIDENCE_CACHE_ENTRIES
+                    or self._evidence_cache_chars + len(encoded) > MAX_EVIDENCE_CACHE_CHARS):
+                oldest = next(iter(self._evidence_cache))
+                self._evidence_cache_chars -= len(self._evidence_cache.pop(oldest))
+                self._evidence_cache_stats['evictions'] += 1
+            self._evidence_cache[identity] = encoded
+            self._evidence_cache_chars += len(encoded)
+            self._evidence_cache_stats['stores'] += 1
+        return True
+
     def snapshot(self):
         with self._lock:
             result = {"version": 1, "run_id": self.run_id,
@@ -215,6 +310,11 @@ class CollaborationSession:
                       "participants": sorted(self._participants),
                       "messages": deepcopy(self._messages),
                       "dropped_messages": self._dropped_messages,
+                      "evidence_cache": {**self._evidence_cache_stats,
+                          "entries": len(self._evidence_cache),
+                          "serialized_chars": self._evidence_cache_chars,
+                          "max_entries": MAX_EVIDENCE_CACHE_ENTRIES,
+                          "max_serialized_chars": MAX_EVIDENCE_CACHE_CHARS},
                       "budgets": {"max_messages": MAX_MESSAGES,
                                   "max_message_chars": MAX_MESSAGE_CHARS,
                                   "max_total_chars": MAX_TOTAL_CHARS}}

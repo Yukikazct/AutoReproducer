@@ -60,7 +60,10 @@ def test_failed_command_keeps_error_state_and_generates_failure_report(pipeline,
     assert result['data']['validation']['status'] == 'execution_failed'
     report = result['data']['report']
     original, marker, summary = report.partition('\n\n<!-- autoreproducer-run-finalization:start -->\n')
+    original, conclusion_marker, conclusion = original.partition('\n\n<!-- autoreproducer-conclusion:start -->\n')
     assert original == 'Actual command output'
+    assert conclusion_marker and '本次复现结论' in conclusion
+    assert result['data']['reproduction_conclusion']['status'] == ('interrupted' if exit_code == 130 else 'failed')
     assert marker and report.count('<!-- autoreproducer-run-finalization:start -->') == 1
     assert report.count('<!-- autoreproducer-run-finalization:end -->') == 1
     assert '**总任务状态**: 异常结束' in summary

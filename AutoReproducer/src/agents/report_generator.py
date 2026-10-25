@@ -169,6 +169,15 @@ def _outcome_diagnosis_lines(data):
              '- **说明**: ' + _markdown_text(_txt(diagnosis.get('reason'))),
              '- 本诊断核查已有结果与冻结设置；未修改实验参数、源码、参考值或重新训练。']
     known = {item.get('id'): item for item in diagnosis.get('evidence', []) if isinstance(item, dict)}
+    assessment = diagnosis.get('assessment') or {}
+    coverage = assessment.get('comparison_coverage') or {}
+    if coverage:
+        lines += [f"- **比较覆盖**: 共 {coverage.get('total', 0)} 项，可比较 {coverage.get('comparable', 0)} 项，"
+                  f"仅供参考 {coverage.get('reference_only', 0)} 项，不可比较 {coverage.get('not_comparable', 0)} 项。",
+                  f"- **已记录参考差距**: {coverage.get('outside_reference', 0)} 项；根因尚未确认。"]
+    reused = (diagnosis.get('efficiency') or {}).get('cache_hits', 0)
+    if type(reused) is int and reused > 0:
+        lines.append(f'- **诊断复用**: 完整输入与来源哈希未变化，复用已有分析 {reused} 次。')
 
     def references(item):
         return '；依据：' + ', '.join(_markdown_text(ref) for ref in item.get('evidence_ids', []) if ref in known)
@@ -182,7 +191,13 @@ def _outcome_diagnosis_lines(data):
     if diagnosis.get('next_steps'):
         lines += ['', '**下一步具体核查**', '']
         for item in diagnosis['next_steps']:
-            lines.append('- ' + _markdown_text(_txt(item.get('check'))) + references(item))
+            priority = 3 if item.get('basis') == 'model_hypothesis' else item.get('priority')
+            prefix = f'P{priority}；' if type(priority) is int and priority in {1, 2, 3} else ''
+            if item.get('basis') == 'model_hypothesis':
+                prefix += '待核实假设；'
+            elif item.get('blocker') is True:
+                prefix += '比较证据待补齐；'
+            lines.append('- ' + prefix + _markdown_text(_txt(item.get('check'))) + references(item))
     model = diagnosis.get('model_analysis') or {}
     if model.get('status') != 'completed':
         lines += ['', '- **模型补充分析**: ' + _markdown_text(_txt(model.get('reason'), '未运行'))]
@@ -754,7 +769,9 @@ class ReportGeneratorAgent(BaseAgent):
         self.log("generate_report", "SUCCESS",
                  f"报告生成完成 ({len(report)} 字符)",
                  {"report_length": len(report)})
+        from src.result_conclusion import build_reproduction_conclusion
         return {"report": report, "report_length": len(report),
+                "reproduction_conclusion": build_reproduction_conclusion(input_data),
                 "report_format_version": REPORT_FORMAT_VERSION}
 
     @staticmethod
@@ -1467,15 +1484,24 @@ class ReportGeneratorAgent(BaseAgent):
             lines.append('')
 
         # 8. 审计与用量统计
+        from src.agent_collaboration import current_collaboration
+        session = current_collaboration()
+        cache = (session.snapshot() if session is not None else collaboration).get('evidence_cache') or {}
         lines += ["## 7. 运行与用量统计",
                   f"- **总步骤数**: {audit.get('total_steps', 'N/A')}",
                   f"- **成功步数**: {audit.get('success', 'N/A')}",
                   f"- **错误步数**: {audit.get('errors', 'N/A')}",
                   f"- **执行时长**: {audit.get('duration_sec', 'N/A')} 秒",
                   f"- **LLM 调用次数**: {audit.get('llm_calls', 0)} "
-                  f"（用于用量审计；全文阅读不设总调用预算）",
-                  "",
+                  f"（用于用量审计；全文阅读不设总调用预算）"]
+        if cache:
+            lines += [f"- **PDF 证据复用**: 命中 {cache.get('hits', 0)} 次，重新提取 {cache.get('misses', 0)} 次；"
+                      "仅复用同一运行中内容与解析器身份均未变化的完整证据。",
+                      "- **复用范围**: 减少重复解析；不代表训练耗时减少或论文复现成功率已经提升。"]
+        lines += ["",
                   "---",
                   "*报告由 AutoReproducer 自动生成*"]
         from src.run_finalization import finalize_report_text
-        return finalize_report_text("\n".join(lines), data)
+        # Rendering saved evidence must not mutate its source. Runtime
+        # finalization separately persists the refreshed derived conclusion.
+        return finalize_report_text("\n".join(lines), dict(data))

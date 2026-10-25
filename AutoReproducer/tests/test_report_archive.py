@@ -38,6 +38,8 @@ def test_backend_archives_report_without_request_credentials(tmp_path, monkeypat
     assert persisted["data"]["execution"] == result["data"]["execution"]
     assert persisted["data"]["validation"] == result["data"]["validation"]
     assert persisted["data"]["report"] == report.read_text(encoding="utf-8")
+    assert persisted["data"]["reproduction_conclusion"] == result["data"]["reproduction_conclusion"]
+    assert persisted["data"]["reproduction_conclusion"]["is_reproduced"] is None
     progress.unlink()
     restored = get_session_report_result({"state": "COMPLETED", "report_path": str(report)})
     assert restored["data"]["report"] == persisted["data"]["report"]
