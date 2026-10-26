@@ -58,7 +58,7 @@ PROFILE_LABELS = repository_entrypoint.profile_labels()
 get_profile = repository_entrypoint.get_profile
 
 # Only refresh the small loader. Older active pipeline modules keep their globals.
-if pipeline_entrypoint.BACKEND_API_VERSION != 10:
+if pipeline_entrypoint.BACKEND_API_VERSION != 13:
     pipeline_entrypoint = importlib.reload(pipeline_entrypoint)
 
 _pipeline_backend = pipeline_entrypoint.load_backend_pipeline()
@@ -469,6 +469,7 @@ with st.sidebar:
     source_repair = False
     source_repair_auto = False
     source_repair_editable = []
+    intelligent_recovery = False
     if (input_mode == "上传PDF" and uploaded_file and not st.session_state.mock_mode
             and not experiment_profile and not corpus_paper):
         requested_method = st.text_input(
@@ -480,6 +481,10 @@ with st.sidebar:
             disabled=st.session_state.running)
         experiment_request = {name: text.strip() for name, text in
             (("method", requested_method), ("dataset", requested_dataset)) if text.strip()}
+        intelligent_recovery = st.checkbox(
+            "智能调查与排障", key="pdf_intelligent_recovery", value=False,
+            disabled=st.session_state.running,
+            help="遇到实际失败时，在固定预算内调查源码、作者环境和公开产物；处理过程与证据写入报告，不改变实验协议。")
         def _select_pdf_execution_mode(selected, alternative):
             if st.session_state.get(selected):
                 st.session_state[alternative] = False
@@ -618,6 +623,7 @@ if start_btn and not st.session_state.running:
                 source_repair=source_repair,
                 source_repair_auto=source_repair_auto,
                 source_repair_editable=source_repair_editable,
+                intelligent_recovery=intelligent_recovery,
                 **({"preferred_repo_url": manual_repo_url} if manual_repo_url else {}),
                 corpus_paper=corpus_paper,
                 experiment_profile=experiment_profile,

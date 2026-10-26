@@ -97,8 +97,31 @@ def _bounded_snapshot(root):
     return snapshot_workspace(root)
 
 
+def cleanup_is_unconfirmed(execution):
+    """Preserve cleanup uncertainty through execution and receipt wrappers."""
+    pending = [(execution, False), (execution.get('final'), False),
+               (execution.get('effective_env_config'), False)]
+    pending.extend((item, False) for item in execution.get('steps') or [])
+    seen = set()
+    while pending:
+        record, receipt = pending.pop()
+        if not isinstance(record, dict) or id(record) in seen:
+            continue
+        seen.add(id(record))
+        if (record.get('cleanup_confirmed') is False or record.get('process_cleanup_confirmed') is False
+                or any(record.get(key) for key in ('cleanup_failed', 'cleanup_unconfirmed', 'cleanup_error', 'cleanup_errors'))
+                or record.get('status') in {'cleanup_failed', 'cleanup_unconfirmed'}
+                or receipt and (record.get('confirmed') is False or record.get('status') in {'failed', 'unconfirmed'})):
+            return True
+        pending.extend((record.get(key), True) for key in ('cleanup', 'process_cleanup', 'cleanup_receipt'))
+    return bool(re.search(r'process[- ](?:tree|group) cleanup (?:failed|was denied)'
+                          r'|\bcleanup_unconfirmed\b', failure_diagnostic(execution), re.I))
+
+
 def repair_is_stopped(execution):
     """A cancellation or unconfirmed cleanup cannot become a repair request."""
+    if cleanup_is_unconfirmed(execution):
+        return True
     records = [execution, execution.get("final") or {},
                execution.get("effective_env_config") or {}]
     records.extend(item for item in execution.get("steps", []) if isinstance(item, dict))
@@ -109,19 +132,11 @@ def repair_is_stopped(execution):
                 or record.get("status") in {"interrupted", "cancelled", "timed_out",
                                             "cleanup_failed", "cleanup_unconfirmed"}
                 or record.get('cleanup_confirmed') is False
+                or record.get('process_cleanup_confirmed') is False
                 or record.get('exit_code') in (124, 130)
                 or record.get("dependency_failure_kind") == "installation_timeout"):
             return True
-        for key in ("cleanup", "process_cleanup"):
-            cleanup = record.get(key)
-            if (isinstance(cleanup, dict) and
-                    (cleanup.get("confirmed") is False or cleanup.get("status") in
-                     {"failed", "unconfirmed", "cleanup_failed", "cleanup_unconfirmed"})):
-                return True
-    # RepositoryRunner retains its concrete process cleanup failures in stderr.
-    # They must remain blocking even when a wrapper has lost separate flags.
-    return bool(re.search(r"process[- ](?:tree|group) cleanup (?:failed|was denied)"
-                          r"|\bcleanup_unconfirmed\b", failure_diagnostic(execution), re.I))
+    return False
 
 
 class RepositoryRepairer:
@@ -269,8 +284,14 @@ class RepositoryRepairer:
                             attempt['reason'] = 'No supported compatibility source in the latest real failure.'
                             break
                     context = self._context(root, execution, steps, attempts[:-1], selected, initial)
+                    from src.intelligent_recovery import current_investigation
+                    investigation = current_investigation()
+                    if investigation:
+                        investigation.consume_repair(source_patch=True)
+                        context['investigation_findings'] = investigation.safe(investigation.state['tasks'])
                     llm_calls += 1
-                    response = self.llm.chat(json.dumps(context, ensure_ascii=False),
+                    recovery_llm = investigation.wrap_llm(self.llm) if investigation else self.llm
+                    response = recovery_llm.chat(json.dumps(context, ensure_ascii=False),
                         system_prompt=_SYSTEM, temperature=0, task="repository_repair")
                     response = str(response).strip()
                     (candidate_dir / 'response.txt').write_text(_private(response), encoding='utf-8')
@@ -307,6 +328,8 @@ class RepositoryRepairer:
                         if danger:
                             raise ValueError(f"unsafe compatibility patch: {danger}")
                     (candidate_dir / "candidate.diff").write_text(_private(transaction.diff), encoding="utf-8")
+                    if investigation:
+                        investigation.review_patch(context, proposal)
                     if validate_patches is not None:
                         validate_patches(root, deepcopy(transaction.files), deepcopy(execution))
                     if collaboration is not None:
@@ -381,6 +404,10 @@ class RepositoryRepairer:
                 except Exception as exc:
                     attempt["status"] = "rejected"
                     attempt["error"] = str(exc)
+                    from src.intelligent_recovery import InvestigationStopped
+                    if isinstance(exc, InvestigationStopped):
+                        attempt['status'] = status = 'stopped'
+                        raise
                     if transaction is not None and transaction.rollback_error:
                         attempt["rollback_error"] = transaction.rollback_error
                         attempt["status"] = status = "rollback_failed"

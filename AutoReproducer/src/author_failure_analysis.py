@@ -28,14 +28,14 @@ def _failure_text(result):
 
 
 def _source_excerpts(plan, packet, workspace, requested=(), diagnostic=''):
+    from src.investigation_tools import InvestigationTools
     entrypoints = [step.get('entrypoint', {}).get('source_path') for step in plan.get('steps', [])]
     locations = dict(traceback_sources(diagnostic, workspace, packet.get('file_inventory') or {}))
     names = list(dict.fromkeys([*reversed(locations), *requested, *entrypoints]))[:5]
     excerpts = {}
-    inventory = packet.get('file_inventory') or []
+    inventory = packet.get('file_inventory') or {}
     for name in names:
-        if (not isinstance(name, str) or name not in inventory
-                or not inventory[name].get('text_available')):
+        if not InvestigationTools.readable_source(name, inventory.get(name)):
             continue
         try:
             source = workspace_path(workspace, name, 'failure analysis source', must_exist=True)

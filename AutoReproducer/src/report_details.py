@@ -90,6 +90,64 @@ def readable_text(text, data):
         '# 论文复现与优化报告', '# 论文复现实验报告', 1)
 
 
+def intelligent_recovery_summary(recovery):
+    """Present saved recovery state without interpreting it as scientific proof."""
+    if not isinstance(recovery, dict):
+        return ''
+
+    def text(value, limit=160):
+        if not isinstance(value, (str, int, float, bool)):
+            return ''
+        value = re.sub(r'\s+', ' ', str(value)).strip()
+        if len(value) > limit:
+            value = value[:limit] + '…'
+        return re.sub(r'([\\`*_{}\[\]()<>!|])', r'\\\1', value)
+
+    lines = ['## 智能调查与处理结果', '']
+    if recovery.get('enabled') is not True:
+        return '\n'.join(lines + ['本次未启用智能调查与排障。', ''])
+    modes = {'single': '单角色', 'collaborative': '角色协作'}
+    mode = modes.get(recovery['mode'], '未记录') if isinstance(recovery.get('mode'), str) else '未记录'
+    statuses = {'ready': '待调查', 'investigating': '调查中', 'investigated': '调查已记录',
+                'unavailable': '调查不可用', 'stopped': '已停止', 'needs_human': '需要人工处理',
+                'repair_proposed': '已提出修复，待原有检查', 'observed': '已记录观察结果',
+                'command_recovered': '原命令运行已恢复，数值等价性未确认'}
+    triggers = {'execution_failure': '作者命令执行失败', 'dependency_failure': '作者依赖准备失败',
+                'result_gap': '结果差距', 'metric_gap': '指标差距'}
+
+    def label(value, labels):
+        return text(labels.get(value, value)) if isinstance(value, str) else '未记录'
+
+    saved_tasks = recovery.get('tasks')
+    tasks = [task for task in saved_tasks if isinstance(task, dict)] if isinstance(saved_tasks, list) else []
+    lines.append(f"- **调查状态**: {label(recovery.get('status'), statuses)}；{mode}；共 {len(tasks)} 项调查。")
+    for task in tasks[:3]:
+        trigger = label(task.get('trigger') or task.get('id') or '未记录触发原因', triggers)
+        lines.append(f"- **处理记录**: {trigger}；状态：{label(task.get('status'), statuses)}。")
+        decisions = task.get('decisions')
+        if isinstance(decisions, list) and decisions:
+            decision = decisions[-1]
+            if isinstance(decision, dict):
+                # Keep only the saved decision explanation, never raw probes or
+                # proposed code. The complete object belongs in the attachment.
+                decision = next((decision[key] for key in ('reason', 'summary', 'action', 'status')
+                                 if isinstance(decision.get(key), str) and decision[key]), '')
+            if text(decision):
+                lines.append('  处理依据：' + text(decision) + '。')
+    if len(tasks) > 3:
+        lines.append(f'- 其余 {len(tasks) - 3} 项调查见完整依据与执行详情。')
+    if recovery.get('requires_human') is True:
+        lines.append('- **需要人工处理**: 是；原因和调查证据见详情附件。')
+    if text(recovery.get('stop_reason')):
+        lines.append('- **停止原因**: ' + text(recovery['stop_reason']))
+    usage = recovery.get('usage')
+    token_count = usage.get('total_tokens') if isinstance(usage, dict) else None
+    shown_tokens = str(token_count) if type(token_count) is int and token_count >= 0 else 'unknown（未记录）'
+    lines.append('- **模型 token 用量**: ' + shown_tokens)
+    lines += ['调查与处理记录用于解释本次运行；论文复现结论仍以执行、协议与指标核验结果为准。完整调查记录见详情附件。', '']
+    return '\n'.join(lines)
+
+
 def save_report_details(full_report, data, report_path):
     """Retain raw quotation values even where the legacy audit used excerpts."""
     values = {}
@@ -115,6 +173,16 @@ def save_report_details(full_report, data, report_path):
         fence = '`' * max(3, 1 + max((len(run) for run in re.findall(r'`+', raw_collaboration)), default=0))
         full_report += ('\n\n## 完整协作记录\n\n保存本次报告生成时的完整协作快照；消息本身不构成核验结论。\n\n'
                         + fence + 'json\n' + raw_collaboration + '\n' + fence + '\n')
+    recovery = data.get('intelligent_recovery')
+    if isinstance(recovery, dict):
+        from src.author_claim_comparison import _redact_evidence
+        from src.report_revisions import sanitize_report_result
+        raw_recovery = json.dumps(_redact_evidence(sanitize_report_result(recovery), ''),
+                                  ensure_ascii=False, indent=2)
+        fence = '`' * max(3, 1 + max((len(run) for run in re.findall(r'`+', raw_recovery)), default=0))
+        full_report += ('\n\n## 完整智能调查与处理记录\n\n'
+                        '以下为保存的调查快照；假设、探针与决策不替代执行和独立指标核验。\n\n'
+                        + fence + 'json\n' + raw_recovery + '\n' + fence + '\n')
     path = Path(report_path).absolute()
     if not Path(report_path).is_absolute():
         from src.execution_artifacts import PROJECT_ROOT

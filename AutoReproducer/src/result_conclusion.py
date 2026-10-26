@@ -35,7 +35,8 @@ def _current_records(execution):
 
 def _execution_level(data, validation, execution):
     records = [data, validation, *_current_records(execution),
-               _mapping(execution.get('effective_env_config'))]
+               _mapping(execution.get('effective_env_config')),
+               _mapping(data.get('intelligent_recovery'))]
     for key, label in (('cancelled', '已取消'), ('interrupted', '已中断'), ('timed_out', '已超时')):
         code = 124 if key == 'timed_out' else 130
         if any(row.get(key) is True or row.get('status') == key

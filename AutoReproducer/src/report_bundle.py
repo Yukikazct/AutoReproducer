@@ -17,7 +17,7 @@ _EVIDENCE_FIELDS = (
     'experiment_protocol', 'grounded_repository_plan', 'source_packet', 'execution_plan',
     'env_config', 'execution', 'validation', 'strict_validation',
     'strict_execution_verification', 'dataset_provenance', 'runtime_dataset_evidence',
-    'source_repair', 'outcome_diagnosis', 'optimization', 'audit_stats',
+    'source_repair', 'intelligent_recovery', 'outcome_diagnosis', 'optimization', 'audit_stats',
     'environment_cleanup', 'run_finalization', 'run_dir', 'repository_executed',
     'run_status', 'execution_source', 'reproduction_scope', 'interrupted',
     'cancelled', 'timed_out',

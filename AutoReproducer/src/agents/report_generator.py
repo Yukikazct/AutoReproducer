@@ -776,13 +776,17 @@ class ReportGeneratorAgent(BaseAgent):
         """Build the experiment report and retain full evidence in a companion."""
         from src.author_claim_comparison import _redact_evidence
         from src.report_revisions import sanitize_report_result
-        from src.report_details import presentation_data, readable_text, save_report_details
+        from src.report_details import (intelligent_recovery_summary, presentation_data,
+                                        readable_text, save_report_details)
         path = report_path or data.get('report_path') or default_report_path()
         safe = _redact_evidence(sanitize_report_result(data), '')
         full = ReportGeneratorAgent._build_report(safe, report_path=path, artifact_resolver=artifact_resolver)
         displayed = ReportGeneratorAgent._build_report(
             presentation_data(safe), report_path=path, artifact_resolver=artifact_resolver)
         displayed = readable_text(displayed, safe)
+        recovery_summary = intelligent_recovery_summary(safe.get('intelligent_recovery'))
+        if recovery_summary:
+            displayed = displayed.rstrip() + '\n\n' + recovery_summary
         link = save_report_details(full, safe, path)
         return displayed.rstrip() + '\n\n## 完整依据与日志\n\n' + link + '\n'
 

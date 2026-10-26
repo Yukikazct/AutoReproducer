@@ -103,6 +103,12 @@ def run_with_dependency_repair(runner, workspace, steps, environment, plan, pack
             return stop('no_progress', '修复后原命令仍出现相同错误；停止重复尝试，保留诊断与失败日志。')
         if used >= MAX_DEPENDENCY_REPAIRS:
             return stop('budget_exhausted', '自修复已达到本任务共享的八次上限；保留所有失败与修复记录。')
+        from src.intelligent_recovery import current_investigation
+        investigation = current_investigation()
+        if investigation:
+            investigation.ensure_running()
+            if investigation.state['usage'].get('repair_actions', 0) >= investigation.budget['max_repair_actions']:
+                return stop('budget_exhausted', '共享修复动作已达上限，未启动新的修复。')
         local = repair_local_import(result, workspace, packet, plan['requirements'])
         if local and local['root'] not in effective.get('repository_pythonpath', []):
             effective.setdefault('repository_pythonpath', []).append(local['root'])

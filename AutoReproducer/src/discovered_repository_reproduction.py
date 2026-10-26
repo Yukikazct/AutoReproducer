@@ -27,6 +27,7 @@ from src.repository_runner import RepositoryRunner
 from src.runtime_preparation import run_owned_process
 from src.safety.paths import workspace_path
 from src.environment_lifecycle import bind_environment_run, release_run_environment
+from src.intelligent_recovery import current_investigation, investigating_run, InvestigationStopped
 
 
 _MAX_DATA_BYTES = 512 * 1024 * 1024
@@ -35,7 +36,7 @@ _SHA = re.compile(r"[0-9a-f]{40}")
 
 
 def _diagnose_outcome(llm, plan, packet, workspace, execution, validation, run_dir, data, emit):
-    """Auxiliary analysis must not turn completed author work into failure."""
+    """Keep analysis errors informational; propagate process safety stops."""
     from src.result_diagnosis import diagnose_experiment_result
     try:
         repaired = data.get('source_repair') or {}
@@ -47,8 +48,17 @@ def _diagnose_outcome(llm, plan, packet, workspace, execution, validation, run_d
             packet = {**packet, 'file_inventory': {
                 name: {**inventory.get(name, {}), 'sha256': sha}
                 for name, sha in repaired['effective_source_files'].items()}}
-        return diagnose_experiment_result(llm, plan, packet, workspace, execution,
-                                          validation, run_dir, data, emit)
+        investigation = current_investigation()
+        diagnosis = diagnose_experiment_result(investigation.wrap_llm(llm) if investigation else llm,
+            plan, packet, workspace, execution, validation, run_dir, data, emit)
+        if investigation and diagnosis:
+            investigation.investigate(trigger='result_discrepancy', plan=plan, packet=packet,
+                workspace=workspace, environment=execution.get('effective_env_config') or data.get('env_config') or {},
+                execution=execution, validation=validation)
+            investigation.ensure_running()
+        return diagnosis
+    except InvestigationStopped:
+        raise
     except Exception as exc:
         # Keep raw exception text out of the artifact: a provider may include
         # credentials or submitted source in its error message.
@@ -336,6 +346,7 @@ class DiscoveredRepositoryReproduction:
         self.runner = RepositoryRunner(logger=logger)
 
     @collaborative_run
+    @investigating_run
     @termination_signals()
     @release_run_environment
     def run(self, request, on_event=None):
@@ -403,6 +414,9 @@ class DiscoveredRepositoryReproduction:
         collaboration = current_collaboration()
         if collaboration:
             collaboration.attach(data)
+        investigation = current_investigation()
+        if investigation:
+            investigation.attach(data, run_dir)
         data['strict_validation'] = {'requested': strict_requested,
             'status': 'pending' if strict_requested else 'not_requested'}
         data['source_repair'] = {'requested': request['source_repair'],
@@ -650,6 +664,8 @@ class DiscoveredRepositoryReproduction:
                     event('plan_repository', 'skipped', str(exc)[:500])
                     phase = 'prepare_repository'; event(phase, 'running')
                 except Exception as exc:
+                    if isinstance(exc, InvestigationStopped):
+                        raise
                     if getattr(exc, 'reproduction_phase', None) == 'prepare_environment':
                         attempt.update(error=str(exc), planning_status='environment_blocked',
                                        failure_kind=getattr(exc, 'category', 'environment_failure'))
@@ -1084,11 +1100,21 @@ class DiscoveredRepositoryReproduction:
                 return effective
 
             def run_steps(selected, runtime_environment):
+                if current_investigation():
+                    current_investigation().ensure_running()
                 from src.author_runtime_dependencies import run_with_dependency_repair
                 from src.author_failure_analysis import analyze_author_failure
                 def analyze_failure(result, effective):
+                    investigation = current_investigation()
+                    if investigation:
+                        task = investigation.investigate(trigger='execution_failure', plan=plan, packet=packet,
+                            workspace=workspace, environment=effective, execution=result)
+                        investigation.ensure_running()
+                        if task and task['status'] != 'repair_proposed':
+                            return None
                     before = len(data.get('failure_analyses') or [])
-                    suggestion = analyze_author_failure(self.llm, result, plan, packet, workspace,
+                    suggestion = analyze_author_failure(investigation.wrap_llm() if investigation else self.llm,
+                                                        result, plan, packet, workspace,
                                                         effective, run_dir, data)
                     if len(data.get('failure_analyses') or []) > before:
                         analysis = data['failure_analyses'][-1]
@@ -1212,6 +1238,8 @@ class DiscoveredRepositoryReproduction:
                 write_json(run_dir / 'original_execution.json', execution)
                 execution = repair_author_failure(self.runner, self.llm, request, plan, snapshot,
                     workspace, run_dir, data, execution, verify_frozen_inputs, emit)
+            if current_investigation():
+                current_investigation().record_execution(execution)
             data["execution"] = execution
             training_id = next(step["id"] for step in plan["steps"] if step["kind"] == "train")
             data["repository_executed"] = any(step.get("id") == training_id and step.get("executed")
