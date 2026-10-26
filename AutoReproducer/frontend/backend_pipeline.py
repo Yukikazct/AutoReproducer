@@ -248,7 +248,7 @@ def run_pipeline_core(progress_path: str,
     store = ProgressStore(progress_path, reset=not _append_progress)
     if type(intelligent_recovery) is not bool:
         return _reject_pdf_input(store, "intelligent_recovery 必须是显式布尔值")
-    from src.intelligent_recovery import normalize_intelligent_recovery_request
+    from src.intelligent_recovery_request import normalize_intelligent_recovery_request
     try:
         recovery_request = normalize_intelligent_recovery_request({
             'intelligent_recovery': intelligent_recovery,

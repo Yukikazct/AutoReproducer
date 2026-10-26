@@ -14,6 +14,7 @@ from pathlib import Path
 import time
 
 from src.author_claim_comparison import _redact_evidence
+from src.intelligent_recovery_request import normalize_intelligent_recovery_request
 from src.method_adapters import write_json
 
 
@@ -43,17 +44,6 @@ def _candidate_digest(proposal):
     contents = [{key: patch.get(key) for key in ('path', 'base_sha256', 'content')}
                 for patch in patches if isinstance(patch, dict)]
     return _digest(sorted(contents, key=lambda row: str(row.get('path'))))
-
-
-def normalize_intelligent_recovery_request(request):
-    enabled = request.get('intelligent_recovery', False)
-    if type(enabled) is not bool:
-        raise ValueError('intelligent_recovery must be an explicit boolean')
-    mode = request.get('intelligent_recovery_mode', 'collaborative')
-    if not isinstance(mode, str) or mode not in {'single', 'collaborative'}:
-        raise ValueError('intelligent_recovery_mode must be single or collaborative')
-    return {**request, 'intelligent_recovery': enabled,
-            'intelligent_recovery_mode': mode if enabled else 'collaborative'}
 
 
 @dataclass
