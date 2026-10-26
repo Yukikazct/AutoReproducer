@@ -377,6 +377,16 @@ print(result["data"].get("validation"))
 
 运行前准备可读取正文的 PDF，并按“模型配置”设置实际使用的服务和模型。该入口同样只报告当前执行结论，不会因省略网页而启用历史数值验收或自动优化。
 
+### 离线导出最终报告
+
+已有终态 `result.json` 或报告旁的 `*.result.json` 时，可直接生成最新格式的报告与可搬迁证据包，无需 API，也不会重新训练：
+
+```powershell
+.\.venv\Scripts\python.exe scripts/export_reproduction_report.py --result "data/runs/已有运行/result.json" --output-dir "data/reports/本次离线交付"
+```
+
+输出目录必须不存在，父目录须已存在。目录包含 `report.md`、脱敏后的 `result.json`、`report.zip`，以及原报告的已验证图片和全文日志附件。ZIP 保存结构化核验记录与逐成员 SHA-256 清单；这些哈希用于检查包内文件一致性，不新增论文验收结论。运行中的结果、缺失或被修改的声明附件会拒绝导出；原始结果和来源文件保留。
+
 ## 更多文档
 
 | 文档 | 内容 |

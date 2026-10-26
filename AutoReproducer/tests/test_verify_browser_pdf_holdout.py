@@ -513,7 +513,8 @@ def test_strict_table_and_markdown_keep_full_renderer_precision_and_explicit_uni
 @pytest.mark.parametrize('strict,matched,failure', [
     (strict, matched, failure)
     for strict, matched in [(False, None), (True, True), (True, False)]
-    for failure in [None, 'reload', 'zip', 'attachment']
+    for failure in [None, 'reload', 'zip', 'attachment', 'manifest_hash', 'manifest_bytes',
+                    'evidence_validation', 'evidence_conclusion']
 ] + [
     (True, matched, failure)
     for matched in [True, False]
@@ -558,11 +559,31 @@ def test_browser_report_download_and_reload_preserve_each_mode_conclusion(
     attachment = report_path.with_name(report_path.stem + '_execution.txt')
     attachment.write_bytes(b'Full original stdout and stderr')
     (run_dir / attachment.name).write_bytes(attachment.read_bytes())
+    from src.report_bundle import report_evidence_bytes, report_manifest_bytes
+    evidence_name = report_path.stem + '.evidence.json'
+    manifest_name = report_path.stem + '.manifest.json'
+    evidence = json.loads(report_evidence_bytes(result, report, report_path.name))
+    if failure == 'evidence_validation':
+        evidence['data']['validation']['is_reproduced'] = 'tampered'
+    elif failure == 'evidence_conclusion':
+        evidence['data']['reproduction_conclusion']['is_reproduced'] = 'tampered'
+    payloads = {
+        report_path.name: report.encode() + (b'changed' if failure == 'zip' else b''),
+        attachment.name: b'changed' if failure == 'attachment' else attachment.read_bytes(),
+        evidence_name: json.dumps(evidence).encode(),
+        'report_assets/paper_markdown_fixture.md': b'Additional PDF reading evidence',
+    }
+    manifest = json.loads(report_manifest_bytes(payloads, report_path.name, evidence_name))
+    if failure == 'manifest_hash':
+        manifest['files'][0]['sha256'] = '0' * 64
+    elif failure == 'manifest_bytes':
+        manifest['files'][0]['bytes'] += 1
+    payloads[manifest_name] = json.dumps(manifest).encode()
     zipped = io.BytesIO()
     with zipfile.ZipFile(zipped, 'w') as archive:
-        archive.writestr(report_path.name, report.encode() + (b'changed' if failure == 'zip' else b''))
-        archive.writestr(attachment.name, b'changed' if failure == 'attachment' else attachment.read_bytes())
-    downloads = {'下载报告': report.encode(), '下载报告和图片（ZIP）': zipped.getvalue()}
+        for name, raw in payloads.items():
+            archive.writestr(name, raw)
+    downloads = {'下载报告': report.encode(), '下载报告与证据（ZIP）': zipped.getvalue()}
 
     class Table:
         def filter(self, *, has_text):
@@ -623,6 +644,7 @@ def test_browser_report_download_and_reload_preserve_each_mode_conclusion(
         checked = audit.verify_report_reconnect(page, args, Path('progress_fixture.jsonl'), runtime, result)
         assert checked['reconnect_preserved_comparison'] is True
         assert checked['structured_records_identical'] is True and checked['markdown_zip_identical'] is True
+        assert checked['bundle_manifest_verified'] is True and checked['bundle_evidence_consistent'] is True
 
 
 @pytest.mark.parametrize("failure", ["exit", "identity", "receipt", "duplicate", "training"])

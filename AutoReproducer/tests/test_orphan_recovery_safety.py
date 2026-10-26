@@ -77,7 +77,13 @@ time.sleep(60)
 
         owner.kill()
         owner.wait(timeout=10)
-        assert task_control.task_status(progress)["orphaned"]
+        # A signalled Windows process handle can precede release of its file
+        # locks. Wait for the owner lock to become available; this is still
+        # not evidence that its descendants have exited.
+        deadline = time.monotonic() + 5
+        while task_control.task_status(progress).get("active") and time.monotonic() < deadline:
+            time.sleep(.01)
+        assert task_control.task_status(progress).get("orphaned")
         cleanup = Mock(return_value={"status": "released", "errors": []})
         monkeypatch.setattr(lifecycle, "release_abandoned_environment", cleanup)
 

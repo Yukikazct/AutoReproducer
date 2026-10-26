@@ -180,4 +180,4 @@ def test_saved_report_figures_are_rendered_as_native_images(tmp_path, monkeypatc
     else:
         app.button(key="history_load").click().run()
     assert not app.exception
-    assert any("报告和图片" in button.label for button in app.get("download_button"))
+    assert any("报告与证据" in button.label for button in app.get("download_button"))

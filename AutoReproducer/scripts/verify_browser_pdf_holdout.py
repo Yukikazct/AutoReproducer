@@ -475,16 +475,46 @@ def verify_report_reconnect(page, args, progress, runtime, result):
         return table.inner_text()
     displayed = show_report()
     content = []
-    for label, suffix in [('下载报告', '.md'), ('下载报告和图片（ZIP）', '.zip')]:
+    for label, suffix in [('下载报告', '.md'), ('下载报告与证据（ZIP）', '.zip')]:
         with page.expect_download(timeout=30000) as received:
             page.get_by_role('button', name=label, exact=True).click()
         path = runtime / (args.tag + '_downloaded_report' + suffix)
         received.value.save_as(str(path))
         content.append(path.read_bytes())
     with zipfile.ZipFile(io.BytesIO(content[1])) as archive:
-        names = [name for name in archive.namelist() if name.endswith('.md')]
-        assert len(names) == 1 and archive.read(names[0]) == content[0]
         report_path = Path(result['report_path'])
+        names = archive.namelist()
+        assert len(names) == len(set(names)), 'Downloaded ZIP contains duplicate member names'
+        assert report_path.name in names and archive.read(report_path.name) == content[0], (
+            'Downloaded ZIP main report differs from the Markdown download')
+        manifest_name = report_path.stem + '.manifest.json'
+        evidence_name = report_path.stem + '.evidence.json'
+        assert manifest_name in names and evidence_name in names, 'Downloaded ZIP has no manifest or evidence'
+        manifest = json.loads(archive.read(manifest_name))
+        assert manifest.get('report') == report_path.name and manifest.get('evidence') == evidence_name
+        assert manifest.get('hash_algorithm') == 'sha256'
+        members = manifest.get('files')
+        assert isinstance(members, list) and all(isinstance(row, dict) for row in members)
+        paths = [row.get('path') for row in members]
+        assert len(paths) == len(set(paths)) and set(paths) == set(names) - {manifest_name}, (
+            'Downloaded ZIP manifest does not cover every payload member exactly once')
+        for row in members:
+            raw = archive.read(row['path'])
+            assert type(row.get('bytes')) is int and row['bytes'] == len(raw), 'ZIP member byte length differs'
+            assert row.get('sha256') == hashlib.sha256(raw).hexdigest(), 'ZIP member SHA-256 differs'
+        from src.author_claim_comparison import _redact_evidence
+        from src.report_revisions import sanitize_report_result
+        from src.result_conclusion import build_reproduction_conclusion
+        safe = _redact_evidence(sanitize_report_result(result), '')
+        evidence = json.loads(archive.read(evidence_name))
+        assert evidence.get('state') == safe.get('state') and evidence.get('error') == safe.get('error')
+        assert evidence.get('report') == {'filename': report_path.name,
+                                         'sha256': hashlib.sha256(content[0]).hexdigest()}
+        saved_evidence = evidence.get('data') or {}
+        assert saved_evidence.get('validation') == safe['data'].get('validation'), (
+            'Downloaded evidence validation differs from the saved result')
+        assert saved_evidence.get('reproduction_conclusion') == build_reproduction_conclusion(safe['data']), (
+            'Downloaded evidence has a stale reproduction conclusion')
         attachment = report_path.with_name(report_path.stem + '_execution.txt')
         assert archive.read(attachment.name) == attachment.read_bytes()
         assert (Path(result['data']['run_dir']) / attachment.name).read_bytes() == attachment.read_bytes()
@@ -499,6 +529,7 @@ def verify_report_reconnect(page, args, progress, runtime, result):
     assert show_report() == displayed
     assert set(runtime.glob('progress_*.jsonl')) == before
     return {'comparison_table': displayed, 'markdown_zip_identical': True,
+            'bundle_manifest_verified': True, 'bundle_evidence_consistent': True,
             'full_output_attachment_identical': True,
             'report_sha256': hashlib.sha256(content[0]).hexdigest(), 'reconnect_preserved_comparison': True,
             **saved}
