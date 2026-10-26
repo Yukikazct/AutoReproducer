@@ -136,6 +136,16 @@ def intelligent_recovery_summary(recovery):
                 lines.append('  处理依据：' + text(decision) + '。')
     if len(tasks) > 3:
         lines.append(f'- 其余 {len(tasks) - 3} 项调查见完整依据与执行详情。')
+    reviews = recovery.get('reviews')
+    if isinstance(reviews, list):
+        reviews = [row for row in reviews if isinstance(row, dict)]
+        model_reviews = [row for row in reviews if row.get('reviewer') in {'independent', 'self_check'}]
+        requested_checks = sum(row.get('action') == 'probe' for row in model_reviews)
+        vetoed = {row['candidate_sha256'] for row in reviews if row.get('stage') == 'patch'
+                  and row.get('action') == 'reject' and isinstance(row.get('candidate_sha256'), str)}
+        review_name = '独立反证审查' if recovery.get('mode') == 'collaborative' else '自检'
+        lines.append(f'- **审查作用**: {review_name} {len(model_reviews)} 次；请求补查 {requested_checks} 次；'
+                     f'否决候选补丁 {len(vetoed)} 个。')
     if recovery.get('requires_human') is True:
         lines.append('- **需要人工处理**: 是；原因和调查证据见详情附件。')
     if text(recovery.get('stop_reason')):

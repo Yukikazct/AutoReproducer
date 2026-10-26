@@ -288,7 +288,8 @@ class RepositoryRepairer:
                     investigation = current_investigation()
                     if investigation:
                         investigation.consume_repair(source_patch=True)
-                        context['investigation_findings'] = investigation.safe(investigation.state['tasks'])
+                        context['investigation_findings'] = investigation.repair_findings()
+                        context['review_feedback'] = investigation.repair_feedback()
                     llm_calls += 1
                     recovery_llm = investigation.wrap_llm(self.llm) if investigation else self.llm
                     response = recovery_llm.chat(json.dumps(context, ensure_ascii=False),
