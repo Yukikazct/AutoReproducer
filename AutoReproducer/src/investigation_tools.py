@@ -164,7 +164,7 @@ class InvestigationTools:
         return self._result('source_context', 'completed', evidence, 'Read hash-matching source and static definitions.')
 
     def _child(self, payload):
-        from src.runtime_preparation import run_owned_process
+        from src.runtime_preparation import RuntimePreparationTimeout, run_owned_process
         python = self.environment.get('python_executable')
         if not isinstance(python, str) or not Path(python).is_absolute() or not Path(python).is_file():
             raise ValueError('A verified author Python is required; application Python is not a fallback')
@@ -173,10 +173,44 @@ class InvestigationTools:
             directory.mkdir(parents=True, exist_ok=True)
         helper = Path(__file__).parent / 'experiments' / 'investigation_probe.py'
         cleaned = []
-        with tempfile.TemporaryDirectory(prefix='probe_', dir=directory) as isolated:
-            result = run_owned_process([python, '-I', '-S', str(helper.resolve())], cwd=isolated,
+        isolated = tempfile.TemporaryDirectory(prefix='probe_', dir=directory)
+        primary_failure = None
+        try:
+            # Isolated Python ignores the encoding environment variables used
+            # by the process owner, whose control channel always decodes UTF-8.
+            result = run_owned_process([python, '-I', '-X', 'utf8', '-S', str(helper.resolve())], cwd=isolated.name,
                 input=json.dumps(payload), timeout_s=60, max_output_bytes=65536,
                 on_cleanup=lambda: cleaned.append(True))
+        except BaseException as exc:
+            primary_failure = exc
+            raise
+        finally:
+            try:
+                isolated.cleanup()
+            except BaseException as cleanup_error:
+                # Windows may retain the probe directory when process cleanup
+                # failed. A second failure must not replace a timeout or cancel.
+                primary_stop = (isinstance(primary_failure, (KeyboardInterrupt, SystemExit, RuntimePreparationTimeout))
+                    or getattr(primary_failure, 'process_cleanup_confirmed', None) is False)
+                if isinstance(cleanup_error, (KeyboardInterrupt, SystemExit)) and not primary_stop:
+                    failure = cleanup_error
+                else:
+                    failure = primary_failure if primary_failure is not None else RuntimeError(
+                        'Probe isolated directory cleanup could not be confirmed')
+                failure.process_cleanup_confirmed = False
+                original_receipt = getattr(primary_failure if primary_failure is not None else failure,
+                                           'cleanup_receipt', None)
+                receipt = {'status': 'unconfirmed', 'process_cleanup_confirmed': False,
+                           'isolated_directory_cleanup': {
+                               'status': 'failed', 'error_type': type(cleanup_error).__name__}}
+                if isinstance(original_receipt, dict):
+                    receipt['process_cleanup'] = dict(original_receipt)
+                failure.cleanup_receipt = receipt
+                failure.add_note('Probe isolated directory cleanup failed: ' + type(cleanup_error).__name__)
+                if failure is cleanup_error:
+                    raise
+                if primary_failure is None:
+                    raise failure from cleanup_error
         if not cleaned:
             failure = RuntimeError('Probe did not finish with a confirmed process cleanup')
             failure.process_cleanup_confirmed = False

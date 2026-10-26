@@ -70,6 +70,127 @@ def test_owned_helper_without_cleanup_confirmation_stops_investigation(tools, mo
     assert result['cleanup_confirmed'] is False
 
 
+@pytest.mark.parametrize('failure_kind', ['unconfirmed', 'timeout', 'cancelled', 'exited', 'cleanup_error'])
+def test_probe_directory_cleanup_cannot_replace_an_owned_stop(tools, monkeypatch, failure_kind):
+    from src.runtime_preparation import ProcessCleanupError, RuntimePreparationTimeout
+    failures = {'unconfirmed': RuntimeError('Owned process cleanup was not confirmed'),
+                'timeout': RuntimePreparationTimeout('Probe timed out'),
+                'cancelled': KeyboardInterrupt('Probe cancelled'),
+                'exited': SystemExit(130),
+                'cleanup_error': ProcessCleanupError('Owned process cleanup failed')}
+    primary = failures[failure_kind]
+    primary.cleanup_receipt = {'status': 'error', 'original_marker': 'preserved'}
+    if failure_kind in {'unconfirmed', 'cleanup_error'}:
+        primary.process_cleanup_confirmed = False
+
+    class OccupiedDirectory:
+        name = str(tools.workspace)
+
+        def __enter__(self):
+            return self.name
+
+        def __exit__(self, *args):
+            self.cleanup()
+
+        def cleanup(self):
+            raise PermissionError('Windows probe directory is still in use')
+
+    def owned_stop(*args, **kwargs):
+        raise primary
+
+    monkeypatch.setattr('src.investigation_tools.tempfile.TemporaryDirectory',
+                        lambda **kwargs: OccupiedDirectory())
+    monkeypatch.setattr('src.runtime_preparation.run_owned_process', owned_stop)
+    if isinstance(primary, (KeyboardInterrupt, SystemExit)):
+        with pytest.raises(type(primary)) as error:
+            tools.execute('runtime_metadata', {'packages': ['pip']})
+        assert error.value is primary
+    else:
+        result = tools.execute('runtime_metadata', {'packages': ['pip']})
+        assert result['status'] == 'stopped', result
+        assert result['cleanup_confirmed'] is False
+        assert type(primary).__name__ in result['summary']
+        assert result.get('timed_out') is (True if failure_kind == 'timeout' else None)
+    assert primary.process_cleanup_confirmed is False
+    assert primary.cleanup_receipt['status'] == 'unconfirmed'
+    assert primary.cleanup_receipt['process_cleanup'] == {
+        'status': 'error', 'original_marker': 'preserved'}
+    assert primary.cleanup_receipt['isolated_directory_cleanup'] == {
+        'status': 'failed', 'error_type': 'PermissionError'}
+
+
+def test_probe_directory_cleanup_failure_after_process_exit_stops_investigation(tools, monkeypatch):
+    from types import SimpleNamespace
+
+    class OccupiedDirectory:
+        name = str(tools.workspace)
+
+        def __enter__(self):
+            return self.name
+
+        def __exit__(self, *args):
+            self.cleanup()
+
+        def cleanup(self):
+            raise PermissionError('Windows probe directory is still in use')
+
+    def owned_success(*args, **kwargs):
+        kwargs['on_cleanup']()
+        return SimpleNamespace(returncode=0, stdout='{}')
+
+    monkeypatch.setattr('src.investigation_tools.tempfile.TemporaryDirectory',
+                        lambda **kwargs: OccupiedDirectory())
+    monkeypatch.setattr('src.runtime_preparation.run_owned_process', owned_success)
+    result = tools.execute('runtime_metadata', {'packages': ['pip']})
+    assert result['status'] == 'stopped', result
+    assert result['cleanup_confirmed'] is False
+
+
+@pytest.mark.parametrize('cleanup_kind', ['cancelled', 'exited'])
+@pytest.mark.parametrize('primary_kind', ['none', 'ordinary', 'timeout', 'unconfirmed', 'cancelled'])
+def test_cancellation_during_probe_directory_cleanup_preserves_stop_priority(
+        tools, monkeypatch, cleanup_kind, primary_kind):
+    from types import SimpleNamespace
+    from src.runtime_preparation import RuntimePreparationTimeout
+    primary = {'none': None, 'ordinary': ValueError('Probe rejected'),
+               'timeout': RuntimePreparationTimeout('Probe timed out'),
+               'unconfirmed': RuntimeError('Process cleanup unconfirmed'),
+               'cancelled': KeyboardInterrupt('Original cancellation')}[primary_kind]
+    if primary_kind == 'unconfirmed':
+        primary.process_cleanup_confirmed = False
+    cleanup_error = KeyboardInterrupt('Cleanup cancelled') if cleanup_kind == 'cancelled' else SystemExit(130)
+
+    class OccupiedDirectory:
+        name = str(tools.workspace)
+
+        def __enter__(self):
+            return self.name
+
+        def __exit__(self, *args):
+            self.cleanup()
+
+        def cleanup(self):
+            raise cleanup_error
+
+    def owned_result(*args, **kwargs):
+        if primary is not None:
+            raise primary
+        kwargs['on_cleanup']()
+        return SimpleNamespace(returncode=0, stdout='{}')
+
+    monkeypatch.setattr('src.investigation_tools.tempfile.TemporaryDirectory',
+                        lambda **kwargs: OccupiedDirectory())
+    monkeypatch.setattr('src.runtime_preparation.run_owned_process', owned_result)
+    expected = primary if primary_kind in {'timeout', 'unconfirmed', 'cancelled'} else cleanup_error
+    with pytest.raises(type(expected)) as error:
+        tools._child({'tool': 'runtime_metadata', 'packages': ['pip'], 'modules': []})
+    assert error.value is expected
+    assert error.value.process_cleanup_confirmed is False
+    assert error.value.cleanup_receipt['status'] == 'unconfirmed'
+    assert error.value.cleanup_receipt['isolated_directory_cleanup'] == {
+        'status': 'failed', 'error_type': type(cleanup_error).__name__}
+
+
 def test_metadata_uses_real_runner_dependency_roots(tools, tmp_path):
     packages = tmp_path / 'recorded_author_dependencies'
     metadata = packages / 'original_package-1.2.3.dist-info'
@@ -79,6 +200,34 @@ def test_metadata_uses_real_runner_dependency_roots(tools, tmp_path):
     result = tools.execute('runtime_metadata', {'packages': ['original-package']})
     assert result['status'] == 'completed', result
     assert result['evidence'][0]['value']['packages']['original-package']['version'] == '1.2.3'
+
+
+def test_metadata_round_trips_unicode_dependency_paths(tools, tmp_path, monkeypatch):
+    packages = tmp_path / '\u4f5c\u8005\u4f9d\u8d56'
+    metadata = packages / 'original_package-1.2.3.dist-info'
+    metadata.mkdir(parents=True)
+    (metadata / 'METADATA').write_text('Metadata-Version: 2.1\nName: original-package\nVersion: 1.2.3\n',
+                                     encoding='utf-8')
+    tools.environment['investigation_dependency_paths'] = [str(packages.resolve())]
+    # -I ignores this setting; the managed helper must select UTF-8 itself.
+    monkeypatch.setenv('PYTHONIOENCODING', 'cp1252')
+    result = tools.execute('runtime_metadata', {'packages': ['original-package']})
+    assert result['status'] == 'completed', result
+    value = result['evidence'][0]['value']
+    assert value['packages']['original-package']['version'] == '1.2.3'
+    assert str(packages.resolve()) in value['metadata_roots']
+
+
+def test_original_contract_round_trips_unicode_function_names(tools, monkeypatch):
+    source = 'def \u6c42\u503c(x):\n    return x*x\ndef test_original():\n    assert \u6c42\u503c(3) == 9\n'
+    path = tools.workspace / 'unicode_contract.py'
+    path.write_text(source, encoding='utf-8')
+    tools.packet['file_inventory'][path.name] = {
+        'sha256': hashlib.sha256(path.read_bytes()).hexdigest(), 'text_available': True}
+    monkeypatch.setenv('PYTHONIOENCODING', 'cp1252')
+    result = tools.execute('author_contract', {'path': path.name, 'function': 'test_original'})
+    assert result['status'] == 'completed', result
+    assert result['evidence'][0]['value']['checked_functions'] == ['test_original', '\u6c42\u503c']
 
 
 def test_contract_runs_only_original_pure_assertion_in_managed_child(tools):
