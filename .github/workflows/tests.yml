@@ -11,8 +11,9 @@ permissions:
 jobs:
   tests:
     runs-on: ${{ matrix.os }}
-    # Windows runs the complete suite in both locale and UTF-8 modes.
-    timeout-minutes: 30
+    # Windows runs both complete encoding selections sequentially. The 3.11
+    # runner exceeded 30 minutes with dependency setup and both full suites.
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 45 || 30 }}
     strategy:
       fail-fast: false
       matrix:
