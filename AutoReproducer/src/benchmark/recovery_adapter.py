@@ -60,6 +60,21 @@ def _environment():
     return result
 
 
+def _python_entrypoint(value):
+    """Validate a trusted executable without dereferencing its venv symlink.
+
+    POSIX virtual environments commonly link bin/python to the base runtime.
+    Launching that resolved target loses pyvenv.cfg and the product's installed
+    dependencies, even when the caller supplied the correct venv executable.
+    """
+    path = Path(os.path.abspath(os.fspath(value)))
+    if not path.is_file():
+        raise FileNotFoundError("The configured Python executable is not a file")
+    # Check broken links and missing ancestors, but preserve the launch path.
+    path.resolve(strict=True)
+    return str(path)
+
+
 def _public_evidence(case, workspace):
     """Narrow, preregistered supported envelope; model text cannot add commands."""
     evidence = deepcopy(case["initial_evidence"])
@@ -140,8 +155,8 @@ class RecoveryAdapter:
         self.products = {arm: Path(root).resolve(strict=True) for arm, root in product_roots.items()}
         if self.products["A"] == self.products["B"] or self.products["B"] != self.products["C"]:
             raise ValueError("A must have a separate old checkout; B/C share the enhanced checkout")
-        self.python = str(Path(product_python or sys.executable).resolve(strict=True))
-        self.author_python = str(Path(author_python or self.python).resolve(strict=True))
+        self.python = _python_entrypoint(product_python or sys.executable)
+        self.author_python = _python_entrypoint(author_python or self.python)
         self.oracle_paths = {key: Path(path).resolve(strict=True) for key, path in oracle_paths.items()}
         self.llm = dict(llm_config or {})
         if set(self.llm) - {"base_url", "api_key", "timeout", "max_tokens"}:
