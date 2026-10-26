@@ -554,7 +554,7 @@ else:
         attempt = subprocess.run([sys.executable, "-X", "utf8", "-c", program,
                                   str(Path(__file__).resolve().parents[1]),
                                   str(tmp_path / "new-service" / "new.jsonl")],
-                                 capture_output=True, text=True, timeout=10)
+                                 capture_output=True, text=True, encoding="utf-8", timeout=10)
         assert attempt.returncode == 0, attempt.stderr
         assert "依赖目录" in attempt.stdout
         assert task_control.task_status(original)["active"]

@@ -97,7 +97,8 @@ def test_web_uses_downloads_and_hides_metadata_without_changing_offline_evidence
     assert '<!-- autoreproducer-conclusion:' not in visible
     with zipfile.ZipFile(io.BytesIO(build_report_bundle(report, path))) as archive:
         assert archive.read('report.md').decode('utf-8') == report
-        assert len(archive.namelist()) == 3
+        assert 'report.manifest.json' in archive.namelist()
+        assert len(archive.namelist()) == 4  # Report, both reading companions, manifest.
 
 
 @pytest.mark.parametrize('target', ['../private.md', '/private.md', 'report_assets/private.md',

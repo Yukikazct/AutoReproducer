@@ -75,8 +75,8 @@ def render_report(report, report_path=None, *, st_module=None):
                 st_module.image(raw, caption=f"运行结果图 {part['number']}")
 
 
-def build_report_bundle(report, report_path):
-    """Package a report and its verified companion assets for offline viewing."""
+def build_report_bundle(report, report_path, *, result=None):
+    """Package verified report assets, saved evidence and a content manifest."""
     report_file = Path(report_path)
     if not report_file.is_absolute():
         report_file = PROJECT_ROOT / report_file
@@ -106,15 +106,19 @@ def build_report_bundle(report, report_path):
     repair_evidence = report_evidence_bytes(report, report_file)
     from src.pdf_markdown import report_markdown_bytes
     reading_evidence = report_markdown_bytes(report, report_file)
+    members = {report_file.name: report.encode('utf-8'), **figures,
+               **repair_evidence, **reading_evidence}
+    if attachment is not None:
+        members[attachment_name] = attachment.read_bytes()
+    from src.report_bundle import report_evidence_bytes, report_manifest_bytes
+    evidence_name = None
+    if result is not None:
+        evidence_name = report_file.stem + '.evidence.json'
+        members[evidence_name] = report_evidence_bytes(result, report, report_file.name)
+    manifest_name = report_file.stem + '.manifest.json'
+    members[manifest_name] = report_manifest_bytes(members, report_file.name, evidence_name)
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr(report_file.name, report)
-        for target, raw in figures.items():
-            archive.writestr(target, raw)
-        if attachment is not None:
-            archive.write(attachment, attachment_name)
-        for name, raw in repair_evidence.items():
-            archive.writestr(name, raw)
-        for name, raw in reading_evidence.items():
+        for name, raw in members.items():
             archive.writestr(name, raw)
     return buffer.getvalue()
 
@@ -137,7 +141,7 @@ def report_downloads(result, *, key, st_module=None, data_root=None):
             if name.endswith('.md'):
                 st_module.download_button('下载论文 Markdown', data=raw, file_name='paper_markdown.md',
                                           mime='text/markdown', key=f'{key}_paper_markdown')
-        st_module.download_button("下载报告和图片（ZIP）", data=build_report_bundle(report, path),
+        st_module.download_button("下载报告与证据（ZIP）", data=build_report_bundle(report, path, result=current),
                                   file_name=path.stem + ".zip", mime="application/zip",
                                   key=f"{key}_zip")
     except ValueError as exc:
