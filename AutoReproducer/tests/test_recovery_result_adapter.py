@@ -45,6 +45,7 @@ WORKER = r'''
 import hashlib, io, json, os, runpy, sys
 from pathlib import Path
 from contextlib import redirect_stdout, nullcontext
+assert sys.flags.utf8_mode == 1, 'Trusted result worker must use the production UTF-8 transport'
 payload = json.loads(sys.stdin.read())
 product, workspace, environment = (Path(payload[key]) for key in ('product','workspace','environment'))
 driver = runpy.run_path(payload['helper'])
@@ -159,7 +160,7 @@ def execute(tmp_path, frozen_products, *, arm="C", actual=None, reference=None, 
     payload = {"product": str(frozen_products[0][arm]), "workspace": str(workspace), "environment": str(environment),
         "helper": str(ROOT / "src/benchmark/recovery_result_evidence.py"), "arm": arm,
         "evidence": case["initial_evidence"], "source_files": case["source_files"], **options}
-    observed = run_owned_process([sys.executable, "-I", str(script)], input=json.dumps(payload),
+    observed = run_owned_process([sys.executable, "-I", "-X", "utf8", str(script)], input=json.dumps(payload),
         cwd=str(tmp_path), timeout_s=90, max_output_bytes=1024 * 1024)
     assert observed.returncode == 0, observed.stderr
     result = json.loads(observed.stdout)
@@ -168,6 +169,16 @@ def execute(tmp_path, frozen_products, *, arm="C", actual=None, reference=None, 
 
 def oracle(status="invalid_evidence", codes=None, **kwargs):
     return {"version": 1, "expected_status": status, "required_issue_codes": ["unit_mismatch"] if codes is None else codes, **kwargs}
+
+
+def test_isolated_result_worker_round_trips_unicode_metadata(tmp_path, frozen_products):
+    reference = {**REFERENCE, "method": "作者模型", "dataset": "实验数据"}
+    _, workspace, content, result = execute(tmp_path, frozen_products, reference=reference, actual=reference)
+    assert result['result_evidence']['completed'] is True
+    assert result['result_evidence']['assessment']['status'] == 'reference_met'
+    assert (workspace / 'metrics.json').read_text('utf-8') == content
+    assert result['result_evidence']['assessment']['actual']['method'] == reference['method']
+    assert result['result_evidence']['assessment']['actual']['dataset'] == reference['dataset']
 
 
 @pytest.mark.parametrize("arm", ["A", "B", "C"])
