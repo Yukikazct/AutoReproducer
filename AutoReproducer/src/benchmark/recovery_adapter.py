@@ -2,7 +2,7 @@
 
 The driver is application code, never a case-selected plugin or shell command.
 Each trial imports the selected frozen product in a fresh owned process. This
-first adapter covers Python API compatibility only; it is not a replacement for
+adapter covers Python API compatibility and verified local import roots; it is not a replacement for
 the complete PDF discovery/planning or paper-acceptance pipeline.
 """
 from __future__ import annotations
@@ -132,10 +132,132 @@ def _public_evidence(case, workspace):
                 or any(spec.operator != "==" or "*" in spec.version for spec in requirement.specifier)):
             raise ValueError("Adapter dependencies must use exact public version pins")
     failure = evidence.get("initial_failure")
-    if (not isinstance(failure, dict) or failure.get("error_type") not in {"AttributeError", "TypeError"}
+    error_types = {"ModuleNotFoundError"} if case.get("category") == "local_import" else {"AttributeError", "TypeError"}
+    if (not isinstance(failure, dict) or failure.get("error_type") not in error_types
             or not isinstance(failure.get("diagnostic_contains"), str) or not failure["diagnostic_contains"]):
-        raise ValueError("Preregister an observed API failure signature")
+        raise ValueError("Preregister an observed local import failure signature" if case.get("category") == "local_import"
+                         else "Preregister an observed API failure signature")
+    if case.get("category") == "local_import" and editable:
+        raise ValueError("Local import recovery cannot authorize source patches")
     return evidence
+
+
+def _import_descriptor(repair):
+    return {key: repair.get(key) for key in ("action", "module", "root", "source_path",
+                                            "source_sha256", "importing_sources")}
+
+
+def _import_runtime_contract(environment):
+    # These are observations written by the normal installer/cache, rather
+    # than settings that authorize a different experiment or executable.
+    telemetry = {"repository_pythonpath", "dependency_install_attempts", "dependency_health_attempts",
+                 "dependency_cache_repairs", "dependency_cache_maintenance", "dependency_temporary_files",
+                 "dependency_reuse"}
+    return {key: deepcopy(value) for key, value in environment.items() if key not in telemetry}
+
+
+def _validated_import_paths(receipt, case, workspace):
+    """Re-derive each path from raw failure + original frozen sources, privately."""
+    roots = receipt.get("repository_pythonpath") or []
+    proofs = receipt.get("import_recovery_proofs") or []
+    if case["category"] != "local_import":
+        if roots or proofs:
+            raise ValueError("Unregistered import-root recovery")
+        return []
+    if (not isinstance(roots, list) or not isinstance(proofs, list) or len(proofs) > 8
+            or len(roots) != len(proofs) or receipt.get("import_environment_preserved") is not True):
+        raise ValueError("Local import recovery is missing its frozen environment/proofs")
+    from src.author_self_repair import repair_local_import
+    evidence = case["initial_evidence"]
+    expected = []
+    for proof in proofs:
+        if (not isinstance(proof, dict) or not isinstance(proof.get("failure"), dict)
+                or not isinstance(proof.get("repair"), dict)):
+            raise ValueError("Import proof must retain a real original failure")
+        derived = repair_local_import(proof["failure"], workspace, evidence["packet"],
+                                      evidence["plan"]["requirements"])
+        if (not derived or _import_descriptor(derived) != _import_descriptor(proof.get("repair") or {})
+                or derived["root"] in expected):
+            raise ValueError("Recorded import root is not justified by its original traceback and source")
+        expected.append(derived["root"])
+    if roots != expected:
+        raise ValueError("Final Python path does not match independently justified import roots")
+    paths = [_path(workspace, name) for name in roots]
+    if any(not path.is_dir() for path in paths):
+        raise ValueError("A restored import root is not an original repository directory")
+    return [str(path) for path in paths]
+
+
+def _run_local_import_recovery(runner, execution, steps, plan, packet, workspace, environment,
+                               run_dir, data, verify_inputs, analyze_failure, on_event):
+    """Use the selected product's existing loop, restricted to local path repair.
+
+    The first result is the actual author run already observed by the adapter.
+    Subsequent runs retain the exact plan/runtime/dependencies and add only a
+    unique root re-derived by that product's trusted repair_local_import. The
+    generic loop may nominate other repairs, but this adapter never executes
+    dependency additions, interpreter changes or model-selected paths.
+    """
+    from src.author_runtime_dependencies import run_with_dependency_repair
+    from src.author_self_repair import failure_diagnostic, repair_local_import
+    from src.repository_repairer import repair_is_stopped
+    effective = deepcopy(execution.get("effective_env_config") or environment)
+    if effective.get("repository_pythonpath"):
+        raise ValueError("Initial import case cannot contain pre-restored roots")
+    baseline = deepcopy(effective)
+    frozen_runtime = _import_runtime_contract(baseline)
+    frozen_steps = deepcopy(steps)
+    proofs, roots = [], []
+    data["_import_recovery_proofs"] = proofs
+    data["_import_environment_preserved"] = True
+    data["_local_import_last_execution"] = execution
+
+    class CheckedRunner:
+        def __init__(self):
+            self.seed = True
+            self.last = execution
+
+        def run(self, selected_workspace, selected_steps, selected_env, **kwargs):
+            verify_inputs()
+            if Path(selected_workspace).resolve() != Path(workspace).resolve() or _digest(selected_steps) != _digest(frozen_steps):
+                raise ValueError("Local import recovery changed the original command plan")
+            if _import_runtime_contract(selected_env) != frozen_runtime:
+                raise ValueError("Local import recovery cannot change the frozen runtime environment or install dependencies")
+            if self.seed:
+                self.seed = False
+                if selected_env.get("repository_pythonpath"):
+                    raise ValueError("Initial import path was not frozen")
+                return deepcopy(execution)
+            if repair_is_stopped(self.last) or RecoveryAdapterCleanup.unconfirmed(self.last):
+                failure = RuntimeError("Original execution stopped; no further import recovery")
+                if RecoveryAdapterCleanup.unconfirmed(self.last):
+                    failure.process_cleanup_confirmed = False
+                raise failure
+            local = repair_local_import(self.last, workspace, packet, plan["requirements"])
+            if not local or selected_env.get("repository_pythonpath") != [*roots, local["root"]]:
+                raise ValueError("Only a uniquely justified original local import root may be restored")
+            roots.append(local["root"])
+            proofs.append({"failure": {"final": {"stderr": failure_diagnostic(self.last)}},
+                           "repair": _import_descriptor(local)})
+            verify_inputs()
+            observed = runner.run(selected_workspace, selected_steps, selected_env, **kwargs)
+            self.last = observed
+            data["_local_import_last_execution"] = observed
+            actual_runtime = _import_runtime_contract(observed.get("effective_env_config") or selected_env)
+            data["_import_environment_preserved"] = actual_runtime == frozen_runtime
+            if not data["_import_environment_preserved"]:
+                raise ValueError("Actual import retry changed the frozen runtime environment")
+            if RecoveryAdapterCleanup.unconfirmed(observed):
+                failure = RuntimeError("Import retry process cleanup was not confirmed")
+                failure.process_cleanup_confirmed = False
+                raise failure
+            return observed
+
+    if repair_is_stopped(execution) or RecoveryAdapterCleanup.unconfirmed(execution):
+        return execution
+    return run_with_dependency_repair(CheckedRunner(), workspace, frozen_steps, effective, plan=plan,
+        packet=packet, run_dir=run_dir, data=data, on_event=on_event, verify_inputs=verify_inputs,
+        analyze_failure=analyze_failure)
 
 
 class RecoveryAdapter:
@@ -207,6 +329,7 @@ class RecoveryAdapter:
                     value = json.loads(checkpoint.read_text("utf-8"))
                     if value.get("nonce") == nonce and value.get("configuration_sha256") == _digest(payload["configuration"]):
                         saved["usage"] = value["usage"]
+                        saved["collaboration"] = value.get("collaboration", {})
                 except (OSError, ValueError, KeyError):
                     pass
             return {**saved, "error_type": type(exc).__name__, "cancelled": isinstance(exc, KeyboardInterrupt),
@@ -244,7 +367,7 @@ class RecoveryAdapter:
                    "product_root": str(root), "product": identity, "cleanup_confirmed": True,
                    "driver_sha256": self.driver_sha256}
         self._receipts[key] = receipt
-        if case.get("category") != "api_compatibility":
+        if case.get("category") not in {"api_compatibility", "local_import"}:
             raw = {"claimed_success": False, "human_interventions": 0, "blocker": "unsupported",
                    "cleanup_confirmed": True, "usage": {"model_requests": 0, "tokens_charged": 0,
                    "prompt_tokens": 0, "completion_tokens": 0, "invalid_retries": 0, "cost": None,
@@ -261,6 +384,7 @@ class RecoveryAdapter:
             raise ValueError("Configure an actual provider for nonscripted trials")
         payload = {"operation": "trial", "product_root": str(root), "author_python": self.author_python,
                    "workspace": str(workspace), "environment": str(environment), "arm": arm,
+                   "category": case["category"],
                    "source_files": deepcopy(case["source_files"]), "evidence": evidence,
                    "configuration": deepcopy(configuration), "provider": provider,
                    "development_responses": self.responses}
@@ -271,9 +395,11 @@ class RecoveryAdapter:
                "cancelled": result.get("cancelled") is True, "timed_out": result.get("timed_out") is True,
                "cleanup_confirmed": result.get("cleanup_confirmed") is True,
                "blocker": result.get("blocker", "execution_failed"), "usage": result.get("usage", {}),
-               "execution_scope": "author_compatibility_recovery", "model_source":
+               "execution_scope": "author_local_import_recovery" if case["category"] == "local_import"
+                                  else "author_compatibility_recovery", "model_source":
                "scripted_development" if self.responses is not None else "provider",
                "driver_sha256": receipt["driver_sha256"]}
+        raw["collaboration"] = deepcopy(result.get("collaboration", {}))
         receipt["raw"] = deepcopy(raw)
         # No provider settings, prompts, hidden oracle data or credentials here.
         public = {k: deepcopy(v) for k, v in receipt.items() if k not in {"original", "configuration", "raw"}}
@@ -310,6 +436,7 @@ class RecoveryAdapter:
                     raise ValueError("Frozen protocol/input or noncompatibility source changed")
             if receipt.get("plan_preserved") is not True or receipt.get("runtime_preserved") is not True:
                 raise ValueError("Original command/runtime contract was not preserved")
+            import_paths = _validated_import_paths(receipt, case, workspace)
             scoring_stage = "oracle_setup"
             private = self.oracle_paths[case["id"]]
             oracle_spec = case["oracle"]
@@ -346,7 +473,7 @@ class RecoveryAdapter:
                         raise ValueError("Oracle dependency path escaped the private trial environment")
                     dependency_paths.append(str(path))
                 observed = self._invoke({"operation": "oracle", "workspace": str(effective),
-                    "scripts": contracts, "dependency_paths": dependency_paths}, cwd=effective, environment=environment,
+                    "scripts": contracts, "dependency_paths": [*import_paths, *dependency_paths]}, cwd=effective, environment=environment,
                     python=receipt["author_python"], timeout=60)
                 cleanup = cleanup and observed.get("cleanup_confirmed") is True
                 for flag in interrupted:
@@ -424,6 +551,7 @@ class _MeteredLLM:
         self.missing, self.seconds, self.last_usage = 0, 0.0, {}
         self.invalid_retries = 0
         self.on_update, self.repair_calls = on_update, 0
+        self.observed_repair_actions = 0
         self.in_flight = False
 
     def __getattr__(self, name):
@@ -467,13 +595,34 @@ def _measurement(llm, session=None):
              "prompt_tokens": llm.prompt if not llm.missing and not llm.in_flight else None,
              "completion_tokens": llm.completion if not llm.missing and not llm.in_flight else None,
              "cost": None, "invalid_retries": llm.invalid_retries, "probes": 0,
-             "source_repair_rounds": llm.repair_calls, "repair_actions": llm.repair_calls}
+             "source_repair_rounds": llm.repair_calls,
+             "repair_actions": llm.repair_calls + llm.observed_repair_actions}
     if session:
         accounting = session.state["usage"]
         usage.update(probes=accounting["probes"],
                      source_repair_rounds=accounting.get("source_patch_rounds", 0),
-                     repair_actions=accounting.get("repair_actions", 0))
+                     repair_actions=accounting.get("repair_actions", 0),
+                     roles=session.safe(deepcopy(accounting.get("roles", {}))))
     return usage
+
+
+def _collaboration_summary(session=None):
+    """Observed review activity, without prompts, patch bodies or verdict power."""
+    if session is None:
+        return {}
+    reviews = [{key: deepcopy(row.get(key)) for key in (
+        "stage", "reviewer", "candidate_sha256", "action", "review_id", "evidence_ids", "reason")}
+        for row in session.state.get("reviews", [])]
+    rejected = {row["candidate_sha256"] for row in reviews
+                if row["stage"] == "patch" and row["action"] == "reject"
+                and isinstance(row["candidate_sha256"], str)}
+    return session.safe({"mode": session.mode, "roles": deepcopy(session.state["usage"].get("roles", {})),
+        "reviews": reviews, "counts": {
+            "independent_reviews": sum(row["reviewer"] == "independent" for row in reviews),
+            "self_checks": sum(row["reviewer"] == "self_check" for row in reviews),
+            "review_probe_requests": sum(row["action"] == "probe" for row in reviews),
+            "distinct_patch_candidates_rejected": len(rejected)},
+        "scope": "observed_recovery_activity_only"})
 
 
 def _assert_product_modules(root):
@@ -560,12 +709,48 @@ def _trial_worker(payload):
     session, task, failure = None, None, {}
     def checkpoint():
         value = {"nonce": payload["nonce"], "configuration_sha256": _digest(config),
-                 "usage": _measurement(llm, session)}
+                 "usage": _measurement(llm, session), "collaboration": _collaboration_summary(session)}
         temporary = environment / "recovery_meter.pending"
         temporary.write_text(json.dumps(value), "utf-8")
         temporary.replace(environment / "recovery_meter.json")
     llm.on_update = checkpoint
     checkpoint()
+    def repair_event(event):
+        llm.observed_repair_actions = len((data.get("self_repair") or {}).get("attempts") or [])
+        checkpoint()
+
+    def investigate_failure(result, effective):
+        nonlocal task
+        if session is None:
+            return None
+        from src.investigation_tools import InvestigationTools
+        probe_environment = {**effective, "investigation_dependency_paths":
+            (result.get("environment") or {}).get("dependency_paths") or []}
+        toolset = InvestigationTools(workspace, evidence["packet"], probe_environment, run_dir)
+        execute = toolset.execute
+        def allowed_tool(name, arguments):
+            if name not in config["tools"]:
+                return {"status": "rejected", "cleanup_confirmed": True, "evidence": [],
+                        "reason": "Tool is outside the preregistered subset"}
+            return execute(name, arguments)
+        toolset.execute = allowed_tool
+        task = session.investigate(trigger="execution_failure", plan=original,
+            packet=evidence["packet"], workspace=workspace, environment=effective,
+            execution=result, tools=toolset)
+        session.ensure_running()
+        return task
+
+    def analyze_local_failure(result, effective):
+        investigation_task = investigate_failure(result, effective)
+        if session and investigation_task and investigation_task.get("status") != "repair_proposed":
+            return None
+        analyze_author_failure(session.wrap_llm() if session else llm, result, original,
+            evidence["packet"], workspace, effective, run_dir, data)
+        if session:
+            session.ensure_running()
+        # This adapter never applies dependency pins for a local-import task.
+        return None
+
     execution, initial, observed = {}, {}, False
     with ExitStack() as stack:
         stack.enter_context(_CaptureWorkerFailure(failure))
@@ -590,26 +775,19 @@ def _trial_worker(payload):
         observed = (not initial.get("success") and initial.get("executed") is True
                     and evidence["initial_failure"]["error_type"] in diagnostic
                     and evidence["initial_failure"]["diagnostic_contains"] in diagnostic)
+        if payload.get("category") == "local_import":
+            from src.author_self_repair import terminal_missing_import
+            observed = observed and bool(terminal_missing_import(diagnostic))
         if session:
             session.record_execution(execution)
-        if observed and not execution.get("success"):
+        if observed and payload.get("category") == "local_import":
+            execution = _run_local_import_recovery(runner, execution, plan, original, evidence["packet"],
+                workspace, env, run_dir, data, verify_inputs, analyze_local_failure, repair_event)
             if session:
-                from src.investigation_tools import InvestigationTools
-                probe_environment = {**env, "investigation_dependency_paths":
-                    (execution.get("environment") or {}).get("dependency_paths") or []}
-                toolset = InvestigationTools(workspace, evidence["packet"], probe_environment, run_dir)
-                execute = toolset.execute
-                # Identical B/C fixed tool subset; unsupported names cannot run.
-                def allowed_tool(name, arguments):
-                    if name not in config["tools"]:
-                        return {"status": "rejected", "cleanup_confirmed": True, "evidence": [],
-                                "reason": "Tool is outside the preregistered subset"}
-                    return execute(name, arguments)
-                toolset.execute = allowed_tool
-                task = session.investigate(trigger="execution_failure", plan=original,
-                    packet=evidence["packet"], workspace=workspace, environment=env,
-                    execution=execution, tools=toolset)
-                session.ensure_running()
+                session.record_execution(execution)
+        elif observed and not execution.get("success"):
+            if session:
+                investigate_failure(execution, env)
             if session is None or task and task.get("status") == "repair_proposed":
                 analyzer_llm = session.wrap_llm() if session else llm
                 analyze_author_failure(analyzer_llm, execution, original, evidence["packet"],
@@ -622,6 +800,7 @@ def _trial_worker(payload):
                 if session:
                     session.record_execution(execution)
         verify_inputs()
+    execution = data.pop("_local_import_last_execution", execution)
     effective = Path(data["source_repair"].get("workspace", workspace))
     prepared_runtime = initial.get("environment", {})
     final_runtime = execution.get("environment", {})
@@ -637,6 +816,10 @@ def _trial_worker(payload):
     from src.repository_repairer import repair_is_stopped
     stopped = repair_is_stopped(execution) or bool(failure)
     reason = session.state.get("stop_reason", "") if session else ""
+    repair_status = ((data.get("self_repair") or {}).get("status") if payload.get("category") == "local_import"
+                     else data["source_repair"].get("status"))
+    if repair_status == "budget_exhausted":
+        reason = "budget_exhausted"
     return {"claimed_success": observed and execution.get("success") is True and not stopped,
             "execution_succeeded": execution.get("success") is True and not stopped,
             "initial_failure_observed": observed, "plan_preserved": plan_ok,
@@ -649,9 +832,13 @@ def _trial_worker(payload):
             "cancelled": failure.get("cancelled", False) or execution.get("cancelled") is True,
             "cleanup_confirmed": failure.get("cleanup_confirmed", True) and not RecoveryAdapterCleanup.unconfirmed(execution),
             "dependency_paths": final_runtime.get("dependency_paths") or [],
+            "repository_pythonpath": (execution.get("effective_env_config") or {}).get("repository_pythonpath") or [],
+            "import_recovery_proofs": data.get("_import_recovery_proofs", []),
+            "import_environment_preserved": data.get("_import_environment_preserved", True),
             "error_type": failure.get("error_type"),
             "loaded_product_modules": _assert_product_modules(root), "usage": usage,
-            "repair_status": data["source_repair"].get("status"),
+            "collaboration": _collaboration_summary(session),
+            "repair_status": repair_status,
             "investigation_status": task.get("status") if task else None}
 
 

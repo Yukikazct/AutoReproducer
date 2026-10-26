@@ -98,7 +98,7 @@ Oracle 通过、协议保持、清理确认且没有人工介入，才算自主�
 
 ## 可执行默认适配器
 
-`src.benchmark.recovery_adapter.RecoveryAdapter` 已将上述接口接到真实产品代码。首版仅支持预登记的 `api_compatibility` Python 源码兼容故障，其余类别明确返回 `unsupported`。它比较固定计划下的作者恢复组件，**不代表完整 PDF 发现与规划流程的端到端 A/B/C 评测**，也不能据此完成四类正式案例覆盖。
+`src.benchmark.recovery_adapter.RecoveryAdapter` 已将上述接口接到真实产品代码。目前支持预登记的 `api_compatibility` Python 源码兼容故障和 `local_import` 本地导入根故障，其余类别明确返回 `unsupported`。它比较固定计划下的作者恢复组件，**不代表完整 PDF 发现与规划流程的端到端 A/B/C 评测**，也不能据此完成四类正式案例覆盖。
 
 A 在独立受管子进程中导入真实旧 checkout 的 `RepositoryRunner`、`analyze_author_failure` 和 `source_repair.repair_author_failure`。B/C 导入增强 checkout 的同一生产恢复链，再分别使用 single/collaborative `RecoverySession`。加载来源检查拒绝任何来自其他 checkout 的 `src.*` 模块。每次创建新作者 venv、数据根和依赖根，清除宿主 `PYTHONPATH`、用户 site 和提供商凭据；API key 只经环境读取或内存参数进入 stdin 管道。父进程确认 worker 及其后代清理后，才进入独立评分。作者完整命令不附加 60 秒上限；venv 准备与独立断言各最多 60 秒。
 
@@ -152,6 +152,12 @@ python scripts/evaluate_recovery.py run --manifest recovery_frozen.json --source
 - `oracle.kind: original_assertions_v1`：私有 JSON 包含 `{"version":1,"scripts":[{"path":"original_test.py","sha256":"<原始测试摘要>"}]}`。路径相对评分 JSON 所在目录，不能来自候选目录。原始测试在模型 worker 退出后，使用本轮作者 venv 在单独受管子进程执行；断言优化被禁用。该测试的依赖必须在原作者环境中声明。
 
 预登记参考必须来源于作者原有测试或可信参考输出。适配器不生成 expected，也不将候选自己生成的测试当作独立验证。API 拼写补丁运行通过，只能证明登记契约与原命令恢复；数值行为等价仍保持 `unknown`。
+
+`local_import` 案例使用同样的冻结结构，`initial_failure.error_type` 为 `ModuleNotFoundError`，`diagnostic_contains` 登记实际缺失模块，`editable` 必须为空。各组调用自己 checkout 内的 `run_with_dependency_repair` 与 `repair_local_import`：仅在真实终末 traceback、导入语句、唯一冻结模块以及包边界均匹配时，恢复仓库内原有导入根并重跑完全相同的命令。不会安装同名外部包、替换解释器、修改源码或放宽原实验设置。恢复器请求及实际运行后的完整环境控制均需与初始环境一致；只允许原有依赖安装/缓存遥测变化和已证明的 `repository_pythonpath`。
+
+同名模块有歧义或缺少来源时，增强组可以使用原固定检查工具补查，然后停止或交给已有分析者；模型不能自行挑选导入根。B/C 的检查、角色与后续错误共享原会话和动作额度。每个已恢复根在回执中保留真实失败与源码摘要，评分器会独立重新推导根列表；原始断言也在相同、经过重新核验的导入路径中运行。最简单的唯一根案例复用 A/B/C 已有的确定性能力，三组都恢复并不能证明 AI 增益。
+
+增强组的 `adapter_receipt.json` 另有 `usage.roles` 和 `collaboration`：仅保留各任务实际请求/用量、审查阶段/角色/候选摘要/动作/证据编号/安全原因，以及审查、补查和不同补丁否决数。它们不含 prompt 或补丁正文，不增加模型调用，也不能替代独立成功 Oracle；外部取消时同样进入受身份绑定的计量 checkpoint。
 
 每次模型请求前后写入仅含计量的 `recovery_meter.json`，绑定随机试验 nonce 与配置摘要；探针和补丁状态变化也更新它。外部取消/超时杀死 worker 后，父进程只在清理确认后回收匹配的 checkpoint。进行中的请求不虚构 token，用量保持未知。Oracle 取消、超时、基础设施异常都停止后续调度；正常原始断言失败作为候选失败保留。
 
