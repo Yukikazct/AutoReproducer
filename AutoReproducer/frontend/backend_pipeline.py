@@ -134,6 +134,9 @@ def _sync_run_report(result: dict) -> None:
     repair_evidence = report_evidence_bytes(report.read_text(encoding='utf-8'), report)
     from src.pdf_markdown import report_markdown_bytes
     repair_evidence.update(report_markdown_bytes(report.read_text(encoding='utf-8'), report))
+    from src.report_details import report_details_bytes
+    for name, raw in report_details_bytes(report.read_text(encoding='utf-8'), report).items():
+        _write_report_copy(workspace_path(run_dir, name, 'run report details'), raw)
     assets = report.with_name(report.stem + "_assets")
     if assets.exists():
         for image in assets.iterdir():
@@ -447,9 +450,7 @@ def run_pipeline_core(progress_path: str,
                 report_file.write_text(report_text, encoding="utf-8")
                 report_path = str(report_file)
 
-                # 完整执行输出附件：报告现已**全文内嵌** code/stdout/stderr，
-                # 附件保留作为可直接下载/归档的纯文本旁路（终端里 wc/grep、
-                # 或想脱离 Markdown 单独留档时用）。
+                # 主报告保留实验设置与结果；详情与纯文本附件保存完整输出。
                 execution_raw = data.get("execution", {}) or {}
                 final_raw = execution_raw.get("final", {}) or {}
                 attach_lines = ["# 完整执行输出（未被截断）",

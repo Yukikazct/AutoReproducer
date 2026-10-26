@@ -385,7 +385,9 @@ print(result["data"].get("validation"))
 .\.venv\Scripts\python.exe scripts/export_reproduction_report.py --result "data/runs/已有运行/result.json" --output-dir "data/reports/本次离线交付"
 ```
 
-输出目录必须不存在，父目录须已存在。目录包含 `report.md`、脱敏后的 `result.json`、`report.zip`，以及原报告的已验证图片和全文日志附件。ZIP 保存结构化核验记录与逐成员 SHA-256 清单；这些哈希用于检查包内文件一致性，不新增论文验收结论。运行中的结果、缺失或被修改的声明附件会拒绝导出；原始结果和来源文件保留。
+输出目录必须不存在，父目录须已存在。目录包含 `report.md`、`report_details.md`、脱敏后的 `result.json`、`report.zip`，以及原报告的已验证图片和全文日志附件。主报告保留论文与实验设置、执行阶段和命令、指标表、结果分析、结论与限制，并显示简短依据和来源位置；大段逐字引文、完整代码与执行输出保存在 `report_details.md` 中，可单独下载，也随 ZIP 携带。主报告中的详情链接绑定 SHA-256，附件缺失或内容改变会被拒绝。
+
+ZIP 同时保存结构化核验记录与逐成员 SHA-256 清单；这些哈希用于检查包内文件一致性，不新增论文验收结论。运行中的结果、缺失或被修改的声明附件会拒绝导出；原始结果和来源文件保留。
 
 ## 更多文档
 

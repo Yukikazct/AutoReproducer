@@ -62,6 +62,7 @@ def save(path, result):
 def test_export_preserves_originals_and_matches_report_result_and_hashed_bundle(saved_result):
     source, original, destination = saved_result
     original['data']['reproduction_conclusion'] = {'is_reproduced': False, 'summary': 'STALE'}
+    original['data']['experiment_spec'] = {'label': 'Frozen selected experiment'}
     save(source, original)
     before = {path: path.read_bytes() for path in source.parent.iterdir() if path.is_file()}
     receipt = export_reproduction_report(source, destination)
@@ -75,6 +76,10 @@ def test_export_preserves_originals_and_matches_report_result_and_hashed_bundle(
     assert '离线生成' in report
     assert exported['data']['validation'] == original['data']['validation']
     assert exported['data']['execution'] == original['data']['execution']
+    assert exported['data']['run_dir'] == original['data']['run_dir']
+    details = (destination / 'report_details.md').read_text(encoding='utf-8')
+    assert f"- **独立运行目录**: `{original['data']['run_dir']}`" in details
+    assert '.saved-evidence-' not in details and '.report-export-' not in details
     assert exported['data']['reproduction_conclusion'] == build_reproduction_conclusion(exported['data'])
     assert exported['data']['reproduction_conclusion']['is_reproduced'] is True
     assert exported['report_export']['source_result_sha256'] == hashlib.sha256(before[source]).hexdigest()

@@ -77,7 +77,12 @@ def test_active_pdf_prepare_path_consumes_plan_handoffs_and_persists_final_dialo
     root = Path(data['run_dir'])
     assert json.loads((root / 'agent_collaboration.json').read_text('utf-8')) == data['agent_collaboration']
     assert json.loads((root / 'result.json').read_text('utf-8'))['data']['agent_collaboration'] == data['agent_collaboration']
-    assert 'Agent 协作记录' in data['report']
+    assert 'Agent 协作摘要' in data['report']
+    from src.report_details import report_details_bytes
+    details = report_details_bytes(data['report'], root / 'report.md')['report_details.md'].decode('utf-8')
+    assert 'Agent 协作记录' in details
+    assert '完整协作记录' in details
+    assert 'AuthorPlanner' in details and 'CodeExecutor' in details
     assert (root / 'paper_markdown.md').exists() and (root / 'paper_markdown.json').exists()
     assert any(event['type'] == 'agent_message' for event in events)
     assert {options['task'] for _, options in llm.calls} == {'author_execution_plan'}

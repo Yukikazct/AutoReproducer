@@ -161,6 +161,8 @@ def export_reproduction_report(result_path, output_dir):
     safe = _redact_evidence(sanitize_report_result(result), '')
     data = safe['data']
     source_report, original = _source_report(source, result['data'], result)
+    from src.report_details import report_details_bytes
+    report_details_bytes(original, source_report)
     # The temporary tree is created under the explicitly selected parent, and
     # only its direct children can be moved into the exclusively created folder.
     with tempfile.TemporaryDirectory(prefix='.report-export-', dir=destination.parent) as temporary:
@@ -170,8 +172,9 @@ def export_reproduction_report(result_path, output_dir):
         report_path = stage / 'report.md'
         with tempfile.TemporaryDirectory(prefix='.saved-evidence-', dir=stage) as evidence:
             rendered = _prepare_reading_and_repair(data, original, source_report, Path(evidence))
+            rendered['_report_source_run_dir'] = data.get('run_dir', '')
             from src.agents.report_generator import ReportGeneratorAgent
-            report = ReportGeneratorAgent._build_report(
+            report = ReportGeneratorAgent.build_report(
                 rendered, report_path=report_path,
                 artifact_resolver=_image_resolver(source_report, report_path))
             report = report.replace(f"- **独立运行目录**: `{rendered['run_dir']}`",
