@@ -220,7 +220,10 @@ class InvestigationTools:
                     raise ValueError('Artifact hash changed')
             value = {'path': name, 'bytes': len(content), 'suffix': Path(name).suffix,
                      'note': 'Metadata only; no per-row targets or predictions exposed.'}
-            if name.endswith('.json'):
+            if Path(name).suffix.lower() in {'.npy', '.npz'}:
+                from src.investigation_artifacts import numpy_artifact_metadata
+                value.update(numpy_artifact_metadata(content, Path(name).suffix.lower()))
+            elif name.endswith('.json'):
                 obj = json.loads(content)
                 value['shape'] = 'mapping' if isinstance(obj, dict) else 'list' if isinstance(obj, list) else 'scalar'
                 if isinstance(obj, dict):

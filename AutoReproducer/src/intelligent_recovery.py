@@ -274,6 +274,18 @@ class RecoverySession:
             if (isinstance(item, dict) and isinstance(item.get('name'), str)
                     and isinstance(item.get('sha256'), str)):
                 public_artifacts[item['name']] = {'sha256': item['sha256'], 'public': True}
+        # RepositoryRunner's declared non-image outputs live under each step's
+        # capture receipt. Top-level artifacts contains collected images only.
+        for step in execution.get('steps') or []:
+            if not isinstance(step, dict):
+                continue
+            for captured in step.get('artifacts') or []:
+                if not isinstance(captured, dict) or captured.get('matched') is not True:
+                    continue
+                for item in captured.get('files') or []:
+                    if (isinstance(item, dict) and isinstance(item.get('path'), str)
+                            and isinstance(item.get('sha256'), str)):
+                        public_artifacts[item['path']] = {'sha256': item['sha256'], 'public': True}
         observation_packet = {**packet, 'investigation_artifacts': public_artifacts}
         observation_environment = {**environment, 'investigation_dependency_paths':
                                    (execution.get('environment') or {}).get('dependency_paths') or []}
