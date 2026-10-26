@@ -35,7 +35,7 @@ from src.project_paths import get_data_root
 
 
 # Contract checked by the web loader before starting a new background thread.
-BACKEND_API_VERSION = 13
+BACKEND_API_VERSION = 14
 WORKER_CANCEL_GRACE_SECONDS = 5
 
 
@@ -225,6 +225,7 @@ def run_pipeline_core(progress_path: str,
                       source_repair_auto: bool = False,
                       source_repair_editable: Optional[List[str]] = None,
                       intelligent_recovery: bool = False,
+                      intelligent_recovery_mode: str = 'collaborative',
                       _managed_runtime: bool = False,
                       _append_progress: bool = False,
                       _runtime_preparation: Optional[dict] = None) -> Dict[str, Any]:
@@ -247,6 +248,14 @@ def run_pipeline_core(progress_path: str,
     store = ProgressStore(progress_path, reset=not _append_progress)
     if type(intelligent_recovery) is not bool:
         return _reject_pdf_input(store, "intelligent_recovery 必须是显式布尔值")
+    from src.intelligent_recovery import normalize_intelligent_recovery_request
+    try:
+        recovery_request = normalize_intelligent_recovery_request({
+            'intelligent_recovery': intelligent_recovery,
+            'intelligent_recovery_mode': intelligent_recovery_mode})
+        intelligent_recovery_mode = recovery_request['intelligent_recovery_mode']
+    except ValueError as exc:
+        return _reject_pdf_input(store, str(exc))
     from src.experiment_request import normalize_experiment_request
     try:
         experiment_request = normalize_experiment_request(experiment_request)
@@ -266,6 +275,7 @@ def run_pipeline_core(progress_path: str,
             "source_repair_auto": source_repair_auto,
             "source_repair_editable": source_repair_editable,
             "intelligent_recovery": intelligent_recovery,
+            "intelligent_recovery_mode": intelligent_recovery_mode,
             "base_url": base_url, "api_key": api_key, "mock_mode": mock_mode,
             "max_trials": max_trials, "use_docker": use_docker,
             "workspace_dir": workspace_dir, "experiment_profile": experiment_profile,
@@ -298,6 +308,7 @@ def run_pipeline_core(progress_path: str,
                 "source_repair_auto": source_repair_auto,
                 "source_repair_editable": source_repair_editable,
                 "intelligent_recovery": intelligent_recovery,
+                "intelligent_recovery_mode": intelligent_recovery_mode,
                 "experiment_profile": experiment_profile}
     pdf_parser_reason = None
     if pdf_path:
@@ -412,6 +423,7 @@ def run_pipeline_core(progress_path: str,
                 "source_repair_auto": source_repair_auto,
                 "source_repair_editable": source_repair_editable,
                 "intelligent_recovery": intelligent_recovery,
+                "intelligent_recovery_mode": intelligent_recovery_mode,
                 "prepare_only": prepare_only, "offline": offline,
                 "use_llm_review": use_llm_review,
                 "allow_result_summary_review": allow_result_summary_review,
@@ -787,6 +799,7 @@ def run_pipeline_background(progress_path: str, *,
                             source_repair_auto: bool = False,
                             source_repair_editable: Optional[List[str]] = None,
                             intelligent_recovery: bool = False,
+                            intelligent_recovery_mode: str = 'collaborative',
                             cleanup_pdf: bool = True,
                             on_done=None) -> threading.Thread:
     """启动后台线程执行流水线；返回守护线程句柄。
@@ -815,6 +828,7 @@ def run_pipeline_background(progress_path: str, *,
                 source_repair_auto=source_repair_auto if source_repair is True else False,
                 source_repair_editable=source_repair_editable if source_repair is True else [],
                 intelligent_recovery=intelligent_recovery,
+                intelligent_recovery_mode=intelligent_recovery_mode,
                 corpus_paper=corpus_paper, model_name=model_name,
                 base_url=base_url, api_key=api_key, mock_mode=mock_mode,
                 max_trials=max_trials, use_docker=use_docker,

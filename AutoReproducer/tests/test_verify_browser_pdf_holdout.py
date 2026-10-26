@@ -123,6 +123,9 @@ class Field:
     def set_checked(self, checked):
         self.checked = checked
 
+    def click(self):
+        pass
+
 
 class Page:
     def __init__(self):
@@ -134,6 +137,9 @@ class Page:
             "Docker 沙箱执行（暂未开放）": Field(checked=False),
             "严格核验：重载模型并独立复算指标": Field(),
             "兼容性源码修复：失败后自动重试": Field(checked=True),
+            "智能调查与排障": Field(checked=True),
+            "调查方式": Field('collaborative'),
+            "限定修复文件（可选，每行一个仓库相对路径）": Field('stale.py'),
             "实验方法 / 模型（可选）": Field(),
             "实验数据集（可选）": Field(),
         }
@@ -143,6 +149,9 @@ class Page:
         return self.fields[name]
 
     def get_by_role(self, role, *, name, exact):
+        if role == 'option':
+            return SimpleNamespace(click=lambda: self.fields['调查方式'].fill(
+                {'单智能体（自检）': 'single', '多智能体协作（独立反证审查）': 'collaborative'}[name]))
         assert (role, name) == ("button", "测试 AI 连接")
         return SimpleNamespace(click=self.connection_test)
 
@@ -202,6 +211,7 @@ def test_pdf_mode_controls_are_set_explicitly_and_exclude_source_repair(strict):
     audit.configure_execution_mode(page, strict)
     assert page.fields['严格核验：重载模型并独立复算指标'].checked is strict
     assert page.fields['兼容性源码修复：失败后自动重试'].checked is False
+    assert page.fields['智能调查与排障'].checked is False
 
 
 def test_strict_cli_is_separate_from_unused_paper_and_execution_only(monkeypatch):

@@ -86,11 +86,14 @@ Runner 返回公开结果及计量：
         "model_requests": 5, "tokens_charged": 30000,
         "probes": 2, "source_repair_rounds": 1, "repair_actions": 1,
         "prompt_tokens": None, "completion_tokens": None, "invalid_retries": 1, "cost": None,
+        "execution_retries": 2, "same_failure_retries": 1,
     },
 }
 ```
 
 实际模型用量缺失保持 `null`，不把未知费用当零。`tokens_charged` 可以来自控制器的保守预算计量，与供应商实际用量分开。显式设置上限时，未知或超过限制的计量使正式评测不完整。
+
+`invalid_retries` 记录模型格式纠错请求；`execution_retries` 记录首个实际作者执行之后的重跑；`same_failure_retries` 记录相邻实际执行在相同步骤、源码位置和终末诊断处再次失败。环境准备拒绝、未启动作者进程的调用不计重跑。修复副本的绝对根路径不产生新错误身份。正在执行的调用被外部中断、没有完整结果时，后两项保持未知；历史回执没有这些字段时也不补零。汇总拒绝同错误次数超过实际重跑次数、格式纠错次数超过模型请求数的回执。
 
 Oracle 回调独立获得 `case, result, workspace, environment`，必须返回显式布尔值 `oracle_passed, protocol_preserved, cleanup_confirmed`，可增加可审计的评分摘要。它负责检查真实执行、冻结设置和进程清理，不能把模型自述成功当作评分。原始评分摘要、摘要哈希与 `trial_id` 绑定保存到每条记录；不要返回隐藏标签、凭据或其他不应出现在报告的私有内容。
 
@@ -98,7 +101,7 @@ Oracle 通过、协议保持、清理确认且没有人工介入，才算自主�
 
 ## 可执行默认适配器
 
-`src.benchmark.recovery_adapter.RecoveryAdapter` 已将上述接口接到真实产品代码。目前支持预登记的 `api_compatibility` Python 源码兼容故障和 `local_import` 本地导入根故障，其余类别明确返回 `unsupported`。它比较固定计划下的作者恢复组件，**不代表完整 PDF 发现与规划流程的端到端 A/B/C 评测**，也不能据此完成四类正式案例覆盖。
+`src.benchmark.recovery_adapter.RecoveryAdapter` 已将上述接口接到真实产品代码，提供四类预登记路径：Python API 兼容、本地导入、受限的缺失依赖恢复和结果产物调查。每类都有下述可执行边界，超出边界不会由模型扩大权限。它比较固定计划下的作者恢复组件，**不代表完整 PDF 发现与规划流程的端到端 A/B/C 评测**；支持四类路径不等于完成自然案例覆盖。
 
 A 在独立受管子进程中导入真实旧 checkout 的 `RepositoryRunner`、`analyze_author_failure` 和 `source_repair.repair_author_failure`。B/C 导入增强 checkout 的同一生产恢复链，再分别使用 single/collaborative `RecoverySession`。加载来源检查拒绝任何来自其他 checkout 的 `src.*` 模块。每次创建新作者 venv、数据根和依赖根，清除宿主 `PYTHONPATH`、用户 site 和提供商凭据；API key 只经环境读取或内存参数进入 stdin 管道。父进程确认 worker 及其后代清理后，才进入独立评分。作者完整命令不附加 60 秒上限；venv 准备与独立断言各最多 60 秒。
 
@@ -156,6 +159,22 @@ python scripts/evaluate_recovery.py run --manifest recovery_frozen.json --source
 `local_import` 案例使用同样的冻结结构，`initial_failure.error_type` 为 `ModuleNotFoundError`，`diagnostic_contains` 登记实际缺失模块，`editable` 必须为空。各组调用自己 checkout 内的 `run_with_dependency_repair` 与 `repair_local_import`：仅在真实终末 traceback、导入语句、唯一冻结模块以及包边界均匹配时，恢复仓库内原有导入根并重跑完全相同的命令。不会安装同名外部包、替换解释器、修改源码或放宽原实验设置。恢复器请求及实际运行后的完整环境控制均需与初始环境一致；只允许原有依赖安装/缓存遥测变化和已证明的 `repository_pythonpath`。
 
 同名模块有歧义或缺少来源时，增强组可以使用原固定检查工具补查，然后停止或交给已有分析者；模型不能自行挑选导入根。B/C 的检查、角色与后续错误共享原会话和动作额度。每个已恢复根在回执中保留真实失败与源码摘要，评分器会独立重新推导根列表；原始断言也在相同、经过重新核验的导入路径中运行。最简单的唯一根案例复用 A/B/C 已有的确定性能力，三组都恢复并不能证明 AI 增益。
+
+### 依赖环境恢复
+
+`runtime_environment` 在原命令实际产生顶层 `ModuleNotFoundError` 后，调用各自冻结产品的依赖恢复循环。`initial_evidence.runtime_environment` 为 `version: 1`，其中 `allowed_repairs` 提前列出缺失 `module`、精确 `requirement` 和完整精确版本 `additions`。每次依赖增加必须由真实 traceback、冻结作者源码或依赖声明支持，最终依赖集合由独立评分器重新核对。版本替换、原生兼容和解释器切换尚不支持，不能用这一条路径宣称覆盖这些能力。
+
+自然案例仅接受公开包的精确版本；`development_wheels` 只供 `dev/injected` 的离线测试使用，必须作为冻结来源文件登记路径与摘要。wheel 元数据、安装文件及字节由评分器核验，不允许拿测试 wheel 冒充自然依赖。环境恢复不修改源码、原命令、数据或实验设置。
+
+### 结果产物调查
+
+`result_evidence` 要求作者原命令已经完整成功，再调查实际产生的单个、不超过 2 MiB 的平铺 JSON 指标摘要。`editable` 必须为空。`initial_evidence.result_contract` 显式登记 `version: 1`、`artifact`、`format: metric_summary_json`、`reference`、`relative_tolerance` 和 `absolute_tolerance`；未知值保留 null，已知字段不能与冻结实验协议冲突。
+
+`reference` 可包括 `metric/value/unit/method/dataset/split/aggregation/runs`。增强组必须选择实际检查工具并在结束决策中引用对应产物证据，工具只公开聚合指标及实验元数据。评分器在模型 worker 退出后独立重读原始产物，核对实际判断、原始字节、实验对应、单位、统计方式及显式容差；不执行隐含单位换算。私有 `oracle.kind: result_evidence_v1` 登记预期判断与必须发现的问题码；接受未知结论还必须显式登记 `allow_unknown` 和完整的 `expected_unknown_fields`。
+
+本路径的“完成”表示正确处理预登记的结果疑点；发现数值差距或无效证据也可以是正确处理，不能据此称为论文数值达标。缺参考时只有保持未知的结论可能通过对应 Oracle。A 保留旧产品已有的、证据完整的比较能力；普通诊断建议不自动成为成功。B/C 和 A 均不修改产物、实验协议、训练参数或验收容差。
+
+### 调查计量
 
 增强组的 `adapter_receipt.json` 另有 `usage.roles` 和 `collaboration`：仅保留各任务实际请求/用量、审查阶段/角色/候选摘要/动作/证据编号/安全原因，以及审查、补查和不同补丁否决数。它们不含 prompt 或补丁正文，不增加模型调用，也不能替代独立成功 Oracle；外部取消时同样进入受身份绑定的计量 checkpoint。
 

@@ -17,6 +17,7 @@ from src.agents.code_executor import CodeExecutorAgent, _safe_install_diagnostic
 from src.agent_collaboration import current_collaboration
 from src.author_self_repair import failure_diagnostic
 from src.execution_plan import plan_steps
+from src.execution_safety import cleanup_is_unconfirmed, iter_execution_records
 from src.safety.patch_policy import PatchPolicy
 from src.safety.patch_transaction import PatchTransaction
 from src.safety.paths import filesystem_path, is_link, workspace_path
@@ -97,35 +98,11 @@ def _bounded_snapshot(root):
     return snapshot_workspace(root)
 
 
-def cleanup_is_unconfirmed(execution):
-    """Preserve cleanup uncertainty through execution and receipt wrappers."""
-    pending = [(execution, False), (execution.get('final'), False),
-               (execution.get('effective_env_config'), False)]
-    pending.extend((item, False) for item in execution.get('steps') or [])
-    seen = set()
-    while pending:
-        record, receipt = pending.pop()
-        if not isinstance(record, dict) or id(record) in seen:
-            continue
-        seen.add(id(record))
-        if (record.get('cleanup_confirmed') is False or record.get('process_cleanup_confirmed') is False
-                or any(record.get(key) for key in ('cleanup_failed', 'cleanup_unconfirmed', 'cleanup_error', 'cleanup_errors'))
-                or record.get('status') in {'cleanup_failed', 'cleanup_unconfirmed'}
-                or receipt and (record.get('confirmed') is False or record.get('status') in {'failed', 'unconfirmed'})):
-            return True
-        pending.extend((record.get(key), True) for key in ('cleanup', 'process_cleanup', 'cleanup_receipt'))
-    return bool(re.search(r'process[- ](?:tree|group) cleanup (?:failed|was denied)'
-                          r'|\bcleanup_unconfirmed\b', failure_diagnostic(execution), re.I))
-
-
 def repair_is_stopped(execution):
     """A cancellation or unconfirmed cleanup cannot become a repair request."""
     if cleanup_is_unconfirmed(execution):
         return True
-    records = [execution, execution.get("final") or {},
-               execution.get("effective_env_config") or {}]
-    records.extend(item for item in execution.get("steps", []) if isinstance(item, dict))
-    for record in records:
+    for record, _ in iter_execution_records(execution):
         if (any(record.get(key) for key in ("cancelled", "interrupted", "timed_out",
                                            "cleanup_failed", "cleanup_unconfirmed",
                                            "cleanup_error", "cleanup_errors"))

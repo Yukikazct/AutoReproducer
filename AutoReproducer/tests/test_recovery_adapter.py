@@ -139,6 +139,8 @@ def test_actual_three_arms_use_frozen_code_and_original_commands(tmp_path, froze
     assert (Path(receipt["effective_workspace"]) / "train.py").read_text() == "from model import Model\nprint(Model().value())\n"
     assert Path(receipt["author_python"]).is_relative_to(environment)
     assert result["usage"]["model_requests"] >= (2 if arm == "A" else 5)
+    assert result['usage']['execution_retries'] == 1
+    assert result['usage']['same_failure_retries'] == 0
     assert result["usage"]["prompt_tokens"] is result["usage"]["cost"] is None
     scored = adapter.evaluate_trial(case=case, result=result, workspace=workspace, environment=environment)
     assert scored["oracle_passed"] is scored["protocol_preserved"] is scored["cleanup_confirmed"] is True, receipt
@@ -195,7 +197,7 @@ def test_reused_trial_and_scripted_holdout_are_rejected(tmp_path, frozen_product
     with pytest.raises(ValueError, match="Scripted"):
         run(adapter, case, workspace, environment, config)
     case["split"], case["origin"] = "dev", "injected"
-    case["category"] = "result_evidence"
+    case["category"] = "unsupported_future_category"
     result = run(adapter, case, workspace, environment, config)
     assert result["blocker"] == "unsupported"
     assert result["driver_sha256"] == adapter.driver_sha256
@@ -229,6 +231,32 @@ def test_worker_identity_change_is_rejected(tmp_path, frozen_products):
     adapter.driver_files[str(adapter.worker)] = "0" * 64
     with pytest.raises(ValueError, match="worker changed"):
         adapter._verify_driver()
+
+
+@pytest.mark.parametrize('tamper', [None, 'source', 'runtime'])
+def test_supported_category_unsupported_verdict_still_checks_frozen_protocol(tmp_path, frozen_products, tamper):
+    adapter, case, workspace, environment, config = setup_adapter(tmp_path, frozen_products)
+    result = run(adapter, case, workspace, environment, config)
+    receipt = adapter._receipts[str(workspace.resolve())]
+    # An actual supported recovery may stop at an unsupported next action.
+    result.update(blocker='unsupported', claimed_success=False)
+    receipt['raw'] = deepcopy(result)
+    if tamper == 'source':
+        (workspace / 'train.py').write_text('print("changed protocol")', encoding='utf-8')
+    elif tamper == 'runtime':
+        receipt['runtime_preserved'] = False
+    scored = adapter.evaluate_trial(case=case, result=result, workspace=workspace, environment=environment)
+    assert scored['oracle_passed'] is False
+    assert scored['cleanup_confirmed'] is True
+    assert scored['protocol_preserved'] is (tamper is None)
+
+
+def test_pure_stdout_oracle_also_rejects_unregistered_driver_changes(tmp_path, frozen_products):
+    adapter, case, workspace, environment, config = setup_adapter(tmp_path, frozen_products)
+    result = run(adapter, case, workspace, environment, config)
+    adapter.driver_files[str(adapter.worker)] = '0' * 64
+    with pytest.raises(ValueError, match='worker changed'):
+        adapter.evaluate_trial(case=case, result=result, workspace=workspace, environment=environment)
 
 
 def test_budget_stop_retains_calls_and_cumulative_usage(tmp_path, frozen_products):

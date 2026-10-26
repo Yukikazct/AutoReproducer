@@ -5,6 +5,7 @@ In particular, author-output comparisons and a successful command do not supply
 the protocol and independent-prediction evidence required for paper acceptance.
 """
 from src.author_claim_comparison import _redact_text
+from src.execution_safety import cleanup_is_unconfirmed
 
 
 def _mapping(value):
@@ -45,15 +46,9 @@ def _execution_level(data, validation, execution):
                for row in records):
             return {'status': 'timed_out' if key == 'timed_out' else 'interrupted',
                     'label': label, 'reason': '保留已发生的执行记录；未完成部分不作完成判定。'}
-    for row in records:
-        cleanup = [_mapping(row.get(key)) for key in ('cleanup', 'process_cleanup')]
-        if (any(row.get(key) for key in ('cleanup_unconfirmed', 'cleanup_failed', 'cleanup_error', 'cleanup_errors'))
-                or row.get('cleanup_confirmed') is False
-                or row.get('status') in {'cleanup_unconfirmed', 'cleanup_failed'}
-                or any(item.get('confirmed') is False or item.get('status') in
-                       {'unconfirmed', 'cleanup_unconfirmed', 'failed', 'cleanup_failed'} for item in cleanup)):
-            return {'status': 'cleanup_unconfirmed', 'label': '进程清理未确认',
-                    'reason': '所属进程清理尚未确认，不能发布本次执行完成或独立验收结论。'}
+    if cleanup_is_unconfirmed(records):
+        return {'status': 'cleanup_unconfirmed', 'label': '进程清理未确认',
+                'reason': '所属进程清理尚未确认，不能发布本次执行完成或独立验收结论。'}
     if any(row.get('process_exited') is False or row.get('process_alive') is True
            or row.get('running') is True for row in records):
         return {'status': 'incomplete', 'label': '执行尚未结束',

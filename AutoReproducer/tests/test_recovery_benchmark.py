@@ -75,6 +75,29 @@ def test_shared_defaults_do_not_limit_normal_model_calls_or_total_tokens():
     assert _configuration(frozen, frozen["cases"][0], "A")["budget_policy"] == "frozen_baseline"
 
 
+@pytest.mark.parametrize('subset,total', [('same_failure_retries', 'execution_retries'),
+                                          ('invalid_retries', 'model_requests')])
+def test_retry_receipts_cannot_exceed_their_actual_observed_total(subset, total):
+    frozen = freeze_manifest(manifest())
+    rows = receipts(frozen)
+    rows[0]['usage'].update({subset: 3, total: 2})
+    with pytest.raises(ValueError, match='Retry count exceeds'):
+        aggregate_results(frozen, rows)
+
+
+def test_author_retry_totals_are_distinct_from_format_retries_and_remain_unknown_for_old_results():
+    frozen = freeze_manifest(manifest())
+    rows = receipts(frozen)
+    summary = aggregate_results(frozen, rows)
+    assert summary['arms']['C']['usage_totals']['execution_retries'] is None
+    for row in rows:
+        row['usage'].update(execution_retries=2, same_failure_retries=1, invalid_retries=0)
+    summary = aggregate_results(frozen, rows)
+    assert summary['arms']['C']['usage_totals']['execution_retries'] == 72
+    assert summary['arms']['C']['usage_totals']['same_failure_retries'] == 36
+    assert summary['arms']['C']['usage_totals']['invalid_retries'] == 0
+
+
 def test_freeze_is_detached_and_any_source_or_oracle_edit_invalidates_it():
     original = manifest()
     frozen = freeze_manifest(original)

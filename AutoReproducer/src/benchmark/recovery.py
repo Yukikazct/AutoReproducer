@@ -33,6 +33,7 @@ BLOCKERS = {"external_condition", "needs_information", "unsupported", "execution
 MAX_MANIFEST_BYTES = 8 * 1024 * 1024
 MAX_SOURCE_FILE_BYTES = 64 * 1024 * 1024
 MAX_TRIAL_SOURCE_BYTES = 512 * 1024 * 1024
+RETRY_METRICS = ('invalid_retries', 'execution_retries', 'same_failure_retries')
 
 
 def _hash(value, size=64):
@@ -225,7 +226,7 @@ def _usage(raw):
     value = raw.get("usage") if isinstance(raw, dict) else None
     value = value if isinstance(value, dict) else {}
     result = {}
-    for key in (*ACCOUNTING_KEYS, "prompt_tokens", "completion_tokens", "invalid_retries"):
+    for key in (*ACCOUNTING_KEYS, "prompt_tokens", "completion_tokens", *RETRY_METRICS):
         number = value.get(key)
         result[key] = number if _integer(number) else None
     for key in ("cost", "duration_seconds"):
@@ -433,9 +434,14 @@ def aggregate_results(manifest, records):
         usage = record.get("usage") or {}
         if not isinstance(usage, dict):
             raise ValueError("Invalid usage receipt")
-        for metric in (*ACCOUNTING_KEYS, "prompt_tokens", "completion_tokens", "invalid_retries"):
+        for metric in (*ACCOUNTING_KEYS, "prompt_tokens", "completion_tokens", *RETRY_METRICS):
             if usage.get(metric) is not None and not _integer(usage[metric]):
                 raise ValueError("Known usage counts must be nonnegative integers")
+        for subset, total in (("same_failure_retries", "execution_retries"),
+                              ("invalid_retries", "model_requests")):
+            if (usage.get(subset) is not None and usage.get(total) is not None
+                    and usage[subset] > usage[total]):
+                raise ValueError("Retry count exceeds its observed total: " + subset)
         for metric in ("cost", "duration_seconds"):
             number = usage.get(metric)
             if number is not None and (type(number) not in {int, float} or number < 0 or not math.isfinite(number)):
@@ -476,7 +482,7 @@ def aggregate_results(manifest, records):
             "human_interventions": sum(record["outcome"]["human_interventions"] for record in runs),
             "usage_totals": {metric: (sum(record.get("usage", {}).get(metric) or 0 for record in runs)
                 if runs and all(record.get("usage", {}).get(metric) is not None for record in runs) else None)
-                for metric in (*ACCOUNTING_KEYS, "prompt_tokens", "completion_tokens", "invalid_retries", "cost", "duration_seconds")}}
+                for metric in (*ACCOUNTING_KEYS, "prompt_tokens", "completion_tokens", *RETRY_METRICS, "cost", "duration_seconds")}}
     a, b, c = (arm_rows[arm] for arm in ARMS)
     net_gain = c["autonomous_cases"] - a["autonomous_cases"]
     collaboration_gain = c["autonomous_cases"] - b["autonomous_cases"]

@@ -3,6 +3,7 @@ import ast
 from contextlib import contextmanager
 import hashlib
 import json
+import math
 from pathlib import Path
 import re
 import tempfile
@@ -12,6 +13,25 @@ from src.safety.paths import workspace_path
 
 MAX_SOURCE_BYTES = 2 * 1024 * 1024
 TOOLS = ('source_context', 'runtime_metadata', 'artifact_contract', 'author_contract')
+
+
+def _strict_metric_json(content):
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError('Aggregate JSON contains duplicate keys')
+            result[key] = value
+        return result
+
+    def invalid(_value):
+        raise ValueError('Aggregate JSON contains a nonfinite number')
+
+    def finite(text):
+        number = float(text)
+        return number if math.isfinite(number) else invalid(text)
+
+    return json.loads(content, object_pairs_hook=unique, parse_constant=invalid, parse_float=finite)
 
 
 class InvestigationTools:
@@ -224,7 +244,7 @@ class InvestigationTools:
                 from src.investigation_artifacts import numpy_artifact_metadata
                 value.update(numpy_artifact_metadata(content, Path(name).suffix.lower()))
             elif name.endswith('.json'):
-                obj = json.loads(content)
+                obj = _strict_metric_json(content) if record.get('metric_summary') is True else json.loads(content)
                 value['shape'] = 'mapping' if isinstance(obj, dict) else 'list' if isinstance(obj, list) else 'scalar'
                 if isinstance(obj, dict):
                     value['keys'] = list(obj)[:100]
@@ -233,6 +253,25 @@ class InvestigationTools:
                     value['protocol_metadata'] = {key: item for key, item in obj.items() if key in
                         {'unit', 'split', 'aggregation', 'runs', 'metric', 'dataset', 'method'}
                         and isinstance(item, (str, int, float, bool, type(None)))}
+                    if record.get('metric_summary') is True:
+                        number = obj.get('value')
+                        try:
+                            finite = type(number) in {int, float} and math.isfinite(number)
+                        except OverflowError:
+                            finite = False
+                        metric = obj.get('metric')
+                        if finite and isinstance(metric, str) and 0 < len(metric.strip()) <= 128:
+                            # A manifest must explicitly authorize this aggregate.
+                            # Arrays, prediction rows and unrelated JSON values
+                            # never become model context through this projection.
+                            value['metric_summary'] = {
+                                key: item for key, item in obj.items() if key in
+                                {'metric', 'value', 'unit', 'method', 'dataset', 'split', 'aggregation', 'runs'}
+                                and (item is None or type(item) in {int, float, bool}
+                                     or isinstance(item, str) and len(item) <= 512)}
+                            value['note'] = 'Explicitly public aggregate metric and protocol metadata; no per-row values exposed.'
+                        else:
+                            value['metric_summary_status'] = 'invalid_or_unavailable'
                 elif isinstance(obj, list):
                     value['rows'] = len(obj)
             elif name.endswith(('.csv', '.tsv')):

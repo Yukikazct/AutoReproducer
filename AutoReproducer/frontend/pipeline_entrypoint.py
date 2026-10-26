@@ -12,7 +12,7 @@ from pathlib import Path
 from types import ModuleType
 
 
-BACKEND_API_VERSION = 13
+BACKEND_API_VERSION = 14
 _UPGRADED_MODULE = f"frontend._backend_pipeline_v{BACKEND_API_VERSION}"
 _load_lock = threading.RLock()
 

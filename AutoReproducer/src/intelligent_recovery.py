@@ -49,7 +49,11 @@ def normalize_intelligent_recovery_request(request):
     enabled = request.get('intelligent_recovery', False)
     if type(enabled) is not bool:
         raise ValueError('intelligent_recovery must be an explicit boolean')
-    return {**request, 'intelligent_recovery': enabled}
+    mode = request.get('intelligent_recovery_mode', 'collaborative')
+    if not isinstance(mode, str) or mode not in {'single', 'collaborative'}:
+        raise ValueError('intelligent_recovery_mode must be single or collaborative')
+    return {**request, 'intelligent_recovery': enabled,
+            'intelligent_recovery_mode': mode if enabled else 'collaborative'}
 
 
 @dataclass
@@ -633,6 +637,6 @@ def investigating_run(function):
         request = normalize_intelligent_recovery_request(request)
         if not request['intelligent_recovery']:
             return function(self, request, *args, **kwargs)
-        with RecoverySession(self.llm).scope():
+        with RecoverySession(self.llm, mode=request['intelligent_recovery_mode']).scope():
             return function(self, request, *args, **kwargs)
     return run
