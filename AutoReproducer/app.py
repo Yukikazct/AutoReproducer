@@ -470,6 +470,7 @@ with st.sidebar:
     source_repair_auto = False
     source_repair_editable = []
     intelligent_recovery = False
+    intelligent_recovery_mode = 'collaborative'
     if (input_mode == "上传PDF" and uploaded_file and not st.session_state.mock_mode
             and not experiment_profile and not corpus_paper):
         requested_method = st.text_input(
@@ -485,6 +486,12 @@ with st.sidebar:
             "智能调查与排障", key="pdf_intelligent_recovery", value=False,
             disabled=st.session_state.running,
             help="遇到实际失败时，在固定预算内调查源码、作者环境和公开产物；处理过程与证据写入报告，不改变实验协议。")
+        if intelligent_recovery:
+            intelligent_recovery_mode = st.selectbox(
+                '调查方式', ['collaborative', 'single'], key='pdf_intelligent_recovery_mode',
+                format_func=lambda mode: {'collaborative': '多智能体协作（独立反证审查）',
+                                          'single': '单智能体（自检）'}[mode],
+                disabled=st.session_state.running)
         def _select_pdf_execution_mode(selected, alternative):
             if st.session_state.get(selected):
                 st.session_state[alternative] = False
@@ -624,6 +631,7 @@ if start_btn and not st.session_state.running:
                 source_repair_auto=source_repair_auto,
                 source_repair_editable=source_repair_editable,
                 intelligent_recovery=intelligent_recovery,
+                intelligent_recovery_mode=intelligent_recovery_mode,
                 **({"preferred_repo_url": manual_repo_url} if manual_repo_url else {}),
                 corpus_paper=corpus_paper,
                 experiment_profile=experiment_profile,

@@ -164,6 +164,11 @@ def analyze_author_failure(llm, result, plan, packet, workspace, environment, ru
                 'available_source_paths': list(packet.get('file_inventory') or [])[:200]}
             if collaboration is not None:
                 evidence['agent_messages'] = collaboration.context('FailureAnalyst')
+            from src.intelligent_recovery import current_investigation
+            investigation = current_investigation()
+            if investigation is not None:
+                evidence['investigation_findings'] = investigation.repair_findings()
+                evidence['review_feedback'] = investigation.repair_feedback()
             record['llm_calls'] += 1
             response = llm.chat(json.dumps(evidence, ensure_ascii=False), system_prompt=system,
                                 temperature=0, task='author_failure_analysis')

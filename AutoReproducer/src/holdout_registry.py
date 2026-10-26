@@ -38,6 +38,13 @@ def repository_key(value):
 
 def load_registry(root, path=None):
     registry = json.loads(Path(path or Path(root) / REGISTRY).read_text("utf-8"))
+    return validate_registry(registry)
+
+
+def validate_registry(registry):
+    """Validate an already-read snapshot with the same rules as the shared file."""
+    if not isinstance(registry, dict):
+        raise ValueError("Unsupported paper registry")
     if registry.get("version") != 1 or not isinstance(registry.get("papers"), list):
         raise ValueError("Unsupported paper registry")
     claimed, ids = {}, set()

@@ -14,6 +14,7 @@ from pathlib import Path
 import time
 
 from src.author_claim_comparison import _redact_evidence
+from src.intelligent_recovery_request import normalize_intelligent_recovery_request
 from src.method_adapters import write_json
 
 
@@ -35,11 +36,14 @@ def _digest(value):
                                     default=str).encode('utf-8')).hexdigest()
 
 
-def normalize_intelligent_recovery_request(request):
-    enabled = request.get('intelligent_recovery', False)
-    if type(enabled) is not bool:
-        raise ValueError('intelligent_recovery must be an explicit boolean')
-    return {**request, 'intelligent_recovery': enabled}
+def _candidate_digest(proposal):
+    if proposal.get('action') != 'apply_compatibility_patch':
+        return _digest(proposal)
+    patches = (proposal.get('patches') or {}).get('patches') or []
+    # Wording and patch order cannot make an unchanged, rejected edit look new.
+    contents = [{key: patch.get(key) for key in ('path', 'base_sha256', 'content')}
+                for patch in patches if isinstance(patch, dict)]
+    return _digest(sorted(contents, key=lambda row: str(row.get('path'))))
 
 
 @dataclass
@@ -108,10 +112,10 @@ class RecoverySession:
         if self.budget['max_probes'] > 4 or self.budget['max_source_repair_rounds'] > 2 or self.budget['max_repair_actions'] > 8:
             raise ValueError('Recovery budgets cannot enlarge the existing action boundaries')
         self.state = {'version': 1, 'enabled': True, 'mode': mode, 'status': 'ready',
-                      'identity': {}, 'budget': deepcopy(self.budget), 'tasks': [],
+                      'identity': {}, 'budget': deepcopy(self.budget), 'tasks': [], 'reviews': [],
                       'usage': {'model_requests': 0, 'known_tokens': 0, 'total_tokens': None,
                                 'estimated_tokens': 0, 'missing_usage_requests': 0,
-                                'duration_seconds': 0.0, 'monetary_cost': None, 'probes': 0},
+                                'duration_seconds': 0.0, 'monetary_cost': None, 'probes': 0, 'roles': {}},
                       'requires_human': False, 'stop_reason': '', 'artifact_path': ''}
         self.run_dir = None
         self.data = None
@@ -167,6 +171,11 @@ class RecoverySession:
             self.stop('budget_exhausted', requires_human=True)
             raise RecoveryBudgetExceeded('Shared investigation budget exhausted')
         usage['model_requests'] += 1
+        role = kwargs.get('task') or 'unspecified'
+        role = role if isinstance(role, str) else 'unspecified'
+        role_usage = usage['roles'].setdefault(role, {'model_requests': 0, 'known_tokens': 0,
+            'total_tokens': None, 'missing_usage_requests': 0, 'duration_seconds': 0.0})
+        role_usage['model_requests'] += 1
         if hasattr(llm, 'last_usage'):
             llm.last_usage = {}
         started = time.monotonic()
@@ -175,15 +184,20 @@ class RecoverySession:
             response = llm.chat(prompt, **kwargs)
             return response
         finally:
-            usage['duration_seconds'] += time.monotonic() - started
+            elapsed = time.monotonic() - started
+            usage['duration_seconds'] += elapsed
+            role_usage['duration_seconds'] += elapsed
             reported = getattr(llm, 'last_usage', {})
             total = reported.get('total_tokens') if isinstance(reported, dict) else None
             if type(total) is int and total > 0:
                 usage['known_tokens'] += total
+                role_usage['known_tokens'] += total
             else:
                 usage['missing_usage_requests'] += 1
+                role_usage['missing_usage_requests'] += 1
                 usage['estimated_tokens'] += estimate + len(str(response or '').encode('utf-8'))
             usage['total_tokens'] = (usage['known_tokens'] if not usage['missing_usage_requests'] else None)
+            role_usage['total_tokens'] = (role_usage['known_tokens'] if not role_usage['missing_usage_requests'] else None)
             self.persist()
 
     def stop(self, reason, *, requires_human=False, cleanup_confirmed=None):
@@ -254,6 +268,18 @@ class RecoverySession:
             if (isinstance(item, dict) and isinstance(item.get('name'), str)
                     and isinstance(item.get('sha256'), str)):
                 public_artifacts[item['name']] = {'sha256': item['sha256'], 'public': True}
+        # RepositoryRunner's declared non-image outputs live under each step's
+        # capture receipt. Top-level artifacts contains collected images only.
+        for step in execution.get('steps') or []:
+            if not isinstance(step, dict):
+                continue
+            for captured in step.get('artifacts') or []:
+                if not isinstance(captured, dict) or captured.get('matched') is not True:
+                    continue
+                for item in captured.get('files') or []:
+                    if (isinstance(item, dict) and isinstance(item.get('path'), str)
+                            and isinstance(item.get('sha256'), str)):
+                        public_artifacts[item['path']] = {'sha256': item['sha256'], 'public': True}
         observation_packet = {**packet, 'investigation_artifacts': public_artifacts}
         observation_environment = {**environment, 'investigation_dependency_paths':
                                    (execution.get('environment') or {}).get('dependency_paths') or []}
@@ -363,6 +389,9 @@ class RecoverySession:
             raise
         finally:
             task['evidence'] = self.safe(context['evidence'])
+            task['investigation_probes'] = deepcopy(task['probes'])
+            task['investigation_hypotheses'] = deepcopy(task['hypotheses'])
+            task['investigation_decisions'] = deepcopy(task['decisions'])
             if task['status'] == 'investigating':
                 task.update(status='needs_human', stop_reason='incomplete_analysis')
             self.state['requires_human'] |= task['status'] == 'needs_human'
@@ -400,6 +429,9 @@ class RecoverySession:
         return list(dict.fromkeys(refs))
 
     def probe(self, toolset, tool, arguments, task):
+        self.ensure_running()
+        if self.state['usage']['probes'] >= self.budget['max_probes']:
+            raise RecoveryBudgetExceeded('Shared observation budget exhausted')
         self.state['usage']['probes'] += 1
         result = toolset.execute(tool, arguments)
         result = self.safe(result)
@@ -430,6 +462,9 @@ class RecoverySession:
                   'Accepting a proposal does not establish a cause, successful execution or numerical equivalence.')
         payload = {'identity': context['identity'], 'evidence': context['evidence'],
                    'probe_results': context['probe_results'], 'candidate_decision': proposal}
+        for key in ('experiment_understanding', 'hypotheses'):
+            if key in context:
+                payload[key] = deepcopy(context[key])
         task = 'recovery_counter_review'
         if self.mode == 'single':
             system = system.replace('Independently challenge', 'As the same generalist, self-check')
@@ -440,42 +475,113 @@ class RecoverySession:
         action = review.get('action')
         if action not in {'accept', 'reject', 'probe'}:
             raise ValueError('Invalid counter-review action')
-        return self.safe({'action': action, 'status': 'accepted' if action == 'accept' else 'rejected',
+        review = self.safe({'action': action, 'status': 'accepted' if action == 'accept' else 'rejected',
                           'reason': str(review.get('reason', ''))[:1600], 'evidence_ids': refs,
                           'probe': review.get('probe') or {}})
+        return self._save_review(proposal, review)
+
+    def _save_review(self, proposal, review, *, reviewer=None):
+        """Bind each actual review to its candidate; messages are not approvals."""
+        review = {**review, 'review_id': 'review_' + str(len(self.state['reviews']) + 1)}
+        record = {**deepcopy(review), 'stage': 'patch' if proposal.get('action') == 'apply_compatibility_patch'
+                  else 'investigation', 'candidate_sha256': _candidate_digest(proposal),
+                  'task_id': (self._active_task or {}).get('id'),
+                  'identity_sha256': _digest(self.state['identity']),
+                  'reviewer': reviewer or ('independent' if self.mode == 'collaborative' else 'self_check')}
+        self.state['reviews'].append(self.safe(record))
+        self.persist()
+        return review
+
+    def repair_feedback(self):
+        """Give the next candidate the observations and explicit review objections."""
+        task = self._active_task or {}
+        return self.safe({'identity': deepcopy(self.state['identity']),
+            'experiment_understanding': deepcopy(task.get('experiment_understanding', {})),
+            'reviews': [deepcopy(row) for row in self.state['reviews']
+                        if row.get('task_id') == task.get('id')][-8:],
+            'candidate_observations': [{'candidate_sha256': row['candidate_sha256'],
+                'probes': deepcopy(row['probes']), 'scope': 'that_candidate_only'}
+                for row in task.get('patch_reviews', [])[-2:]],
+            'constraint': 'Review feedback is observational; original commands, inputs and protocol remain binding.'})
+
+    def repair_findings(self):
+        findings = []
+        for task in self.state['tasks']:
+            row = {key: deepcopy(value) for key, value in task.items() if key != 'patch_reviews'}
+            row['probes'] = deepcopy(task.get('investigation_probes', []))
+            row['hypotheses'] = deepcopy(task.get('investigation_hypotheses', []))
+            row['decisions'] = deepcopy(task.get('investigation_decisions', []))
+            findings.append(row)
+        return self.safe(findings)
 
     def review_patch(self, context, proposal):
         """An additional veto before existing deterministic patch validation."""
         self.ensure_running()
         if self._active_task and self._active_task['status'] == 'needs_human':
             raise ValueError('Investigation has not established a candidate recovery action')
+        candidate = {'action': 'apply_compatibility_patch', 'patches': proposal}
+        candidate_sha = _candidate_digest(candidate)
+        if any(row.get('stage') == 'patch' and row.get('action') == 'reject'
+               and row.get('candidate_sha256') == candidate_sha for row in self.state['reviews']):
+            raise ValueError('Independent patch review rejected: unchanged candidate was already rejected; no progress')
         evidence = [{'id': 'patch_sources', 'source': 'repairer_hash_verified_sources', 'value': context.get('sources')},
                     {'id': 'original_failure', 'source': 'owned_execution', 'value': context.get('initial_diagnostic') or context.get('diagnostic')},
                     {'id': 'patch_candidate', 'source': 'untrusted_proposal', 'value': proposal}]
+        # The repair reviewer needs the findings already obtained by the analyst,
+        # rather than spending another probe to rediscover the same evidence.
+        task = self._active_task or {}
+        known = {item['id'] for item in evidence}
+        for item in task.get('evidence', []):
+            if item.get('id') not in known:
+                evidence.append(deepcopy(item))
+                known.add(item.get('id'))
+        task.setdefault('investigation_probes', deepcopy(task.get('probes', [])))
+        probe_results = deepcopy(task['investigation_probes'])
+        review_context = {'identity': self.state['identity'], 'evidence': evidence,
+                          'probe_results': probe_results,
+                          'experiment_understanding': task.get('experiment_understanding', {}),
+                          'hypotheses': [row for row in task.get('hypotheses', [])
+                                         if row.get('scope') != 'candidate_under_original_assertions']}
+        candidate_record = {'candidate_sha256': candidate_sha, 'evidence': deepcopy(evidence), 'probes': []}
+        if self._active_task:
+            self._active_task.setdefault('patch_reviews', []).append(candidate_record)
         candidate_scope = getattr(self._toolset, 'candidate_contracts', None)
         with candidate_scope(proposal) if candidate_scope else nullcontext():
-            review = self._review({'identity': self.state['identity'], 'evidence': evidence, 'probe_results': []},
-                                  {'action': 'apply_compatibility_patch', 'patches': proposal})
-            if review['action'] == 'probe' and self._toolset and self._active_task:
-                if self.state['usage']['probes'] < self.budget['max_probes']:
-                    request = review['probe']
-                    result = self.probe(self._toolset, request.get('tool'), request.get('arguments'), self._active_task)
-                    evidence.extend(result.get('evidence', []))
-                    self.ensure_running()
-                    if result.get('status') == 'failed' and any(
-                            (item.get('value') or {}).get('candidate_sha256') for item in result.get('evidence', [])):
-                        review = {'action': 'reject', 'status': 'rejected',
+            seen = set()
+            while True:
+                review = self._review(review_context, candidate)
+                if self._active_task:
+                    self._active_task['decisions'].append(review)
+                if review['action'] != 'probe':
+                    break
+                request = review['probe']
+                key = _digest([request.get('tool'), request.get('arguments')])
+                if (not self._toolset or not self._active_task or key in seen
+                        or self.state['usage']['probes'] >= self.budget['max_probes']):
+                    reason = 'Requested observation is unavailable, repeated or exceeds the shared probe budget.'
+                    rejected = self._save_review(candidate, {'action': 'reject', 'status': 'rejected',
+                        'reason': reason, 'evidence_ids': review['evidence_ids']}, reviewer='controller')
+                    if self._active_task:
+                        self._active_task['decisions'].append(rejected)
+                    self.persist()
+                    raise ValueError('Independent patch review rejected or needs more evidence: ' + reason)
+                seen.add(key)
+                result = self.probe(self._toolset, request.get('tool'), request.get('arguments'), self._active_task)
+                evidence.extend(result.get('evidence', []))
+                probe_results.append(result)
+                # A failed candidate's assertions must not become evidence about
+                # the next candidate. Preserve the snapshot under its own hash.
+                candidate_record['evidence'] = self.safe(evidence)
+                candidate_record['probes'].append(deepcopy(result))
+                self.ensure_running()
+                if result.get('status') == 'failed' and any(
+                        (item.get('value') or {}).get('candidate_sha256') for item in result.get('evidence', [])):
+                    review = self._save_review(candidate, {'action': 'reject', 'status': 'rejected',
                             'reason': 'Candidate failed the unchanged original assertion contract.',
-                            'evidence_ids': [item['id'] for item in result['evidence']]}
-                        self._active_task['decisions'].append(review)
-                        self.persist()
-                        raise ValueError(review['reason'])
-                    if not self._blocked:
-                        review = self._review({'identity': self.state['identity'], 'evidence': evidence,
-                                               'probe_results': [result]},
-                                              {'action': 'apply_compatibility_patch', 'patches': proposal})
-        if self._active_task:
-            self._active_task['decisions'].append(review)
+                            'evidence_ids': [item['id'] for item in result['evidence']]}, reviewer='original_contract')
+                    self._active_task['decisions'].append(review)
+                    self.persist()
+                    raise ValueError(review['reason'])
         self.persist()
         if review['status'] != 'accepted':
             raise ValueError('Independent patch review rejected or needs more evidence: ' + review['reason'])
@@ -521,6 +627,6 @@ def investigating_run(function):
         request = normalize_intelligent_recovery_request(request)
         if not request['intelligent_recovery']:
             return function(self, request, *args, **kwargs)
-        with RecoverySession(self.llm).scope():
+        with RecoverySession(self.llm, mode=request['intelligent_recovery_mode']).scope():
             return function(self, request, *args, **kwargs)
     return run

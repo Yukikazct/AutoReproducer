@@ -3,6 +3,7 @@ import ast
 from contextlib import contextmanager
 import hashlib
 import json
+import math
 from pathlib import Path
 import re
 import tempfile
@@ -12,6 +13,25 @@ from src.safety.paths import workspace_path
 
 MAX_SOURCE_BYTES = 2 * 1024 * 1024
 TOOLS = ('source_context', 'runtime_metadata', 'artifact_contract', 'author_contract')
+
+
+def _strict_metric_json(content):
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError('Aggregate JSON contains duplicate keys')
+            result[key] = value
+        return result
+
+    def invalid(_value):
+        raise ValueError('Aggregate JSON contains a nonfinite number')
+
+    def finite(text):
+        number = float(text)
+        return number if math.isfinite(number) else invalid(text)
+
+    return json.loads(content, object_pairs_hook=unique, parse_constant=invalid, parse_float=finite)
 
 
 class InvestigationTools:
@@ -144,7 +164,7 @@ class InvestigationTools:
         return self._result('source_context', 'completed', evidence, 'Read hash-matching source and static definitions.')
 
     def _child(self, payload):
-        from src.runtime_preparation import run_owned_process
+        from src.runtime_preparation import RuntimePreparationTimeout, run_owned_process
         python = self.environment.get('python_executable')
         if not isinstance(python, str) or not Path(python).is_absolute() or not Path(python).is_file():
             raise ValueError('A verified author Python is required; application Python is not a fallback')
@@ -153,10 +173,44 @@ class InvestigationTools:
             directory.mkdir(parents=True, exist_ok=True)
         helper = Path(__file__).parent / 'experiments' / 'investigation_probe.py'
         cleaned = []
-        with tempfile.TemporaryDirectory(prefix='probe_', dir=directory) as isolated:
-            result = run_owned_process([python, '-I', '-S', str(helper.resolve())], cwd=isolated,
+        isolated = tempfile.TemporaryDirectory(prefix='probe_', dir=directory)
+        primary_failure = None
+        try:
+            # Isolated Python ignores the encoding environment variables used
+            # by the process owner, whose control channel always decodes UTF-8.
+            result = run_owned_process([python, '-I', '-X', 'utf8', '-S', str(helper.resolve())], cwd=isolated.name,
                 input=json.dumps(payload), timeout_s=60, max_output_bytes=65536,
                 on_cleanup=lambda: cleaned.append(True))
+        except BaseException as exc:
+            primary_failure = exc
+            raise
+        finally:
+            try:
+                isolated.cleanup()
+            except BaseException as cleanup_error:
+                # Windows may retain the probe directory when process cleanup
+                # failed. A second failure must not replace a timeout or cancel.
+                primary_stop = (isinstance(primary_failure, (KeyboardInterrupt, SystemExit, RuntimePreparationTimeout))
+                    or getattr(primary_failure, 'process_cleanup_confirmed', None) is False)
+                if isinstance(cleanup_error, (KeyboardInterrupt, SystemExit)) and not primary_stop:
+                    failure = cleanup_error
+                else:
+                    failure = primary_failure if primary_failure is not None else RuntimeError(
+                        'Probe isolated directory cleanup could not be confirmed')
+                failure.process_cleanup_confirmed = False
+                original_receipt = getattr(primary_failure if primary_failure is not None else failure,
+                                           'cleanup_receipt', None)
+                receipt = {'status': 'unconfirmed', 'process_cleanup_confirmed': False,
+                           'isolated_directory_cleanup': {
+                               'status': 'failed', 'error_type': type(cleanup_error).__name__}}
+                if isinstance(original_receipt, dict):
+                    receipt['process_cleanup'] = dict(original_receipt)
+                failure.cleanup_receipt = receipt
+                failure.add_note('Probe isolated directory cleanup failed: ' + type(cleanup_error).__name__)
+                if failure is cleanup_error:
+                    raise
+                if primary_failure is None:
+                    raise failure from cleanup_error
         if not cleaned:
             failure = RuntimeError('Probe did not finish with a confirmed process cleanup')
             failure.process_cleanup_confirmed = False
@@ -220,8 +274,11 @@ class InvestigationTools:
                     raise ValueError('Artifact hash changed')
             value = {'path': name, 'bytes': len(content), 'suffix': Path(name).suffix,
                      'note': 'Metadata only; no per-row targets or predictions exposed.'}
-            if name.endswith('.json'):
-                obj = json.loads(content)
+            if Path(name).suffix.lower() in {'.npy', '.npz'}:
+                from src.investigation_artifacts import numpy_artifact_metadata
+                value.update(numpy_artifact_metadata(content, Path(name).suffix.lower()))
+            elif name.endswith('.json'):
+                obj = _strict_metric_json(content) if record.get('metric_summary') is True else json.loads(content)
                 value['shape'] = 'mapping' if isinstance(obj, dict) else 'list' if isinstance(obj, list) else 'scalar'
                 if isinstance(obj, dict):
                     value['keys'] = list(obj)[:100]
@@ -230,6 +287,25 @@ class InvestigationTools:
                     value['protocol_metadata'] = {key: item for key, item in obj.items() if key in
                         {'unit', 'split', 'aggregation', 'runs', 'metric', 'dataset', 'method'}
                         and isinstance(item, (str, int, float, bool, type(None)))}
+                    if record.get('metric_summary') is True:
+                        number = obj.get('value')
+                        try:
+                            finite = type(number) in {int, float} and math.isfinite(number)
+                        except OverflowError:
+                            finite = False
+                        metric = obj.get('metric')
+                        if finite and isinstance(metric, str) and 0 < len(metric.strip()) <= 128:
+                            # A manifest must explicitly authorize this aggregate.
+                            # Arrays, prediction rows and unrelated JSON values
+                            # never become model context through this projection.
+                            value['metric_summary'] = {
+                                key: item for key, item in obj.items() if key in
+                                {'metric', 'value', 'unit', 'method', 'dataset', 'split', 'aggregation', 'runs'}
+                                and (item is None or type(item) in {int, float, bool}
+                                     or isinstance(item, str) and len(item) <= 512)}
+                            value['note'] = 'Explicitly public aggregate metric and protocol metadata; no per-row values exposed.'
+                        else:
+                            value['metric_summary_status'] = 'invalid_or_unavailable'
                 elif isinstance(obj, list):
                     value['rows'] = len(obj)
             elif name.endswith(('.csv', '.tsv')):

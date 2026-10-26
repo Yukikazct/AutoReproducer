@@ -14,15 +14,17 @@ from src.benchmark.recovery import (
     validate_manifest, verify_product_identity,
 )
 from src.holdout_registry import digest
+from src.benchmark.recovery_admission import admission_receipt, source_receipt
 
 
 def manifest(count=12):
     source = b"print('frozen original')\n"
     cases = []
     for index in range(count):
+        case_source = source + (f"# repository {index // 2}\n".encode() if count >= 12 else b"")
         evidence = {"diagnostic": "A preregistered real blocking diagnostic", "case": index}
         cases.append({"id": f"case-{index}", "repository_url": f"https://github.com/example/repo-{index // 2}",
-            "repository_revision": "1" * 40, "source_files": {"train.py": hashlib.sha256(source).hexdigest()},
+            "repository_revision": "1" * 40, "source_files": {"train.py": hashlib.sha256(case_source).hexdigest()},
             "split": "holdout", "origin": "natural", "unused_for_tuning": True,
             "category": ("runtime_environment", "local_import", "api_compatibility", "result_evidence")[index % 4],
             "goal": "Run the original command and check its unchanged protocol",
@@ -30,11 +32,32 @@ def manifest(count=12):
                        "sha256": digest({"expected": index})},
             "initial_evidence": evidence, "initial_evidence_sha256": digest(evidence)})
     enhanced = {"product_revision": "b" * 40, "product_source_sha256": "c" * 64}
-    return {"version": 1, "repetitions": 3,
+    value = {"version": 1, "repetitions": 3,
         "arms": {"A": {"product_revision": "a" * 40, "product_source_sha256": "d" * 64},
                  "B": deepcopy(enhanced), "C": deepcopy(enhanced)},
         "model": "fixed-model-identifier", "tools": list(DEFAULT_TOOLS),
         "budget": deepcopy(DEFAULT_BUDGET), "cases": cases}
+    # Synthetic trusted evaluator receipts below exercise aggregation semantics.
+    # Real file/registry admission and mutation are tested separately.
+    if count >= 12:
+        registry = {"version": 1, "papers": []}
+        audit = {"version": 1, "reviewed_at": "2026-01-01T00:00:00+00:00",
+            "auditor": "synthetic test operator", "scope": ["synthetic fixture history"],
+            "evidence": [{"path": "fixture-history.json", "sha256": "0" * 64}],
+            "repository_groups": [{"id": f"repo-{index}",
+                "repository_urls": [f"https://github.com/example/repo-{index}"],
+                "aliases_reviewed": True, "finding": "no_tuning_found",
+                "paper_identity": {"title": f"Fixture Paper {index}", "aliases": [],
+                    "source_ids": [f"fixture:{index}"], "pdf_sha256": [digest({"pdf": index})]},
+                "source_acquisitions": [{"version": 1, "acquired_at": "2025-12-31T00:00:00Z",
+                    "repository_url": f"https://github.com/example/repo-{index}", "repository_revision": "1" * 40,
+                    "git_tree": "2" * 40, "source_files": deepcopy(cases[index * 2]["source_files"]),
+                    "git_blobs": {"train.py": {"mode": "100644", "sha1": "3" * 40}}, "evidence_index": 0}],
+                "evidence_indices": [0], "events": []} for index in range((count + 1) // 2)]}
+        value["frozen_at"] = "2026-01-02T00:00:00+00:00"
+        value["holdout_admission"] = {"version": 1, "registry": registry, "registry_sha256": digest(registry),
+            "audit": audit, "audit_sha256": digest(audit)}
+    return value
 
 
 def receipts(frozen, success=None):
@@ -55,6 +78,8 @@ def receipts(frozen, success=None):
                     "trial_id": trial_id, "workspace_id": uuid.uuid4().hex,
                     "environment_id": uuid.uuid4().hex, "context_id": uuid.uuid4().hex,
                     "product_identity": {"verified": True, "actual": deepcopy(frozen["arms"][arm])},
+                    **({"holdout_admission": admission_receipt(frozen)} if frozen.get("holdout_admission") else {}),
+                    **({"author_source_identity": source_receipt(frozen, case)} if frozen.get("holdout_admission") else {}),
                     "outcome": _outcome(raw, evaluation),
                     "evaluation": {"trial_id": trial_id, "oracle_sha256": case["oracle"]["sha256"],
                                    "result": evaluation, "result_sha256": digest(evaluation)},
@@ -73,6 +98,29 @@ def test_shared_defaults_do_not_limit_normal_model_calls_or_total_tokens():
     assert aggregate_results(frozen, rows)["evaluation_complete"]
     assert _configuration(frozen, frozen["cases"][0], "A")["budget"] is None
     assert _configuration(frozen, frozen["cases"][0], "A")["budget_policy"] == "frozen_baseline"
+
+
+@pytest.mark.parametrize('subset,total', [('same_failure_retries', 'execution_retries'),
+                                          ('invalid_retries', 'model_requests')])
+def test_retry_receipts_cannot_exceed_their_actual_observed_total(subset, total):
+    frozen = freeze_manifest(manifest())
+    rows = receipts(frozen)
+    rows[0]['usage'].update({subset: 3, total: 2})
+    with pytest.raises(ValueError, match='Retry count exceeds'):
+        aggregate_results(frozen, rows)
+
+
+def test_author_retry_totals_are_distinct_from_format_retries_and_remain_unknown_for_old_results():
+    frozen = freeze_manifest(manifest())
+    rows = receipts(frozen)
+    summary = aggregate_results(frozen, rows)
+    assert summary['arms']['C']['usage_totals']['execution_retries'] is None
+    for row in rows:
+        row['usage'].update(execution_retries=2, same_failure_retries=1, invalid_retries=0)
+    summary = aggregate_results(frozen, rows)
+    assert summary['arms']['C']['usage_totals']['execution_retries'] == 72
+    assert summary['arms']['C']['usage_totals']['same_failure_retries'] == 36
+    assert summary['arms']['C']['usage_totals']['invalid_retries'] == 0
 
 
 def test_freeze_is_detached_and_any_source_or_oracle_edit_invalidates_it():
