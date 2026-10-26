@@ -106,8 +106,10 @@ def build_report_bundle(report, report_path, *, result=None):
     repair_evidence = report_evidence_bytes(report, report_file)
     from src.pdf_markdown import report_markdown_bytes
     reading_evidence = report_markdown_bytes(report, report_file)
+    from src.report_details import report_details_bytes
+    details = report_details_bytes(report, report_file)
     members = {report_file.name: report.encode('utf-8'), **figures,
-               **repair_evidence, **reading_evidence}
+               **repair_evidence, **reading_evidence, **details}
     if attachment is not None:
         members[attachment_name] = attachment.read_bytes()
     from src.report_bundle import report_evidence_bytes, report_manifest_bytes
@@ -136,6 +138,10 @@ def report_downloads(result, *, key, st_module=None, data_root=None):
     st_module.download_button("下载报告", data=report, file_name=path.name,
                               mime="text/markdown", key=f"{key}_markdown")
     try:
+        from src.report_details import report_details_bytes
+        for name, raw in report_details_bytes(report, path).items():
+            st_module.download_button('下载完整依据与执行详情', data=raw, file_name=name,
+                                      mime='text/markdown', key=f'{key}_details')
         from src.pdf_markdown import report_markdown_bytes
         for name, raw in report_markdown_bytes(report, path).items():
             if name.endswith('.md'):

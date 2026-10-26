@@ -736,12 +736,9 @@ def _result_analysis_lines(data):
     return lines + [""]
 
 
-# 报告内代码与执行输出**全文内嵌**，不设展示上限。
-# 此前是截断到 6000/6000/3000 字符 + 一句「完整内容见 *_execution.txt 附件」，
-# 但报告本身才是用户真正在读的东西：实测一次 10627 字符的输出被砍到 6000，
-# 读报告的人拿到的是半截内容，还得去翻附件才知道后一半是什么。
-# 前端按原生 Markdown 渲染（代码块 = 灰底 `<pre>`），全文内嵌意味着长输出会
-# 把页面拉长——这是刻意换来的：可读性优先于版面，附件仍提供纯文本旁路。
+# 审计渲染保留完整代码与执行输出，不设截断上限。
+# 面向阅读的正文保留实验设置、结果与解释；长原文、代码、日志写入校验过的
+# 详情附件，可单独下载并随报告 ZIP 携带。
 
 
 class ReportGeneratorAgent(BaseAgent):
@@ -764,7 +761,7 @@ class ReportGeneratorAgent(BaseAgent):
             collaboration.attach(input_data)
         self.log("generate_report", "START", "开始生成复现报告", input_data)
 
-        report = self._build_report(input_data, report_path=report_path)
+        report = self.build_report(input_data, report_path=report_path)
 
         self.log("generate_report", "SUCCESS",
                  f"报告生成完成 ({len(report)} 字符)",
@@ -773,6 +770,25 @@ class ReportGeneratorAgent(BaseAgent):
         return {"report": report, "report_length": len(report),
                 "reproduction_conclusion": build_reproduction_conclusion(input_data),
                 "report_format_version": REPORT_FORMAT_VERSION}
+
+    @staticmethod
+    def build_report(data: dict, *, report_path=None, artifact_resolver=None) -> str:
+        """Build the experiment report and retain full evidence in a companion."""
+        from src.author_claim_comparison import _redact_evidence
+        from src.report_revisions import sanitize_report_result
+        from src.report_details import (intelligent_recovery_summary, presentation_data,
+                                        readable_text, save_report_details)
+        path = report_path or data.get('report_path') or default_report_path()
+        safe = _redact_evidence(sanitize_report_result(data), '')
+        full = ReportGeneratorAgent._build_report(safe, report_path=path, artifact_resolver=artifact_resolver)
+        displayed = ReportGeneratorAgent._build_report(
+            presentation_data(safe), report_path=path, artifact_resolver=artifact_resolver)
+        displayed = readable_text(displayed, safe)
+        recovery_summary = intelligent_recovery_summary(safe.get('intelligent_recovery'))
+        if recovery_summary:
+            displayed = displayed.rstrip() + '\n\n' + recovery_summary
+        link = save_report_details(full, safe, path)
+        return displayed.rstrip() + '\n\n## 完整依据与日志\n\n' + link + '\n'
 
     @staticmethod
     def _build_report(data: dict, *, report_path=None, artifact_resolver=None) -> str:
@@ -833,8 +849,9 @@ class ReportGeneratorAgent(BaseAgent):
         # 2. 资源定位
         lines += ["## 2. 资源定位",
                   f"- **代码仓库**: {resources.get('code_repo_url', '未找到')}",
-                  f"- **数据集**: {resources.get('dataset_url', '未找到')}",
-                  f"- **置信度**: {_fmt(resources.get('confidence', 0.0))}"]
+                  f"- **数据集**: {resources.get('dataset_url', '未找到')}"]
+        from src.repository_confidence import repository_confidence_lines
+        lines += repository_confidence_lines(data)
         if resources.get("discovery_repository_url"):
             lines += [f"- **论文原文发现仓库**: {resources['discovery_repository_url']}",
                       f"- **实际固定训练仓库**: {resources.get('training_repository_url', resources.get('code_repo_url', '未找到'))}"]
@@ -850,7 +867,6 @@ class ReportGeneratorAgent(BaseAgent):
         identity = resources.get("repository_identity") or {}
         if identity:
             lines += [f"- **仓库关联证据**: {identity.get('reason', '未核验')}",
-                      f"- **发现来源**: {identity.get('source', '未记录')}",
                       "- **执行范围**: 定位仓库是资源发现结果；是否运行仓库由下方执行对象和实际步骤确认。"]
             if identity.get("source") == "user_supplied_pinned_git_llm_review":
                 lines += ["- **仓库提供方式**: 用户在自动确认失败后手动提供",
@@ -904,7 +920,7 @@ class ReportGeneratorAgent(BaseAgent):
                       f"- **论文版本/参考位置**: {paper_info.get('reference_source', '')}",
                       f"- **固定源码版本**: `{repository.get('resolved_sha', '未获取')}`",
                       f"- **实验定义SHA-256**: `{data.get('spec_sha256', '')}`",
-                      f"- **独立运行目录**: `{data.get('run_dir', '')}`",
+                      f"- **独立运行目录**: `{data.get('_report_source_run_dir', data.get('run_dir', ''))}`",
                       f"- **参数**: {spec.get('parameters', {})}"]
             dataset = data.get("dataset_provenance") or {}
             if dataset:

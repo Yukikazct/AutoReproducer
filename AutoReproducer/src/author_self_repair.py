@@ -159,6 +159,9 @@ def save_repair_state(run_dir, data, on_event, *, status, reason, current=None):
 
 
 def record_repair(run_dir, data, on_event, result, action, reason):
+    from src.intelligent_recovery import current_investigation
+    if current_investigation():
+        current_investigation().consume_repair()
     state = data.setdefault('self_repair', {'attempts': []})
     state['attempts'].append({'round': len(state['attempts']) + 1, 'action': action,
         'reason': reason, 'status': 'retrying', 'failed_execution_dir': result.get('run_dir'),
