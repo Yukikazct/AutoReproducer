@@ -18,6 +18,42 @@ Manifest 使用 `version: 1`、`repetitions: 3`，包含以下字段：
 
 默认 `max_model_requests: null`、`max_tokens: null`，允许根据实际需要调用。也可显式设置正整数上限。探针/源码补丁/修复动作上限分别为 4/2/8，不能在角色切换或新错误时重置。模型上下文容量另行配置，不能把 1M 上下文当作累计用量或价格。
 
+### 正式样本的身份准入
+
+`unused_for_tuning: true` 只是案例声明，不能单独授予正式完成。正式冻结还需读取实际共享 `docs/paper_acceptance_registry.json` 和操作者完成的有界暴露审计；模型不接收审计、来源回执或私有评分。没有这些材料的历史 manifest 仍可运行、聚合，但 `evaluation_complete=false`。
+
+先为每个完整作者 Git checkout 生成只读来源回执；该命令不下载、导入或执行作者代码，也不覆盖已有输出：
+
+```powershell
+python scripts/evaluate_recovery.py register-source --source-root C:\author\original-checkout --output C:\review\acquisition.json
+```
+
+回执含实际 `origin`、`HEAD`、Git tree、全部 tracked 文件的 SHA-256 与 Git blob/mode 映射，以及采集时间。源码必须保持 Git 原始字节，建议获取时禁用 CRLF 转换。源码/元数据读取均有上界，Git 子命令各限 30 秒；单文件、全部源码、tracked 文件数分别限 64 MiB、512 MiB、20,000。选择性 raw export、子目录、子模块、源码符号链接或经过修改的 checkout 均不能直接进入正式试验。运行产物写入独立 trial workspace，不纳入原 checkout。
+
+暴露审计为可信操作者的 JSON，`version: 1`，主要字段如下：
+
+| 字段 | 要求 |
+| --- | --- |
+| `reviewed_at`、`auditor`、`scope` | 带时区的真实审核时间、审核者与实际检索范围；审核及获取须在冻结前完成，拒绝未来冻结 |
+| `evidence` | `path` 为审计目录内相对文件，`sha256` 为实际文件摘要；最多 128 份、总计 32 MiB，单份审计/registry JSON 最多 4 MiB |
+| `repository_groups` | 每组 `id`、`repository_urls` 覆盖已审核的作者 URL、fork 和别名，`aliases_reviewed: true`；组间不得冲突 |
+| `paper_identity`（每组） | `title`、`aliases`、非空 `source_ids` 和 `pdf_sha256`；按共享 registry 的标题、来源和 PDF 身份规则交叉核对，包括没有仓库 URL 的历史论文 |
+| `finding`、`events`（每组） | 仅 `no_tuning_found` 可准入；`unknown`、既有调试/开发案例/历史评测事件均阻断。事件包括 `kind`、带时区 `at`、`evidence_index` |
+| `evidence_indices`、`source_acquisitions`（每组） | 引用实际审核材料。来源回执原 JSON 加上 `evidence_index` 放入 `source_acquisitions`，与对应证据文件逐字段/类型绑定 |
+
+已知 registry 的 regression/accepted 论文，不能靠换标题、case id 或已审核 fork 重新入选。审计记录的跨 manifest 开发/调试暴露同样排除；本 manifest 内的已审核 fork 不得跨 dev/holdout。相同完整源码摘要不能被登记成多组独立仓库，已审核 fork 按同一组计数。
+
+完成审计后，使用同一份原文件冻结与运行：
+
+```powershell
+python scripts/evaluate_recovery.py freeze --manifest recovery.json --admission-audit C:\review\audit.json --output recovery_frozen.json
+python scripts/evaluate_recovery.py run --manifest recovery_frozen.json --admission-audit C:\review\audit.json --source-roots recovery_sources.json --product-roots recovery_products.json --adapter src.benchmark.recovery_adapter:run_trial --oracle src.benchmark.recovery_adapter:evaluate_trial --output-dir recovery_trials
+```
+
+`--registry` 可由可信操作者显式指定共享登记文件；默认读取当前应用的登记。每次正式 trial 前后重读 registry、审计和证据，并核对实际完整作者 Git checkout。逐条回执绑定准入与源码身份；离线聚合缺少这些实际核验回执时保留未完成状态。
+
+这项检查依赖可信获取和审核过程。Git `origin` 是本地配置，单独不能证明远端归属；回执与哈希也不是签名。`no_tuning_found` 仅说明声明的范围内未发现调试使用，不能证明未记录的历史或未知 fork 不存在。未知情况应继续保留未知，不由模型补成合格。
+
 每个案例要求：
 
 ```json
@@ -188,7 +224,7 @@ python scripts/evaluate_recovery.py run --manifest recovery_frozen.json --source
 
 `aggregate_results(frozen_manifest, receipts)` 检查输入身份、配置、Oracle 评分记录、独立工作区/环境/上下文身份和重复记录。哈希约束绑定身份，不是评分器签名；离线汇总仍依赖可信评分器产出的真实记录，不能凭手填布尔值证明复现。
 
-只有自然 holdout 案例至少 12 个、至少 6 个仓库、全部 A/B/C 各 3 次试验齐全、实际产品版本经过核对、无取消/超时/未清理记录，且 B/C 限额计量通过，`evaluation_complete` 才为真。缺失试验保留分母并列出，不允许删除失败试验后计算成绩。开发样本和注入样本另列。
+只有自然 holdout 案例至少 12 个、至少 6 个经身份审核的仓库组、全部 A/B/C 各 3 次试验齐全、共享 registry/暴露审核及原源码逐次核验、实际产品版本经过核对、无取消/超时/未清理记录，且 B/C 限额计量通过，`evaluation_complete` 才为真。缺失试验保留分母并列出，不允许删除失败试验后计算成绩。开发样本和注入样本另列。
 
 每个案例至少 2/3 次自主完成才算该组解决此案例；不能把 108 次运行视为 108 个独立样本，同仓库案例也相关。验收目标为 C 相比 A 至少净增 2 个案例、人工接管需求相对降低 30%，错误成功判定和协议违规均为零。A 没有接管需求时，降低比例不可计算，不能据此声称下降。
 

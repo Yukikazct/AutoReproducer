@@ -19,6 +19,10 @@ from typing import Callable
 import uuid
 
 from src.holdout_registry import digest, product_hashes, repository_key
+from src.benchmark.recovery_admission import (
+    admission_receipt, prepare_admission, repository_identity, source_receipt, validate_admission,
+    verify_admission, verify_author_source,
+)
 
 ARMS = ("A", "B", "C")
 DEFAULT_BUDGET = {"max_model_requests": None, "max_tokens": None, "max_probes": 4,
@@ -143,6 +147,7 @@ def validate_manifest(manifest, *, require_frozen=False):
         evidence = case.get("initial_evidence")
         if not isinstance(evidence, dict) or case.get("initial_evidence_sha256") != digest(evidence):
             raise ValueError("Initial evidence is missing or its digest changed")
+    validate_admission(value)
     supplied = value.get("manifest_sha256")
     if supplied is not None and supplied != manifest_digest(value):
         raise ValueError("Frozen recovery manifest changed")
@@ -151,10 +156,18 @@ def validate_manifest(manifest, *, require_frozen=False):
     return value
 
 
-def freeze_manifest(manifest):
-    """Return a detached preregistration receipt; no network, training or writes."""
+def freeze_manifest(manifest, *, admission_audit_path=None, registry_path=None):
+    """Return detached preregistration, optionally reading a trusted exposure audit."""
     value = validate_manifest(manifest)
-    value.setdefault("frozen_at", datetime.now(timezone.utc).isoformat())
+    now = datetime.now(timezone.utc).isoformat()
+    if admission_audit_path is not None:
+        if "manifest_sha256" in value or "holdout_admission" in value:
+            raise ValueError("A frozen or admitted manifest cannot be re-admitted")
+        value["frozen_at"] = now
+        value["holdout_admission"] = prepare_admission(value, audit_path=admission_audit_path,
+                                                      registry_path=registry_path)
+    else:
+        value.setdefault("frozen_at", now)
     value["manifest_sha256"] = manifest_digest(value)
     return validate_manifest(value, require_frozen=True)
 
@@ -268,7 +281,8 @@ def _outcome(raw, evaluated):
 
 
 def run_benchmark(manifest, source_roots, output_dir, *, trial_runner: Callable,
-                  oracle_evaluator: Callable, product_roots=None, split="holdout"):
+                  oracle_evaluator: Callable, product_roots=None, split="holdout",
+                  admission_audit_path=None, registry_path=None):
     """Run trusted callbacks in fresh trial roots; never expose oracle to runner.
 
     trial_runner receives keyword arguments case, arm, repeat, workspace,
@@ -282,6 +296,8 @@ def run_benchmark(manifest, source_roots, output_dir, *, trial_runner: Callable,
     selected = [case for case in frozen["cases"] if case["split"] == split]
     if not selected:
         raise ValueError("No cases registered for the selected split")
+    verified_admission = verify_admission(frozen, audit_path=admission_audit_path,
+                                          registry_path=registry_path)
     output = Path(output_dir).resolve()
     if output.exists():
         raise FileExistsError("Benchmark output must be a new directory")
@@ -300,6 +316,7 @@ def run_benchmark(manifest, source_roots, output_dir, *, trial_runner: Callable,
     for case in selected:
         for name, expected in case["source_files"].items():
             _read_source(roots[case["id"]], name, expected)
+        verify_author_source(frozen, case, roots[case["id"]])
     output.mkdir(parents=True)
     (output / "manifest.json").write_text(json.dumps(frozen, ensure_ascii=False, indent=2), encoding="utf-8")
     records = []
@@ -308,6 +325,9 @@ def run_benchmark(manifest, source_roots, output_dir, *, trial_runner: Callable,
             arms = list(ARMS)
             random.Random(digest([frozen["manifest_sha256"], case["id"], repeat])).shuffle(arms)
             for arm in arms:
+                verified_admission = verify_admission(frozen, audit_path=admission_audit_path,
+                                                      registry_path=registry_path)
+                verified_source = verify_author_source(frozen, case, roots[case["id"]])
                 verified_product = (verify_product_identity(products[arm], frozen["arms"][arm])
                                     if products is not None else None)
                 trial = output / (case["id"] + "_" + arm + "_" + str(repeat))
@@ -341,6 +361,8 @@ def run_benchmark(manifest, source_roots, output_dir, *, trial_runner: Callable,
                     _read_source(roots[case["id"]], name, expected)
                 if products is not None:
                     verify_product_identity(products[arm], frozen["arms"][arm])
+                verify_admission(frozen, audit_path=admission_audit_path, registry_path=registry_path)
+                verify_author_source(frozen, case, roots[case["id"]])
                 usage = _usage(raw)
                 usage["duration_seconds"] = time.monotonic() - began
                 record = {"version": 1, "case_id": case["id"], "arm": arm, "repeat": repeat,
@@ -352,6 +374,8 @@ def run_benchmark(manifest, source_roots, output_dir, *, trial_runner: Callable,
                     **identity, "outcome": outcome, "usage": usage,
                     "product_identity": {"verified": verified_product is not None,
                                          "actual": verified_product},
+                    **({"holdout_admission": deepcopy(verified_admission)} if verified_admission else {}),
+                    **({"author_source_identity": deepcopy(verified_source)} if verified_source else {}),
                     "execution_metadata": {key: raw.get(key) for key in
                         ("driver_sha256", "model_source", "execution_scope")} if isinstance(raw, dict) else {},
                     "evaluation": {"trial_id": identity["trial_id"], "oracle_sha256": case["oracle"]["sha256"],
@@ -380,6 +404,10 @@ def aggregate_results(manifest, records):
         raise ValueError("Trial receipts must be a list")
     cases = {case["id"]: case for case in frozen["cases"]}
     indexed, unique_ids, budget_problems, unverified_products = {}, set(), [], []
+    unverified_admissions = []
+    unverified_sources = []
+    expected_admission = admission_receipt(frozen)
+    expected_sources = {case["id"]: source_receipt(frozen, case) for case in frozen["cases"]}
     for record in records:
         if not isinstance(record, dict) or record.get("version") != 1:
             raise ValueError("Unsupported trial receipt")
@@ -410,6 +438,18 @@ def aggregate_results(manifest, records):
                 raise ValueError("Actual product identity differs from the frozen arm")
         else:
             unverified_products.append({"case_id": case["id"], "arm": arm, "repeat": repeat})
+        expected_source = expected_sources[case["id"]]
+        for field, proof in (("holdout_admission", expected_admission),
+                             ("author_source_identity", expected_source)):
+            supplied_proof = record.get(field)
+            if supplied_proof is not None and (not isinstance(supplied_proof, dict)
+                    or type(supplied_proof.get("version")) is not int or supplied_proof["version"] != 1
+                    or supplied_proof.get("verified") is not True or supplied_proof != proof):
+                raise ValueError("Trial admission receipt differs from the frozen registry/exposure review/source identity")
+        if expected_source is not None and record.get("author_source_identity") != expected_source:
+            unverified_sources.append({"case_id": case["id"], "arm": arm, "repeat": repeat})
+        if expected_admission is None or record.get("holdout_admission") != expected_admission:
+            unverified_admissions.append({"case_id": case["id"], "arm": arm, "repeat": repeat})
         for name in ("trial_id", "workspace_id", "environment_id", "context_id"):
             identifier = record.get(name)
             if not _text(identifier) or identifier in unique_ids:
@@ -457,7 +497,7 @@ def aggregate_results(manifest, records):
     main = [case for case in frozen["cases"] if case["split"] == "holdout" and case["origin"] == "natural"]
     missing = [{"case_id": case["id"], "arm": arm, "repeat": repeat} for case in main
                for arm in ARMS for repeat in range(1, 4) if (case["id"], arm, repeat) not in indexed]
-    repositories = {repository_key(case["repository_url"]) for case in main}
+    repositories = {repository_identity(frozen, case) for case in main}
     category_counts = {category: sum(case["category"] == category for case in main) for category in sorted(CATEGORIES)}
     case_rows, arm_rows = [], {}
     main_ids = {case["id"] for case in main}
@@ -495,6 +535,13 @@ def aggregate_results(manifest, records):
                    or record["outcome"]["cancelled"] or record["outcome"]["timed_out"]
                    or record["evaluation"]["result"].get("infrastructure_error")]
     reasons = []
+    unaudited = [item for item in unverified_admissions if item["case_id"] in main_ids]
+    if expected_admission is None:
+        reasons.append("Formal holdouts require a frozen shared registry and bounded exposure review")
+    elif unaudited:
+        reasons.append("Registry/exposure admission was not verified for some formal trials")
+    if unverified_sources:
+        reasons.append("Original author Git checkout identity was not verified for some formal trials")
     if len(main) < 12:
         reasons.append("At least 12 preregistered natural holdout cases are required")
     if len(repositories) < 6:
@@ -522,6 +569,11 @@ def aggregate_results(manifest, records):
         "category_counts": category_counts,
         "missing_trials": missing, "budget_problems": problems, "unverified_product_trials": unchecked,
         "interrupted_trials": interrupted,
+        "holdout_admission": {"audited": expected_admission is not None,
+            "unverified_trials": unaudited,
+            "registry_sha256": expected_admission["registry_sha256"] if expected_admission else None,
+            "audit_sha256": expected_admission["audit_sha256"] if expected_admission else None},
+        "unverified_author_source_trials": unverified_sources,
         "arms": arm_rows, "cases": case_rows,
         "comparisons": {"C_minus_A_autonomous_cases": net_gain, "C_minus_B_autonomous_cases": collaboration_gain,
                         "C_vs_A_human_need_relative_reduction": human_reduction},
@@ -533,4 +585,5 @@ def aggregate_results(manifest, records):
         "limitations": ["Case-majority summaries; repetitions and same-repository cases are not independent samples.",
             "Results concern selected blocking tasks, not overall paper reproduction success.",
             "Receipt hashes bind identity; independent oracle execution is the evaluator's responsibility.",
+            "Exposure eligibility is limited to the trusted operator's declared review scope and recorded aliases.",
             "Three new complete-paper experiments must be accepted separately."]}
