@@ -26,6 +26,27 @@ TMPDIR=/private/tmp .venv/bin/python -m pytest tests/ -q -ra
 
 使用规范临时路径避开 macOS `/var`、`/tmp` 的符号链接别名。原生训练测试还需要专用且版本匹配的 `AUTOREPRO_TEST_CPU_DEPS`，没有该缓存的跳过项不计为通过。
 
+## 验证记录（2026-10-27）
+
+功能代码固定于 `816fee15b4560806a203c7ab93f7d9ec1627f6c3`。最后复查还覆盖了三条边界：环境或数据准备不能证明作者命令恢复；补丁候选变化不能重复消费与候选无关的检查；失败后切换关联实现必须在下载及重新规划之前取得共享恢复额度。
+
+| 验证环境 | 已完成结果 |
+| --- | --- |
+| Windows Python 3.11 | 专项 367 通过、0 跳过；UTF-8 路径追加 93 通过 |
+| Windows Python 3.12 | 专项 367 通过、0 跳过；UTF-8 路径追加 93 通过 |
+| Ubuntu Python 3.11 | 专项 366 通过、1 个 Windows 条件项跳过 |
+| macOS Python 3.12 | 专项 366 通过、1 个 Windows 条件项跳过 |
+| 本地合并专项 | 453 通过、1 个 Windows 条件项跳过，包含真实探针去重、候选切换、阶段核验与报告归档 |
+| 本地全量回归 | 5271 通过、201 个平台/硬件/专用依赖条件项跳过，0 失败；耗时 532.70 秒 |
+| Windows 原生 CPU 服务 | PyG 293 通过、DGL 14 通过，均无跳过 |
+| Ubuntu 原生 CPU 服务 | PyG 293 通过、DGL 14 通过，均无跳过 |
+
+[四平台专项 CI 与 JUnit 附件](https://github.com/Yukikazct/AutoReproducer/actions/runs/40433503548)。测试组重叠，不累计为不同案例；上述结果是工程验收，不是自然论文恢复率。
+
+[原生 CPU CI 与依赖/健康/JUnit 附件](https://github.com/Yukikazct/AutoReproducer/actions/runs/40433498675) 覆盖真实受控作者训练、修复副本及独立指标核验的合成服务夹具。登记时，更广泛的 [远程全量回归矩阵](https://github.com/Yukikazct/AutoReproducer/actions/runs/40433503474) 仍在执行，不将未结束的检查计为通过。
+
+依赖元数据检查、工作流 YAML 解析、暂存内容凭据模式扫描及 diff 空白检查均通过。五份原有未跟踪文档/图片/PDF 的 SHA-256 保持不变，未包含在提交中。
+
 ## 正式收益状态
 
 `evaluation_complete=false`。本工作区尚未登记并完成本轮要求的 12 个自然阻塞案例、6 个仓库、四类故障及 A/B/C 各三次试验，也没有完成 3 篇未用于调试论文的真实 PDF 全流程验收。当前未配置模型 API 凭据，不能执行真实供应商的正式试验。
