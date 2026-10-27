@@ -1,0 +1,66 @@
+{
+  "issue": "https://github.com/Yukikazct/AutoReproducer/issues/59",
+  "date": "2026-10-27",
+  "base_commit": "c2c75a700a43ab8b3884e4a55066f41d90d54a4f",
+  "existing_merged_fixes": [
+    62,
+    63
+  ],
+  "scope": "Default local web task cancellation, process cleanup, reset and restart",
+  "macos": {
+    "python": "3.12.2",
+    "tests": 350,
+    "passed": 338,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 12,
+    "seconds": 69.048,
+    "skipped_scope": "Windows-specific tests",
+    "modules": [
+      "tests.test_app_interactions",
+      "tests.test_environment_lifecycle",
+      "tests.test_live_pipeline_entrypoint",
+      "tests.test_nested_execution_cleanup",
+      "tests.test_owned_session_runtime",
+      "tests.test_posix_process_scope",
+      "tests.test_preset_bootstrap_imports",
+      "tests.test_preset_runtime_delegation",
+      "tests.test_process_lifecycle",
+      "tests.test_repository_run_lifecycle",
+      "tests.test_repository_runner",
+      "tests.test_run_lifecycle",
+      "tests.test_runtime_entrypoint",
+      "tests.test_safe_runtime_preparation",
+      "tests.test_task_cancellation",
+      "tests.test_training_environment_lifecycle"
+    ]
+  },
+  "linux": {
+    "python": "3.11",
+    "image": "python:3.11-slim",
+    "network": "none",
+    "passed": 53,
+    "skipped": 3,
+    "failures": 0,
+    "seconds": 13.58,
+    "modules": [
+      "test_posix_process_scope",
+      "test_owned_session_runtime",
+      "test_task_cancellation",
+      "test_runtime_entrypoint"
+    ],
+    "dependency_source": "Read-only mounted existing pytest and filelock Python packages; binary/native package execution not part of this check"
+  },
+  "checks": {
+    "git_diff_check": "passed",
+    "pip_check": "passed",
+    "existing_user_artifacts_sha256_unchanged": 5
+  },
+  "not_validated": [
+    "Current changes on Windows",
+    "Docker-mode container cleanup",
+    "Legacy tasks without ownership metadata",
+    "Author programs deliberately escaping with setsid"
+  ],
+  "delivery": "Issue-scoped branch codex/issue59-posix-reset-20261027 submitted through an associated pull request; remote CI status is reported by the pull request"
+}

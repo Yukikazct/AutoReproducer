@@ -35,14 +35,14 @@ from src.project_paths import get_data_root
 
 
 # Contract checked by the web loader before starting a new background thread.
-BACKEND_API_VERSION = 14
+BACKEND_API_VERSION = 15
 WORKER_CANCEL_GRACE_SECONDS = 5
 
 
 def _force_stop_contains_worker_children():
-    # Windows jobs contain nested sessions. A POSIX process group does not
-    # contain inner runners that deliberately start their own session.
-    return os.name == "nt"
+    # Windows jobs and the retained POSIX session owner both confirm the full
+    # managed worker scope before publishing cleanup or allowing another task.
+    return os.name in {"nt", "posix"}
 
 
 def __getattr__(name):
@@ -568,9 +568,11 @@ def _run_prepared_pipeline(store: ProgressStore, request: dict, reason: str, *, 
     Only the request pipe carries credentials. The existing progress file remains
     the single source of truth for the page throughout recovery and training.
     """
-    from src.runtime_preparation import (
-        prepare_runtime, run_owned_process, safe_runtime_diagnostic, release_worker_environment,
-    )
+    from frontend.runtime_entrypoint import load_runtime_preparation
+    runtime = load_runtime_preparation()
+    prepare_runtime, run_owned_process = runtime.prepare_runtime, runtime.run_owned_process
+    safe_runtime_diagnostic = runtime.safe_runtime_diagnostic
+    release_worker_environment = runtime.release_worker_environment
     from frontend.task_control import current_task
     control = current_task()
     if control is not None and cancel_check is None:
@@ -708,12 +710,12 @@ def _run_prepared_pipeline(store: ProgressStore, request: dict, reason: str, *, 
             timeout_s=None,
             cancel_check=worker_cancelled,
             on_cleanup=confirmed_cleanup,
+            contain_session=True,
         )
         # Normal return also carries the run_owned_process cleanup contract.
         confirmed_cleanup()
         if not worker_cleaned:
-            from src.runtime_preparation import ProcessCleanupError
-            raise ProcessCleanupError("外层进程退出不足以确认独立会话中的子进程已回收")
+            raise runtime.ProcessCleanupError("外层进程退出不足以确认独立会话中的子进程已回收")
         cancelled = bool(cancel_check and cancel_check())
         finish_worker("interrupted" if cancelled else "success" if completed.returncode == 0 else "error",
                       "用户已停止本任务" if cancelled else None)
