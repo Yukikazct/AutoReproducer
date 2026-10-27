@@ -71,7 +71,7 @@ class ScriptedRunner:
     def run(self, workspace, steps, environment, **kwargs):
         self.calls.append(deepcopy(environment))
         error = next(self.errors)
-        return {'success': not error, 'run_dir': f'/run/{len(self.calls)}',
+        return {'success': not error, 'executed': True, 'run_dir': f'/run/{len(self.calls)}',
                 'final': {'stderr': error}, 'effective_env_config': deepcopy(environment)}
 
 

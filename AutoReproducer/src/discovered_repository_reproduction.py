@@ -452,6 +452,7 @@ class DiscoveredRepositoryReproduction:
             offline = bool(request.get("offline"))
             unique = repository_candidates(document, evidence, data['resources'], execution_only=execution_only)
             attempts, packet, selected, plan, last_plan_error = [], None, False, None, None
+            workspace = None
             data['repository_identity_attempts'] = attempts
             data['planning_trace'] = []
 
@@ -541,117 +542,128 @@ class DiscoveredRepositoryReproduction:
                 attempts.append(attempt)
                 data['planning_trace'].append(attempt)
                 try:
-                    self.logger.log("ResourceFinder", phase, "RUNNING", f"正在定位候选仓库版本（{index}/{len(unique)}）：{candidate_url}")
-                    revision, pin_evidence = resolve_repository_revision(
-                        candidate_url, pin if candidate_url.casefold() == url.casefold() else "", offline=offline)
-                    workspace = run_dir / ("repo" if index == 1 else f"candidate_repos/{index}")
-                    self.logger.log("ResourceFinder", phase, "RUNNING", "正在获取源码：" + revision)
-                    snapshot = export_repository(self.root, {"repository": {"url": candidate_url, "revision": revision}},
-                                                 workspace, offline=offline, required_files=[], include_submodules=False)
-                    if snapshot.get("resolved_sha") != revision or snapshot.get("url") != candidate_url:
-                        raise ValueError("导出的仓库与所选作者来源或固定版本不一致")
-                    attempt.update(revision=revision, archive_sha256=snapshot.get("archive_sha256"),
-                                   workspace=str(workspace.resolve()))
-                    if not manual:
-                        # Planning can fail before execute_candidate. Never let
-                        # caller-supplied verification survive that error path.
-                        record_candidate_identity(candidate_url, candidate, revision)
-                    # Allow discovered/user-provided URLs without a literal
-                    # author-code statement in the PDF. This flag only controls
-                    # evidence acquisition; execution mode skips the reviewer.
-                    self.logger.log("ResourceFinder", phase, "RUNNING", "源码已就绪；正在读取 README、依赖声明与论文运行线索")
-                    packet = build_evidence_packet(request["pdf_path"], workspace, snapshot, for_identity_review=True)
-                    packet['author_execution_only'] = not strict_requested
-                    if request['experiment_request']:
-                        packet['experiment_request'] = deepcopy(request['experiment_request'])
-                    if not strict_requested:
-                        packet['limits']['training_timeout_s'] = None
-                    bind_full_paper_notes(packet, request)
-                    if manual:
-                        packet["repository_input"] = {"source": "user_supplied", "url": url}
-                    elif candidate.get('source') == 'model_discovered':
-                        packet['repository_input'] = {'source': 'model_discovered', 'url': candidate_url}
-                    if packet["pdf"]["sha256"] != document.sha256:
-                        raise ValueError("原始 PDF 在仓库准备期间发生变化，不能使用不同论文继续规划")
-                    write_json(run_dir / f"repository_identity_packet_{index}.json", packet)
-                    if snapshot.get('submodules_pending'):
-                        materialize_submodules(self.root, snapshot, offline=offline)
-                        packet = build_evidence_packet(request['pdf_path'], workspace, snapshot, for_identity_review=True)
+                    def prepare_candidate():
+                        nonlocal workspace, packet, plan, phase
+                        self.logger.log("ResourceFinder", phase, "RUNNING", f"正在定位候选仓库版本（{index}/{len(unique)}）：{candidate_url}")
+                        revision, pin_evidence = resolve_repository_revision(
+                            candidate_url, pin if candidate_url.casefold() == url.casefold() else "", offline=offline)
+                        workspace = run_dir / ("repo" if index == 1 else f"candidate_repos/{index}")
+                        self.logger.log("ResourceFinder", phase, "RUNNING", "正在获取源码：" + revision)
+                        snapshot = export_repository(self.root, {"repository": {"url": candidate_url, "revision": revision}},
+                                                     workspace, offline=offline, required_files=[], include_submodules=False)
+                        if snapshot.get("resolved_sha") != revision or snapshot.get("url") != candidate_url:
+                            raise ValueError("导出的仓库与所选作者来源或固定版本不一致")
+                        attempt.update(revision=revision, archive_sha256=snapshot.get("archive_sha256"),
+                                       workspace=str(workspace.resolve()))
+                        if not manual:
+                            # Planning can fail before execute_candidate. Never let
+                            # caller-supplied verification survive that error path.
+                            record_candidate_identity(candidate_url, candidate, revision)
+                        # Allow discovered/user-provided URLs without a literal
+                        # author-code statement in the PDF. This flag only controls
+                        # evidence acquisition; execution mode skips the reviewer.
+                        self.logger.log("ResourceFinder", phase, "RUNNING", "源码已就绪；正在读取 README、依赖声明与论文运行线索")
+                        packet = build_evidence_packet(request["pdf_path"], workspace, snapshot, for_identity_review=True)
                         packet['author_execution_only'] = not strict_requested
                         if request['experiment_request']:
                             packet['experiment_request'] = deepcopy(request['experiment_request'])
                         if not strict_requested:
                             packet['limits']['training_timeout_s'] = None
                         bind_full_paper_notes(packet, request)
-                        packet['repository_input'] = {'source': candidate['source'], 'url': candidate_url}
-                    packet['repository_identity_pending'] = False
-                    event('prepare_repository', 'success')
-                    phase = 'plan_repository'; event(phase, 'running')
-                    data['resources']['selected_repo'] = candidate_url
-                    write_json(run_dir / 'source_packet.json', packet)
-                    if collaboration:
-                        collaboration.send('ResourceFinder', 'AuthorPlanner', 'handoff', {
-                            'repository': {'url': candidate_url, 'revision': revision},
-                            'selection': candidate.get('source'),
-                            'experiment_request': request['experiment_request'],
-                            'pdf_sha256': packet['pdf']['sha256']})
-                        collaboration.send('SourceReader', 'AuthorPlanner', 'evidence', {
-                            'source_paths': list(packet.get('repository', {}).get('files') or {})[:40],
-                            'inventory_count': len(packet.get('file_inventory') or {}),
-                            'source_packet': 'source_packet.json',
-                            'rule': 'Only hash-validated original source and paper evidence authorize a plan.'})
-                    from src.author_execution_plan import propose_author_execution_plan
-                    try:
-                        if strict_requested:
-                            from src.agents.experiment_protocol import ExperimentProtocolAgent
-                            from src.discovered_repository_plan import propose_plan
-                            author_packet = deepcopy(packet)
-                            try:
-                                protocol = ExperimentProtocolAgent(self.llm, self.logger).run(packet, workspace)
-                                packet['experiment_protocol'] = protocol
-                                if collaboration:
-                                    collaboration.send('ExperimentProtocol', 'AuthorPlanner', 'protocol', {
-                                        'status': protocol.get('status'),
-                                        'protocol': protocol,
-                                        'authority': 'The frozen protocol is validated separately from messages.'})
-                                write_json(run_dir / 'experiment_protocol.json', protocol)
-                                plan = propose_plan(self.llm, packet, workspace)
-                                from src.strict_validation import assert_strict_plan
-                                assert_strict_plan(plan, packet, workspace)
-                            except PlanEvidenceError as strict_error:
-                                # Eligibility limits the acceptance claim, not the
-                                # ability to run the original author command.
-                                # Never downgrade changed frozen inputs to a warning.
-                                verify_snapshot(workspace, snapshot, {})
-                                if digest(request['pdf_path']) != document.sha256:
-                                    raise ValueError('原始 PDF 在严格规划期间发生变化') from strict_error
-                                rejection_packet = ('strict_rejection_packet.json' if index == 1
-                                                    else f'strict_rejection_packet_{index}.json')
-                                write_json(run_dir / rejection_packet, packet)
-                                data['strict_validation'].update(status='unavailable', reason=str(strict_error),
-                                    failure_kind=strict_error.category,
-                                    rejection_packet=rejection_packet,
-                                    evidence=deepcopy(getattr(strict_error, 'planning_evidence', None)))
-                                write_json(run_dir / 'strict_validation.json', data['strict_validation'])
-                                self.logger.log('PaperReader', 'strict_validation', 'WARNING',
-                                    '严格验收暂不可用，继续运行原作者命令：' + str(strict_error))
-                                # Strict discovery must not spend the ordinary
-                                # planner's source budget or leave rejected
-                                # protocol state in its execution evidence.
-                                packet = author_packet
-                                packet['author_execution_only'] = True
+                        if manual:
+                            packet["repository_input"] = {"source": "user_supplied", "url": url}
+                        elif candidate.get('source') == 'model_discovered':
+                            packet['repository_input'] = {'source': 'model_discovered', 'url': candidate_url}
+                        if packet["pdf"]["sha256"] != document.sha256:
+                            raise ValueError("原始 PDF 在仓库准备期间发生变化，不能使用不同论文继续规划")
+                        write_json(run_dir / f"repository_identity_packet_{index}.json", packet)
+                        if snapshot.get('submodules_pending'):
+                            materialize_submodules(self.root, snapshot, offline=offline)
+                            packet = build_evidence_packet(request['pdf_path'], workspace, snapshot, for_identity_review=True)
+                            packet['author_execution_only'] = not strict_requested
+                            if request['experiment_request']:
+                                packet['experiment_request'] = deepcopy(request['experiment_request'])
+                            if not strict_requested:
                                 packet['limits']['training_timeout_s'] = None
-                                plan = propose_author_execution_plan(self.llm, packet, workspace)
-                        else:
-                            plan = propose_author_execution_plan(self.llm, packet, workspace)
-                    except BaseException:
-                        try:
-                            write_json(run_dir / 'source_packet.json', packet)
-                        except OSError as storage_error:
-                            data['source_packet_persistence_error'] = str(storage_error)
-                        raise
-                    else:
+                            bind_full_paper_notes(packet, request)
+                            packet['repository_input'] = {'source': candidate['source'], 'url': candidate_url}
+                        packet['repository_identity_pending'] = False
+                        event('prepare_repository', 'success')
+                        phase = 'plan_repository'; event(phase, 'running')
+                        data['resources']['selected_repo'] = candidate_url
                         write_json(run_dir / 'source_packet.json', packet)
+                        if collaboration:
+                            collaboration.send('ResourceFinder', 'AuthorPlanner', 'handoff', {
+                                'repository': {'url': candidate_url, 'revision': revision},
+                                'selection': candidate.get('source'),
+                                'experiment_request': request['experiment_request'],
+                                'pdf_sha256': packet['pdf']['sha256']})
+                            collaboration.send('SourceReader', 'AuthorPlanner', 'evidence', {
+                                'source_paths': list(packet.get('repository', {}).get('files') or {})[:40],
+                                'inventory_count': len(packet.get('file_inventory') or {}),
+                                'source_packet': 'source_packet.json',
+                                'rule': 'Only hash-validated original source and paper evidence authorize a plan.'})
+                        from src.author_execution_plan import propose_author_execution_plan
+                        try:
+                            if strict_requested:
+                                from src.agents.experiment_protocol import ExperimentProtocolAgent
+                                from src.discovered_repository_plan import propose_plan
+                                author_packet = deepcopy(packet)
+                                try:
+                                    protocol = ExperimentProtocolAgent(self.llm, self.logger).run(packet, workspace)
+                                    packet['experiment_protocol'] = protocol
+                                    if collaboration:
+                                        collaboration.send('ExperimentProtocol', 'AuthorPlanner', 'protocol', {
+                                            'status': protocol.get('status'),
+                                            'protocol': protocol,
+                                            'authority': 'The frozen protocol is validated separately from messages.'})
+                                    write_json(run_dir / 'experiment_protocol.json', protocol)
+                                    plan = propose_plan(self.llm, packet, workspace)
+                                    from src.strict_validation import assert_strict_plan
+                                    assert_strict_plan(plan, packet, workspace)
+                                except PlanEvidenceError as strict_error:
+                                    # Eligibility limits the acceptance claim, not the
+                                    # ability to run the original author command.
+                                    # Never downgrade changed frozen inputs to a warning.
+                                    verify_snapshot(workspace, snapshot, {})
+                                    if digest(request['pdf_path']) != document.sha256:
+                                        raise ValueError('原始 PDF 在严格规划期间发生变化') from strict_error
+                                    rejection_packet = ('strict_rejection_packet.json' if index == 1
+                                                        else f'strict_rejection_packet_{index}.json')
+                                    write_json(run_dir / rejection_packet, packet)
+                                    data['strict_validation'].update(status='unavailable', reason=str(strict_error),
+                                        failure_kind=strict_error.category,
+                                        rejection_packet=rejection_packet,
+                                        evidence=deepcopy(getattr(strict_error, 'planning_evidence', None)))
+                                    write_json(run_dir / 'strict_validation.json', data['strict_validation'])
+                                    self.logger.log('PaperReader', 'strict_validation', 'WARNING',
+                                        '严格验收暂不可用，继续运行原作者命令：' + str(strict_error))
+                                    # Strict discovery must not spend the ordinary
+                                    # planner's source budget or leave rejected
+                                    # protocol state in its execution evidence.
+                                    packet = author_packet
+                                    packet['author_execution_only'] = True
+                                    packet['limits']['training_timeout_s'] = None
+                                    plan = propose_author_execution_plan(self.llm, packet, workspace)
+                            else:
+                                plan = propose_author_execution_plan(self.llm, packet, workspace)
+                        except BaseException:
+                            try:
+                                write_json(run_dir / 'source_packet.json', packet)
+                            except OSError as storage_error:
+                                data['source_packet_persistence_error'] = str(storage_error)
+                            raise
+                        else:
+                            write_json(run_dir / 'source_packet.json', packet)
+                        return {'plan': plan, 'packet': packet, 'snapshot': snapshot,
+                                'revision': revision, 'pin_evidence': pin_evidence}
+
+                    from src.planning_recovery import alternative_candidate_attempt
+                    prepared = alternative_candidate_attempt(prepare_candidate, candidate=candidate,
+                        previous_attempts=attempts[:-1], pdf_sha256=document.sha256,
+                        experiment_request=request['experiment_request'])
+                    snapshot, revision, pin_evidence = (prepared[key] for key in
+                        ('snapshot', 'revision', 'pin_evidence'))
                     execute_candidate(candidate_url, candidate, plan, packet, snapshot, revision, pin_evidence)
                     selected = True
                     attempt.update(accepted=True, revision=revision, planning_status='accepted',

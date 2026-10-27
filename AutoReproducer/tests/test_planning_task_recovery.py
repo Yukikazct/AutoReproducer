@@ -103,7 +103,8 @@ def test_cancelled_python_install_does_not_start_another_interpreter(tmp_path, m
         assert not session.state['actions']
 
 
-def test_python_switch_ledger_records_actual_original_preflight_outcome(tmp_path, monkeypatch):
+@pytest.mark.parametrize('executed', [True, False])
+def test_python_switch_ledger_records_actual_original_preflight_outcome(tmp_path, monkeypatch, executed):
     monkeypatch.setattr('src.agents.code_executor._requested_python_conflict',
         lambda diagnostic, requirements: {'requires_python': '<3.12', 'package': 'original-dependency'})
     monkeypatch.setattr(author_python, 'select_author_python', lambda *args, **kwargs:
@@ -115,7 +116,7 @@ def test_python_switch_ledger_records_actual_original_preflight_outcome(tmp_path
     executions = []
     def preflight(effective):
         executions.append(deepcopy(effective))
-        return {'success': True, 'executed': True, 'run_dir': str(tmp_path / 'preflight'), 'cleanup_confirmed': True}
+        return {'success': True, 'executed': executed, 'run_dir': str(tmp_path / 'preflight'), 'cleanup_confirmed': True}
     with RecoverySession(None).scope() as session:
         result = author_python.retry_requested_python_conflict({}, tmp_path, environment,
             {'python_version': '3.12.1'}, failed, preflight)
@@ -123,6 +124,8 @@ def test_python_switch_ledger_records_actual_original_preflight_outcome(tmp_path
         action, = session.state['actions']
         assert action['kind'] == 'select_compatible_author_python'
         assert action['phase'] == 'environment_preparation'
-        assert action['status'] == 'verified'
+        assert action['status'] == ('verified' if executed else 'executed')
+        assert action['verification']['recovered_phase'] == ('environment_preparation' if executed else None)
+        assert action['execution'].get('original_command_rerun') is not True
         assert session.state['usage']['repair_actions'] == 1
         assert executions[0]['requirements_txt'] == 'original-dependency==1.0'

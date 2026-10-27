@@ -2,6 +2,7 @@
 from copy import deepcopy
 import io
 import json
+from pathlib import Path
 from unittest.mock import Mock
 import zipfile
 
@@ -116,6 +117,19 @@ def test_deterministic_comparisons_override_older_metric_payloads():
     assert view['metrics'][0]['actual'] == 0.85
 
 
+def test_unavailable_strict_verification_retains_author_completion_and_visible_reason(tmp_path):
+    data = example_data()
+    data['strict_validation'] = {'requested': True, 'status': 'unavailable',
+                                'reason': 'No independent capture for this framework'}
+    view = build_report_view_model(data)
+    report = ReportGeneratorAgent.build_report(data, report_path=tmp_path / 'report.md')
+    assert view['answers']['completion'] == '已完成运行'
+    assert view['conclusion']['independent']['status'] == 'unavailable'
+    assert view['conclusion']['independent']['reason'] == data['strict_validation']['reason']
+    assert '独立核验尚未完成' in report and '作者仓库代码运行完成' in report
+    assert data['strict_validation']['reason'] in report
+
+
 def test_stopped_and_no_progress_actions_retain_executed_evidence_without_success():
     data = example_data()
     recovery = data['intelligent_recovery']
@@ -141,6 +155,75 @@ def test_failed_action_shows_actual_error_before_unverified_placeholder():
         {'kind': 'replan', 'status': 'failed', 'execution': {'status': 'failed', 'error': 'entrypoint is missing'},
          'verification': {'success': None, 'reason': 'Not verified'}}]}})
     assert view['recovery_contributions'][0]['result'] == 'entrypoint is missing'
+
+
+def test_preparation_and_planning_receipts_cannot_claim_an_author_command_rerun():
+    phases = ['environment_preparation', 'dataset_preparation', 'entrypoint_planning',
+              'paper_parsing', 'repository_discovery', 'result_evidence', 'environment']
+    actions = [{'phase': phase, 'status': 'verified',
+                'execution': {'status': 'completed', 'original_command_rerun': True},
+                'verification': {'success': True}} for phase in phases]
+    # A recovered-stage record also overrides an older, contradictory stage.
+    actions.append({'phase': 'author_execution', 'recovered_phase': 'dataset_preparation',
+                    'execution': {'status': 'completed', 'original_command_rerun': True},
+                    'verification': {'success': True}})
+    actions.append({'phase': 'author_execution',
+                    'execution': {'status': 'completed', 'original_command_rerun': True},
+                    'verification': {'success': True}})
+    actions.append({'execution': {'status': 'completed', 'original_command_rerun': True},
+                    'verification': {'success': True}})
+    view = build_report_view_model({'intelligent_recovery': {'enabled': True, 'actions': actions}})
+    rows = view['recovery_contributions']
+    assert all(row['rerun'] is False for row in rows[:-2])
+    assert all(row['verified'] is True for row in rows)
+    assert [row['rerun'] for row in rows[-2:]] == [True, True]
+
+
+def test_preparation_recovery_does_not_repeat_contradictory_author_rerun_reason():
+    for phase, reason in [('environment_preparation', 'Original author command rerun; numerical equivalence unknown'),
+                          ('dataset_preparation', '修复后的原作者命令已实际重跑并正常退出。')]:
+        data = {'intelligent_recovery': {'enabled': True, 'actions': [{
+            'phase': phase, 'status': 'verified',
+            'execution': {'status': 'completed', 'original_command_rerun': True},
+            'verification': {'success': True, 'reason': reason}}]}}
+        before = deepcopy(data)
+        row = build_report_view_model(data)['recovery_contributions'][0]
+        assert row['rerun'] is False
+        assert '作者原命令重跑未核验' in row['result'] and reason not in row['result']
+        assert row['verification']['reason'] == reason and data == before
+        data['intelligent_recovery']['actions'][0].pop('phase')
+        assert build_report_view_model(data)['recovery_contributions'][0]['result'] == reason
+
+
+def test_history_upgrade_keeps_preparation_recovery_separate_from_author_execution(tmp_path):
+    path = tmp_path / 'report.md'
+    path.write_text('# Legacy', encoding='utf-8')
+    data = example_data()
+    recovery = data['intelligent_recovery']
+    action = recovery['actions'][0]
+    action['phase'] = 'environment_preparation'
+    recovery['tasks'] = [{'trigger': 'execution_failure', 'status': 'command_recovered',
+                          'recovered_phase': 'environment_preparation'}]
+    data.update(report='# Legacy', report_path=str(path), self_repair={
+        'status': 'resolved', 'reason': '修复后的原命令已实际重跑并正常退出。',
+        'attempts': [{'round': 1, 'status': 'resolved', 'action': 'install_missing_dependency',
+                      'reason': '重试原命令'}]})
+    source = {'state': 'COMPLETED', 'report_path': str(path), 'data': data}
+    original = deepcopy(source)
+    upgraded = regenerate_report(source)
+    report = upgraded['data']['report']
+    assert source == original and path.read_text(encoding='utf-8') == '# Legacy'
+    assert upgraded['data']['report_view_model']['recovery_contributions'][0]['rerun'] is False
+    assert '环境准备已恢复，作者实验运行另行记录' in report
+    assert '环境预检执行失败' in report and '作者命令执行失败' not in report
+    assert '原命令运行已恢复' not in report and '原命令已实际重跑' not in report
+    assert '受控步骤命令重跑通过' in report and '历史记录未保存修复阶段' in report
+    assert 'original command completed' not in report and '作者原命令重跑未核验' in report
+    details = (Path(upgraded['report_path']).parent / (Path(upgraded['report_path']).stem + '_details.md'))
+    assert 'original command completed' in details.read_text(encoding='utf-8')
+    with zipfile.ZipFile(io.BytesIO(build_report_bundle(report, upgraded['report_path'], result=upgraded))) as bundle:
+        evidence = json.loads(next(bundle.read(name) for name in bundle.namelist() if name.endswith('.evidence.json')))
+        assert evidence['data']['report_view_model']['recovery_contributions'][0]['rerun'] is False
 
 
 def test_failed_receipts_and_rejected_actions_cannot_be_verified_even_with_stale_true_flag():

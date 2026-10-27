@@ -18,6 +18,42 @@ def _map(value):
     return value if isinstance(value, dict) else {}
 
 
+def is_non_author_recovery_phase(value):
+    """Known preparation/evidence phases cannot prove an author-command rerun."""
+    if not isinstance(value, str):
+        return False
+    return value in {'paper_parsing', 'repository_discovery', 'entrypoint_planning',
+                     'environment_preparation', 'dataset_preparation', 'result_evidence',
+                     'paper', 'planning', 'environment', 'dataset', 'validation', 'results'}
+
+
+def _non_author_recovery_phase(action, execution):
+    phases = (action.get('phase'), action.get('recovered_phase'),
+              execution.get('phase'), execution.get('recovered_phase'))
+    return next((phase for phase in phases if is_non_author_recovery_phase(phase)), None)
+
+
+def _original_command_rerun(action, execution):
+    # Old receipts sometimes marked successful preflight/data-loader retries as
+    # author reruns. Re-rendering history must not repeat that scope error.
+    if _non_author_recovery_phase(action, execution):
+        return False
+    return execution.get('original_command_rerun')
+
+
+def _contribution_result(action, execution, verification):
+    if execution.get('error'):
+        return execution['error']
+    reason = verification.get('reason') or execution.get('status')
+    phase = _non_author_recovery_phase(action, execution)
+    if phase and isinstance(reason, str) and re.search(
+            r'\boriginal\s+(?:author\s+)?command\b|原(?:作者)?命令', reason, re.I):
+        scope = {'environment_preparation': '环境准备', 'environment': '环境准备',
+                 'dataset_preparation': '数据准备', 'dataset': '数据准备'}.get(phase, '准备或证据核查')
+        return scope + '步骤的执行与验证记录已保存；作者原命令重跑未核验。原始验证说明见详情附件。'
+    return reason
+
+
 def _rows(value):
     return [row for row in value if isinstance(row, dict)] if isinstance(value, list) else []
 
@@ -182,8 +218,8 @@ def _contributions(data):
                      'review': deepcopy(_map(action.get('review'))),
                      'status': status,
                      'executed': executed, 'verified': verified,
-                     'rerun': execution.get('original_command_rerun'),
-                     'result': execution.get('error') or verification.get('reason') or execution.get('status'),
+                     'rerun': _original_command_rerun(action, execution),
+                     'result': _contribution_result(action, execution, verification),
                      'verification': deepcopy(verification)})
     if not actions:
         # Historical decisions have no execution link. Preserve them as advice,

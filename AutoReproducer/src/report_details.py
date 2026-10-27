@@ -111,19 +111,40 @@ def intelligent_recovery_summary(recovery):
     statuses = {'ready': '待调查', 'investigating': '调查中', 'investigated': '调查已记录',
                 'unavailable': '调查不可用', 'stopped': '已停止', 'needs_human': '需要人工处理',
                 'repair_proposed': '已提出修复，待原有检查', 'observed': '已记录观察结果',
-                'command_recovered': '原命令运行已恢复，数值等价性未确认'}
+                'command_recovered': '原命令运行已恢复，数值等价性未确认',
+                'environment_recovered': '环境准备已恢复，作者实验运行另行记录',
+                'dataset_recovered': '数据准备已恢复，作者实验运行另行记录'}
     triggers = {'execution_failure': '作者命令执行失败', 'dependency_failure': '作者依赖准备失败',
                 'result_gap': '结果差距', 'metric_gap': '指标差距'}
 
     def label(value, labels):
         return text(labels.get(value, value)) if isinstance(value, str) else '未记录'
 
+    def scoped_status(record):
+        from src.report_view_model import is_non_author_recovery_phase
+        status = record.get('status')
+        if status != 'command_recovered':
+            return status
+        phases = (record.get('recovered_phase'), record.get('phase'))
+        phase = next((value for value in phases if is_non_author_recovery_phase(value)), None)
+        return {'environment_preparation': 'environment_recovered',
+                'environment': 'environment_recovered',
+                'dataset_preparation': 'dataset_recovered',
+                'dataset': 'dataset_recovered'}.get(phase, 'observed') if phase else status
+
     saved_tasks = recovery.get('tasks')
     tasks = [task for task in saved_tasks if isinstance(task, dict)] if isinstance(saved_tasks, list) else []
-    lines.append(f"- **调查状态**: {label(recovery.get('status'), statuses)}；{mode}；共 {len(tasks)} 项调查。")
+    lines.append(f"- **调查状态**: {label(scoped_status(recovery), statuses)}；{mode}；共 {len(tasks)} 项调查。")
     for task in tasks[:3]:
-        trigger = label(task.get('trigger') or task.get('id') or '未记录触发原因', triggers)
-        lines.append(f"- **处理记录**: {trigger}；状态：{label(task.get('status'), statuses)}。")
+        trigger = task.get('trigger') or task.get('id') or '未记录触发原因'
+        if trigger == 'execution_failure':
+            phase = task.get('recovered_phase') or task.get('phase')
+            trigger = {'environment_preparation': '环境预检执行失败',
+                       'environment': '环境预检执行失败',
+                       'dataset_preparation': '数据准备执行失败',
+                       'dataset': '数据准备执行失败'}.get(phase, trigger)
+        trigger = label(trigger, triggers)
+        lines.append(f"- **处理记录**: {trigger}；状态：{label(scoped_status(task), statuses)}。")
         decisions = task.get('decisions')
         if isinstance(decisions, list) and decisions:
             decision = decisions[-1]

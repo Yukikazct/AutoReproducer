@@ -63,6 +63,42 @@ def planning_llm(llm):
     return session.wrap_llm(llm) if session is not None and llm is not None else llm
 
 
+def alternative_candidate_attempt(operation, *, candidate, previous_attempts, pdf_sha256,
+                                  experiment_request):
+    """Charge a failed implementation's replacement before downloading or planning.
+
+    Candidate eligibility still comes from the existing PDF/README rules. A
+    validated replacement plan verifies planning only, never author execution.
+    """
+    session = current_investigation()
+    if session is None or not previous_attempts:
+        return operation()
+    previous = previous_attempts[-1]
+    evidence = {'pdf_sha256': pdf_sha256, 'experiment_request': deepcopy(experiment_request),
+                'candidate': deepcopy(candidate), 'previous_attempt': deepcopy(previous)}
+
+    def verify(value):
+        plan, packet = value['plan'], value['packet']
+        valid = (bool(plan.get('steps') and plan.get('evidence_sha256'))
+                 and plan.get('pdf_sha256') == pdf_sha256
+                 and packet.get('pdf', {}).get('sha256') == pdf_sha256
+                 and packet.get('experiment_request', {}) == experiment_request
+                 and plan.get('repository', {}).get('url') == candidate['url'])
+        if not valid:
+            raise ValueError('Alternative implementation lacks a validated plan for the frozen experiment')
+        return {'success': True, 'reason': 'Alternative author implementation passed the original plan validators; execution remains unverified',
+                'evidence': {'plan_evidence_sha256': plan['evidence_sha256'],
+                             'repository': deepcopy(plan['repository'])}}
+
+    with session.phase('entrypoint_planning'):
+        return session.run_action('replan_author_implementation', operation,
+            problem=str(previous.get('error') or 'Previous implementation could not be prepared'),
+            evidence=evidence, role='AuthorPlanner',
+            review={'status': 'accepted', 'reviewer': 'original_candidate_rules',
+                    'reason': 'Only existing PDF, explicit user or author-linked implementation candidates may retain the same frozen experiment request.'},
+            verify=verify)
+
+
 def durable_planning_context():
     session = current_investigation()
     return ('\nDurable task goals, verified facts and unresolved objections (navigation only):\n'

@@ -282,7 +282,10 @@ def retry_requested_python_conflict(packet, managed_root, environment, selected_
                     role='EnvBuilder', review={'status': 'accepted',
                         'reviewer': 'requested_dependency_rules',
                         'reason': 'A real installer diagnostic proves the interpreter constraint; author requirements remain unchanged.'},
-                    verify=lambda result: {'success': result.get('success') is True,
+                    verify=lambda result: {'success': (result.get('success') is True
+                        if result.get('executed') is True or (result.get('final') or {}).get('executed') is True else None),
+                        'recovered_phase': ('environment_preparation' if result.get('success') is True and
+                            (result.get('executed') is True or (result.get('final') or {}).get('executed') is True) else None),
                         'reason': 'Unchanged native preflight rerun under the selected interpreter',
                         'evidence': {'execution_dir': result.get('run_dir'),
                                      'cleanup_confirmed': result.get('cleanup_confirmed')}})

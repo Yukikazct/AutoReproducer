@@ -509,11 +509,21 @@ class RecoverySession(TaskRecoveryLedger):
 
     def probe(self, toolset, tool, arguments, task):
         self.ensure_running()
-        # Candidate contracts are distinct observations under a new source hash.
-        candidate = next((row.get('candidate_sha256') for row in reversed(task.get('patch_reviews', []))), None)
+        # Only a selected pure contract actually reads candidate source. Other
+        # fixed observations still inspect the unchanged original/environment.
+        candidate = None
+        candidate_sources = getattr(toolset, '_candidate_sources', None)
+        if tool == 'author_contract' and isinstance(arguments, dict) and isinstance(candidate_sources, dict):
+            content = candidate_sources.get(arguments.get('path'))
+            if isinstance(content, str):
+                candidate = hashlib.sha256(content.encode('utf-8')).hexdigest()
+        observed_environment = getattr(toolset, 'environment', None)
+        observed_environment = observed_environment if isinstance(observed_environment, dict) else {}
         self.consume_probe(tool=tool, arguments={'arguments': arguments, 'candidate_sha256': candidate,
             'source_sha256': self.state['identity'].get('source_sha256'),
-            'requirements_txt': (getattr(toolset, 'environment', None) or {}).get('requirements_txt')})
+            'requirements_txt': observed_environment.get('requirements_txt'),
+            'python_executable': observed_environment.get('python_executable'),
+            'dependency_paths': observed_environment.get('investigation_dependency_paths')})
         result = toolset.execute(tool, arguments)
         result = self.safe(result)
         task['probes'].append(result)
@@ -705,10 +715,20 @@ class RecoverySession(TaskRecoveryLedger):
             actual_execution = (execution.get('executed') is True
                 or (execution.get('final') or {}).get('executed') is True)
             recovered = execution.get('success') is True and actual_execution
-            self._active_task['execution_recovered'] = recovered
+            scope = self.execution_scope(execution)
+            task_scope = self.execution_scope({}, self._active_task.get('phase'))
+            if scope != task_scope:
+                self._active_task.setdefault('phase_checks', {})[scope] = {'success': recovered,
+                    'execution_dir': execution.get('run_dir')}
+                self.persist()
+                return  # A preflight cannot resolve an author failure, or relabel a preparation fix.
+            self._active_task['execution_recovered'] = recovered and scope == 'author_execution'
+            self._active_task['phase_recovered'] = recovered
             self._active_task['numerical_equivalence'] = 'unknown'
             if recovered:
-                self._active_task['status'] = 'command_recovered'
+                self._active_task['recovered_phase'] = scope
+                self._active_task['status'] = {'environment_preparation': 'environment_recovered',
+                    'dataset_preparation': 'dataset_recovered', 'author_execution': 'command_recovered'}[scope]
                 for issue in self.state['unresolved_issues']:
                     if issue.get('task_id') == self._active_task['id']:
                         issue.update(status='resolved', resolved_by_execution=execution.get('run_dir'))

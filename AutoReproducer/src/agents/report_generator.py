@@ -761,19 +761,35 @@ def _legacy_repair_lines(data):
     lines = []
     self_repair = data.get('self_repair') or {}
     if self_repair:
-        outcomes = {'resolved': '原命令重跑通过', 'blocked': '缺少可验证的自动修复方案',
+        from src.report_view_model import is_non_author_recovery_phase
+        def is_author(record):
+            phases = (record.get('recovered_phase'), record.get('phase'))
+            return 'author_execution' in phases and not any(is_non_author_recovery_phase(value) for value in phases)
+        def reason(value, record):
+            value = _txt(value)
+            if not is_author(record):
+                value = value.replace('原作者命令', '受控步骤命令').replace('原命令', '受控步骤命令')
+            return _markdown_text(value)
+        outcomes = {'blocked': '缺少可验证的自动修复方案',
+                    'environment_recovered': '环境准备已恢复', 'dataset_recovered': '数据准备已恢复',
                     'retrying': '正在重跑验证', 'no_progress': '重跑后错误相同',
                     'failed_with_new_error': '重跑后出现新错误', 'interrupted': '已取消',
                     'timed_out': '已超时', 'budget_exhausted': '已达到修复次数上限'}
+        def outcome(record):
+            if record.get('status') == 'resolved':
+                return ('原作者命令' if is_author(record) else '受控步骤命令') + '重跑通过'
+            return outcomes.get(record.get('status'), '未完成')
         lines += ['', '### 自动诊断与修复', '',
-                  '- 状态：' + outcomes.get(self_repair.get('status'), '未完成') + '；'
-                  + _markdown_text(_txt(self_repair.get('reason'))),
-                  '- 每次修复都重跑原命令；此处记录运行恢复情况，论文数值核验另行记录。']
+                  '- 状态：' + outcome(self_repair) + '；'
+                  + reason(self_repair.get('reason'), self_repair),
+                  '- 修复效果依据受控步骤的实际重跑记录；作者实验完成与论文数值核验另行记录。']
+        if not (self_repair.get('recovered_phase') or self_repair.get('phase')):
+            lines.append('- 历史记录未保存修复阶段，无法据此确认作者实验命令已重跑。')
         for item in self_repair.get('attempts') or []:
             lines.append('- 第 ' + str(item.get('round')) + ' 轮：'
                 + _markdown_text(_txt(item.get('action'))) + '；'
-                + outcomes.get(item.get('status'), '未完成') + '；'
-                + _markdown_text(_txt(item.get('reason'))))
+                + outcome(item) + '；'
+                + reason(item.get('reason'), item))
     return lines
 
 

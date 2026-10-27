@@ -32,6 +32,26 @@ def fingerprint(problem, evidence=None, kind=None):
                                      default=str).encode('utf-8')).hexdigest()
 
 
+def classify_execution_scope(execution, phase=None):
+    """Preparation commands prove preparation; unscoped callers run author plans.
+
+    Independent repository/benchmark callers predate phase tracking and keep
+    their author-command semantics. Explicit preparation phases and owned
+    generated step IDs narrow that scope without creating new execution proof.
+    """
+    if phase in {'environment_preparation', 'dataset_preparation'}:
+        return phase
+    scopes = {'native_preflight': 'environment_preparation',
+              'prepare_author_datasets': 'dataset_preparation'}
+    final_id = (execution.get('final') or {}).get('id') or execution.get('id')
+    if final_id in scopes:
+        return scopes[final_id]
+    identifiers = [row.get('id') for row in execution.get('steps') or [] if isinstance(row, dict)]
+    if identifiers and all(identifier in scopes for identifier in identifiers):
+        return scopes[identifiers[-1]]
+    return 'author_execution'
+
+
 def summarize_recovery_state(state):
     """Summarize a detached receipt without creating a session or new actions."""
     from src.execution_safety import cleanup_is_unconfirmed
@@ -44,7 +64,7 @@ def summarize_recovery_state(state):
     def verified(row):
         execution = row.get('execution') or {}
         result = execution.get('result') or {}
-        return (executed(row) and row.get('status') not in {'stopped', 'rejected', 'no_progress'}
+        return (executed(row) and row.get('status') not in {'stopped', 'failed', 'rejected', 'no_progress'}
             and execution.get('status') not in {'stopped', 'failed', 'error', 'cancelled', 'timed_out'}
             and not cleanup_is_unconfirmed([execution, result])
             and result.get('cancelled') is not True and result.get('timed_out') is not True
@@ -150,6 +170,9 @@ class TaskRecoveryLedger:
     def recovery_summary(self):
         return summarize_recovery_state(self.state)
 
+    def execution_scope(self, execution, phase=None):
+        return classify_execution_scope(execution, self.state['phase'] if phase is None else phase)
+
     def begin_action(self, kind, *, problem='', evidence=None, role='Coordinator', review=None,
                      source_patch=False):
         """Reserve a real recovery attempt before execution, not on receipt."""
@@ -246,16 +269,24 @@ class TaskRecoveryLedger:
         from src.repository_repairer import cleanup_is_unconfirmed, repair_is_stopped
         stopped = repair_is_stopped(result)
         reran = result.get('executed') is True or (result.get('final') or {}).get('executed') is True
+        scope = self.execution_scope(result, action.get('phase'))
+        author_reran = reran and scope == 'author_execution'
+        recovered = result.get('success') is True and reran and not stopped
+        if recovered:
+            action['recovered_phase'] = scope
         if stopped:
             self.stop('execution_stopped_or_cleanup_unconfirmed',
                 cleanup_confirmed=False if cleanup_is_unconfirmed(result) else None)
         self.finish_action(action, result=result, verification={
             'success': (result.get('success') is True and not stopped) if reran else False if stopped else None,
-            'reason': ('Original author command rerun; numerical equivalence remains unknown'
-                       if reran else 'Original author command did not execute; repair effect remains unverified'),
+            'recovered_phase': scope if recovered else None,
+            'reason': ('Original author command rerun; numerical equivalence remains unknown' if author_reran else
+                       'Unchanged environment preflight rerun; author command has not been verified' if reran and scope == 'environment_preparation' else
+                       'Unchanged dataset preparation rerun; author command has not been verified' if reran else
+                       'Controlled step did not execute; repair effect remains unverified'),
             'evidence': {'execution_dir': result.get('run_dir'),
                          'exit_code': (result.get('final') or {}).get('exit_code')}},
-            status='stopped' if stopped else None, original_command_rerun=reran)
+            status='stopped' if stopped else None, original_command_rerun=author_reran)
         self._legacy_action = None
 
     def run_action(self, kind, operation, *, problem='', evidence=None, role='Coordinator',
