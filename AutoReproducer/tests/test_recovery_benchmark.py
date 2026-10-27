@@ -17,6 +17,40 @@ from src.holdout_registry import digest
 from src.benchmark.recovery_admission import admission_receipt, source_receipt
 
 
+def test_component_success_does_not_invent_full_pipeline_success_rates():
+    frozen = freeze_manifest(manifest())
+    summary = aggregate_results(frozen, receipts(frozen))
+    for stages in (arm['stage_outcomes'] for arm in summary['arms'].values()):
+        for observation in stages.values():
+            assert observation == {'successful_trials': 0, 'observed_trials': 0,
+                                   'unknown_trials': 36, 'rate': None}
+
+
+def test_pipeline_stage_rates_require_independent_evaluator_facts():
+    frozen = freeze_manifest(manifest())
+    records = receipts(frozen)
+    for record in records:
+        evaluated = record['evaluation']['result']
+        evaluated.update(planning_completed=True, author_execution_completed=True,
+                         independent_metrics_verified=False)
+        record['evaluation']['result_sha256'] = digest(evaluated)
+        record['outcome'] = _outcome(record['outcome'], evaluated)
+    summary = aggregate_results(frozen, records)
+    assert summary['arms']['C']['stage_outcomes']['planning_completed']['rate'] == 1
+    assert summary['arms']['C']['stage_outcomes']['independent_metrics_verified']['rate'] == 0
+    records[0]['outcome']['independent_metrics_verified'] = True
+    with pytest.raises(ValueError, match='contradicts'):
+        aggregate_results(frozen, records)
+
+
+def test_runner_cannot_claim_unobserved_pipeline_stages():
+    frozen = freeze_manifest(manifest())
+    records = receipts(frozen)
+    records[0]['outcome']['planning_completed'] = True
+    with pytest.raises(ValueError, match='independent evaluation'):
+        aggregate_results(frozen, records)
+
+
 def manifest(count=12):
     source = b"print('frozen original')\n"
     cases = []

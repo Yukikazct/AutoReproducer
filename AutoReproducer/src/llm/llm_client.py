@@ -17,6 +17,7 @@ Mock 模式按 `task` 任务标识精确分发确定性响应，杜绝关键词�
 `task` 缺省时回退到关键词匹配，兼容遗留调用点。
 """
 import json
+import math
 import os
 import urllib.request
 import urllib.error
@@ -248,6 +249,11 @@ class LLMClient:
             "completion_tokens": c,
             "total_tokens": t,
         }
+        usage = result.get('usage') if isinstance(result, dict) else None
+        if isinstance(usage, dict):
+            cost = usage.get('monetary_cost', usage.get('cost'))
+            if type(cost) in (int, float) and math.isfinite(cost) and cost >= 0:
+                self.last_usage['monetary_cost'] = cost
         if p or c:
             self.total_prompt_tokens += p
             self.total_completion_tokens += c

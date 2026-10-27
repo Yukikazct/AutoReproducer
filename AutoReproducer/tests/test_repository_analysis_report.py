@@ -118,7 +118,7 @@ def test_result_report_explains_accepted_summary_with_one_real_call_and_scope(re
     assert "The selected experiment has close numerical results." in report
     assert "| mse | 0.375 | 0.3841444 | 0.0091444 | 2.44% |" in report
     assert "Only one selected experiment is covered." in report
-    assert "用户授权的 MSE、MAE、已完成轮数、协议核验与独立复算状态摘要" in report
+    assert "本次已记录的实际指标、训练进展、协议核验与独立复算状态摘要" in report
     assert "选定论文实验数值复现通过" in report
     assert "最终结论由确定性核验给出" in report
 

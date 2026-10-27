@@ -17,11 +17,11 @@ from urllib.parse import quote
 from src.project_paths import get_data_root
 
 
-REPORT_FORMAT_VERSION = 5
+REPORT_FORMAT_VERSION = 6
 REPORT_FORMAT_MARKER = f"<!-- autoreproducer-report-format: {REPORT_FORMAT_VERSION} -->"
 _VERSION = re.compile(r"^<!-- autoreproducer-report-format: (\d+) -->$", re.MULTILINE)
 _PRESENTATION_FIELDS = {"report", "report_path", "report_length", "report_format_version", "report_rendering",
-                        "reproduction_conclusion"}
+                        "reproduction_conclusion", "report_view_model"}
 _CREDENTIAL_KEYS = {"apikey", "accesstoken", "refreshtoken", "authorization", "password",
                     "secret", "secretkey", "clientsecret", "bearertoken", "apitoken",
                     "authtoken", "privatekey", "credentials"}
@@ -138,6 +138,9 @@ def _overlay(result, report, path, source):
     if data["report_format_version"] >= 4:
         from src.result_conclusion import build_reproduction_conclusion
         data["reproduction_conclusion"] = build_reproduction_conclusion(data)
+    if data["report_format_version"] >= 6:
+        from src.report_view_model import build_report_view_model
+        data["report_view_model"] = build_report_view_model(data)
     updated["report_path"] = str(path)
     return updated
 

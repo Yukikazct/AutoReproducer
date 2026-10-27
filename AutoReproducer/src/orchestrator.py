@@ -8,6 +8,7 @@
 """
 from typing import Any, Dict, Optional
 from pathlib import Path
+from functools import wraps
 from src.audit.audit_logger import AuditLogger
 from src.llm.llm_client import LLMClient
 from src.agents.paper_reader import PaperReaderAgent
@@ -19,6 +20,8 @@ from src.agents.optimizer import OptimizerAgent
 from src.resource_manager import ResourceManager
 from src.environment_lifecycle import release_run_environment
 from src.agent_collaboration import collaborative_run, current_collaboration
+from src.intelligent_recovery import investigating_run, current_investigation
+from src.stage_recovery import run_stage, StageEvidenceError
 
 # EnvBuilder 真实构建时使用的镜像名；成功构建后通过 env_config.image_tag
 # 透传给 CodeExecutor，让复现代码在本镜像内运行（含论文依赖）
@@ -26,6 +29,25 @@ DEFAULT_IMAGE_TAG = "autorepro-env"
 
 _MAIN_PHASE_IDS = {"READ_PAPER": "generate_reader", "FIND_RESOURCES": "find_resources",
                    "BUILD_ENV": "build_environment", "EXECUTE_CODE": "execute_code"}
+
+
+def _preserve_recovery_interruption(function):
+    @wraps(function)
+    def run(self, *args, **kwargs):
+        try:
+            return function(self, *args, **kwargs)
+        except (KeyboardInterrupt, SystemExit):
+            session = current_investigation()
+            if session:
+                session.stop('run_interrupted')
+                try:
+                    self.data['interrupted'] = True
+                    self._fail(self.state, '任务已取消；保留已取得的证据，未确认的步骤不计为完成')
+                    self.get_result()
+                except Exception as exc:
+                    self.logger.log('Orchestrator', 'persist_interruption', 'ERROR', str(exc))
+            raise
+    return run
 
 
 
@@ -84,6 +106,8 @@ class Orchestrator:
 
     @collaborative_run
     @release_run_environment
+    @investigating_run
+    @_preserve_recovery_interruption
     def run(self, input_data: dict, on_event=None) -> dict:
         """执行复现、验证与报告；智能优化接口当前尚未开放。
 
@@ -96,6 +120,13 @@ class Orchestrator:
         """
         self.on_event = on_event
         self.state, self.error = "INIT", None
+        self.data = {key: input_data.get(key, '') for key in ('pdf_path', 'paper_title')}
+        investigation = current_investigation()
+        if investigation:
+            investigation.attach(self.data)
+            investigation.freeze_goal({key: input_data.get(key) for key in (
+                'experiment_request', 'pdf_path', 'paper_title', 'preferred_repo_url',
+                'code_repo_url', 'strict_validation', 'experiment_profile')})
         from src.strict_validation import normalize_strict_validation_request
         try:
             input_data = normalize_strict_validation_request(input_data)
@@ -105,7 +136,23 @@ class Orchestrator:
             return self.get_result()
         from src.pdf_input import PDFInputError, resolve_pdf_request
         try:
+            if investigation and input_data.get('pdf_path'):
+                import hashlib
+                try:
+                    frozen_pdf = hashlib.sha256(Path(input_data['pdf_path']).read_bytes()).hexdigest()
+                except OSError:
+                    frozen_pdf = None  # The canonical parser supplies the missing-file diagnosis.
+                if frozen_pdf:
+                    investigation.freeze_goal({'pdf_sha256': frozen_pdf})
             input_data = resolve_pdf_request({**input_data, "mock_mode": self.mock_mode})
+            if investigation and input_data.get('pdf_path'):
+                from src.pdf_input import extract_pdf_input
+                document = extract_pdf_input(input_data['pdf_path'])
+                if document.sha256 != investigation.state['goals'].get('pdf_sha256'):
+                    raise PDFInputError('原始 PDF 在论文识别期间发生变化，已停止本次任务')
+                input_data = {**input_data, 'pdf_input': {'sha256': document.sha256,
+                    'pages': document.page_count, 'bytes': document.byte_size,
+                    'readable': True, 'extraction': document.extraction}}
         except PDFInputError as exc:
             self.data = {"pdf_path": input_data.get("pdf_path", ""),
                          "paper_title": input_data.get("paper_title", ""),
@@ -155,6 +202,7 @@ class Orchestrator:
         self.data = {
             "paper_title": input_data.get("paper_title", "") or "",
             "pdf_path": input_data.get("pdf_path", "") or "",
+            "pdf_input": input_data.get('pdf_input') or {},
             "code": input_data.get("code", "") or "",
             "corpus_paper": input_data.get("corpus_paper"),
             "preferred_repo_url": input_data.get("preferred_repo_url", ""),
@@ -174,6 +222,8 @@ class Orchestrator:
             "fix_records": [],
             "optimization": self._reserved_optimization(input_data),
         }
+        if investigation:
+            investigation.attach(self.data)
 
         # 论文稳定 ID（三层存储索引）：corpus 语料键 / sha1(title) 前 12 位
         paper_id = self.resource_manager.paper_id_for(
@@ -211,7 +261,7 @@ class Orchestrator:
             self.logger.log("Orchestrator", f"enter_{state_name}", "RUNNING",
                             f"进入阶段: {state_name}")
             try:
-                result = agent.run(self.data)
+                result = run_stage(agent, state_name, self.data)
                 self._merge_result(state_name, result)
                 self._handoff_result(state_name)
                 self._accumulate_llm_calls(result)
@@ -254,6 +304,8 @@ class Orchestrator:
                 self.logger.end_plan(state_name)
             except Exception as e:
                 self.logger.end_plan(state_name)
+                if isinstance(e, StageEvidenceError):
+                    self._merge_result(state_name, e.result)
                 if state_name == "EXECUTE_CODE":
                     self.data["validation"] = {
                         "status": "execution_failed", "result_level": "failed",
@@ -275,7 +327,8 @@ class Orchestrator:
                              reason=self.data["optimization"]["reason"], outcome="not_implemented")
 
         # 报告生成（合并复现 + 优化）
-        if not pipeline_failed or self.data.get("execution") or self.data.get("source_request"):
+        if (not pipeline_failed or self.data.get("execution") or self.data.get("source_request")
+                or self.data.get('intelligent_recovery')):
             self.state = "GENERATE_REPORT"
             self._emit_state(self.state, "ReportGenerator", "running", phase_id="generate_report", attempt=1)
             self.logger.begin_plan("GENERATE_REPORT")
@@ -283,12 +336,12 @@ class Orchestrator:
             if current_collaboration():
                 current_collaboration().attach(self.data)
             try:
-                self.data["report"] = self.agents["reporter"].run(self.data) \
-                    .get("report", "")
+                self.data.update(self.agents["reporter"].run(self.data))
                 self.logger.end_plan("GENERATE_REPORT")
                 self._emit_state(self.state, "ReportGenerator", "success", phase_id="generate_report", attempt=1)
             except Exception as e:
                 self.logger.end_plan("GENERATE_REPORT")
+                self.data['report'] = ''
                 self._emit_state(self.state, "ReportGenerator", "error", phase_id="generate_report", attempt=1, reason=str(e))
                 self._fail("GENERATE_REPORT", str(e))
             if pipeline_failed:
@@ -588,6 +641,21 @@ class Orchestrator:
         """进入 ERROR 状态并记录日志。"""
         self.state = "ERROR"
         self.error = message
+        investigation = current_investigation()
+        if investigation:
+            # Parsing/discovery failures precede the repository service's run
+            # directory. Give those failures the same durable evidence/report
+            # lifecycle rather than losing them before repository execution.
+            if not self.data.get('run_dir'):
+                import uuid
+                from src.environment_lifecycle import bind_environment_run
+                directory = Path(self.resource_manager.data_root) / 'runs' / ('task_' + uuid.uuid4().hex)
+                directory.mkdir(parents=True, exist_ok=False)
+                self.data.update(run_dir=str(directory.resolve()),
+                                 report_path=str((directory / 'report.md').resolve()))
+                bind_environment_run(directory)
+            investigation.attach(self.data, self.data['run_dir'])
+            investigation.record_issue(message, evidence={'stage': stage}, role='Coordinator')
         if stage == "FIND_RESOURCES" and self.data.get("pdf_path") and not self.mock_mode:
             self.data["repository_fallback"] = {"available": True,
                 "pdf_sha256": (self.data.get("pdf_input") or {}).get("sha256"),
@@ -604,13 +672,30 @@ class Orchestrator:
 
     def get_result(self) -> dict:
         """获取最终结果。"""
-        return {
+        investigation = current_investigation()
+        if investigation:
+            investigation.attach(self.data, self.data.get('run_dir'))
+            if self.error and 'report' not in self.data:
+                self.data['audit_stats'] = self.logger.get_stats()
+                try:
+                    self.data.update(self.agents['reporter'].run(self.data))
+                except Exception as exc:
+                    self.data['report'] = ''
+                    self.logger.log('ReportGenerator', 'early_failure_report', 'ERROR', str(exc))
+        result = {
             "state": self.state,
             "error": self.error,
             "data": self.data,
             "audit_logs": self.logger.get_summary(),
             "audit_stats": self.logger.get_stats(),
         }
+        if investigation and self.data.get('run_dir'):
+            from src.method_adapters import write_json
+            directory = Path(self.data['run_dir'])
+            write_json(directory / 'result.json', result)
+            if self.data.get('report'):
+                (directory / 'report.md').write_text(self.data['report'], encoding='utf-8')
+        return result
 
     def get_state_machine(self) -> list:
         """返回状态机定义。"""

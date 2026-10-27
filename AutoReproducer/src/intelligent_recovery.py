@@ -10,12 +10,15 @@ from dataclasses import asdict, dataclass, field
 from functools import wraps
 import hashlib
 import json
+import math
 from pathlib import Path
 import time
+from threading import RLock
 
 from src.author_claim_comparison import _redact_evidence
 from src.intelligent_recovery_request import normalize_intelligent_recovery_request
 from src.method_adapters import write_json
+from src.task_recovery import TaskRecoveryLedger, fingerprint
 
 
 _CURRENT = ContextVar('autorepro_investigation', default=None)
@@ -79,6 +82,18 @@ def current_investigation():
     return _CURRENT.get()
 
 
+def serialized_recovery(function):
+    """Serialize environment/source mutation while preserving legacy callers."""
+    @wraps(function)
+    def wrapped(*args, **kwargs):
+        session = current_investigation()
+        with session._mutation_lock if session else nullcontext():
+            if session:
+                session.ensure_running()
+            return function(*args, **kwargs)
+    return wrapped
+
+
 class _BudgetedLLM:
     def __init__(self, session, llm):
         self._session, self._llm = session, llm
@@ -90,7 +105,7 @@ class _BudgetedLLM:
         return self._session.chat(self._llm, prompt, **kwargs)
 
 
-class RecoverySession:
+class RecoverySession(TaskRecoveryLedger):
     """One ledger across roles, changed errors, source reads and patch rounds.
 
     No default total request/token ceiling: investigation ends through bounded
@@ -111,11 +126,15 @@ class RecoverySession:
                 raise ValueError('Invalid recovery budget: ' + name)
         if self.budget['max_probes'] > 4 or self.budget['max_source_repair_rounds'] > 2 or self.budget['max_repair_actions'] > 8:
             raise ValueError('Recovery budgets cannot enlarge the existing action boundaries')
-        self.state = {'version': 1, 'enabled': True, 'mode': mode, 'status': 'ready',
+        self.state = {'version': 2, 'enabled': True, 'mode': mode, 'status': 'ready',
                       'identity': {}, 'budget': deepcopy(self.budget), 'tasks': [], 'reviews': [],
+                      'phase': 'initialization', 'phases': [], 'goals': {}, 'facts': {},
+                      'unresolved_issues': [], 'decisions': [], 'actions': [],
                       'usage': {'model_requests': 0, 'known_tokens': 0, 'total_tokens': None,
                                 'estimated_tokens': 0, 'missing_usage_requests': 0,
-                                'duration_seconds': 0.0, 'monetary_cost': None, 'probes': 0, 'roles': {}},
+                                'duration_seconds': 0.0, 'monetary_cost': None, 'probes': 0, 'roles': {},
+                                'known_monetary_cost': 0.0, 'missing_cost_requests': 0,
+                                'repair_actions': 0, 'source_patch_rounds': 0},
                       'requires_human': False, 'stop_reason': '', 'artifact_path': ''}
         self.run_dir = None
         self.data = None
@@ -125,20 +144,44 @@ class RecoverySession:
         self._patch_rounds = 0
         self._toolset = None
         self._context = None
+        self._mutation_lock = RLock()
+        self._running_action = None
+        self._attachments = []
+        self._probe_keys = set()
+        self._legacy_action = None
 
     @contextmanager
     def scope(self):
         token = _CURRENT.set(self)
         try:
             yield self
+        except BaseException as exc:
+            interrupted = isinstance(exc, (KeyboardInterrupt, SystemExit))
+            cleanup_failed = getattr(exc, 'process_cleanup_confirmed', None) is False
+            for action in self.state['actions']:
+                if action['status'] == 'executing':
+                    self.finish_action(action, error=exc,
+                        status='stopped' if interrupted or cleanup_failed else 'failed')
+            if cleanup_failed:
+                self.stop('run_cleanup_unconfirmed', requires_human=True, cleanup_confirmed=False)
+            elif not self._blocked and interrupted:
+                self.stop('run_interrupted')
+            raise
         finally:
             self.persist()
             _CURRENT.reset(token)
 
-    def attach(self, data, run_dir):
-        self.data, self.run_dir = data, Path(run_dir)
-        self.state['identity']['run_id'] = self.run_dir.name
-        self.state['artifact_path'] = str(self.run_dir / 'intelligent_recovery.json')
+    def attach(self, data, run_dir=None):
+        if not isinstance(data, dict):
+            raise TypeError('Recovery result data must be a dictionary')
+        if self.data is None:
+            self.data = data
+        if not any(item is data for item in self._attachments):
+            self._attachments.append(data)
+        if self.run_dir is None and run_dir is not None:
+            self.run_dir = Path(run_dir)
+            self.state['identity']['run_id'] = self.run_dir.name
+            self.state['artifact_path'] = str(self.run_dir / 'intelligent_recovery.json')
         data['intelligent_recovery'] = self.state
         self.persist()
 
@@ -147,6 +190,10 @@ class RecoverySession:
         return _redact_evidence(value, credential if isinstance(credential, str) else '')
 
     def persist(self):
+        summary = self.safe(self.recovery_summary())
+        for data in self._attachments:
+            data['intelligent_recovery'] = self.state
+            data['recovery_summary'] = deepcopy(summary)
         if self.run_dir:
             try:
                 write_json(self.run_dir / 'intelligent_recovery.json', self.safe(self.state))
@@ -155,10 +202,14 @@ class RecoverySession:
 
     def wrap_llm(self, llm=None):
         target = self.llm if llm is None else llm
-        return target if isinstance(target, _BudgetedLLM) else _BudgetedLLM(self, target)
+        if isinstance(target, _BudgetedLLM):
+            if target._session is self:
+                return target
+            target = target._llm
+        return _BudgetedLLM(self, target)
 
     def chat(self, llm, prompt, **kwargs):
-        if self._blocked:
+        if self._blocked or self.state.get('status') == 'stopped' or self.state.get('cleanup_confirmed') is False:
             raise RecoveryBudgetExceeded(self.state['stop_reason'] or 'Investigation stopped')
         usage = self.state['usage']
         limit = self.budget['max_model_requests']
@@ -174,7 +225,8 @@ class RecoverySession:
         role = kwargs.get('task') or 'unspecified'
         role = role if isinstance(role, str) else 'unspecified'
         role_usage = usage['roles'].setdefault(role, {'model_requests': 0, 'known_tokens': 0,
-            'total_tokens': None, 'missing_usage_requests': 0, 'duration_seconds': 0.0})
+            'total_tokens': None, 'missing_usage_requests': 0, 'duration_seconds': 0.0,
+            'monetary_cost': None, 'known_monetary_cost': 0.0, 'missing_cost_requests': 0})
         role_usage['model_requests'] += 1
         if hasattr(llm, 'last_usage'):
             llm.last_usage = {}
@@ -198,9 +250,25 @@ class RecoverySession:
                 usage['estimated_tokens'] += estimate + len(str(response or '').encode('utf-8'))
             usage['total_tokens'] = (usage['known_tokens'] if not usage['missing_usage_requests'] else None)
             role_usage['total_tokens'] = (role_usage['known_tokens'] if not role_usage['missing_usage_requests'] else None)
+            cost = reported.get('monetary_cost') if isinstance(reported, dict) else None
+            if type(cost) in (int, float) and math.isfinite(cost) and cost >= 0:
+                usage['known_monetary_cost'] += cost
+                role_usage['known_monetary_cost'] += cost
+            else:
+                usage['missing_cost_requests'] += 1
+                role_usage['missing_cost_requests'] += 1
+            for record in (usage, role_usage):
+                record['monetary_cost'] = (record['known_monetary_cost']
+                    if not record['missing_cost_requests'] else None)
             self.persist()
 
     def stop(self, reason, *, requires_human=False, cleanup_confirmed=None):
+        prior_reason = self.state.get('stop_reason')
+        prior_cleanup_failure = self.state.get('cleanup_confirmed') is False
+        if prior_reason and (prior_cleanup_failure or self._blocked and cleanup_confirmed is not False):
+            reason = prior_reason
+        requires_human = (self.state.get('requires_human', False) or requires_human
+                          or prior_cleanup_failure or cleanup_confirmed is False)
         self._blocked = True
         self.state.update(status='stopped', stop_reason=reason, requires_human=requires_human)
         if cleanup_confirmed is False:
@@ -244,17 +312,27 @@ class RecoverySession:
                     'pdf_sha256': (packet.get('pdf') or {}).get('sha256'),
                     'source_sha256': _digest({name: record.get('sha256') for name, record in inventory.items()}),
                     'plan_sha256': _digest(plan)}
-        self.state['identity'].update(identity)
+        self.state['identity'].update(self.safe(identity))
         diagnostic = failure_diagnostic(execution)[-8000:]
-        fingerprint = _digest([trigger, identity, diagnostic, validation, environment.get('requirements_txt'),
-                               environment.get('python_executable')])
-        if any(task['fingerprint'] == fingerprint for task in self.state['tasks']):
+        failure_key = fingerprint(diagnostic, {'repository': identity['repository'],
+            'pdf_sha256': identity['pdf_sha256'], 'source_sha256': identity['source_sha256'],
+            'plan_sha256': identity['plan_sha256'], 'validation': validation,
+            'requirements_txt': environment.get('requirements_txt'),
+            'python_executable': environment.get('python_executable')})
+        if any(task['fingerprint'] == failure_key for task in self.state['tasks']):
+            self.stop('repeated_failure', requires_human=True)
             return None  # A repeated error is not new progress or a fresh budget.
         if len(self.state['tasks']) >= 5:
             self.stop('distinct_investigation_limit', requires_human=True)
             return None
         task = asdict(InvestigationTask('investigation_' + str(len(self.state['tasks']) + 1),
-                                       trigger, identity, fingerprint))
+                                       trigger, identity, failure_key))
+        task['phase'] = self.state['phase']
+        issue = self.record_issue(diagnostic, evidence={
+            'source_sha256': identity['source_sha256'], 'plan_sha256': identity['plan_sha256'],
+            'validation': validation}, role='Investigator')
+        issue['task_id'] = task['id']
+        task['issue_id'] = issue['id']
         self.state['tasks'].append(task)
         self._active_task = task
         self.state['status'] = 'investigating'
@@ -405,6 +483,7 @@ class RecoverySession:
     def _proposal(self, context, system, task):
         from src.discovered_repository_plan import _json_response
         context = dict(context)
+        context['task_state'] = self.critical_context()
         for attempt in range(2):
             response = self.chat(self.llm, json.dumps(self.safe(context), ensure_ascii=False),
                                  system_prompt=system, temperature=0, task=task)
@@ -430,9 +509,11 @@ class RecoverySession:
 
     def probe(self, toolset, tool, arguments, task):
         self.ensure_running()
-        if self.state['usage']['probes'] >= self.budget['max_probes']:
-            raise RecoveryBudgetExceeded('Shared observation budget exhausted')
-        self.state['usage']['probes'] += 1
+        # Candidate contracts are distinct observations under a new source hash.
+        candidate = next((row.get('candidate_sha256') for row in reversed(task.get('patch_reviews', []))), None)
+        self.consume_probe(tool=tool, arguments={'arguments': arguments, 'candidate_sha256': candidate,
+            'source_sha256': self.state['identity'].get('source_sha256'),
+            'requirements_txt': (getattr(toolset, 'environment', None) or {}).get('requirements_txt')})
         result = toolset.execute(tool, arguments)
         result = self.safe(result)
         task['probes'].append(result)
@@ -486,6 +567,9 @@ class RecoverySession:
         record = {**deepcopy(review), 'stage': 'patch' if proposal.get('action') == 'apply_compatibility_patch'
                   else 'investigation', 'candidate_sha256': _candidate_digest(proposal),
                   'task_id': (self._active_task or {}).get('id'),
+                  'phase': self.state['phase'],
+                  'action_id': next((row['id'] for row in reversed(self.state['actions'])
+                      if row['status'] == 'executing' and row['kind'] == 'compatibility_patch'), None),
                   'identity_sha256': _digest(self.state['identity']),
                   'reviewer': reviewer or ('independent' if self.mode == 'collaborative' else 'self_check')}
         self.state['reviews'].append(self.safe(record))
@@ -588,8 +672,11 @@ class RecoverySession:
 
     def consume_repair(self, *, source_patch=False):
         self.ensure_running()
+        if self._running_action is not None:
+            return  # A controlled enclosing action already reserved this allowance.
         if (self._repair_actions >= self.budget['max_repair_actions']
                 or source_patch and self._patch_rounds >= self.budget['max_source_repair_rounds']):
+            self.stop('repair_budget_exhausted', requires_human=True)
             raise RecoveryBudgetExceeded('Shared repair action/patch budget exhausted')
         self._repair_actions += 1
         self._patch_rounds += int(source_patch)
@@ -597,7 +684,7 @@ class RecoverySession:
         self.persist()
 
     def ensure_running(self):
-        if self._blocked:
+        if self._blocked or self.state.get('status') == 'stopped' or self.state.get('cleanup_confirmed') is False:
             failure = InvestigationStopped(self.state['stop_reason'] or 'Investigation stopped')
             if self.state.get('timed_out') is True:
                 failure.timed_out = True
@@ -608,25 +695,57 @@ class RecoverySession:
 
     def record_execution(self, execution):
         from src.repository_repairer import repair_is_stopped
+        if self._blocked or self.state.get('status') == 'stopped' or self.state.get('cleanup_confirmed') is False:
+            self.persist()
+            return
         if repair_is_stopped(execution):
             self.stop('execution_stopped_or_cleanup_unconfirmed',
                       cleanup_confirmed=False if self._unconfirmed_cleanup(execution) else None)
         elif self._active_task and self._active_task['trigger'] == 'execution_failure':
-            self._active_task['execution_recovered'] = execution.get('success') is True
+            actual_execution = (execution.get('executed') is True
+                or (execution.get('final') or {}).get('executed') is True)
+            recovered = execution.get('success') is True and actual_execution
+            self._active_task['execution_recovered'] = recovered
             self._active_task['numerical_equivalence'] = 'unknown'
-            if execution.get('success') is True:
+            if recovered:
                 self._active_task['status'] = 'command_recovered'
+                for issue in self.state['unresolved_issues']:
+                    if issue.get('task_id') == self._active_task['id']:
+                        issue.update(status='resolved', resolved_by_execution=execution.get('run_dir'))
             self.state['requires_human'] = any(task['status'] in {'needs_human', 'repair_proposed'}
-                                              for task in self.state['tasks'])
+                                              for task in self.state['tasks']) or any(
+                        issue['status'] != 'resolved' for issue in self.state['unresolved_issues'])
         self.persist()
 
 
 def investigating_run(function):
     @wraps(function)
     def run(self, request, *args, **kwargs):
+        session = current_investigation()
+        # Orchestrator forwards its result data to a nested service. The live
+        # receipt occupies the same legacy key as the public boolean control;
+        # accept only this session's own receipt, never arbitrary dictionaries.
+        if session is not None and request.get('intelligent_recovery') is session.state:
+            request = {**request, 'intelligent_recovery': True,
+                       'intelligent_recovery_mode': session.mode}
         request = normalize_intelligent_recovery_request(request)
+
+        def invoke(owned_session):
+            # Meter identity/protocol/result calls as well as active recovery.
+            # Nested planners may wrap again; wrap_llm preserves one charge.
+            original_llm = self.llm
+            if original_llm is not None:
+                self.llm = owned_session.wrap_llm(original_llm)
+            try:
+                return function(self, request, *args, **kwargs)
+            finally:
+                self.llm = original_llm
+
+        if session is not None:
+            session.ensure_running()
+            return invoke(session)
         if not request['intelligent_recovery']:
             return function(self, request, *args, **kwargs)
-        with RecoverySession(self.llm, mode=request['intelligent_recovery_mode']).scope():
-            return function(self, request, *args, **kwargs)
+        with RecoverySession(self.llm, mode=request['intelligent_recovery_mode']).scope() as owned_session:
+            return invoke(owned_session)
     return run

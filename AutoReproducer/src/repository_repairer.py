@@ -18,6 +18,7 @@ from src.agent_collaboration import current_collaboration
 from src.author_self_repair import failure_diagnostic
 from src.execution_plan import plan_steps
 from src.execution_safety import cleanup_is_unconfirmed, iter_execution_records
+from src.intelligent_recovery import serialized_recovery
 from src.safety.patch_policy import PatchPolicy
 from src.safety.patch_transaction import PatchTransaction
 from src.safety.paths import filesystem_path, is_link, workspace_path
@@ -182,8 +183,10 @@ class RepositoryRepairer:
         collaboration = current_collaboration()
         if collaboration is not None:
             context["agent_messages"] = collaboration.context("RepositoryRepairer")
+            context['task_state'] = collaboration.task_context()
         return _private(context)
 
+    @serialized_recovery
     def run(self, workspace, steps, env_config, *, on_event=None,
             initial_execution=None, verify_candidate=None, validate_patches=None,
             select_sources=None):
@@ -245,6 +248,7 @@ class RepositoryRepairer:
                     '# No validated patch set was applied; see result.json and proposal/response.\n', encoding='utf-8')
                 transaction = None
                 baseline = None
+                ledger_action = investigation = None
                 validation_request = execution_request = None
                 try:
                     _check_workspace_budget(root)
@@ -264,7 +268,11 @@ class RepositoryRepairer:
                     from src.intelligent_recovery import current_investigation
                     investigation = current_investigation()
                     if investigation:
-                        investigation.consume_repair(source_patch=True)
+                        ledger_action = investigation.begin_action('compatibility_patch',
+                            problem=failure_diagnostic(execution),
+                            evidence={'sources': context['sources'], 'review_feedback': investigation.repair_feedback()},
+                            role='RepositoryRepairer', source_patch=True,
+                            review={'status': 'pending', 'reason': 'Candidate requires model and deterministic validation'})
                         context['investigation_findings'] = investigation.repair_findings()
                         context['review_feedback'] = investigation.repair_feedback()
                     llm_calls += 1
@@ -310,6 +318,11 @@ class RepositoryRepairer:
                         investigation.review_patch(context, proposal)
                     if validate_patches is not None:
                         validate_patches(root, deepcopy(transaction.files), deepcopy(execution))
+                    if ledger_action is not None:
+                        ledger_action['review'] = investigation.safe({
+                            'status': 'accepted', 'reviewer': 'independent_and_deterministic_validators',
+                            'reason': 'Candidate passed source scope, protected protocol and review checks',
+                            'reviews': deepcopy(investigation.state['reviews'][-1:])})
                     if collaboration is not None:
                         collaboration.reply(validation_request, "PatchValidator",
                             {"round": index + 1, "status": "accepted",
@@ -382,8 +395,8 @@ class RepositoryRepairer:
                 except Exception as exc:
                     attempt["status"] = "rejected"
                     attempt["error"] = str(exc)
-                    from src.intelligent_recovery import InvestigationStopped
-                    if isinstance(exc, InvestigationStopped):
+                    from src.intelligent_recovery import InvestigationStopped, RecoveryBudgetExceeded
+                    if isinstance(exc, (InvestigationStopped, RecoveryBudgetExceeded)):
                         attempt['status'] = status = 'stopped'
                         raise
                     if transaction is not None and transaction.rollback_error:
@@ -405,6 +418,33 @@ class RepositoryRepairer:
                         attempt["status"] = status = "rollback_failed"
                     raise
                 finally:
+                    if ledger_action is not None:
+                        ran = isinstance(attempt.get('execution'), dict)
+                        author_reran = ran and (attempt['execution'].get('executed') is True
+                            or (attempt['execution'].get('final') or {}).get('executed') is True)
+                        verified = attempt.get('status') == 'succeeded' and author_reran
+                        stopped = (ran and repair_is_stopped(attempt['execution'])
+                                   or attempt.get('status') in {'interrupted', 'stopped', 'rollback_failed'})
+                        if not ran:
+                            ledger_action['review'] = investigation.safe({
+                                'status': 'rejected' if attempt.get('status') == 'rejected' else 'unaccepted',
+                                'reason': attempt.get('error') or attempt.get('reason') or attempt.get('status'),
+                                'reviews': deepcopy(investigation.state['reviews'][-1:])})
+                        investigation.finish_action(ledger_action,
+                            result=attempt.get('execution') or {}, executed=ran,
+                            original_command_rerun=author_reran, verification={
+                                'success': verified if ran else None,
+                                'reason': 'Original command and protected-input checks passed; numerical equivalence unknown'
+                                    if verified else attempt.get('error') or 'Candidate did not pass original-command verification',
+                                'evidence': {'candidate_directory': str(candidate_dir),
+                                    'rollback_status': attempt.get('rollback_error') or ('restored' if transaction and transaction.restored else None)}},
+                            status='stopped' if stopped else 'verified' if verified else 'failed' if ran else 'rejected')
+                        if stopped and ran:
+                            investigation.stop('execution_stopped_or_cleanup_unconfirmed',
+                                cleanup_confirmed=False if cleanup_is_unconfirmed(attempt['execution']) else None)
+                        if attempt.get('status') in {'rollback_failed', 'interrupted', 'stopped'}:
+                            investigation.stop('patch_' + attempt['status'], requires_human=True,
+                                cleanup_confirmed=False if attempt['status'] == 'rollback_failed' else None)
                     if collaboration is not None:
                         if validation_request is not None:
                             collaboration.reply(validation_request, "PatchValidator",

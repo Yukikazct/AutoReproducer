@@ -17,7 +17,7 @@ _EVIDENCE_FIELDS = (
     'experiment_protocol', 'grounded_repository_plan', 'source_packet', 'execution_plan',
     'env_config', 'execution', 'validation', 'strict_validation',
     'strict_execution_verification', 'dataset_provenance', 'runtime_dataset_evidence',
-    'source_repair', 'intelligent_recovery', 'outcome_diagnosis', 'optimization', 'audit_stats',
+    'source_repair', 'intelligent_recovery', 'recovery_summary', 'outcome_diagnosis', 'optimization', 'audit_stats',
     'environment_cleanup', 'run_finalization', 'run_dir', 'repository_executed',
     'run_status', 'execution_source', 'reproduction_scope', 'interrupted',
     'cancelled', 'timed_out',
@@ -37,6 +37,8 @@ def report_evidence_bytes(result, report, report_name):
     data = safe['data']
     evidence = {key: data[key] for key in _EVIDENCE_FIELDS if key in data}
     evidence['reproduction_conclusion'] = build_reproduction_conclusion(data)
+    from src.report_view_model import build_report_view_model
+    evidence['report_view_model'] = build_report_view_model(data)
     return json_bytes({
         'schema_version': 1,
         'kind': 'autoreproducer_report_evidence',

@@ -6,6 +6,8 @@ _START = "<!-- autoreproducer-run-finalization:start -->"
 _END = "<!-- autoreproducer-run-finalization:end -->"
 _CONCLUSION_START = "<!-- autoreproducer-conclusion:start -->"
 _CONCLUSION_END = "<!-- autoreproducer-conclusion:end -->"
+_OVERVIEW_START = "<!-- autoreproducer-overview:start -->"
+_OVERVIEW_END = "<!-- autoreproducer-overview:end -->"
 
 def _lines_outside_fences(report):
     fence = None
@@ -59,6 +61,13 @@ def _with_conclusion(report, data):
     conclusion = build_reproduction_conclusion(data)
     data["reproduction_conclusion"] = conclusion
     lines = [_CONCLUSION_START, conclusion_markdown(conclusion), _CONCLUSION_END, ""]
+    from src.report_revisions import report_format_version
+    if report_format_version(report) >= 6:
+        from src.report_view_model import build_report_view_model, report_overview_markdown
+        view = build_report_view_model(data)
+        data['report_view_model'] = view
+        report = _remove_summary(report, _OVERVIEW_START, _OVERVIEW_END)
+        lines = [_OVERVIEW_START, report_overview_markdown(view), _OVERVIEW_END, '', *lines]
     return _insert_block(report, lines, before_markers=(_START,))
 
 
@@ -69,6 +78,9 @@ def finalize_report_text(report, data):
     if not report:
         return report
     report = _remove_summary(report, _CONCLUSION_START, _CONCLUSION_END)
+    # Remove the whole old overview before inserting cleanup; otherwise the
+    # cleanup section could land inside that block and be removed with it.
+    report = _remove_summary(report, _OVERVIEW_START, _OVERVIEW_END)
     if not receipt:
         return _with_conclusion(report, data)
     state = finalization.get("state")

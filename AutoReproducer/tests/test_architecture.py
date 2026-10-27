@@ -245,10 +245,9 @@ class TestEndToEnd:
         report = e2e_result["data"].get("report", "")
         assert len(report) > 200
         # 关键内容块齐全
-        for section in ["## 1. 论文信息", "## 2. 资源定位",
-                        "## 3. 环境配置", "## 4. 代码执行",
-                        "## 5. 运行结果", "## 6. 智能优化",
-                        "## 7. 运行与用量统计"]:
+        for section in ["## 任务结果与恢复", "## 本次复现结论", "## 选定实验与冻结依据",
+                        "## 资源与执行准备", "## 实际执行记录", "## 指标与参考比较",
+                        "## 恢复行动与协作贡献", "## 运行与用量统计"]:
             assert section in report, f"报告缺少章节 {section}"
 
     def test_budget_stats_in_audit(self, e2e_result):

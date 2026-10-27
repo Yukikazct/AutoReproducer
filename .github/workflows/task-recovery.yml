@@ -1,0 +1,76 @@
+name: Task recovery and report acceptance
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  recovery:
+    name: recovery (${{ matrix.os }}, ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            python: '3.11'
+          - os: windows-latest
+            python: '3.12'
+          - os: ubuntu-latest
+            python: '3.11'
+          - os: macos-latest
+            python: '3.12'
+    defaults:
+      run:
+        working-directory: AutoReproducer
+    env:
+      PYTHONIOENCODING: utf-8
+      MPLBACKEND: Agg
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: AutoReproducer/requirements-test.txt
+      - name: Install test and application dependencies
+        run: python -m pip install -r requirements-test.txt
+      - name: Canonicalize temporary paths
+        run: python -c "import os,pathlib,tempfile; p=str(pathlib.Path(tempfile.gettempdir()).resolve()); f=open(os.environ['GITHUB_ENV'],'a',encoding='utf-8'); f.write('TMPDIR='+p+'\n'); f.close()"
+      - name: Verify collaboration, recovery, cancellation and v6 exports
+        env:
+          PYTHONUTF8: '0'
+        run: >-
+          python -m pytest -q -ra
+          tests/test_task_recovery_ledger.py tests/test_task_stage_recovery.py
+          tests/test_planning_task_recovery.py tests/test_intelligent_recovery.py
+          tests/test_agent_collaboration.py tests/test_author_self_repair.py
+          tests/test_repository_runner.py tests/test_environment_lifecycle.py
+          tests/test_late_recovery_cleanup.py
+          tests/test_intelligent_recovery_frontend.py tests/test_pdf_recovery_modes.py
+          tests/test_report_view_model.py tests/test_report_revisions.py
+          tests/test_report_export.py tests/test_report_bundle_evidence.py
+          tests/test_recovery_benchmark.py tests/test_recovery_review_reporting.py
+          --junitxml=task-recovery-results.xml
+      - name: Verify Unicode task paths and recovery with UTF-8 mode
+        if: runner.os == 'Windows'
+        run: >-
+          python -X utf8 -m pytest -q -ra
+          tests/test_task_stage_recovery.py tests/test_task_recovery_ledger.py
+          tests/test_planning_task_recovery.py tests/test_report_view_model.py
+          tests/test_environment_lifecycle.py
+          --junitxml=task-recovery-utf8-results.xml
+      - name: Preserve acceptance results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: task-recovery-${{ matrix.os }}-${{ matrix.python }}
+          path: AutoReproducer/task-recovery*results.xml
+          if-no-files-found: ignore

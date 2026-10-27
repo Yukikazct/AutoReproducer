@@ -135,6 +135,22 @@ class TestLLMClientUsageHook:
                                      "completion_tokens": 0,
                                      "total_tokens": 0}
 
+    def test_provider_cost_reaches_task_role_accounting_without_price_inference(self, monkeypatch):
+        from src.intelligent_recovery import RecoverySession
+        client = self._client()
+        payload = {'choices': [{'message': {'content': 'ok'}, 'finish_reason': 'stop'}],
+                   'usage': {'total_tokens': 15, 'cost': 0.003}}
+        self._patch_urlopen(monkeypatch, payload)
+        with RecoverySession(client).scope() as session:
+            session.wrap_llm().chat('check original evidence', task='author_planner')
+            assert session.state['usage']['monetary_cost'] == 0.003
+            assert session.state['usage']['roles']['author_planner']['monetary_cost'] == 0.003
+            payload['usage'].pop('cost')
+            self._patch_urlopen(monkeypatch, payload)
+            session.wrap_llm().chat('check new evidence', task='author_planner')
+            assert session.state['usage']['monetary_cost'] is None
+            assert session.state['usage']['roles']['author_planner']['monetary_cost'] is None
+
     def test_hook_exception_does_not_break_call(self, monkeypatch):
         client = self._client()
 

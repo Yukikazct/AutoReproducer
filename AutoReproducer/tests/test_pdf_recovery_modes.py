@@ -62,8 +62,8 @@ def test_role_mode_survives_background_and_owned_worker(monkeypatch, tmp_path, m
 def test_real_pdf_page_submits_selected_mode(strict_app, mode):
     make, capture = strict_app
     app = make()
-    assert 'pdf_intelligent_recovery_mode' not in [row.key for row in app.sidebar.selectbox]
-    app.sidebar.checkbox(key='pdf_intelligent_recovery').check().run()
+    assert app.sidebar.checkbox(key='pdf_intelligent_recovery').value is True
+    assert app.sidebar.selectbox(key='pdf_intelligent_recovery_mode').value == 'collaborative'
     app.sidebar.selectbox(key='pdf_intelligent_recovery_mode').select(mode).run()
     next(button for button in app.sidebar.button if button.label == '开始复现').click().run()
     assert not app.exception

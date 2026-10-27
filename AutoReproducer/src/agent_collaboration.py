@@ -215,6 +215,16 @@ class CollaborationSession:
                     length += size
             return deepcopy(list(reversed(selected)))
 
+    def task_context(self):
+        """Return durable goals, facts and objections outside recent messages.
+
+        The recovery coordinator owns this state. Reading a message does not
+        resolve an issue or mark an action executed.
+        """
+        from src.intelligent_recovery import current_investigation
+        session = current_investigation()
+        return session.critical_context() if session is not None else {}
+
     @contextmanager
     def evidence_cache_scope(self):
         """Coalesce concurrent reads without blocking message delivery or UI events."""

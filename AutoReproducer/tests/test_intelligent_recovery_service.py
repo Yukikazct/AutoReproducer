@@ -36,7 +36,9 @@ def test_prepare_only_has_no_investigation_or_new_execution_gate(tmp_path, monke
     result = service.run({**request, 'prepare_only': True, 'intelligent_recovery': True})
     assert result['state'] == 'COMPLETED', result.get('error')
     state = result['data']['intelligent_recovery']
-    assert state['tasks'] == [] and state['usage']['model_requests'] == 0
+    assert state['tasks'] == []
+    assert state['usage']['model_requests'] == len(llm.calls) > 0
+    assert not any(role.startswith('recovery_') for role in state['usage']['roles'])
     assert state['budget']['max_tokens'] is None
     assert Path(state['artifact_path']).is_file()
     assert current_investigation() is None

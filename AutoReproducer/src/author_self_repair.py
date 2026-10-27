@@ -161,7 +161,9 @@ def save_repair_state(run_dir, data, on_event, *, status, reason, current=None):
 def record_repair(run_dir, data, on_event, result, action, reason):
     from src.intelligent_recovery import current_investigation
     if current_investigation():
-        current_investigation().consume_repair()
+        current_investigation().record_external_repair(action,
+            problem=failure_diagnostic(result), evidence={'failure_fingerprint': failure_fingerprint(result),
+                'reason': reason}, reason=reason)
     state = data.setdefault('self_repair', {'attempts': []})
     state['attempts'].append({'round': len(state['attempts']) + 1, 'action': action,
         'reason': reason, 'status': 'retrying', 'failed_execution_dir': result.get('run_dir'),
@@ -175,6 +177,9 @@ def verify_repair_result(run_dir, data, on_event, result):
     attempts = state.get('attempts') or []
     if not attempts or attempts[-1].get('status') != 'retrying':
         return
+    from src.intelligent_recovery import current_investigation
+    if current_investigation():
+        current_investigation().verify_external_repair(result)
     attempt = attempts[-1]
     attempt['verification_execution_dir'] = result.get('run_dir')
     if result.get('success'):

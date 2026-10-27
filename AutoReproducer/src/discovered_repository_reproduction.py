@@ -4,7 +4,7 @@ No paper identity is registered here. The frozen plan is derived from the actual
 PDF and pinned repository, then executed with the repository process owner.
 """
 from copy import deepcopy
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 import hashlib
 import json
 import os
@@ -443,6 +443,9 @@ class DiscoveredRepositoryReproduction:
             data["pdf_input"] = {"sha256": document.sha256, "pages": document.page_count,
                                  "bytes": document.byte_size, "readable": True,
                                  "extraction": document.extraction}
+            if investigation:
+                investigation.freeze_goal({'author_pdf_sha256': document.sha256,
+                    'author_experiment_request': deepcopy(request['experiment_request'])})
             from src.pdf_markdown import write_markdown_evidence
             data['paper_markdown'] = write_markdown_evidence(run_dir, document)
             pin = (data["resources"].get("repo_discovery") or {}).get("pinned_revision", "")
@@ -498,6 +501,16 @@ class DiscoveredRepositoryReproduction:
                 data["paper_info"]["metrics"] = {item["name"]: item["reference"] for item in candidate_plan["metrics"]}
                 data["paper_info"]["required_metrics"] = [item["name"] for item in candidate_plan["metrics"]]
                 candidate_environment = environment_for_plan(candidate_plan)
+                from src.planning_recovery import validate_plan_consistency
+                data['plan_consistency'] = validate_plan_consistency(
+                    candidate_plan, candidate_packet, workspace, candidate_environment)
+                write_json(run_dir / 'plan_consistency.json', data['plan_consistency'])
+                if investigation:
+                    investigation.remember_fact('validated_author_plan', {
+                        'spec_sha256': data['spec_sha256'], 'pdf_sha256': candidate_plan['pdf_sha256'],
+                        'repository': candidate_plan['repository'],
+                        'experiment_request': request['experiment_request'],
+                        'consistency': data['plan_consistency']})
                 self._receive_author_plan('EnvBuilder', candidate_plan)
                 candidate_environment["offline"] = offline
                 data["env_config"] = deepcopy(candidate_environment)
@@ -708,6 +721,8 @@ class DiscoveredRepositoryReproduction:
                 raise ValueError("无法获取候选仓库源码。" + "；".join(attempt.get("error", "") for attempt in attempts))
         except (KeyboardInterrupt, SystemExit) as exc:
             phase = getattr(exc, "reproduction_phase", phase)
+            if investigation:
+                investigation.stop('cancelled', requires_human=False)
             data["interrupted"] = True
             if getattr(exc, "execution", None) is not None:
                 data["environment_preparation" if phase == "prepare_environment" else "execution"] = exc.execution
@@ -732,6 +747,15 @@ class DiscoveredRepositoryReproduction:
         except Exception as exc:
             phase = getattr(exc, "reproduction_phase", phase)
             error = str(exc) or type(exc).__name__
+            if investigation:
+                # Retain concrete preparation blockers even when no controlled
+                # repair is possible (missing hardware/data is not a new plan).
+                investigation.record_issue(error, evidence={
+                    'failure_kind': getattr(exc, 'category', 'runtime_error'),
+                    'pdf_sha256': data.get('pdf_input', {}).get('sha256'),
+                    'repository': data.get('resources', {}).get('selected_repo'),
+                    'planning_evidence': getattr(exc, 'planning_evidence', None)},
+                    role=next((item[2] for item in phases if item[0] == phase), 'Coordinator'))
             if phase == "prepare_repository":
                 try:
                     fallback_pdf = extract_pdf_input(request["pdf_path"])
@@ -767,7 +791,7 @@ class DiscoveredRepositoryReproduction:
             collaboration.persist(run_dir)
         event("generate_report", "running")
         try:
-            data["report"] = ReportGeneratorAgent(self.logger).run(data, report_path=data["report_path"])["report"]
+            data.update(ReportGeneratorAgent(self.logger).run(data, report_path=data["report_path"]))
             (run_dir / "report.md").write_text(data["report"], encoding="utf-8")
             result = {"state": "ERROR" if error else "COMPLETED", "data": data, "error": error}
             write_json(run_dir / "result.json", result)
@@ -1125,9 +1149,19 @@ class DiscoveredRepositoryReproduction:
                             'data': {'failure_kind': analysis['failure_kind'],
                                      'action': analysis['action'], 'llm_calls': analysis['llm_calls']}}})
                     return suggestion
-                return run_with_dependency_repair(self.runner, workspace, selected, runtime_environment,
-                    plan, packet, run_dir, data, progress, verify_frozen_inputs, repair_numeric, repair_path,
-                    analyze_failure, repair_pyg=repair_pyg, prepare_environment=prepare_runtime_environment)
+                investigation = current_investigation()
+                identifiers = {step.get('id') for step in selected} if isinstance(selected, list) else set()
+                recovery_phase = ('environment_preparation' if 'native_preflight' in identifiers else
+                                  'dataset_preparation' if 'prepare_author_datasets' in identifiers else
+                                  'author_execution')
+                with investigation.phase(recovery_phase) if investigation else nullcontext():
+                    result = run_with_dependency_repair(self.runner, workspace, selected, runtime_environment,
+                        plan, packet, run_dir, data, progress, verify_frozen_inputs, repair_numeric, repair_path,
+                        analyze_failure, repair_pyg=repair_pyg, prepare_environment=prepare_runtime_environment)
+                    if investigation:
+                        investigation.record_execution(result)
+                        investigation.ensure_running()
+                    return result
 
             preflight = [{"id": "native_preflight", "kind": "check", "required": True,
                           "argv": ["python", "-u", f"{CAPTURE_DIR}/preflight.py"], "cwd": ".",

@@ -38,6 +38,7 @@ MAX_MANIFEST_BYTES = 8 * 1024 * 1024
 MAX_SOURCE_FILE_BYTES = 64 * 1024 * 1024
 MAX_TRIAL_SOURCE_BYTES = 512 * 1024 * 1024
 RETRY_METRICS = ('invalid_retries', 'execution_retries', 'same_failure_retries')
+STAGE_OUTCOMES = ('planning_completed', 'author_execution_completed', 'independent_metrics_verified')
 
 
 def _hash(value, size=64):
@@ -272,7 +273,17 @@ def _outcome(raw, evaluated):
     if type(claimed) is not bool:
         raise ValueError("claimed_success must be boolean")
     blocker = evaluated.get("blocker") or raw.get("blocker") or "unclassified"
+    # Component adapters have no observation of full PDF planning/training.
+    # Only the independent evaluator can supply these optional stage facts.
+    stages = {}
+    for field in STAGE_OUTCOMES:
+        value = evaluated.get(field)
+        if value is not None and type(value) is not bool:
+            raise ValueError('Stage outcomes must be booleans or unknown: ' + field)
+        if field in evaluated:
+            stages[field] = value
     return {"autonomous_completed": completed, "claimed_success": claimed,
+            **stages,
             **interrupted,
             **{field: evaluated[field] for field in ("oracle_passed", "protocol_preserved", "cleanup_confirmed")},
             "needs_human": human > 0 or not completed, "human_interventions": human,
@@ -469,8 +480,10 @@ def aggregate_results(manifest, records):
                 or evaluation.get("result_sha256") != digest(evaluation["result"])):
             raise ValueError("Independent evaluation receipt is not bound to this trial/oracle")
         recomputed = _outcome(outcome, evaluation["result"])
-        if any(outcome[field] != recomputed[field] for field in recomputed):
+        if any(outcome.get(field) != recomputed[field] for field in recomputed):
             raise ValueError("Outcome contradicts authoritative oracle/protocol/cleanup fields")
+        if any(outcome.get(field) != recomputed.get(field) for field in STAGE_OUTCOMES):
+            raise ValueError('Stage outcome has no matching independent evaluation')
         usage = record.get("usage") or {}
         if not isinstance(usage, dict):
             raise ValueError("Invalid usage receipt")
@@ -520,6 +533,13 @@ def aggregate_results(manifest, records):
             "completed_trials": len(runs), "false_successes": sum(record["outcome"]["false_success"] for record in runs),
             "protocol_violations": sum(not record["outcome"]["protocol_preserved"] for record in runs),
             "human_interventions": sum(record["outcome"]["human_interventions"] for record in runs),
+            "stage_outcomes": {field: {
+                'successful_trials': sum(record['outcome'].get(field) is True for record in runs),
+                'observed_trials': sum(type(record['outcome'].get(field)) is bool for record in runs),
+                'unknown_trials': sum(record['outcome'].get(field) is None for record in runs),
+                'rate': (sum(record['outcome'].get(field) is True for record in runs) / len(runs)
+                         if runs and all(type(record['outcome'].get(field)) is bool for record in runs) else None),
+            } for field in STAGE_OUTCOMES},
             "usage_totals": {metric: (sum(record.get("usage", {}).get(metric) or 0 for record in runs)
                 if runs and all(record.get("usage", {}).get(metric) is not None for record in runs) else None)
                 for metric in (*ACCOUNTING_KEYS, "prompt_tokens", "completion_tokens", *RETRY_METRICS, "cost", "duration_seconds")}}

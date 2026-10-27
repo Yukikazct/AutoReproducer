@@ -60,7 +60,12 @@ def report_image_bytes(target, report_path):
 
 
 def render_report(report, report_path=None, *, st_module=None):
-    """Keep text/code as native Markdown and serve verified images via st.image."""
+    """Render persisted model-derived Markdown; do not derive another verdict.
+
+    V6 live reports and saved revisions are generated from ReportViewModel by
+    the shared report builder. This presentation layer serves those same bytes
+    used by Markdown/ZIP downloads, with verified images via ``st.image``.
+    """
     if st_module is None:
         import streamlit as st_module
     report_path = report_path or DEFAULT_REPORT_PATH
