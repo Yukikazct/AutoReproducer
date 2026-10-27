@@ -152,7 +152,11 @@ def test_frozen_three_arms_install_only_registered_dependency_and_rerun_original
     evaluated = adapter.evaluate_trial(case=case, result=result, workspace=workspace, environment=environment)
     assert evaluated['oracle_passed'] is evaluated['protocol_preserved'] is evaluated['cleanup_confirmed'] is True, evaluated
     assert evaluated['numerical_equivalence'] == 'unknown'
-    assert 'private' not in json.dumps(recorded)
+    # macOS's canonical temporary root itself contains /private/. Check the
+    # actual private oracle directory and filename, not that unrelated word.
+    serialized = json.dumps(recorded)
+    assert json.dumps(str((tmp_path / 'private').resolve()))[1:-1] not in serialized
+    assert 'original_assertions.py' not in serialized
 
 
 def test_two_actual_missing_imports_share_recovery_budget_and_keep_first_dependency(tmp_path, frozen_products):

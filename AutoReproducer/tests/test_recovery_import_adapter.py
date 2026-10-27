@@ -80,7 +80,9 @@ def test_unique_frozen_import_root_recovers_original_command_without_llm_or_sour
     scored = adapter.evaluate_trial(case=case, result=result, workspace=workspace, environment=environment)
     assert scored["oracle_passed"] is scored["protocol_preserved"] is scored["cleanup_confirmed"] is True, scored
     assert scored["numerical_equivalence"] == "unknown"
-    assert "private" not in json.dumps(receipt["import_recovery_proofs"])
+    serialized = json.dumps(receipt['import_recovery_proofs'])
+    assert json.dumps(str((tmp_path / 'private').resolve()))[1:-1] not in serialized
+    assert 'original_assertions.py' not in serialized
 
 
 def test_two_actual_import_failures_share_repair_budget_and_restore_both_roots(tmp_path, frozen_products):

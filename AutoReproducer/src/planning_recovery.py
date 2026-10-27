@@ -94,7 +94,7 @@ def validate_plan_consistency(plan, packet, workspace, environment):
             if name not in inventory or not source.is_file() or digest(source) != inventory[name]['sha256']:
                 raise PlanEvidenceError('Original dataset or loader differs from pinned source: ' + name,
                                         category='source_changed')
-    if environment.get('author_requirements') != plan.get('requirements', {}).get('author', []):
+    if (environment.get('author_requirements') or []) != (plan.get('requirements', {}).get('author') or []):
         raise PlanEvidenceError('Environment author declarations differ from the validated plan',
                                 category='protocol_conflict')
     return {'status': 'verified', 'entrypoints': checked,

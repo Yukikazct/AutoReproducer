@@ -978,6 +978,14 @@ class ReportGeneratorAgent(BaseAgent):
         identity = resources.get('repository_identity') or {}
         if identity.get('reason'):
             lines.append('- **仓库关联证据**: ' + _markdown_text(str(identity['reason'])))
+        evidence = resources.get('selection_evidence') or identity.get('evidence') or {}
+        if evidence:
+            page = evidence.get('page')
+            location = f'PDF 第 {page} 页' if type(page) is int and page > 0 else '页码未记录'
+            lines += ['- **仓库来源位置**: ' + location + '；来源：' + _inline_code(evidence.get('source') or '未记录'),
+                      '- **仓库证据类型**: ' + _inline_code(evidence.get('evidence_type') or '未记录')]
+            if evidence.get('url'):
+                lines.append('- **来源仓库链接**: ' + _markdown_text(str(evidence['url'])))
         if env.get('requirements_txt'):
             lines.append('- **依赖清单**: ' + _markdown_text(env['requirements_txt']))
         lines += _discovered_plan_lines(readable)
