@@ -133,7 +133,6 @@ def test_cancel_during_runtime_dependency_download_stops_tree_and_releases_lock(
     assert "silent pip fixture" in progress.read_text(encoding="utf-8")
 
 
-@pytest.mark.skipif(os.name != "nt", reason="forced nested worker cleanup is guaranteed by Windows jobs")
 def test_cancel_while_worker_installer_is_silent_closes_job_before_done(tmp_path, monkeypatch):
     progress, ready = tmp_path / "progress.jsonl", tmp_path / "pids.json"
     prepared = runtime.RuntimePreparation(sys.executable, True, False, "fixture", "fixture")
@@ -174,7 +173,6 @@ def test_cancel_while_worker_installer_is_silent_closes_job_before_done(tmp_path
     assert snapshot["result"]["data"]["environment_cleanup"]["status"] == "released"
 
 
-@pytest.mark.skipif(os.name != 'nt', reason='forced native parser cancellation uses Windows jobs')
 def test_hung_pdf_parser_runs_in_owned_worker_and_can_be_stopped(tmp_path, monkeypatch):
     import src.pdf_input as pdf_input
     progress, ready = tmp_path / 'parse.jsonl', tmp_path / 'pids.json'
@@ -191,7 +189,7 @@ def test_hung_pdf_parser_runs_in_owned_worker_and_can_be_stopped(tmp_path, monke
         "def blocked(request):\n"
         "    child=subprocess.Popen([sys.executable,'-I','-c','import time;time.sleep(60)'])\n"
         f"    Path({str(ready)!r}).write_text(json.dumps([os.getpid(),child.pid]))\n"
-        "    ctypes.windll.kernel32.Sleep(60000)\n"
+        "    ctypes.windll.kernel32.Sleep(60000) if os.name == 'nt' else ctypes.CDLL(None).sleep(60)\n"
         "    raise AssertionError('parser should have been stopped')\n"
         "pdf_input.resolve_pdf_request=blocked\n"
         "runpy.run_module('frontend.preset_worker',run_name='__main__')\n", encoding='utf-8')

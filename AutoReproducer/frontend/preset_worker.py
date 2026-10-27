@@ -1,5 +1,6 @@
 """Continue one preset in the automatically prepared, owned Python runtime."""
 import json
+import os
 import sys
 
 from src.process_lifecycle import termination_signals, watch_parent_session, watch_cancellation_file
@@ -15,6 +16,10 @@ def main():
     request = json.loads(payload.decode("utf-8"))
     if not isinstance(request, dict) or request.get("_managed_runtime") is not True:
         raise ValueError("A prepared preset worker requires a managed request")
+    if os.name == "posix":
+        # Nested runners keep private process groups inside this owned session.
+        # The outer owner can still find them after their immediate parent exits.
+        os.environ["AUTOREPRO_WORKER_SESSION"] = str(os.getsid(0))
     from frontend.backend_pipeline import run_pipeline_core
     cancel_file, cancel_token = request.pop("_cancel_file", None), request.pop("_cancel_token", None)
     with watch_cancellation_file(cancel_file, cancel_token):
