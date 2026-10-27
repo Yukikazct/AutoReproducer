@@ -26,6 +26,15 @@ def add_file(fixture, name, content):
     fixture['snapshot']['files'][name] = hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+@pytest.fixture
+def reviewed_windows_native_bounds(monkeypatch):
+    """These interpreter tests exercise the reviewed Windows DGL combination."""
+    from src import dependency_versions
+    original = dependency_versions.reviewed_python_requirement
+    monkeypatch.setattr(dependency_versions, 'reviewed_python_requirement',
+        lambda requirements, device='cpu', **kwargs: original(requirements, device, platform_name='win32'))
+
+
 def proposal(fixture, step):
     return {'version': 1, 'scope': SCOPE,
             'repository': {key: fixture['snapshot'][key] for key in ('url', 'revision')},
@@ -280,7 +289,8 @@ def test_reviewed_native_family_keeps_compatible_patch_releases(tmp_path, monkey
     assert selected['python_version'] == '3.11'
 
 
-def test_frozen_execution_passes_reviewed_native_python_bounds_to_selector(tmp_path, monkeypatch):
+def test_frozen_execution_passes_reviewed_native_python_bounds_to_selector(tmp_path, monkeypatch,
+                                                                         reviewed_windows_native_bounds):
     from test_author_execution_plan import AuthorLLM
     from test_discovered_repository_service import setup_service
 
@@ -305,7 +315,8 @@ def test_frozen_execution_passes_reviewed_native_python_bounds_to_selector(tmp_p
 
 
 @pytest.mark.parametrize('author_specifier', ['>=3.11,<3.13', '>=3.12,<3.13'])
-def test_runtime_missing_dgl_selects_reviewed_python_before_install_retry(tmp_path, monkeypatch, author_specifier):
+def test_runtime_missing_dgl_selects_reviewed_python_before_install_retry(tmp_path, monkeypatch, author_specifier,
+                                                                       reviewed_windows_native_bounds):
     from copy import deepcopy
     from src.method_adapters import write_json
     from test_author_execution_plan import AuthorLLM

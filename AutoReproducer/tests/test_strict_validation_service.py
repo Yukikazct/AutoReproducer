@@ -214,7 +214,12 @@ def test_actual_unsupported_strict_request_still_runs_author_command(tmp_path, m
     assert data['validation']['is_reproduced'] is None
     assert data['validation']['paper_metrics_verified'] is False
     assert any('严格验收未完成' in warning for warning in data['validation']['warnings'])
-    assert '**严格验收**: 未完成；保留普通作者执行结果' in data['report']
+    view = data['report_view_model']
+    assert view['answers']['completion'] == '已完成运行'
+    assert view['conclusion']['independent']['status'] == 'unavailable'
+    assert '独立核验尚未完成' in data['report']
+    assert '作者仓库代码运行完成' in data['report']
+    assert 'No independent capture for this framework' in data['report']
 
 
 @pytest.mark.parametrize('strict', [False, True])

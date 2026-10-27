@@ -195,6 +195,8 @@ def export_reproduction_report(result_path, output_dir):
         data.update(report=report, report_path=str(final_report), report_length=len(report),
                     report_format_version=REPORT_FORMAT_VERSION,
                     reproduction_conclusion=build_reproduction_conclusion(data))
+        from src.report_view_model import build_report_view_model
+        data['report_view_model'] = build_report_view_model(data)
         safe['report_path'] = str(final_report)
         safe['report_export'] = {'mode': 'offline_saved_result', 'source_result_filename': source.name,
                                  'source_result_sha256': _digest(raw),

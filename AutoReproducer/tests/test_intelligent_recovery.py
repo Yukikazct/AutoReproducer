@@ -228,3 +228,11 @@ def test_patch_veto_feeds_existing_rollback_then_real_original_command(tmp_path,
     assert commands == plan['steps']
     assert session.state['tasks'][0]['numerical_equivalence'] == 'unknown'
     assert session.state['tasks'][0]['status'] == 'command_recovered'
+    actions = session.state['actions']
+    assert [action['status'] for action in actions] == ['rejected', 'verified']
+    assert actions[0]['execution']['status'] == 'not_executed'
+    assert actions[0]['verification']['success'] is None
+    assert actions[1]['execution']['original_command_rerun'] is True
+    assert actions[1]['verification']['success'] is True
+    assert session.recovery_summary()['actions_executed'] == 1
+    assert session.state['usage']['source_patch_rounds'] == 2

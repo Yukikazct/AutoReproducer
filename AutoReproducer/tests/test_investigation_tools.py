@@ -30,6 +30,64 @@ def test_source_is_hash_bound_and_no_path_escape(tools):
     assert tools.execute('source_context', {'paths': ['original_test.py']})['status'] == 'rejected'
 
 
+def test_changed_candidate_cannot_make_an_unchanged_source_observation_new(tools):
+    from src.intelligent_recovery import RecoverySession, RecoveryBudgetExceeded
+    path = tools.workspace / 'original_test.py'
+    original = path.read_text('utf-8')
+    task = {'probes': [], 'hypotheses': [], 'patch_reviews': [{'candidate_sha256': 'a' * 64}]}
+    session = RecoverySession(None)
+    arguments = {'paths': [path.name]}
+    proposal = {'patches': [{'path': path.name,
+        'base_sha256': tools.packet['file_inventory'][path.name]['sha256'],
+        'content': original.replace('return x*x', 'return x+x')}]}
+    with tools.candidate_contracts(proposal):
+        first = session.probe(tools, 'source_context', arguments, task)
+    assert 'return x*x' in first['evidence'][0]['value']['text']
+    task['patch_reviews'].append({'candidate_sha256': 'b' * 64})
+    proposal['patches'][0]['content'] = original + '\n# Another compatibility candidate\n'
+    with tools.candidate_contracts(proposal), pytest.raises(RecoveryBudgetExceeded, match='Repeated observation'):
+        session.probe(tools, 'source_context', arguments, task)
+    assert session.state['usage']['probes'] == 1
+    assert len(task['probes']) == 1
+    assert path.read_text('utf-8') == original
+
+
+def test_candidate_contract_checks_differ_only_when_selected_source_changes(tools):
+    from src.intelligent_recovery import RecoverySession
+    path = tools.workspace / 'original_test.py'
+    original = path.read_text('utf-8')
+    session = RecoverySession(None)
+    task = {'probes': [], 'hypotheses': []}
+    arguments = {'path': path.name, 'function': 'test_square'}
+    results = []
+    for replacement in ('return x+x', 'return x*x'):
+        proposal = {'patches': [{'path': path.name,
+            'base_sha256': tools.packet['file_inventory'][path.name]['sha256'],
+            'content': original.replace('return x*x', replacement)}]}
+        with tools.candidate_contracts(proposal):
+            results.append(session.probe(tools, 'author_contract', arguments, task))
+    assert [row['status'] for row in results] == ['failed', 'completed']
+    assert session.state['usage']['probes'] == 2
+    hashes = [row['evidence'][0]['value']['candidate_sha256'] for row in results]
+    assert hashes[0] != hashes[1]
+    assert path.read_text('utf-8') == original
+
+
+def test_patching_another_file_does_not_change_the_selected_original_contract(tools):
+    from src.intelligent_recovery import RecoverySession, RecoveryBudgetExceeded
+    session = RecoverySession(None)
+    task = {'probes': [], 'hypotheses': []}
+    arguments = {'path': 'original_test.py', 'function': 'test_square'}
+    session.probe(tools, 'author_contract', arguments, task)
+    other = tools.workspace / 'unsafe.py'
+    proposal = {'patches': [{'path': other.name,
+        'base_sha256': tools.packet['file_inventory'][other.name]['sha256'],
+        'content': other.read_text('utf-8') + '\n# unrelated candidate\n'}]}
+    with tools.candidate_contracts(proposal), pytest.raises(RecoveryBudgetExceeded, match='Repeated observation'):
+        session.probe(tools, 'author_contract', arguments, task)
+    assert session.state['usage']['probes'] == 1
+
+
 def test_investigator_can_request_frozen_paper_context_for_unknown_protocol_fields(tools):
     text = 'We report ten runs; the test metric is expressed as a percentage.'
     tools.packet['pdf'] = {'sha256': 'a' * 64, 'pages': [

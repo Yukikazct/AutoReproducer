@@ -428,7 +428,7 @@ class TestReportSurfacesVerdictBasis:
                                    "actual": {"accuracy": 0.85}},
         })
         assert "无法比对的指标" in report
-        assert "| f1_score | 0.8 | N/A |" in report
+        assert "| f1\\_score | 0.8 | 未取得 |" in report
 
 
 class TestReportSurfacesBestEffort:

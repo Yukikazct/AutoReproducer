@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from src.intelligent_recovery import RecoveryBudgetExceeded, RecoverySession
+from src.intelligent_recovery import InvestigationStopped, RecoveryBudgetExceeded, RecoverySession
 
 
 class Model:
@@ -107,13 +107,19 @@ def test_review_and_direct_probe_share_the_same_allowance(tmp_path):
     session.probe(session._toolset, 'source_context', {'paths': ['other.py']}, session._active_task)
     with pytest.raises(ValueError, match='shared probe budget'):
         session.review_patch({'sources': {}}, {'patches': []})
-    with pytest.raises(RecoveryBudgetExceeded):
-        session.probe(session._toolset, 'source_context', {'paths': ['third.py']}, session._active_task)
     assert len(session._toolset.calls) == 1
     assert session.state['reviews'][-1]['action'] == 'reject'
     session.llm.respond = lambda *_: accept()
     with pytest.raises(ValueError, match='already rejected; no progress'):
         session.review_patch({'sources': {}}, {'patches': []})
+    # A direct check cannot reset the reviewer allowance. Exhausting the
+    # task-wide budget is terminal even when a later model would accept.
+    with pytest.raises(RecoveryBudgetExceeded):
+        session.probe(session._toolset, 'source_context', {'paths': ['third.py']}, session._active_task)
+    with pytest.raises(InvestigationStopped, match='probe_budget_exhausted'):
+        session.review_patch({'sources': {}}, {'patches': []})
+    assert session.state['usage']['probes'] == 1
+    assert len(session._toolset.calls) == 1
     assert len(session.llm.calls) == 1
 
 

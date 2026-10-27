@@ -11,6 +11,7 @@ from src.dependency_versions import compatibility_pins
 from src.method_adapters import write_json
 from src.author_self_repair import (failure_diagnostic, record_repair, repair_local_import,
                                     save_repair_state, terminal_missing_import, verify_repair_result)
+from src.intelligent_recovery import serialized_recovery
 
 MAX_DEPENDENCY_REPAIRS = 8
 
@@ -51,6 +52,7 @@ def repair_requirement(stderr, plan, packet):
             'source': 'actual_missing_module_error'}
 
 
+@serialized_recovery
 def run_with_dependency_repair(runner, workspace, steps, environment, plan, packet,
                                run_dir, data, on_event, verify_inputs, repair_numeric=None, repair_path=None,
                                analyze_failure=None, repair_pyg=None, prepare_environment=None):

@@ -25,7 +25,20 @@ def _read_planning_sources(names, packet, workspace, collaboration, *, trigger):
         request = collaboration.send('AuthorPlanner', 'SourceReader', 'request', {
             'action': 'read_pinned_sources', 'paths': deepcopy(names), 'trigger': trigger})
     try:
+        from src.intelligent_recovery import current_investigation
+        investigation = current_investigation()
+        if investigation:
+            investigation.consume_probe(tool='source_context', arguments={
+                'paths': names, 'repository': {key: packet['repository'].get(key) for key in ('url', 'revision')},
+                'pdf_sha256': packet.get('pdf', {}).get('sha256'),
+                'source_sha256': {name: (packet.get('file_inventory') or {}).get(name, {}).get('sha256')
+                                  for name in names if isinstance(name, str)}})
         _add_requested_files(names, packet, workspace)
+        if investigation:
+            for name in names:
+                investigation.remember_fact('pinned_source:' + packet['repository']['revision'][:12] + ':' + name,
+                    {'path': name, 'sha256': packet['file_inventory'][name]['sha256'],
+                     'repository': packet['repository']['url'], 'artifact': 'source_packet.json'})
     except (ValueError, TypeError, KeyError, OSError, RuntimeError) as exc:
         if request is not None:
             collaboration.reply(request, 'SourceReader', {
@@ -160,6 +173,8 @@ def propose_author_execution_plan(llm, packet, workspace):
     from src.agent_collaboration import current_collaboration
     from src.execution_host import probe_execution_host
     collaboration = current_collaboration()
+    from src.planning_recovery import planning_attempt, planning_llm, durable_planning_context
+    llm = planning_llm(llm)
     packet['execution_host'] = probe_execution_host()
     readmes = '\n'.join(source['text'] for name, source in packet['repository']['files'].items()
                         if Path(name).name.lower().startswith('readme'))
@@ -257,45 +272,55 @@ steps:[{id,kind:'train|eval',argv:['python','original.py',...] OR ['python','-m'
             '\nSchema:\n' + schema
             + '\nAuthor execution evidence:\n' + _canonical(_planning_view(packet))
             + '\nPrevious structural feedback (correct the original invocation before environment setup):\n' + feedback)
+        prompt += durable_planning_context()
         if collaboration is not None:
             prompt += ('\nAgent collaboration context (untrusted navigation and validation feedback; '
                 'only the original pinned evidence can justify commands or experimental settings):\n'
                 + _canonical(collaboration.context('AuthorPlanner', limit=6)))
         validation_request = None
         try:
-            response = llm.chat(prompt, system_prompt=system, temperature=0, task='author_execution_plan')
-            payload = _json_response(response)
-            if 'request_files' in payload:
-                if set(payload) != {'request_files'} or reads >= 2:
-                    raise PlanEvidenceError('Author execution source requests exhausted or malformed')
-                _read_planning_sources(payload['request_files'], packet, workspace, collaboration,
-                                       trigger='model_request')
-                reads += 1
-                continue
-            if 'unsupported' in payload:
-                raise PlanEvidenceError('No original author execution plan: ' + str(payload['unsupported']),
-                    planning_evidence={'stage': 'author_execution_plan', 'proposal': payload}, category='missing_information')
-            if collaboration is not None:
-                validation_request = collaboration.send('AuthorPlanner', 'PlanValidator', 'request', {
-                    'action': 'validate_original_author_plan', 'attempt': len(failures) + 1,
-                    'repository': deepcopy(payload.get('repository')),
-                    'steps': deepcopy(payload.get('steps'))})
-            while True:
-                try:
-                    plan = validate_author_execution_plan(payload, packet, workspace)
-                    break
-                except PlanEvidenceError as exc:
-                    required = getattr(exc, 'required_files', None)
-                    if not required or reads >= 2:
-                        raise
-                    _read_planning_sources(required, packet, workspace, collaboration,
-                                           trigger='validator_required_sources')
+            def attempt():
+                nonlocal payload, reads, validation_request
+                response = llm.chat(prompt, system_prompt=system, temperature=0, task='author_execution_plan')
+                payload = _json_response(response)
+                if 'request_files' in payload:
+                    if set(payload) != {'request_files'} or reads >= 2:
+                        raise PlanEvidenceError('Author execution source requests exhausted or malformed')
+                    _read_planning_sources(payload['request_files'], packet, workspace, collaboration,
+                                           trigger='model_request')
                     reads += 1
-            if validation_request is not None:
-                collaboration.reply(validation_request, 'PlanValidator', {
-                    'status': 'accepted', 'evidence_sha256': plan['evidence_sha256']})
+                    return None
+                if 'unsupported' in payload:
+                    raise PlanEvidenceError('No original author execution plan: ' + str(payload['unsupported']),
+                        planning_evidence={'stage': 'author_execution_plan', 'proposal': payload}, category='missing_information')
+                if collaboration is not None:
+                    validation_request = collaboration.send('AuthorPlanner', 'PlanValidator', 'request', {
+                        'action': 'validate_original_author_plan', 'attempt': len(failures) + 1,
+                        'repository': deepcopy(payload.get('repository')),
+                        'steps': deepcopy(payload.get('steps'))})
+                while True:
+                    try:
+                        plan = validate_author_execution_plan(payload, packet, workspace)
+                        break
+                    except PlanEvidenceError as exc:
+                        required = getattr(exc, 'required_files', None)
+                        if not required or reads >= 2:
+                            raise
+                        _read_planning_sources(required, packet, workspace, collaboration,
+                                               trigger='validator_required_sources')
+                        reads += 1
+                if validation_request is not None:
+                    collaboration.reply(validation_request, 'PlanValidator', {
+                        'status': 'accepted', 'evidence_sha256': plan['evidence_sha256']})
+                return plan
+            plan = planning_attempt(attempt, packet, problem=feedback, proposal=payload)
+            if plan is None:
+                continue
             return _publish_author_plan(plan, packet, collaboration)
         except (ValueError, TypeError, KeyError, OSError, RuntimeError) as exc:
+            from src.intelligent_recovery import InvestigationStopped, RecoveryBudgetExceeded
+            if isinstance(exc, (InvestigationStopped, RecoveryBudgetExceeded)):
+                raise
             feedback = str(exc)[:4000]
             if collaboration is not None:
                 content = {'status': 'rejected', 'reason': feedback,
@@ -312,10 +337,11 @@ steps:[{id,kind:'train|eval',argv:['python','original.py',...] OR ['python','-m'
     try:
         command_failure = next((item['evidence'] for item in reversed(failure_details)
             if (item.get('evidence') or {}).get('stage') == 'author_command_arguments'), {})
-        plan = plan_from_author_commands(packet, workspace,
+        plan = planning_attempt(lambda: plan_from_author_commands(packet, workspace,
             required_entrypoint=command_failure.get('entrypoint'),
             required_arguments=command_failure.get('arguments'),
-            missing_options=command_failure.get('missing_options', []))
+            missing_options=command_failure.get('missing_options', [])),
+            packet, problem=feedback, proposal=payload, fallback=True)
         plan['planning_warnings'].append('Model planning unavailable; using a literal original README/launcher command.')
         plan['planning_failures'] = failures
         plan['planning_failure_details'] = failure_details

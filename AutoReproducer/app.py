@@ -483,7 +483,7 @@ with st.sidebar:
         experiment_request = {name: text.strip() for name, text in
             (("method", requested_method), ("dataset", requested_dataset)) if text.strip()}
         intelligent_recovery = st.checkbox(
-            "智能调查与排障", key="pdf_intelligent_recovery", value=False,
+            "智能调查与排障", key="pdf_intelligent_recovery", value=True,
             disabled=st.session_state.running,
             help="遇到实际失败时，在固定预算内调查源码、作者环境和公开产物；处理过程与证据写入报告，不改变实验协议。")
         if intelligent_recovery:

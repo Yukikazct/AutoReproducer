@@ -94,13 +94,15 @@ def test_cached_backend_is_upgraded_for_new_recovery_argument(monkeypatch):
 
 
 @pytest.mark.parametrize('enabled', [False, True])
-def test_generic_pdf_recovery_checkbox_defaults_off_and_submits_bool(strict_app, enabled):
+def test_generic_pdf_recovery_checkbox_defaults_on_and_submits_bool(strict_app, enabled):
     make, capture = strict_app
     app = make()
     checkbox = app.sidebar.checkbox(key='pdf_intelligent_recovery')
-    assert checkbox.value is False
-    if enabled:
-        checkbox.check().run()
+    assert checkbox.value is True
+    assert app.sidebar.selectbox(key='pdf_intelligent_recovery_mode').value == 'collaborative'
+    if not enabled:
+        checkbox.uncheck().run()
+        assert 'pdf_intelligent_recovery_mode' not in [row.key for row in app.sidebar.selectbox]
     next(button for button in app.sidebar.button if button.label == '开始复现').click().run()
     assert not app.exception
     request = capture.call_args.kwargs

@@ -40,6 +40,12 @@ def _markdown_text(value: str) -> str:
                   value.replace("\n", " ").replace("\r", " "))
 
 
+def _inline_code(value):
+    value = str(value).replace('\n', ' ').replace('\r', ' ')
+    fence = '`' * (1 + max((len(run) for run in re.findall(r'`+', value)), default=0))
+    return fence + ' ' + value + ' ' + fence
+
+
 def _collaboration_summary(content):
     """Keep the report readable; the run artifact retains full message payloads."""
     if isinstance(content, dict):
@@ -259,7 +265,7 @@ def _comparison_field_lines(node, side):
     return lines
 
 
-def _author_claim_comparison_lines(comparison):
+def _author_claim_comparison_lines(comparison, *, include_table=True):
     if not comparison:
         return []
     lines = ['', '### 作者输出与论文宣称对比', '',
@@ -270,16 +276,21 @@ def _author_claim_comparison_lines(comparison):
         note = ('实际输出中的指标保留在下方证据表；未将其他数据集或基线指标作为参考。'
                 if comparison.get('metric_records') else '作者输出中未识别到可比较的数值指标。')
         diagnostic = comparison.get('diagnostic')
-        return lines + [note] + (['未完成原因：' + _markdown_text(str(diagnostic)[:2000])] if diagnostic else []) + ['']
-    lines += ['', '| 指标 / 数据集 / 方法 | 论文宣称 | 作者运行输出 | 差值（实际 − 论文） | 结论 |',
-              '| --- | --- | --- | --- | --- |']
+        saved_error = comparison.get('persistence_error')
+        return (lines + [note] + (['未完成原因：' + _markdown_text(str(diagnostic)[:2000])] if diagnostic else [])
+                + (['- **对比记录保存诊断**: ' + _markdown_text(str(saved_error))] if saved_error else []) + [''])
+    if include_table:
+        lines += ['', '| 指标 / 数据集 / 方法 | 论文宣称 | 作者运行输出 | 差值（实际 − 论文） | 结论 |',
+                  '| --- | --- | --- | --- | --- |']
     def value_cell(node):
         suffix = {'percent': '%', 'fraction': '（比例）'}.get(node.get('unit'), '')
         aggregation = {'single': '单次', 'mean': '均值', 'median': '中位数', 'best': '最佳', 'unknown': '统计方式未明确'}.get(node.get('aggregation'), '')
         runs = node.get('runs')
         return _metric_value_text(node, suffix) + f"；{aggregation}" + (f"，{runs} 次" if runs else '')
     for row in rows:
-        paper, actual = row['reference'], row['actual']
+        paper, actual = row.get('reference'), row.get('actual')
+        paper = paper if isinstance(paper, dict) else {'value': paper}
+        actual = actual if isinstance(actual, dict) else {'value': actual}
         difference = row.get('difference')
         delta = '无法比较' if difference is None else f"{difference:+.4g}"
         if difference is not None:
@@ -287,17 +298,23 @@ def _author_claim_comparison_lines(comparison):
             relative = row.get('relative_difference')
             if relative is not None:
                 delta += f"；相对差异 {relative:+.2%}"
-        verdict = {'not_comparable': '设置或指标不对应', 'reference_only': '仅供参考，尚未验收'}.get(row['status'])
+        verdict = {'not_comparable': '设置或指标不对应', 'reference_only': '仅供参考，尚未验收'}.get(row.get('status'))
         if verdict is None:
             verdict = ('达到参考' if row['meets_reference'] else '未达到参考') if row.get('meets_reference') is not None else (
-                '在误差范围内' if row.get('within_tolerance') else '超出误差范围')
-        cells = [f"{row['metric']} / {paper.get('dataset')} / {paper.get('method')}",
-                 value_cell(paper), value_cell(actual), delta, verdict]
-        lines.append('| ' + ' | '.join(_markdown_text(cell) for cell in cells) + ' |')
+                '在误差范围内' if row.get('within_tolerance') is True else
+                '超出误差范围' if row.get('within_tolerance') is False else '逐项判定未记录')
+        if include_table:
+            cells = [f"{row.get('metric')} / {paper.get('dataset')} / {paper.get('method')}",
+                     value_cell(paper), value_cell(actual), delta, verdict]
+            lines.append('| ' + ' | '.join(_markdown_text(cell) for cell in cells) + ' |')
+        else:
+            lines.append('- **对比结果**: ' + _markdown_text(str(row.get('metric')) + '；' + verdict + '；差值 ' + delta))
     lines += ['', f"参考阈值为项目约定的 {comparison.get('relative_tolerance', 0.05):.0%} 相对误差，非论文提供的标准。"]
     citations = {ref['id']: ref for ref in comparison.get('citations', [])}
     for row in rows:
-        paper, actual = row['reference'], row['actual']
+        paper, actual = row.get('reference'), row.get('actual')
+        paper = paper if isinstance(paper, dict) else {'value': paper}
+        actual = actual if isinstance(actual, dict) else {'value': actual}
         settings = row.get('settings')
         settings = settings if isinstance(settings, dict) else {}
         assessment = {'matched': '所引设置相符', 'different': '所引设置不同',
@@ -314,14 +331,18 @@ def _author_claim_comparison_lines(comparison):
         for limitation in row.get('limitations', []):
             lines.append('- **对比限制**: ' + _markdown_text(limitation))
         pages = [str(citations[key]['page']) for key in paper.get('citations', []) if key in citations and citations[key]['source'] == 'pdf']
-        lines += ['- **论文来源**: PDF 第 ' + '、'.join(dict.fromkeys(pages)) + ' 页',
-                  '> ' + _markdown_text(paper['value_quote'])]
+        if pages:
+            lines += ['- **论文来源**: PDF 第 ' + '、'.join(dict.fromkeys(pages)) + ' 页']
+        if paper.get('value_quote'):
+            lines.append('> ' + _markdown_text(paper['value_quote']))
         if paper.get('column_quote'):
             lines += ['- **论文列标题**: ' + _markdown_text(paper['column_quote'])]
         if actual.get('source_quote'):
             lines += ['- **实际输出原文**: ' + _markdown_text(actual['source_quote'])]
     for error in comparison.get('validation_errors') or []:
         lines.append('- **未完成的配对**: ' + _markdown_text(str(error.get('error', ''))[:600]))
+    if comparison.get('persistence_error'):
+        lines.append('- **对比记录保存诊断**: ' + _markdown_text(str(comparison['persistence_error'])))
     return lines + ['']
 
 
@@ -692,7 +713,7 @@ def _repository_analysis_lines(data):
         for issue in verifier.get("issues") or []:
             lines.append("  - " + _markdown_text(_txt(issue)))
         lines += _analysis_evidence_lines(verifier, sources)
-    lines += ["", "> 分析范围与实验范围均为选定的 DLinear / ETTh1 336→96 多变量实验，不代表论文全部实验。", ""]
+    lines += ["", "> 分析范围由本次冻结的方法、数据集与实验设置确定，不代表论文全部实验。", ""]
     return lines
 
 
@@ -708,7 +729,7 @@ def _result_analysis_lines(data):
              "- **LLM 分析状态**: " + states.get(status, _txt(status, "未记录")),
              "- **结论职责**: API 分析状态与训练、协议核验、独立指标复算分别记录；API 解释失败不会覆盖已完成实验的确定性结论。"]
     if analysis:
-        lines += ["- **结果解释输入范围**: 用户授权的 MSE、MAE、已完成轮数、协议核验与独立复算状态摘要；参考依据为公开来源。"]
+        lines += ["- **结果解释输入范围**: 本次已记录的实际指标、训练进展、协议核验与独立复算状态摘要；参考依据为公开来源。"]
         lines += _analysis_stage_lines(analysis)
         accepted = (analysis.get("analyses") or {}).get("result_validator") or analysis
         if analysis.get("status") == "accepted":
@@ -734,6 +755,129 @@ def _result_analysis_lines(data):
     if data.get("analysis_error"):
         lines.append("- **分析诊断**: " + _markdown_text(_txt(data["analysis_error"])))
     return lines + [""]
+
+
+def _legacy_repair_lines(data):
+    lines = []
+    self_repair = data.get('self_repair') or {}
+    if self_repair:
+        from src.report_view_model import is_non_author_recovery_phase
+        def is_author(record):
+            phases = (record.get('recovered_phase'), record.get('phase'))
+            return 'author_execution' in phases and not any(is_non_author_recovery_phase(value) for value in phases)
+        def reason(value, record):
+            value = _txt(value)
+            if not is_author(record):
+                value = value.replace('原作者命令', '受控步骤命令').replace('原命令', '受控步骤命令')
+            return _markdown_text(value)
+        outcomes = {'blocked': '缺少可验证的自动修复方案',
+                    'environment_recovered': '环境准备已恢复', 'dataset_recovered': '数据准备已恢复',
+                    'retrying': '正在重跑验证', 'no_progress': '重跑后错误相同',
+                    'failed_with_new_error': '重跑后出现新错误', 'interrupted': '已取消',
+                    'timed_out': '已超时', 'budget_exhausted': '已达到修复次数上限'}
+        def outcome(record):
+            if record.get('status') == 'resolved':
+                return ('原作者命令' if is_author(record) else '受控步骤命令') + '重跑通过'
+            return outcomes.get(record.get('status'), '未完成')
+        lines += ['', '### 自动诊断与修复', '',
+                  '- 状态：' + outcome(self_repair) + '；'
+                  + reason(self_repair.get('reason'), self_repair),
+                  '- 修复效果依据受控步骤的实际重跑记录；作者实验完成与论文数值核验另行记录。']
+        if not (self_repair.get('recovered_phase') or self_repair.get('phase')):
+            lines.append('- 历史记录未保存修复阶段，无法据此确认作者实验命令已重跑。')
+        for item in self_repair.get('attempts') or []:
+            lines.append('- 第 ' + str(item.get('round')) + ' 轮：'
+                + _markdown_text(_txt(item.get('action'))) + '；'
+                + outcome(item) + '；'
+                + reason(item.get('reason'), item))
+    return lines
+
+
+def _optimization_lines(optimization, *, is_rezero=False):
+    lines = []
+    # 6. 智能优化
+    lines += ["## 6. 智能优化"]
+    if optimization.get("mode") in {"suggest", "validate"}:
+        lines += [f"- **状态**: {_markdown_text(_txt(optimization.get('status')))}",
+                  f"- **说明**: {_markdown_text(_txt(optimization.get('reason')))}",
+                  f"- **已验证提升**: {'是' if optimization.get('optimized') else '否'}"]
+        for index, suggestion in enumerate(optimization.get("suggestions", []), 1):
+            suggestion_status = {"untested": "尚未验证", "tested": "已完成候选试验", "failed": "试验失败",
+                                 "validated_gain": "两种子留出确认通过"}.get(suggestion.get("status"), "尚未验证")
+            lines += ["", f"### 建议 {index}（{suggestion_status}）",
+                      f"- **参数**: {suggestion['parameter']}：{suggestion['baseline_value']} → {suggestion['value']}"]
+            for key, label in (("hypothesis", "假设"), ("expected_effect", "预期效果"),
+                               ("cost", "成本"), ("validation_plan", "验证方法")):
+                lines.append(f"- **{label}**: {_markdown_text(suggestion[key])}")
+            for evidence in suggestion.get("evidence", []):
+                lines += [f"- **依据**: [{evidence['source_id']}]({evidence['url']}) · {evidence['locator']}",
+                          "", "> " + _markdown_text(evidence["quote"]).replace("\n", "\n> ")]
+        if optimization.get("trials"):
+            lines += ["", "### 真实候选记录", "", "| 候选 | 状态 | 验证指标 | 耗时（秒） |",
+                      "|---|---|---|---|"]
+            for trial in optimization["trials"]:
+                lines.append("| " + " | ".join(_markdown_text(_txt(trial.get(k))) for k in
+                             ("candidate", "status", "metrics", "elapsed_s")) + " |")
+        if optimization.get("confirmation"):
+            lines += ["", "### 两种子留出确认", "", "```json",
+                      json.dumps(optimization["confirmation"], ensure_ascii=False, indent=2), "```"]
+        if optimization.get("mode") == "validate":
+            lines += ["", "- **优化评估范围**: 固定验证集选优后，仅对选定候选做两个种子的留出确认；与官方全图/全轨迹拟合指标分别报告。",
+                      f"- **优化协议基线**: {optimization.get('baseline', {})}",
+                      f"- **已用预算**: {_fmt(optimization.get('budget_used_s'), '.2f')} / {optimization.get('budget_seconds', 7200)} 秒"]
+    elif not optimization.get("optimized"):
+        if is_rezero:
+            lines.append("- **优化状态**: 关闭；本实验按冻结作者协议运行。")
+        else:
+            lines.append(f"- **优化状态**: 未触发("
+                         f"{optimization.get('reason', '复现未成功或未运行优化')})")
+    else:
+        # 模拟优化必须与真实执行区分开：`_simulate_trial` 是拿方向名的
+        # 哈希当"改进潜力"的假数据，与代码、指标都无关。不标注的话，
+        # "改进幅度 1.80% / 最优结果 0.0908" 会被当成实测结果读。
+        records = optimization.get("optimization_report", []) or []
+        sim_types = {(r.get("detail") or {}).get("type") for r in records}
+        simulated = bool(records) and "real_exec" not in sim_types
+
+        state_text = "⚠️ 已优化（模拟）" if simulated else "✅ 已优化"
+        lines += [f"- **优化状态**: {state_text}",
+                  f"- **基线指标**: {optimization.get('baseline', 'N/A')}"]
+        if simulated:
+            lines += [
+                "  > ⚠️ **本轮优化未真实执行**：以下「改进幅度 / 最优结果」"
+                "由方向名哈希模拟得出（`ucb_mock`），**不是**跑出来的实测值，"
+                "不能作为代码改进效果的依据。",
+            ]
+        lines += [f"- **最优方向**: {optimization.get('best_arm', 'N/A')}",
+                  f"- **改进幅度**: {optimization.get('improvement', 0):.2%}"
+                  + ("（模拟）" if simulated else ""),
+                  f"- **最优结果**: {optimization.get('best_result', 'N/A')}"
+                  + ("（模拟）" if simulated else ""),
+                  f"- **预算使用**: {optimization.get('budget_used', 'N/A')} / "
+                  f"{optimization.get('budget', 'N/A')} 次尝试",
+                  "",
+                  "### 尝试记录(UCB 预算调度)",
+                  "| 方向 | 改进幅度 | 依据 | 判定 |",
+                  "|------|----------|------|------|"]
+        for r in records:
+            mark = "✅ Keep" if r.get("kept") else "❌ Reject"
+            rd = r.get("detail") or {}
+            basis = {"real_exec": "真实执行",
+                     "ucb_mock": "⚠️ 哈希模拟"}.get(rd.get("type") or "",
+                                                   rd.get("type") or "未知")
+            # 真实执行时补上"按哪个指标、哪个方向"判的——退回启发式选键
+            # 时方向可能是错的，不写清楚就无从分辨。
+            rb = rd.get("reward_basis") or {}
+            if rb.get("metric_key"):
+                arrow = "↓" if rb.get("direction") == "越小越好" else "↑"
+                note = "" if rb.get("metric_source") == "论文声明指标" \
+                    else "，启发式选键"
+                basis += f" · {rb['metric_key']}{arrow}{note}"
+            lines.append(f"| {r.get('arm')} | {r.get('improvement'):.4f} "
+                         f"| {basis} | {mark} |")
+    lines.append("")
+
+    return lines
 
 
 # 审计渲染保留完整代码与执行输出，不设截断上限。
@@ -767,8 +911,10 @@ class ReportGeneratorAgent(BaseAgent):
                  f"报告生成完成 ({len(report)} 字符)",
                  {"report_length": len(report)})
         from src.result_conclusion import build_reproduction_conclusion
+        from src.report_view_model import build_report_view_model
         return {"report": report, "report_length": len(report),
                 "reproduction_conclusion": build_reproduction_conclusion(input_data),
+                "report_view_model": build_report_view_model(input_data),
                 "report_format_version": REPORT_FORMAT_VERSION}
 
     @staticmethod
@@ -776,19 +922,207 @@ class ReportGeneratorAgent(BaseAgent):
         """Build the experiment report and retain full evidence in a companion."""
         from src.author_claim_comparison import _redact_evidence
         from src.report_revisions import sanitize_report_result
-        from src.report_details import (intelligent_recovery_summary, presentation_data,
-                                        readable_text, save_report_details)
+        from src.report_details import save_report_details
+        from src.report_view_model import ReportViewModel
         path = report_path or data.get('report_path') or default_report_path()
         safe = _redact_evidence(sanitize_report_result(data), '')
+        view = ReportViewModel.from_data(safe)
         full = ReportGeneratorAgent._build_report(safe, report_path=path, artifact_resolver=artifact_resolver)
-        displayed = ReportGeneratorAgent._build_report(
-            presentation_data(safe), report_path=path, artifact_resolver=artifact_resolver)
-        displayed = readable_text(displayed, safe)
-        recovery_summary = intelligent_recovery_summary(safe.get('intelligent_recovery'))
-        if recovery_summary:
-            displayed = displayed.rstrip() + '\n\n' + recovery_summary
+        displayed = ReportGeneratorAgent._build_readable_report(
+            view, safe, report_path=path, artifact_resolver=artifact_resolver)
         link = save_report_details(full, safe, path)
         return displayed.rstrip() + '\n\n## 完整依据与日志\n\n' + link + '\n'
+
+    @staticmethod
+    def _build_readable_report(view, data, *, report_path, artifact_resolver=None):
+        """Render named presentation fields directly; never trim a full template."""
+        from src.report_details import (intelligent_recovery_summary, presentation_data,
+                                        recovery_contribution_lines, report_metric_lines)
+        from src.result_conclusion import conclusion_markdown
+        from src.report_view_model import report_overview_markdown
+        artifact_resolver = artifact_resolver or markdown_image_target
+        readable = presentation_data(data)
+        paper = view.experiment['paper_info']
+        spec, protocol = view.experiment['experiment_spec'], view.experiment['experiment_protocol']
+        execution = data.get('execution') or {}
+        final = execution.get('final') or {}
+        env = execution.get('effective_env_config') or data.get('env_config') or {}
+        validation = data.get('validation') or {}
+        lines = ['# 论文复现实验报告', REPORT_FORMAT_MARKER, '',
+                 f"**生成时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", '',
+                 '<!-- autoreproducer-overview:start -->', report_overview_markdown(view),
+                 '<!-- autoreproducer-overview:end -->', '',
+                 '<!-- autoreproducer-conclusion:start -->', conclusion_markdown(view.conclusion),
+                 '<!-- autoreproducer-conclusion:end -->', '',
+                 '## 选定实验与冻结依据', '',
+                 '- **标题**: ' + _markdown_text(_txt(paper.get('title'), '未记录')),
+                 '- **方法**: ' + _markdown_text(_txt(paper.get('method'), '未记录')),
+                 '- **数据集**: ' + _markdown_text(_txt(paper.get('dataset'), '未记录'))]
+        if spec:
+            lines += ['- **实验定义**: ' + _markdown_text(_txt(spec.get('label') or spec.get('id'), '未记录')),
+                      '- **冻结参数**: ' + _markdown_text(_txt(spec.get('parameters'), '未记录'))]
+        if protocol:
+            for key, label in (('method', '方法与变体'), ('dataset', '数据与划分'),
+                               ('training', '训练协议'), ('repetitions', '重复次数与汇总')):
+                if protocol.get(key):
+                    lines.append('- **' + label + '**: ' + _markdown_text(_txt(protocol[key])))
+        coverage = data.get('reading_coverage') or {}
+        if coverage:
+            lines.append('- **论文阅读覆盖**: ' + ('完成' if coverage.get('complete') else '未完成')
+                         + f"；{coverage.get('read_characters', '未记录')}/{coverage.get('total_characters', '未记录')} 字符")
+        pdf = data.get('pdf_input') or data.get('pdf_resolution') or {}
+        if pdf.get('sha256'):
+            lines.append('- **来源 PDF SHA-256**: `' + _markdown_text(str(pdf['sha256'])) + '`')
+        if data.get('paper_markdown'):
+            from src.pdf_markdown import report_markdown_targets
+            try:
+                lines += report_markdown_targets(data, report_path)
+            except (OSError, ValueError, KeyError):
+                lines.append('- **论文 Markdown 附件**: 未能核对附件，原运行目录与读取结果保留。')
+        resources, repository = data.get('resources') or {}, data.get('repository') or {}
+        lines += ['', '## 资源与执行准备', '',
+                  '- **代码仓库**: ' + _markdown_text(_txt(resources.get('code_repo_url') or repository.get('url'), '未取得')),
+                  '- **固定源码版本**: ' + _markdown_text(_txt(repository.get('resolved_sha'), '未记录')),
+                  '- **Python**: ' + _markdown_text(_txt(env.get('python_executable') or env.get('python_version'), '未记录')),
+                  '- **运行设备**: ' + _markdown_text(_txt(env.get('device'), '未记录'))]
+        if repository.get('archive_sha256'):
+            lines.append('- **源码归档 SHA-256**: ' + _markdown_text(str(repository['archive_sha256'])))
+        if repository.get('path'):
+            lines.append('- **独立源码副本**: ' + _inline_code(repository['path']))
+        if repository:
+            lines.append('- 源码已获取；实际执行来源以执行记录为准。')
+        source_request = data.get('source_request') or {}
+        if source_request.get('status') == 'needs_pdf':
+            lines += ['- **执行准备**: 待补充论文 PDF；尚未准备执行命令。',
+                      '- **执行范围**: 仓库实验尚未执行。',
+                      '- **下一步**: ' + _markdown_text(_txt(source_request.get('next_action') or source_request.get('reason')))]
+            if source_request.get('selected_repository'):
+                lines.append('- **候选仓库（作者归属未核验）**: '
+                             + _markdown_text(_txt(source_request['selected_repository'])))
+        identity = resources.get('repository_identity') or {}
+        if identity.get('reason'):
+            lines.append('- **仓库关联证据**: ' + _markdown_text(str(identity['reason'])))
+        evidence = resources.get('selection_evidence') or identity.get('evidence') or {}
+        if evidence:
+            page = evidence.get('page')
+            location = f'PDF 第 {page} 页' if type(page) is int and page > 0 else '页码未记录'
+            lines += ['- **仓库来源位置**: ' + location + '；来源：' + _inline_code(evidence.get('source') or '未记录'),
+                      '- **仓库证据类型**: ' + _inline_code(evidence.get('evidence_type') or '未记录')]
+            if evidence.get('url'):
+                lines.append('- **来源仓库链接**: ' + _markdown_text(str(evidence['url'])))
+        if env.get('requirements_txt'):
+            lines.append('- **依赖清单**: ' + _markdown_text(env['requirements_txt']))
+        lines += _discovered_plan_lines(readable)
+        lines += _source_repair_lines(readable, report_path)
+        lines += _repository_analysis_lines(readable)
+        lines += ['', '## 实际执行记录', '',
+                  '- **运行状态**: ' + _markdown_text(view.conclusion['execution']['label']),
+                  '- **退出码**: ' + _markdown_text(_txt(final.get('exit_code'), '未记录')),
+                  '- 完整原始命令、标准输出、诊断日志和补丁保存在详情与证据附件中。']
+        if not final.get('stdout'):
+            lines.append('- **标准输出**: 无输出或未记录。')
+        scope = execution.get('reproduction_scope')
+        if scope == 'generated_reconstruction':
+            lines.append('- **执行对象**: 模型依据可用论文证据生成的单文件实现；未运行已发现仓库。')
+        if execution.get('not_runnable'):
+            lines += ['- **执行状态**: ⚠️ 未运行；无法验证（代码未运行）。',
+                      '- **未运行原因**: ' + _markdown_text(_txt(execution.get('reason')))]
+        if execution.get('evidence_status') == 'insufficient_evidence':
+            lines.append('- **证据状态**: 无法核验（论文证据不足，未执行论文实验）。')
+        if execution.get('best_effort'):
+            state = '✅ 成功' if final.get('success') else '❌ 失败'
+            lines += ['- **执行状态**: ' + state + '（尽力而为：论文信息不足）',
+                      '- **复现状态**: ⚠️ 无法核对；本次输出不是论文结论。',
+                      '- **生成方式**: ' + ('Mock 本地演示脚本' if execution.get('fallback_used') else '依据可用证据生成的实现')]
+            for assumption in execution.get('assumptions') or []:
+                lines.append('  - 假设: ' + _txt(assumption))
+        stats = execution.get('sanitize_stats') or {}
+        dropped = int(stats.get('code_dropped') or 0)
+        prose = int(stats.get('prose_dropped') or 0)
+        if dropped:
+            lines.append(f'- **⚠️ 清洗丢弃**: {dropped} 行疑似代码行；生成代码可能已被截短。')
+        elif prose:
+            lines.append(f'- **清洗丢弃**: 叙述行 {prose} 行（预期行为，未触碰代码）。')
+        steps = execution.get('steps') or execution.get('stages') or (data.get('execution_plan') or {}).get('steps') or []
+        for step in steps:
+            argv = step.get('argv') or (step.get('step') or {}).get('argv')
+            if argv:
+                lines.append('- **命令**: ' + _markdown_text(json.dumps(argv, ensure_ascii=False)))
+            if step.get('skipped') or step.get('not_run'):
+                lines.append('- **未执行原因**: ' + _markdown_text(_txt(step.get('reason') or step.get('not_run'))))
+        for step in execution.get('skipped') or []:
+            lines.append('- **未执行步骤**: ' + _markdown_text(_txt(step.get('id'))) + '；'
+                         + _markdown_text(_txt(step.get('not_run') or step.get('blocked_by') or step.get('reason'), '未记录原因')))
+        lines += ['', '## 指标与参考比较', '', *report_metric_lines(view.metrics)]
+        if validation.get('status') == 'author_code_completed':
+            boundary = ('作者仓库代码运行完成（已对比作者输出，尚未独立核验论文数值）'
+                        if (validation.get('author_claim_comparison') or {}).get('comparisons') else
+                        '作者仓库代码运行完成（未进行论文数值审核）')
+            lines.append('- **作者执行范围**: ' + boundary)
+        lines += _author_claim_comparison_lines((readable.get('validation') or {}).get('author_claim_comparison'), include_table=False)
+        inner = validation.get('validation') or {}
+        if inner.get('differences'):
+            lines += ['', '**指标差异**', *['- ' + _markdown_text(str(value)) for value in inner['differences']]]
+        if inner.get('missing_metrics'):
+            lines += ['', '**无法比对的指标**', *['- ' + _markdown_text(str(value)) for value in inner['missing_metrics']]]
+        if validation.get('reason'):
+            lines.append('- **判定依据**: ' + _markdown_text(str(validation['reason'])))
+        records = validation.get('metric_records') or []
+        if records:
+            lines += ['', '### 实际指标证据', '', '| 指标 | 实测值 | 单位 | 数据划分 | 阶段 | 来源 |',
+                      '|---|---|---|---|---|---|']
+            for record in records:
+                cells = [record.get('name'), _metric_value_text(record) if record.get('value') is not None else '未取得',
+                         record.get('unit') or '未记录', record.get('split') or '未记录',
+                         record.get('stage') or '未记录', record.get('source') or '未记录']
+                lines.append('| ' + ' | '.join(_markdown_text(_txt(cell)) for cell in cells) + ' |')
+        lines += _numeric_compatibility_lines(validation)
+        lines += _runtime_dataset_lines(readable.get('runtime_dataset_evidence') or validation.get('runtime_dataset_evidence'))
+        lines += _outcome_diagnosis_lines(readable)
+        lines += _result_analysis_lines(readable)
+        lines += _legacy_repair_lines(readable)
+        if data.get('optimization'):
+            lines += _optimization_lines(readable['optimization'], is_rezero=spec.get('adapter_id') == 'rezero')
+        if view.collaboration['messages_recorded']:
+            lines += ['', '## Agent 协作摘要', '',
+                f"已保存 {view.collaboration['messages_recorded']} 条阶段交接与核查消息；"
+                f"实际执行 {view.collaboration['actions_executed']} 项恢复动作，"
+                f"其中 {view.collaboration['actions_verified']} 项效果已验证。",
+                '收到消息或确认交接不计为完成修复；采用动作及验证见恢复贡献表，完整消息见详情附件。',
+                '- **参与角色**: ' + _markdown_text('、'.join(view.collaboration['participants']))]
+        lines += ['', *recovery_contribution_lines(view.recovery_contributions, recorded=view.recovery_recorded)]
+        summary = intelligent_recovery_summary(data.get('intelligent_recovery'))
+        if summary:
+            lines += ['', summary]
+        usage = view.recovery_usage
+        if usage.get('roles'):
+            lines += ['', '## 角色用量与耗时', '', '| 角色 | 模型请求 | token | 耗时（秒） | 费用 |', '|---|---|---|---|---|']
+            for role, item in usage['roles'].items():
+                if not isinstance(item, dict):
+                    continue
+                cells = [role, item.get('model_requests'), item.get('total_tokens'),
+                         item.get('duration_seconds'), item.get('monetary_cost')]
+                lines.append('| ' + ' | '.join('未知' if value is None else _markdown_text(str(value)) for value in cells) + ' |')
+        audit = data.get('audit_stats') or {}
+        if audit:
+            lines += ['', '## 运行与用量统计', '',
+                      '- **总步骤数**: ' + _markdown_text(_txt(audit.get('total_steps'), '未记录')),
+                      '- **执行时长（秒）**: ' + _markdown_text(_txt(audit.get('duration_sec'), '未记录')),
+                      '- **LLM 调用次数**: ' + _markdown_text(_txt(audit.get('llm_calls'), '未记录'))]
+        artifacts = final.get('artifacts') or []
+        if artifacts:
+            lines += ['', '## 本次运行生成的图片', '']
+        for index, artifact in enumerate(artifacts, 1):
+            target = artifact_resolver(artifact, report_path)
+            if target:
+                lines += ['**图 ' + str(index) + '**：' + _markdown_text(_txt(artifact.get('name'), f'图 {index}')),
+                          '', f'![运行结果图 {index}]({target})', '']
+            else:
+                lines.append(f'> 图 {index} 无法读取，图片文件可能已被清理。')
+        for warning in final.get('artifact_warnings') or []:
+            lines.append('> ' + _markdown_text(str(warning)))
+        from src.run_finalization import finalize_report_text
+        return finalize_report_text('\n'.join(lines), dict(data))
 
     @staticmethod
     def _build_report(data: dict, *, report_path=None, artifact_resolver=None) -> str:
@@ -974,21 +1308,7 @@ class ReportGeneratorAgent(BaseAgent):
                 succeeded = sum(repair.get("status") == "succeeded" for repair in cache_repairs)
                 lines.append(f"- **缓存修复**: {succeeded}/{len(cache_repairs)} 项完成；依赖版本与实验协议保持冻结")
         source_recoveries = data.get("public_source_recovery") or []
-        self_repair = data.get('self_repair') or {}
-        if self_repair:
-            outcomes = {'resolved': '原命令重跑通过', 'blocked': '缺少可验证的自动修复方案',
-                        'retrying': '正在重跑验证', 'no_progress': '重跑后错误相同',
-                        'failed_with_new_error': '重跑后出现新错误', 'interrupted': '已取消',
-                        'timed_out': '已超时', 'budget_exhausted': '已达到修复次数上限'}
-            lines += ['', '### 自动诊断与修复', '',
-                      '- 状态：' + outcomes.get(self_repair.get('status'), '未完成') + '；'
-                      + _markdown_text(_txt(self_repair.get('reason'))),
-                      '- 每次修复都重跑原命令；此处记录运行恢复情况，论文数值核验另行记录。']
-            for item in self_repair.get('attempts') or []:
-                lines.append('- 第 ' + str(item.get('round')) + ' 轮：'
-                    + _markdown_text(_txt(item.get('action'))) + '；'
-                    + outcomes.get(item.get('status'), '未完成') + '；'
-                    + _markdown_text(_txt(item.get('reason'))))
+        lines += _legacy_repair_lines(data)
         runtime_repairs = data.get('dependency_repair_attempts') or []
         if runtime_repairs:
             lines += ['', '### 根据运行报错补充依赖', '']
@@ -1394,87 +1714,7 @@ class ReportGeneratorAgent(BaseAgent):
                     lines += ["", f"> {_markdown_text(evidence['source_id'])}: " + _markdown_text(evidence["quote"]).replace("\n", "\n> ")]
         lines.append("")
 
-        # 6. 智能优化
-        lines += ["## 6. 智能优化"]
-        if optimization.get("mode") in {"suggest", "validate"}:
-            lines += [f"- **状态**: {_markdown_text(_txt(optimization.get('status')))}",
-                      f"- **说明**: {_markdown_text(_txt(optimization.get('reason')))}",
-                      f"- **已验证提升**: {'是' if optimization.get('optimized') else '否'}"]
-            for index, suggestion in enumerate(optimization.get("suggestions", []), 1):
-                suggestion_status = {"untested": "尚未验证", "tested": "已完成候选试验", "failed": "试验失败",
-                                     "validated_gain": "两种子留出确认通过"}.get(suggestion.get("status"), "尚未验证")
-                lines += ["", f"### 建议 {index}（{suggestion_status}）",
-                          f"- **参数**: {suggestion['parameter']}：{suggestion['baseline_value']} → {suggestion['value']}"]
-                for key, label in (("hypothesis", "假设"), ("expected_effect", "预期效果"),
-                                   ("cost", "成本"), ("validation_plan", "验证方法")):
-                    lines.append(f"- **{label}**: {_markdown_text(suggestion[key])}")
-                for evidence in suggestion.get("evidence", []):
-                    lines += [f"- **依据**: [{evidence['source_id']}]({evidence['url']}) · {evidence['locator']}",
-                              "", "> " + _markdown_text(evidence["quote"]).replace("\n", "\n> ")]
-            if optimization.get("trials"):
-                lines += ["", "### 真实候选记录", "", "| 候选 | 状态 | 验证指标 | 耗时（秒） |",
-                          "|---|---|---|---|"]
-                for trial in optimization["trials"]:
-                    lines.append("| " + " | ".join(_markdown_text(_txt(trial.get(k))) for k in
-                                 ("candidate", "status", "metrics", "elapsed_s")) + " |")
-            if optimization.get("confirmation"):
-                lines += ["", "### 两种子留出确认", "", "```json",
-                          json.dumps(optimization["confirmation"], ensure_ascii=False, indent=2), "```"]
-            if optimization.get("mode") == "validate":
-                lines += ["", "- **优化评估范围**: 固定验证集选优后，仅对选定候选做两个种子的留出确认；与官方全图/全轨迹拟合指标分别报告。",
-                          f"- **优化协议基线**: {optimization.get('baseline', {})}",
-                          f"- **已用预算**: {_fmt(optimization.get('budget_used_s'), '.2f')} / {optimization.get('budget_seconds', 7200)} 秒"]
-        elif not optimization.get("optimized"):
-            if is_rezero:
-                lines.append("- **优化状态**: 关闭；本实验按冻结作者协议运行。")
-            else:
-                lines.append(f"- **优化状态**: 未触发("
-                             f"{optimization.get('reason', '复现未成功或未运行优化')})")
-        else:
-            # 模拟优化必须与真实执行区分开：`_simulate_trial` 是拿方向名的
-            # 哈希当"改进潜力"的假数据，与代码、指标都无关。不标注的话，
-            # "改进幅度 1.80% / 最优结果 0.0908" 会被当成实测结果读。
-            records = optimization.get("optimization_report", []) or []
-            sim_types = {(r.get("detail") or {}).get("type") for r in records}
-            simulated = bool(records) and "real_exec" not in sim_types
-
-            state_text = "⚠️ 已优化（模拟）" if simulated else "✅ 已优化"
-            lines += [f"- **优化状态**: {state_text}",
-                      f"- **基线指标**: {optimization.get('baseline', 'N/A')}"]
-            if simulated:
-                lines += [
-                    "  > ⚠️ **本轮优化未真实执行**：以下「改进幅度 / 最优结果」"
-                    "由方向名哈希模拟得出（`ucb_mock`），**不是**跑出来的实测值，"
-                    "不能作为代码改进效果的依据。",
-                ]
-            lines += [f"- **最优方向**: {optimization.get('best_arm', 'N/A')}",
-                      f"- **改进幅度**: {optimization.get('improvement', 0):.2%}"
-                      + ("（模拟）" if simulated else ""),
-                      f"- **最优结果**: {optimization.get('best_result', 'N/A')}"
-                      + ("（模拟）" if simulated else ""),
-                      f"- **预算使用**: {optimization.get('budget_used', 'N/A')} / "
-                      f"{optimization.get('budget', 'N/A')} 次尝试",
-                      "",
-                      "### 尝试记录(UCB 预算调度)",
-                      "| 方向 | 改进幅度 | 依据 | 判定 |",
-                      "|------|----------|------|------|"]
-            for r in records:
-                mark = "✅ Keep" if r.get("kept") else "❌ Reject"
-                rd = r.get("detail") or {}
-                basis = {"real_exec": "真实执行",
-                         "ucb_mock": "⚠️ 哈希模拟"}.get(rd.get("type") or "",
-                                                       rd.get("type") or "未知")
-                # 真实执行时补上"按哪个指标、哪个方向"判的——退回启发式选键
-                # 时方向可能是错的，不写清楚就无从分辨。
-                rb = rd.get("reward_basis") or {}
-                if rb.get("metric_key"):
-                    arrow = "↓" if rb.get("direction") == "越小越好" else "↑"
-                    note = "" if rb.get("metric_source") == "论文声明指标" \
-                        else "，启发式选键"
-                    basis += f" · {rb['metric_key']}{arrow}{note}"
-                lines.append(f"| {r.get('arm')} | {r.get('improvement'):.4f} "
-                             f"| {basis} | {mark} |")
-        lines.append("")
+        lines += _optimization_lines(optimization, is_rezero=is_rezero)
 
         collaboration = data.get('agent_collaboration') or {}
         messages = collaboration.get('messages') or []

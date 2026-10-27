@@ -111,19 +111,40 @@ def intelligent_recovery_summary(recovery):
     statuses = {'ready': '待调查', 'investigating': '调查中', 'investigated': '调查已记录',
                 'unavailable': '调查不可用', 'stopped': '已停止', 'needs_human': '需要人工处理',
                 'repair_proposed': '已提出修复，待原有检查', 'observed': '已记录观察结果',
-                'command_recovered': '原命令运行已恢复，数值等价性未确认'}
+                'command_recovered': '原命令运行已恢复，数值等价性未确认',
+                'environment_recovered': '环境准备已恢复，作者实验运行另行记录',
+                'dataset_recovered': '数据准备已恢复，作者实验运行另行记录'}
     triggers = {'execution_failure': '作者命令执行失败', 'dependency_failure': '作者依赖准备失败',
                 'result_gap': '结果差距', 'metric_gap': '指标差距'}
 
     def label(value, labels):
         return text(labels.get(value, value)) if isinstance(value, str) else '未记录'
 
+    def scoped_status(record):
+        from src.report_view_model import is_non_author_recovery_phase
+        status = record.get('status')
+        if status != 'command_recovered':
+            return status
+        phases = (record.get('recovered_phase'), record.get('phase'))
+        phase = next((value for value in phases if is_non_author_recovery_phase(value)), None)
+        return {'environment_preparation': 'environment_recovered',
+                'environment': 'environment_recovered',
+                'dataset_preparation': 'dataset_recovered',
+                'dataset': 'dataset_recovered'}.get(phase, 'observed') if phase else status
+
     saved_tasks = recovery.get('tasks')
     tasks = [task for task in saved_tasks if isinstance(task, dict)] if isinstance(saved_tasks, list) else []
-    lines.append(f"- **调查状态**: {label(recovery.get('status'), statuses)}；{mode}；共 {len(tasks)} 项调查。")
+    lines.append(f"- **调查状态**: {label(scoped_status(recovery), statuses)}；{mode}；共 {len(tasks)} 项调查。")
     for task in tasks[:3]:
-        trigger = label(task.get('trigger') or task.get('id') or '未记录触发原因', triggers)
-        lines.append(f"- **处理记录**: {trigger}；状态：{label(task.get('status'), statuses)}。")
+        trigger = task.get('trigger') or task.get('id') or '未记录触发原因'
+        if trigger == 'execution_failure':
+            phase = task.get('recovered_phase') or task.get('phase')
+            trigger = {'environment_preparation': '环境预检执行失败',
+                       'environment': '环境预检执行失败',
+                       'dataset_preparation': '数据准备执行失败',
+                       'dataset': '数据准备执行失败'}.get(phase, trigger)
+        trigger = label(trigger, triggers)
+        lines.append(f"- **处理记录**: {trigger}；状态：{label(scoped_status(task), statuses)}。")
         decisions = task.get('decisions')
         if isinstance(decisions, list) and decisions:
             decision = decisions[-1]
@@ -156,6 +177,71 @@ def intelligent_recovery_summary(recovery):
     lines.append('- **模型 token 用量**: ' + shown_tokens)
     lines += ['调查与处理记录用于解释本次运行；论文复现结论仍以执行、协议与指标核验结果为准。完整调查记录见详情附件。', '']
     return '\n'.join(lines)
+
+
+def _cell(value, missing='未记录'):
+    if value is None or value == '':
+        return missing
+    text = re.sub(r'\s+', ' ', str(value)).strip()
+    if len(text) > 240:
+        text = text[:240] + '…（完整记录见详情附件）'
+    return re.sub(r'([\\`*_{}\[\]()<>!|])', r'\\\1', text)
+
+
+def report_metric_lines(metrics):
+    """Render the shared metric model without inventing missing observations."""
+    if not metrics:
+        return ['本次实际指标或论文参考尚未取得。']
+    lines = ['| 指标 | 论文参考 | 实际值 | 单位（参考 / 实际） | 划分（参考 / 实际） | 次数（参考 / 实际） | 差值 | 可比较性 |',
+             '|---|---|---|---|---|---|---|---|']
+    labels = {'comparable': '可比较', 'reference_only': '仅供参考',
+              'not_comparable': '不可比较', 'unrecorded': '未记录'}
+    for row in metrics:
+        difference = _cell(row.get('difference'), '未取得')
+        if row.get('difference') is not None and row.get('difference_unit'):
+            unit = {'percentage_points': '个百分点'}.get(row['difference_unit'], row['difference_unit'])
+            difference += ' ' + _cell(unit)
+        cells = [_cell(row.get('metric')), _cell(row.get('reference'), '未取得'),
+                 _cell(row.get('actual'), '未取得'),
+                 _cell(row.get('reference_unit')) + ' / ' + _cell(row.get('actual_unit')),
+                 _cell(row.get('reference_split')) + ' / ' + _cell(row.get('actual_split')),
+                 _cell(row.get('reference_runs')) + ' / ' + _cell(row.get('actual_runs')),
+                 difference,
+                 _cell(labels.get(row.get('comparability'), row.get('comparability')))]
+        lines.append('| ' + ' | '.join(cells) + ' |')
+    lines += ['', '未取得的数值保留为空缺；可比较性依据冻结协议与已有核验记录，指标名称相同不足以确认可比。']
+    return lines
+
+
+def recovery_contribution_lines(rows, *, recorded):
+    """Separate proposed, rejected, executed and verified recovery contributions."""
+    lines = ['## 恢复行动与协作贡献', '']
+    if not recorded:
+        return lines + ['未记录：历史结果没有保存智能恢复信息。', '']
+    if not rows:
+        return lines + ['没有记录恢复动作；阶段交接或收到消息不计为已完成修复。', '']
+    lines += ['| 阶段与原始问题 | 调查角色 | 证据 | 采用动作 | 审查结果 | 原命令重跑 | 最终效果 |',
+              '|---|---|---|---|---|---|---|']
+    statuses = {'proposed': '仅提出建议', 'rejected': '已否决，未执行', 'executing': '执行中',
+                'executed': '已执行，效果待核验', 'verified': '已执行且效果已验证',
+                'failed': '执行失败', 'stopped': '已停止', 'no_progress': '未取得新进展'}
+    for row in rows:
+        review = row.get('review') or {}
+        review_result = review.get('reason') or review.get('status') or review.get('action') or '未记录'
+        evidence = row.get('evidence') or []
+        if isinstance(evidence, list):
+            evidence = ', '.join(str(item.get('id') or item.get('path') or item.get('source') or '已保存证据')
+                                 if isinstance(item, dict) else str(item) for item in evidence)
+        rerun = '是' if row.get('rerun') is True else '否' if row.get('rerun') is False else '未记录'
+        status = statuses.get(row.get('status'), row.get('status') or '未记录')
+        if row.get('status') == 'rejected' and row.get('executed'):
+            status = '审查拒绝；保留已有执行记录'
+        cells = [str(row.get('phase') or '未记录') + '；' + str(row.get('problem') or '未记录'),
+                 row.get('role'), evidence, row.get('action'), review_result, rerun,
+                 status + ('；' + str(row['result']) if row.get('result') else '')]
+        lines.append('| ' + ' | '.join(_cell(value) for value in cells) + ' |')
+    lines += ['', '以上说明实际排障作用；运行恢复、论文参考达标与独立核验分别判断。', '']
+    return lines
 
 
 def save_report_details(full_report, data, report_path):

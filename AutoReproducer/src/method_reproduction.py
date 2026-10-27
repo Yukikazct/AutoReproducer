@@ -312,7 +312,7 @@ class MethodReproduction:
         data["quick_target"] = {"limit_s": profile["budget"]["total_s"], "validated_on_this_run": False,
                                 "scope": "prepared_environment_to_report", "elapsed_s": data["execution_elapsed_s"]}
         event("generate_report", "running")
-        data["report"] = ReportGeneratorAgent(self.logger).run(data, report_path=data["report_path"])["report"]
+        data.update(ReportGeneratorAgent(self.logger).run(data, report_path=data["report_path"]))
         (run_dir / "report.md").write_text(data["report"], encoding="utf-8")
         data["run_elapsed_s"] = time.monotonic() - started
         data["execution_elapsed_s"] = (time.monotonic() - execution_started
