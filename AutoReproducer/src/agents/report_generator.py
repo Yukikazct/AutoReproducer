@@ -975,6 +975,14 @@ class ReportGeneratorAgent(BaseAgent):
             lines.append('- **独立源码副本**: ' + _inline_code(repository['path']))
         if repository:
             lines.append('- 源码已获取；实际执行来源以执行记录为准。')
+        source_request = data.get('source_request') or {}
+        if source_request.get('status') == 'needs_pdf':
+            lines += ['- **执行准备**: 待补充论文 PDF；尚未准备执行命令。',
+                      '- **执行范围**: 仓库实验尚未执行。',
+                      '- **下一步**: ' + _markdown_text(_txt(source_request.get('next_action') or source_request.get('reason')))]
+            if source_request.get('selected_repository'):
+                lines.append('- **候选仓库（作者归属未核验）**: '
+                             + _markdown_text(_txt(source_request['selected_repository'])))
         identity = resources.get('repository_identity') or {}
         if identity.get('reason'):
             lines.append('- **仓库关联证据**: ' + _markdown_text(str(identity['reason'])))
