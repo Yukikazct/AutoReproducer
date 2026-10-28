@@ -188,6 +188,21 @@ def _method_tail(method, row):
     return match.end() if match else None
 
 
+def dataset_row_header(reference, row, header):
+    """Recognize the other common orientation from explicit original labels.
+
+    This establishes labels only. Full positional verification still requires
+    the complete header, cells and their order in ``locate_table_value``.
+    """
+    if not isinstance(header, str) or not isinstance(row, str):
+        return False
+    method = reference.get('method')
+    return bool(isinstance(method, str) and method.strip()
+        and re.match(r'^\s*\|?\s*datasets?\b', header, re.I)
+        and _method_tail(reference.get('dataset'), row) is not None
+        and re.search(r'(?<![\w+.-])' + re.escape(method) + r'(?![\w+-]|\.[\w])', header, re.I))
+
+
 def _metric_name(label):
     value = re.sub(r'\s*\((?:percent|percentage|%)\)\s*$', '', str(label), flags=re.I).strip()
     value = value.rstrip('%').strip()
@@ -314,13 +329,17 @@ def locate_table_value(reference, quote, header, *, page_text=None):
         return _result('unknown', 'A truncated physical row or header cannot establish column positions')
     if header_span[1] >= row_span[0]:
         return _result('unknown', 'The complete header must precede its method row')
-    start = _method_tail(reference.get('method'), quote)
+    transposed = dataset_row_header(reference, quote, header)
+    selected_reference = dict(reference)
+    if transposed:
+        selected_reference.update(method=reference['dataset'], dataset=reference['method'])
+    start = _method_tail(selected_reference.get('method'), quote)
     if start is None:
         return _result('rejected', 'Quoted method row does not match the requested method variant')
     cells, first_cell = _cells(quote[start:])
     if cells is None:
         return _result('unknown', 'The complete result row contains unsupported or unparsed cells')
-    if not _known_row_prefix(reference, quote[start:start + first_cell]):
+    if not _known_row_prefix(selected_reference, quote[start:start + first_cell]):
         return _result('unknown', 'Unparsed row labels may identify another method or dataset')
     for cell in cells:
         for part in [cell, *cell.get('parts', [])]:
@@ -331,11 +350,12 @@ def locate_table_value(reference, quote, header, *, page_text=None):
         return _result('unknown', 'Complete header/row widths do not establish a unique table layout')
     if not _between_rows(page_text[header_span[1]:row_span[0]], len(paths)):
         return _result('unknown', 'Header is incomplete or separated from the row by another table/prose')
-    index, selection_error = _select(reference, paths, quote[start:start + first_cell])
+    index, selection_error = _select(selected_reference, paths, quote[start:start + first_cell])
     if index is None:
         return _result('unknown', selection_error)
     selected = cells[index]
     evidence = {'column_index': index, 'column_labels': paths[index], 'column_count': len(paths),
+                'orientation': 'datasets_in_rows' if transposed else 'methods_in_rows',
                 'row_span': row_span, 'header_span': header_span, 'basis': rules,
                 'cell_span': selected['span'], 'cell_quote': quote[slice(*selected['span'])]}
     if selected.get('missing'):

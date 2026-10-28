@@ -29,6 +29,14 @@ from src.runtime_platform import runtime_fingerprint
 MAX_ARTIFACT_BYTES = 64 * 1024 * 1024
 
 
+def _mark_cleanup_unconfirmed(record, errors):
+    """Keep failed process cleanup machine-readable without claiming exit proof."""
+    record.update(success=False, cleanup_unconfirmed=True, process_cleanup_confirmed=False,
+                  cleanup_errors=list(dict.fromkeys(errors)))
+    record['cleanup_receipt'] = {'status': 'error', 'process_cleanup_confirmed': False,
+                                'errors': list(record['cleanup_errors'])}
+
+
 class RepositoryRunner:
     def __init__(self, logger=None, executor=None):
         # Dependency and environment helpers do not call the LLM.
@@ -37,7 +45,8 @@ class RepositoryRunner:
 
     def run_with_repairs(self, workspace, steps, env_config, *, llm, editable,
                          max_rounds=2, on_event=None, initial_execution=None,
-                         verify_candidate=None, validate_patches=None, select_sources=None):
+                         verify_candidate=None, validate_patches=None, select_sources=None,
+                         compatibility_source_files=None):
         """Explicit compatibility-repair mode for a caller-owned isolated tree.
 
         Ordinary run() never rewrites author sources. This separate entry point
@@ -45,7 +54,10 @@ class RepositoryRunner:
         """
         from src.repository_repairer import RepositoryRepairer
         from src.safety.patch_policy import PatchPolicy
-        repairer = RepositoryRepairer(self, llm, PatchPolicy(editable=editable), max_rounds=max_rounds)
+        if compatibility_source_files and (validate_patches is None or verify_candidate is None):
+            raise ValueError('Compatibility filename scope requires proposal and execution validators')
+        repairer = RepositoryRepairer(self, llm, PatchPolicy(editable=editable,
+            compatibility_source_files=compatibility_source_files), max_rounds=max_rounds)
         return repairer.run(workspace, steps, env_config, on_event=on_event,
                             initial_execution=initial_execution, verify_candidate=verify_candidate,
                             validate_patches=validate_patches, select_sources=select_sources)
@@ -197,6 +209,7 @@ class RepositoryRunner:
                 if process.poll() is None:
                     process.kill()
                     return "process-group cleanup was denied; only the direct process was terminated"
+                return "process-group cleanup was denied; descendant termination is unconfirmed"
         elif process.poll() is None:
             # Windows does not expose killpg. taskkill /T terminates the
             # supervisor's complete descendant tree, while it is still alive.
@@ -225,7 +238,7 @@ class RepositoryRunner:
         record.update(stage="full", executed=False, stdout_path=str(stdout_path),
                       stderr_path=str(stderr_path))
         process, timed_out, group_killed = None, False, False
-        interrupted, job = None, None
+        interrupted, cleanup_failure, job = None, None, None
         exit_code, diagnostic, cleanup_errors = -2, "", []
         # Plot helpers live beside the logs, not inside the author repository.
         environment = self.executor._exec_env(str(run_dir))
@@ -330,9 +343,24 @@ class RepositoryRunner:
                     process.wait(timeout=5)
                 elif job is not None:
                     job.close()
-            except BaseException:
-                if interrupted is None:
-                    raise
+            except BaseException as exc:
+                cleanup_errors.append(f'process cleanup raised {type(exc).__name__}: {exc}')
+                cleanup_failure = exc
+        if cleanup_errors:
+            _mark_cleanup_unconfirmed(record, cleanup_errors)
+            record['process_exit_code'] = process.returncode if process is not None else None
+            from src.environment_lifecycle import retain_unconfirmed_processes
+            receipt = retain_unconfirmed_processes(
+                self.executor._dependency_lock_root(), record['cleanup_receipt'])
+            self.executor.env_config.update(process_cleanup_confirmed=False, cleanup_receipt=receipt)
+        failure = interrupted or cleanup_failure
+        if failure is not None:
+            # Preserve cancellation or the original cleanup exception. Callers
+            # must retain the environment when process termination is unproven.
+            failure.repository_step_record = record
+            if cleanup_errors:
+                failure.process_cleanup_confirmed = False
+                failure.cleanup_receipt = record['cleanup_receipt']
         if interrupted is not None:
             # Retain a cancellation record even if later artifact/log bookkeeping
             # fails; those failures must not replace the caller's interruption.
@@ -369,11 +397,12 @@ class RepositoryRunner:
                 json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
             emit({"type": "repository_step", "step_id": step["id"],
                   "status": "interrupted" if interrupted is not None else "success" if record["success"] else "error", **record})
-        except BaseException:
-            if interrupted is None:
+        except BaseException as exc:
+            if failure is None:
                 raise
-        if interrupted is not None:
-            raise interrupted
+            failure.add_note(f'repository cleanup evidence collection failed: {exc}')
+        if failure is not None:
+            raise failure
         return record
 
     @termination_signals()
@@ -420,6 +449,23 @@ class RepositoryRunner:
                   "attempts": attempts, "stages": attempts, "steps": attempts,
                   "skipped": skipped, "step_artifacts": [],
                   "artifacts": [], "artifact_warnings": warnings, "llm_calls": 0}
+
+        def retain_cleanup_failure(exc):
+            record = getattr(exc, 'repository_step_record', None)
+            if record is not None:
+                if not any(item is record for item in attempts):
+                    attempts.append(record)
+                result['final'] = dict(record)
+            result['executed'] = any(item.get('executed') for item in attempts)
+            receipt = getattr(exc, 'cleanup_receipt', {})
+            _mark_cleanup_unconfirmed(result, receipt.get('errors') or [str(exc)])
+            exc.execution = result
+            if result.get('run_dir'):
+                try:
+                    (Path(result['run_dir']) / 'execution.json').write_text(
+                        json.dumps(result, ensure_ascii=False, indent=2), encoding='utf-8')
+                except (OSError, ValueError, TypeError) as evidence_error:
+                    exc.add_note(f'cleanup failure record could not be saved: {evidence_error}')
 
         def emit(event):
             if on_event is not None:
@@ -593,12 +639,15 @@ class RepositoryRunner:
                         raise
                     attempts.append(record)
                     result["executed"] = result["executed"] or record["executed"]
-                    if not record["success"] and step["required"]:
+                    if record.get('cleanup_unconfirmed'):
+                        _mark_cleanup_unconfirmed(result, record['cleanup_errors'])
+                        halted = step['id']
+                    elif not record["success"] and step["required"]:
                         halted = step["id"]
                 # Every required step must have run and succeeded. A blocked step is a
                 # failed verdict, never a "skipped/optional" one; an optional step may
                 # fail on its own without dragging the experiment down.
-                result["success"] = (not skipped
+                result["success"] = (not result.get('cleanup_unconfirmed') and not skipped
                                      and len(attempts) == len(planned)
                                      and all(s["success"] or not s["required"]
                                              for s in attempts))
@@ -623,6 +672,8 @@ class RepositoryRunner:
             result["final"] = dict(record or {"stage": "full", "success": False, "executed": False,
                                              "exit_code": 130, "cancelled": True, "timed_out": False,
                                              "stdout": "", "stderr": "repository execution interrupted"})
+            if getattr(exc, 'process_cleanup_confirmed', True) is False:
+                retain_cleanup_failure(exc)
             exc.execution = result
             try:
                 if result.get("environment", {}).get("status") == "running":
@@ -640,9 +691,16 @@ class RepositoryRunner:
                 save_environment("error", str(exc))
             return reject(str(exc), -4)
         except (OSError, ValueError, TypeError) as exc:
+            if getattr(exc, 'process_cleanup_confirmed', True) is False:
+                retain_cleanup_failure(exc)
+                raise
             if result.get("environment", {}).get("status") == "running":
                 save_environment("error", str(exc))
             return reject(str(exc))
+        except BaseException as exc:
+            if getattr(exc, 'process_cleanup_confirmed', True) is False:
+                retain_cleanup_failure(exc)
+            raise
         finally:
             # Scope-exit collection runs after preparation was persisted.
             # Refresh diagnostics without counting training as preparation.
@@ -655,7 +713,7 @@ class RepositoryRunner:
                     (Path(result["run_dir"]) / "environment.json").write_text(
                         json.dumps(environment, ensure_ascii=False, indent=2), encoding="utf-8")
                     execution_path = Path(result["run_dir"]) / "execution.json"
-                    if execution_path.is_file():
+                    if execution_path.is_file() or result.get('cleanup_unconfirmed'):
                         execution_path.write_text(
                             json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
                 except (OSError, ValueError, TypeError) as exc:

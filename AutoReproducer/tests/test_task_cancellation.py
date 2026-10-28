@@ -16,9 +16,10 @@ from src import runtime_preparation as runtime
 
 
 @pytest.fixture(autouse=True)
-def isolate_failed_root_registry(monkeypatch):
+def isolate_failed_root_registry(monkeypatch, tmp_path):
     # Deliberate cleanup-failure tests must not block unrelated pytest cases.
     monkeypatch.setattr(task_control, "_blocked_roots", {})
+    monkeypatch.setenv("AUTOREPRO_DEPS_ROOT", str(tmp_path / "dependencies"))
 
 
 def wait_for(predicate, timeout=12):
@@ -309,8 +310,7 @@ def test_cleanup_failure_blocks_reset_until_retry_succeeds(tmp_path, monkeypatch
     assert backend.ProgressStore.read_snapshot(str(progress))["result"]["report_path"] == "existing-report.md"
 
 
-@pytest.mark.skipif(os.name != "nt", reason="orphan recovery relies on Windows job ownership")
-def test_orphan_recovery_requires_dead_owner_and_closes_only_its_progress(tmp_path, monkeypatch):
+def test_orphaned_receipt_never_authorizes_cleanup_from_owner_pid_only(tmp_path, monkeypatch):
     from types import SimpleNamespace
     import src.environment_lifecycle as lifecycle
     import src.process_lifecycle as process_lifecycle
@@ -334,12 +334,14 @@ def test_orphan_recovery_requires_dead_owner_and_closes_only_its_progress(tmp_pa
     cleanup.assert_not_called()
     assert backend.ProgressStore.read_snapshot(str(progress))["running"]
     api.WaitForSingleObject.return_value = 0
-    assert task_control.recover_orphaned_task(str(progress), backend.ProgressStore)
-    cleanup.assert_called_once()
+    assert not task_control.recover_orphaned_task(str(progress), backend.ProgressStore)
+    cleanup.assert_not_called()
     snapshot = backend.ProgressStore.read_snapshot(str(progress))
-    assert not snapshot["running"] and snapshot["state"] == "ERROR"
-    assert snapshot["active_workers"] == snapshot["active_runs"] == []
+    assert snapshot["running"]
+    assert snapshot["active_workers"] and snapshot["active_runs"]
     assert other.read_bytes() == other_bytes
+    with pytest.raises(RuntimeError, match="恢复原任务"):
+        task_control.register_task(tmp_path / "new.jsonl")
 
 
 def test_legacy_progress_without_owner_is_never_recovered_by_guessing(tmp_path):
@@ -481,6 +483,230 @@ def test_disk_failed_receipt_blocks_another_service_without_overwriting(tmp_path
     control.record.write_text("{broken", encoding="utf-8")
     with pytest.raises(RuntimeError, match="无法确认"):
         task_control.register_task(tmp_path / "new.jsonl")
+
+
+@pytest.mark.parametrize("process_cleanup_confirmed", [True, False])
+def test_finish_write_failure_releases_owner_and_retains_durable_root_gate(
+        tmp_path, monkeypatch, process_cleanup_confirmed):
+    progress = tmp_path / "old-session" / "progress.jsonl"
+    control = task_control.register_task(progress)
+    monkeypatch.setattr(control, "_save", Mock(side_effect=PermissionError("receipt is locked")))
+    try:
+        with pytest.raises(PermissionError, match="receipt is locked"):
+            control.finish(process_cleanup_confirmed=process_cleanup_confirmed)
+        assert control.finished
+        with task_control._OwnerLock(task_control._paths(progress)[1]).acquire(timeout=0):
+            pass
+        assert task_control._key(progress) not in task_control._tasks
+        status = task_control.task_status(progress)
+        assert not status["active"] and status["cleanup_failed"]
+        assert status["cleanup_unconfirmed"] is (not process_cleanup_confirmed)
+        monkeypatch.setattr(task_control, "_blocked_roots", {})  # A fresh service's memory.
+        with pytest.raises(RuntimeError, match="恢复原任务"):
+            task_control.register_task(tmp_path / "new-session" / "progress.jsonl")
+    finally:
+        # Keep the unpatched implementation from leaking its deliberately stuck
+        # owner lock when this regression is run against the original defect.
+        control.lock.release()
+        task_control._tasks.pop(task_control._key(progress), None)
+
+
+@pytest.mark.parametrize("state", ["running", "cleanup_failed", "cleanup_unconfirmed"])
+def test_shared_root_gate_survives_a_service_exit_and_different_progress_directory(tmp_path, state):
+    original = tmp_path / "old-service" / "old.jsonl"
+    next_progress = tmp_path / "new-service" / "new.jsonl"
+    project = str(Path(__file__).resolve().parents[1])
+    program = """
+import os,sys
+sys.path.insert(0,sys.argv[1])
+from frontend.task_control import register_task
+owner=register_task(sys.argv[2])
+state=sys.argv[3]
+if state != 'running':
+    owner.finish(cleanup_failed=True,process_cleanup_confirmed=state != 'cleanup_unconfirmed')
+os._exit(0)
+"""
+    previous = subprocess.run([sys.executable, "-X", "utf8", "-c", program, project, str(original), state],
+                              capture_output=True, text=True, timeout=10)
+    assert previous.returncode == 0, previous.stderr
+    with pytest.raises(RuntimeError, match="恢复原任务"):
+        unexpected = task_control.register_task(next_progress)
+        unexpected.finish()
+    assert not next_progress.with_suffix(".control.json").exists()
+
+
+def test_same_root_rejects_another_service_while_owner_is_active(tmp_path):
+    original = tmp_path / "old-service" / "old.jsonl"
+    control = task_control.register_task(original)
+    program = """
+import sys
+sys.path.insert(0,sys.argv[1])
+from frontend.task_control import register_task
+try:
+    owner=register_task(sys.argv[2])
+except RuntimeError as exc:
+    print(str(exc))
+else:
+    owner.finish()
+    sys.exit(2)
+"""
+    try:
+        attempt = subprocess.run([sys.executable, "-X", "utf8", "-c", program,
+                                  str(Path(__file__).resolve().parents[1]),
+                                  str(tmp_path / "new-service" / "new.jsonl")],
+                                 capture_output=True, text=True, encoding="utf-8", timeout=10)
+        assert attempt.returncode == 0, attempt.stderr
+        assert "依赖目录" in attempt.stdout
+        assert task_control.task_status(original)["active"]
+    finally:
+        control.finish()
+
+
+def test_failed_finish_can_recover_and_start_from_another_progress_directory(tmp_path, monkeypatch):
+    import src.environment_lifecycle as lifecycle
+    original = tmp_path / "old-session" / "old.jsonl"
+    control = task_control.register_task(original)
+    backend.ProgressStore(str(original)).emit({"type": "done", "result": {
+        "state": "COMPLETED", "report_path": "retained-report.md", "data": {"evidence": "retained"}}})
+    monkeypatch.setattr(control, "_save", Mock(side_effect=PermissionError("locked progress receipt")))
+    with pytest.raises(PermissionError):
+        control.finish()
+    release = Mock(return_value={"status": "in_use", "errors": []})
+    monkeypatch.setattr(lifecycle, "release_abandoned_environment", release)
+    assert not task_control.recover_orphaned_task(original, backend.ProgressStore)
+    assert control.shared_record.exists(), "a busy environment is not a cleanup confirmation"
+    release.return_value = {"status": "released", "errors": []}
+    assert task_control.recover_orphaned_task(original, backend.ProgressStore)
+    assert not control.shared_record.exists()
+    snapshot = backend.ProgressStore.read_snapshot(str(original))
+    assert snapshot["result"]["report_path"] == "retained-report.md"
+    assert snapshot["result"]["data"]["evidence"] == "retained"
+    new = task_control.register_task(tmp_path / "new-session" / "new.jsonl")
+    new.finish()
+
+
+def test_both_receipt_writes_failing_keeps_preexisting_running_gate(tmp_path, monkeypatch):
+    progress = tmp_path / "original" / "progress.jsonl"
+    control = task_control.register_task(progress)
+    saved = control.shared_record.read_bytes()
+    monkeypatch.setattr(control, "_save", Mock(side_effect=PermissionError("local receipt locked")))
+    monkeypatch.setattr(control, "_save_shared", Mock(side_effect=PermissionError("shared receipt locked")))
+    with pytest.raises(PermissionError, match="local receipt locked") as raised:
+        control.finish()
+    assert "shared receipt locked" in " ".join(raised.value.__notes__)
+    assert control.shared_record.read_bytes() == saved
+    with task_control._OwnerLock(task_control._paths(progress)[1]).acquire(timeout=0):
+        pass
+    monkeypatch.setattr(task_control, "_blocked_roots", {})
+    with pytest.raises(RuntimeError, match="恢复原任务"):
+        task_control.register_task(tmp_path / "different-directory" / "new.jsonl")
+    assert not task_control.recover_orphaned_task(progress, backend.ProgressStore)
+
+
+def test_corrupt_shared_receipt_blocks_another_directory_without_overwriting(tmp_path, monkeypatch):
+    progress = tmp_path / "original" / "progress.jsonl"
+    control = task_control.register_task(progress)
+    control.finish(cleanup_failed=True)
+    control.shared_record.write_text("{broken", encoding="utf-8")
+    monkeypatch.setattr(task_control, "_blocked_roots", {})
+    with pytest.raises(RuntimeError, match="无法确认"):
+        task_control.register_task(tmp_path / "another-directory" / "new.jsonl")
+    assert control.shared_record.read_text(encoding="utf-8") == "{broken"
+
+
+def test_recovery_rechecks_generation_after_owner_locks_are_acquired(tmp_path, monkeypatch):
+    import src.environment_lifecycle as lifecycle
+    progress = tmp_path / "progress.jsonl"
+    control = task_control.register_task(progress)
+    control.finish(cleanup_failed=True)
+    previous = task_control.task_status(progress)
+    changed = dict(previous["record"], token="f" * 32)
+    task_control._write_record(control.record, changed)
+    task_control._write_record(control.shared_record, changed)
+    original_record = control.record.read_bytes()
+    original_shared = control.shared_record.read_bytes()
+    backend.ProgressStore(str(progress)).emit({"type": "done", "result": {"state": "COMPLETED", "data": {}}})
+    original_progress = progress.read_bytes()
+    monkeypatch.setattr(task_control, "task_status", lambda path: previous)
+    release = Mock(return_value={"status": "released", "errors": []})
+    monkeypatch.setattr(lifecycle, "release_abandoned_environment", release)
+    assert not task_control.recover_orphaned_task(progress, backend.ProgressStore)
+    release.assert_not_called()
+    assert control.record.read_bytes() == original_record
+    assert control.shared_record.read_bytes() == original_shared
+    assert progress.read_bytes() == original_progress
+
+
+def test_registration_receipt_failure_releases_root_admission_and_created_lease(tmp_path, monkeypatch):
+    original = task_control.TaskControl._save
+    monkeypatch.setattr(task_control.TaskControl, "_save", Mock(side_effect=PermissionError("cannot save owner")))
+    with pytest.raises(PermissionError, match="cannot save owner"):
+        task_control.register_task(tmp_path / "failed" / "old.jsonl")
+    monkeypatch.setattr(task_control.TaskControl, "_save", original)
+    control = task_control.register_task(tmp_path / "retry" / "new.jsonl")
+    control.finish()
+
+
+def test_finished_control_is_idempotent_without_reintroducing_a_root_gate(tmp_path):
+    control = task_control.register_task(tmp_path / "progress.jsonl")
+    control.finish()
+    control.finish()
+    assert not control.shared_record.exists()
+    replacement = task_control.register_task(tmp_path / "new-directory" / "progress.jsonl")
+    replacement.finish()
+
+
+def test_shared_gate_keeps_unrelated_dependency_roots_independent(tmp_path, monkeypatch):
+    blocked = task_control.register_task(tmp_path / "failed.jsonl")
+    blocked.finish(cleanup_failed=True)
+    monkeypatch.setenv("AUTOREPRO_DEPS_ROOT", str(tmp_path / "other-dependencies"))
+    unrelated = task_control.register_task(tmp_path / "separate-session" / "new.jsonl")
+    unrelated.finish()
+    assert task_control.task_status(blocked.path)["cleanup_failed"]
+
+
+def test_recovery_preserves_pending_worker_report_and_evidence(tmp_path, monkeypatch):
+    import src.environment_lifecycle as lifecycle
+    progress = tmp_path / "pending-report.jsonl"
+    control = task_control.register_task(progress)
+    store = backend.ProgressStore(str(progress))
+    store.emit({"type": "pipeline_worker", "worker_id": "worker", "status": "running"})
+    store.emit({"type": "done", "result": {"state": "COMPLETED", "report_path": "saved-report.md",
+                "session_id": "saved-session", "data": {"evidence": ["saved-artifact"]}}})
+    control.finish(cleanup_failed=True)
+    assert backend.ProgressStore.read_snapshot(str(progress))["result"] is None
+    monkeypatch.setattr(lifecycle, "release_abandoned_environment",
+                        Mock(return_value={"status": "released", "errors": []}))
+    assert task_control.recover_orphaned_task(progress, backend.ProgressStore)
+    recovered = backend.ProgressStore.read_snapshot(str(progress))
+    assert not recovered["running"] and recovered["active_workers"] == []
+    assert recovered["result"]["report_path"] == "saved-report.md"
+    assert recovered["result"]["session_id"] == "saved-session"
+    assert recovered["result"]["data"]["evidence"] == ["saved-artifact"]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows denies replacing an open receipt")
+@pytest.mark.parametrize("locked_receipt", ["record", "shared_record", "shared_record_delete"])
+def test_real_locked_receipt_finishes_ownership_and_recovers_after_unlock(tmp_path, monkeypatch, locked_receipt):
+    import src.environment_lifecycle as lifecycle
+    progress = tmp_path / "original" / "progress.jsonl"
+    control = task_control.register_task(progress)
+    target = "shared_record" if locked_receipt == "shared_record_delete" else locked_receipt
+    with getattr(control, target).open("r", encoding="utf-8"):
+        with pytest.raises(PermissionError):
+            control.finish(cleanup_failed=locked_receipt == "shared_record")
+    assert control.finished
+    with task_control._OwnerLock(task_control._paths(progress)[1]).acquire(timeout=0):
+        pass
+    assert task_control.task_status(progress)["cleanup_failed"]
+    monkeypatch.setattr(task_control, "_blocked_roots", {})
+    with pytest.raises(RuntimeError, match="恢复原任务"):
+        task_control.register_task(tmp_path / "another-session" / "new.jsonl")
+    monkeypatch.setattr(lifecycle, "release_abandoned_environment",
+                        Mock(return_value={"status": "released", "errors": []}))
+    assert task_control.recover_orphaned_task(progress, backend.ProgressStore)
+    replacement = task_control.register_task(tmp_path / "another-session" / "new.jsonl")
+    replacement.finish()
 
 
 def test_slow_runtime_download_checks_cancel_between_read1_chunks(tmp_path, monkeypatch):

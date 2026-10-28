@@ -88,6 +88,25 @@ def test_auto_scope_does_not_expand_an_explicit_allowlist(repair_case):
     case['verify']()
 
 
+def test_compatibility_fix_keeps_original_argument_taking_evaluator_call(repair_case):
+    case = repair_case
+    source = ('class Evaluator:\n    def eval(self, values):\n        return values\n'
+              'class Model:\n    def value(self):\n'
+              '        return Evaluator().eval(dict(answer=7)).iteritems()\n')
+    (case['workspace'] / 'model.py').write_text(source, encoding='utf-8')
+    case['snapshot']['files']['model.py'] = digest(case['workspace'] / 'model.py')
+    latest = case['runner'].run(case['workspace'], case['data']['execution_plan'], {})
+    case['initial'].clear()
+    case['initial'].update(latest)
+    enable_auto(case)
+    llm = CompatibilityLLM(lambda context, _: {name: value['content'].replace('.iteritems()', '.items()')
+                                              for name, value in context['sources'].items()})
+    result = case['run'](llm)
+    assert result['success'], result
+    assert result['final']['stdout'].strip() == '7\n7'
+    case['verify']()
+
+
 def staged_failure(case, next_path='adapter.py'):
     """A second source/API is reached only after the first real failure is fixed."""
     caller = ("from model import Model\nprint(list(Model().value())[0][1])\n"
@@ -104,9 +123,10 @@ def staged_failure(case, next_path='adapter.py'):
     return following
 
 
-def test_auto_second_round_selects_new_traceback_source_after_real_compatibility_progress(repair_case):
+@pytest.mark.parametrize('following_name', ['adapter.py', 'worker_eval.py', 'test_runtime_helper.py'])
+def test_auto_second_round_selects_new_traceback_source_after_real_compatibility_progress(repair_case, following_name):
     case = repair_case
-    following = staged_failure(case)
+    following = staged_failure(case, next_path=following_name)
     enable_auto(case)
     def propose(context, number):
         changes = {'model.py': MODEL_SOURCE.replace('.iteritems()', '.items()')}
@@ -115,9 +135,9 @@ def test_auto_second_round_selects_new_traceback_source_after_real_compatibility
         else:
             assert 'viewitems' in context['diagnostic']
             assert 'iteritems' in context['initial_diagnostic']
-            assert set(context['sources']) == {'model.py', 'adapter.py'}
+            assert set(context['sources']) == {'model.py', following_name}
             assert context['sources']['model.py']['content'] == MODEL_SOURCE
-            changes['adapter.py'] = following.replace('.viewitems()', '.items()')
+            changes[following_name] = following.replace('.viewitems()', '.items()')
         return changes
     llm = CompatibilityLLM(propose)
     result = case['run'](llm)
@@ -125,9 +145,9 @@ def test_auto_second_round_selects_new_traceback_source_after_real_compatibility
     assert result['final']['stdout'].strip() == '7\n7'
     assert len(llm.calls) == 2
     state = case['data']['source_repair']
-    assert state['editable'] == ['model.py', 'adapter.py']
-    assert [item['selected'] for item in state['auto_selections']] == [['model.py'], ['adapter.py']]
-    assert {item['path'] for item in state['changed_files']} == {'model.py', 'adapter.py'}
+    assert state['editable'] == ['model.py', following_name]
+    assert [item['selected'] for item in state['auto_selections']] == [['model.py'], [following_name]]
+    assert {item['path'] for item in state['changed_files']} == {'model.py', following_name}
     assert read_json(case['run_dir'] / 'source_repair.json')['auto_selections'] == state['auto_selections']
     case['verify']()
     repair.verify_repaired_execution(case['plan'], case['data'], result)
@@ -185,6 +205,19 @@ def test_cancelled_or_timed_out_execution_never_derives_scope_or_calls_model(rep
     assert result is case['initial'] and not llm.calls
     assert case['data']['source_repair']['status'] == 'not_applicable'
     assert 'auto_selection' not in case['data']['source_repair']
+    assert not (case['run_dir'] / 'repair_workspace').exists()
+
+
+@pytest.mark.parametrize('flag', ['cancelled', 'timed_out', 'cleanup_unconfirmed', 'processes_alive'])
+def test_stale_success_with_lifecycle_failure_cannot_skip_repair_gate(repair_case, flag):
+    case = repair_case
+    enable_auto(case)
+    case['initial'].update(success=True)
+    case['initial']['final'][flag] = True
+    llm = CompatibilityLLM()
+    result = case['run'](llm)
+    assert result['success'] is False and not llm.calls
+    assert case['data']['source_repair']['status'] == 'not_applicable'
     assert not (case['run_dir'] / 'repair_workspace').exists()
 
 
@@ -255,6 +288,17 @@ def test_keyword_scope_uses_ast_keyword_evidence_not_a_comment(tmp_path):
     (tmp_path / 'caller.py').write_text('# call(legacy_api=1)\ncall(current_api=1)\n', encoding='utf-8')
     snapshot['files']['caller.py'] = digest(tmp_path / 'caller.py')
     assert not repair._automatic_repair_sources(execution, tmp_path, snapshot)['selected']
+
+
+@pytest.mark.parametrize('symbol', ['random_state', 'learning_rate', 'dropout', 'n_estimators',
+                                    'max_iter', 'num_layers', 'hidden_channels', 'momentum',
+                                    'randomState', 'learningRate', 'numLayers', 'maxIter',
+                                    'n_components', 'num_leaves', 'perplexity', 'tol', 'C', 'bagging_fraction'])
+@pytest.mark.parametrize('kind', ['attribute', 'keyword'])
+def test_hyperparameter_names_do_not_enter_automatic_compatibility_scope(tmp_path, symbol, kind):
+    execution, snapshot = selection_fixture(tmp_path, ['model.py'], symbol=symbol, kind=kind)
+    selected = repair._automatic_repair_sources(execution, tmp_path, snapshot)
+    assert not selected['selected'] and '协议敏感' in selected['reason']
 
 
 def test_unlisted_traceback_files_never_enter_auto_scope(tmp_path):

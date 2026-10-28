@@ -556,6 +556,31 @@ def test_complete_multilevel_header_is_bound_to_hashed_page(sources):
     assert rows[0]['status'] == 'comparable'
 
 
+def test_transposed_table_comparison_keeps_dataset_method_identity(sources):
+    fixture, packet, records, payload = _replace_comparison_table(sources,
+        'Datasets | Baseline | Signal Linear', 'SignGrid | 98.0 | 100.0')
+    payload['comparisons'][0]['reference']['column_labels'] = ['Signal Linear']
+    payload['comparisons'][0]['reference']['context_quotes'] = {'split': 'Test accuracy (%) in a single run.'}
+    rows, _ = validate_comparisons(payload, packet, fixture['workspace'], records)
+    assert rows[0]['reference']['column_evidence']['orientation'] == 'datasets_in_rows'
+    assert rows[0]['reference']['column_evidence']['column_index'] == 1
+    assert rows[0]['status'] == 'comparable'
+    payload['comparisons'][0]['reference']['value'] = 98.0
+    with pytest.raises(ValueError, match='does not belong'):
+        validate_comparisons(payload, packet, fixture['workspace'], records)
+
+
+def test_word_repetition_count_can_be_paired_without_changing_observed_runs(sources):
+    fixture, packet, records, payload = _replace_comparison_table(sources,
+        'Method SignGrid OtherGrid', 'Signal Linear test 100.0 98.0',
+        caption='Mean test accuracy (%) over ten runs.')
+    payload['comparisons'][0]['reference'].update(aggregation='mean', runs=10)
+    rows, _ = validate_comparisons(payload, packet, fixture['workspace'], records)
+    assert rows[0]['reference']['field_evidence']['runs']['value'] == 10
+    assert rows[0]['actual']['runs'] == 1
+    assert rows[0]['status'] == 'reference_only'
+
+
 @pytest.mark.parametrize('incomplete', [False, True])
 def test_multilevel_ambiguity_preserves_gap_without_verdict(sources, incomplete):
     header = 'SignGrid OtherGrid\nMethod\nFixed Random Fixed Random'

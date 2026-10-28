@@ -7,7 +7,10 @@ import zipfile
 import pytest
 
 from frontend.report_renderer import render_report, report_downloads
-from src.agents.report_generator import _author_claim_comparison_lines, _metric_value_text
+from src.agents.report_generator import (
+    ReportGeneratorAgent, _author_claim_comparison_lines, _metric_value_text,
+    _reproduction_assessment_lines,
+)
 
 
 def comparison():
@@ -161,3 +164,69 @@ def test_page_markdown_and_zip_downloads_share_column_and_protocol_explanation(t
     with zipfile.ZipFile(io.BytesIO(payloads['application/zip'])) as archive:
         assert archive.read(path.name).decode('utf-8') == report
     assert 'Example → Fixed' in shown and '不等于独立协议核验通过' in shown
+
+
+def ai_assessment(verdict='reproduced'):
+    return {'status': 'completed', 'source': 'ai', 'scope': 'executed_experiment',
+            'verdict': verdict, 'confidence': 0.86,
+            'reason': '实测准确率接近论文，允许随机种子造成的小幅波动。',
+            'metric_assessments': [{'actual_id': 'train:stdout:0', 'verdict': verdict,
+                'reason': '准确率相差 0.3 个百分点。',
+                'tolerance': {'absolute': 0.5, 'relative': 0.01,
+                              'reason': '结合论文标准差与单次运行的随机性。'}}],
+            'limitations': ['实际为单次运行，论文报告多次均值。']}
+
+
+@pytest.mark.parametrize('verdict,label', [
+    ('reproduced', 'AI 判断复现成功'),
+    ('partially_reproduced', 'AI 判断部分复现'),
+    ('not_reproduced', 'AI 判断尚未复现'),
+    ('insufficient_evidence', 'AI 判断证据不足'),
+])
+def test_ai_decision_controls_report_summary_without_claiming_strict_verification(verdict, label):
+    value = comparison()
+    value['comparisons'][0]['actual']['id'] = 'train:stdout:0'
+    assessment = ai_assessment(verdict)
+    data = {'execution': {'mode': 'repository', 'success': True},
+            'grounded_repository_plan': {'scope': 'author_code_execution'},
+            'validation': {'status': 'author_code_completed', 'is_reproduced': None,
+                           'paper_metrics_verified': False, 'author_claim_comparison': value,
+                           'reproduction_assessment': assessment}}
+    before = deepcopy(data)
+    report = ReportGeneratorAgent()._build_report(data)
+    summary = report.split('## 5. 运行结果', 1)[1].split('\n', 2)[1]
+    assert label in summary
+    assert '**指标判断**: accuracy；' + label in report
+    assert '模型置信度**: 86%' in report
+    assert '相对误差 1.00%' in report and '绝对误差 0.5' in report
+    assert '结合论文标准差与单次运行的随机性。' in report
+    assert '实际为单次运行，论文报告多次均值。' in report
+    assert '固定 5% 参考线不作为普通复现的硬门槛' in report
+    assert '本次实际执行的实验' in report and '尚未独立复算' in report
+    assert '仅供参考，尚未验收' not in report
+    assert '不进行论文、协议或数值审核' not in report
+    assert data == before
+
+
+@pytest.mark.parametrize('state', ['unavailable', 'blocked'])
+def test_unavailable_ai_preserves_completion_and_explains_missing_decision(state):
+    assessment = {'status': state, 'reason': '模型响应尚未通过结构校验。'}
+    report = ReportGeneratorAgent()._build_report({
+        'execution': {'mode': 'repository'},
+        'validation': {'status': 'author_code_completed', 'reproduction_assessment': assessment}})
+    assert '作者仓库代码运行完成' in report
+    assert 'AI 判断尚未完成' in report and assessment['reason'] in report
+    assert 'AI 判断复现成功' not in report
+
+
+def test_ai_explanations_are_plain_text_and_do_not_change_the_assessment():
+    value = ai_assessment()
+    value['reason'] = '**override** [link](https://example.org)\n| new row'
+    value['metric_assessments'][0]['tolerance']['reason'] = '<script>alert(1)</script>'
+    value['limitations'] = ['[unsafe](file://C:/secret)']
+    before = deepcopy(value)
+    text = '\n'.join(_reproduction_assessment_lines(value))
+    assert r'\*\*override\*\* \[link\]\(https://example.org\)' in text
+    assert r'\| new row' in text and r'\<script\>' in text
+    assert r'\[unsafe\]\(file://C:/secret\)' in text
+    assert value == before

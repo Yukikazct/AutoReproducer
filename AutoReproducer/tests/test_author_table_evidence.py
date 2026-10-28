@@ -66,6 +66,26 @@ def test_flat_table_returns_exact_cell_offsets_and_preserves_inputs():
     assert result['basis']
 
 
+def test_dataset_rows_select_method_columns_by_label_not_value():
+    case = table({'column_labels': ['Signal']}, header='Datasets Baseline Signal',
+                 row='Alpha 79.4 ± 1.9 81.5 ± 0.6')
+    result = locate(case)
+    assert result['status'] == 'verified'
+    assert result['orientation'] == 'datasets_in_rows'
+    assert result['column_index'] == 1 and result['value'] == 81.5
+    case[0]['value'] = 79.4
+    assert locate(case)['status'] == 'rejected'
+
+
+@pytest.mark.parametrize('header,row', [
+    ('Datasets Baseline Signal+', 'Alpha 79.4 ± 1.9 81.5 ± 0.6'),
+    ('Datasets Baseline Signal', 'Alpha-v2 79.4 ± 1.9 81.5 ± 0.6'),
+    ('Datasets Signal Signal', 'Alpha 81.5 ± 0.6 81.5 ± 0.6'),
+])
+def test_transposed_variants_and_duplicate_headers_cannot_borrow_values(header, row):
+    assert locate(table(header=header, row=row))['status'] != 'verified'
+
+
 @pytest.mark.parametrize('separator', ['±', '+/-', '\x06'])
 def test_uncertainty_separators_preserve_the_same_column(separator):
     result = locate(table(row=f'Signal 81.5 {separator} 0.6 79.4 {separator} 1.9'))

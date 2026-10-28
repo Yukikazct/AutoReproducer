@@ -320,7 +320,7 @@ def render_paper_input():
                 st.caption("从论文正文寻找仓库并尝试运行，实际报错会显示在日志中。")
                 if (not st.session_state.mock_mode
                         and st.session_state.get('corpus_paper_select', '无') == '无'):
-                    st.caption('按作者 README 直接运行仓库代码，缺包时自动安装并重试。')
+                    st.caption('AI 将结合 README 说明、源码和配置规划作者运行命令；缺包时自动安装并重试。')
             links = preview.get("repository_links", [])
             if links:
                 primary = next((link for link in links if link.get("is_author_code")), None)
@@ -497,12 +497,13 @@ with st.sidebar:
             help="请求在作者代码运行后检查实验协议、重载模型并独立计算指标；暂不支持核验时继续普通运行并记录原因。")
         if strict_validation:
             st.caption("严格核验需要完整模型、数据划分和实验设置证据；不支持时继续普通运行并记录核验不可用，结果以实际检查为准。")
+        st.caption("默认在作者命令完整结束后，由 AI 结合论文指标、实际差异与实验设置判断复现情况，并说明容许误差和局限。")
         source_repair = st.checkbox(
-            "兼容性源码修复：失败后自动重试", key="pdf_source_repair",
+            "AI 自动修复：失败后修复并重试", key="pdf_source_repair",
             disabled=st.session_state.running,
             on_change=_select_pdf_execution_mode,
             args=("pdf_source_repair", "pdf_strict_validation"),
-            help="按真实报错定位兼容性问题，最多两轮隔离修复和原命令重试；保留补丁与日志，不得改变实验协议。")
+            help="按真实报错恢复依赖、从作者公开引用补齐缺失数据，并尝试兼容性源码修复；修复后重跑原命令验证，保留来源、补丁与日志。")
         if source_repair:
             strict_validation = False
             editable_text = st.text_area(
@@ -933,8 +934,42 @@ with tab1:
         data = result.get("data", {}) or {}
         if result.get("state") == "COMPLETED":
             validation = data.get("validation") or {}
+            assessment = validation.get('reproduction_assessment') or {}
             if validation.get("result_level") == "failed":
                 st.error("实验未通过：" + validation.get("reason", "查看报告和执行日志"))
+            elif assessment.get('status') == 'completed':
+                verdict = assessment.get('verdict')
+                label = {'reproduced': 'AI 判断复现成功',
+                         'partially_reproduced': 'AI 判断部分复现',
+                         'not_reproduced': 'AI 判断尚未复现',
+                         'insufficient_evidence': 'AI 判断证据不足'}.get(verdict, 'AI 判断证据不足')
+                message = label + '：' + str(assessment.get('reason') or '详见报告中的指标和判断依据。')
+                if verdict == 'reproduced':
+                    st.success(message)
+                else:
+                    st.warning(message)
+                st.caption('判断范围为本次实际执行的实验。AI 根据具体论文选择合理误差；固定 5% 参考线不作为普通复现的硬门槛。')
+                confidence = assessment.get('confidence')
+                if type(confidence) in (int, float):
+                    st.caption(f'模型置信度：{confidence:.0%}（模型自评）。')
+                for item in assessment.get('metric_assessments') or []:
+                    tolerance = item.get('tolerance') or {}
+                    bounds = []
+                    if type(tolerance.get('relative')) in (int, float):
+                        bounds.append(f"相对误差 {tolerance['relative']:.2%}")
+                    if type(tolerance.get('absolute')) in (int, float):
+                        unit = {'percentage_points': ' 个百分点', 'fraction': '（比例）'}.get(
+                            item.get('difference_unit'), '（指标原单位）')
+                        bounds.append(f"绝对误差 {tolerance['absolute']:.4g}{unit}")
+                    explanation = '；'.join(bounds + [str(tolerance.get('reason') or '')]).strip('；')
+                    if explanation:
+                        st.caption('容许误差依据：' + explanation)
+                for limitation in assessment.get('limitations') or []:
+                    st.caption('判断局限：' + str(limitation))
+                for warning in validation.get('warnings', []):
+                    st.warning(warning)
+                if validation.get('paper_metrics_verified') is not True:
+                    st.caption('严格独立复算为可选核验，本次未完成该项。')
             elif validation.get("status") == "not_reproduced":
                 st.warning("完整实验已运行，论文数值验收未通过：" + validation.get("reason", "查看指标差异"))
             elif validation.get("status") == "reference_not_met":
@@ -956,6 +991,8 @@ with tab1:
                 st.info(validation.get("reason", "流程已结束，请查看实验结论"))
             elif validation.get('status') == 'author_code_completed':
                 st.success('所选仓库代码已运行完成，命令已正常退出。')
+                if assessment:
+                    st.caption('AI 复现判断尚未完成：' + str(assessment.get('reason') or '详见报告。'))
                 if validation.get('training_observed') is False:
                     st.caption('本次未记录到优化器更新；详见作者程序输出。')
                 for warning in validation.get('warnings', []):

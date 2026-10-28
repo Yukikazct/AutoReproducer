@@ -125,6 +125,23 @@ def test_explicit_official_cuda_install_has_same_long_budget_without_self_retry(
     assert instance.env_config["dependency_install_attempts"][0]["timeout_s"] == 1800
 
 
+def test_fixed_default_cpu_torch_gets_cold_install_budget_without_changing_pins(monkeypatch, tmp_path):
+    calls = install_responses(monkeypatch, [(0, 'installed', '')])
+    instance = executor()
+    instance.env_config['auto_prepare'] = True
+    assert prepare(instance, tmp_path) is None
+    assert len(calls) == 1 and calls[0]['kwargs']['timeout'] == ce.LOCAL_CPU_PIP_TIMEOUT
+    assert calls[0]['requirements'] == REQUIREMENTS
+
+
+def test_small_auto_prepared_stack_keeps_generic_budget(monkeypatch, tmp_path):
+    calls = install_responses(monkeypatch, [(0, 'installed', '')])
+    instance = executor()
+    instance.env_config.update(auto_prepare=True, requirements_txt='numpy==1.26.4')
+    assert prepare(instance, tmp_path) is None
+    assert len(calls) == 1 and calls[0]['kwargs']['timeout'] == ce.LOCAL_PIP_TIMEOUT
+
+
 @pytest.mark.parametrize("starting_source", [MIRROR, ALIYUN, USTC, OFFICIAL])
 @pytest.mark.parametrize("wheel", ["cpu", "cu121"])
 def test_reviewed_stack_receives_full_budget_on_its_first_source(monkeypatch, tmp_path, starting_source, wheel):

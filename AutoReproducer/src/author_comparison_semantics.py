@@ -14,10 +14,19 @@ _SPLITS = {
     'validation': r'\b(?:validation|valid|val)\b|验证',
     'train': r'\btrain(?:ing)?\b|训练',
 }
+_COUNT_WORDS = {word: number for number, word in enumerate(
+    'zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen'.split())}
+for _tens, _word in enumerate('twenty thirty forty fifty sixty seventy eighty ninety'.split(), 2):
+    _COUNT_WORDS[_word] = _tens * 10
+    for _one in range(1, 10):
+        _unit = next(word for word, number in _COUNT_WORDS.items() if number == _one)
+        _COUNT_WORDS[_word + '-' + _unit] = _tens * 10 + _one
+        _COUNT_WORDS[_word + ' ' + _unit] = _tens * 10 + _one
+_COUNT = r'(?:\d+|' + '|'.join(re.escape(word) for word in sorted(_COUNT_WORDS, key=len, reverse=True)) + ')'
 _RUNS = re.compile(
-    r'(?<![\w.+-])(?:(?P<before>\d+)\s+(?:independent\s+|random\s+|repeated\s+)?'
+    r'(?<![\w.+-])(?:(?P<before>' + _COUNT + r')\s+(?:independent\s+|random\s+|repeated\s+)?'
     r'(?:runs|trials|seeds|repetitions|repeats)|'
-    r'(?P<label>runs|trials|seeds|repetitions|repeats)\s*(?:=|:)\s*(?P<after>\d+))\b', re.I)
+    r'(?P<label>runs|trials|seeds|repetitions|repeats)\s*(?:=|:)\s*(?P<after>' + _COUNT + r'))\b', re.I)
 _SINGLE = re.compile(r'\b(?:a\s+single|single|one|1)\s+(?:run|trial|seed)\b', re.I)
 _AGGREGATIONS = {
     'mean': r'\b(?:mean|average|averaged|avg)\b|均值|平均',
@@ -91,7 +100,9 @@ def _repetitions(node, refs):
                     r'(?:\s*[,;:/&.±−–—-]\s*|\s+(?:and|or|to|through)\s+|\s+)[+-]?\d',
                     text[match.end():], re.I):
                 continue  # A list of IDs, progress fraction or range is not a count.
-            candidates.append((int(match['before'] or match['after']), _snippet(text, match), source))
+            literal = (match['before'] or match['after']).casefold()
+            count = int(literal) if literal.isdigit() else _COUNT_WORDS[literal]
+            candidates.append((count, _snippet(text, match), source))
         for match in _SINGLE.finditer(text):
             candidates.append((1, _snippet(text, match), source))
     values = {item[0] for item in candidates}
@@ -101,6 +112,11 @@ def _repetitions(node, refs):
     if len(values) == 1:
         return _support('contradicted', value=next(iter(values)), reason='Original repetition count differs')
     return _support('unknown', reason='Repetitions need an explicit, unambiguous runs/trials/seeds statement')
+
+
+def repetition_count_supported(node, refs):
+    """Support an explicitly scoped count, including English number words."""
+    return _repetitions(node, refs)['status'] == 'verified'
 
 
 def _aggregation(node, refs):

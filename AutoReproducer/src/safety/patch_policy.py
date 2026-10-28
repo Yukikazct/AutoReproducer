@@ -176,7 +176,8 @@ class PatchPolicy:
                  protected_files: Optional[Iterable[str]] = None,
                  protected_suffixes: Optional[Iterable[str]] = None,
                  workspace: Optional[str] = None,
-                 max_patchable_file_bytes: int = MAX_PATCHABLE_FILE_BYTES) -> None:
+                 max_patchable_file_bytes: int = MAX_PATCHABLE_FILE_BYTES,
+                 compatibility_source_files: Optional[Iterable[str]] = None) -> None:
         self._editable = {self._normalize(p) for p in (editable or [])
                           if self._normalize(p)}
         self._protected_prefixes = tuple(
@@ -187,6 +188,11 @@ class PatchPolicy:
         # 可选工作区根：提供后启用单文件体积预算校验（相对路径解析到真实文件）
         self._workspace = workspace
         self.max_patchable_file_bytes = int(max_patchable_file_bytes)
+        # Only the compatibility executor supplies this exact source scope,
+        # together with before/after AST validators. All directory, credential,
+        # data-extension, size and whitelist protections still apply.
+        self._compatibility_source_files = {self._normalize(name) for name in (compatibility_source_files or [])
+                                            if self._normalize(name).endswith('.py')}
 
     # ---------------- 基础工具 ----------------
 
@@ -210,6 +216,7 @@ class PatchPolicy:
             protected_suffixes=self._protected_suffixes,
             workspace=workspace,
             max_patchable_file_bytes=self.max_patchable_file_bytes,
+            compatibility_source_files=self._compatibility_source_files,
         )
 
     # ---------------- 判定 ----------------
@@ -269,7 +276,7 @@ class PatchPolicy:
 
         # 5) 文件名模式（test_*.py / *_eval.py / dataset_utils.py 等）
         stem = rel.stem
-        if DENIED_STEM_RE.match(stem) or DENIED_STEM_SUFFIX_RE.search(stem):
+        if (DENIED_STEM_RE.match(stem) or DENIED_STEM_SUFFIX_RE.search(stem)) and norm not in self._compatibility_source_files:
             return PatchDecision(norm, False, "denied_filename",
                                  f"文件名标识评测/测试/数据基础设施,禁止修改: {norm}")
 

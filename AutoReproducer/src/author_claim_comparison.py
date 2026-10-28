@@ -10,8 +10,8 @@ import math
 import re
 
 from src.author_comparison_context import comparison_plan, comparison_view, prepare_comparison_packet
-from src.author_comparison_semantics import context_evidence, reference_uncertainty, settings_evidence
-from src.author_table_evidence import locate_table_value
+from src.author_comparison_semantics import context_evidence, reference_uncertainty, repetition_count_supported, settings_evidence
+from src.author_table_evidence import dataset_row_header, locate_table_value
 from src.discovered_repository_plan import (
     _canonical, _citations, _has_value, _json_response, _planning_excerpts, _references,
 )
@@ -144,6 +144,12 @@ def collect_author_metrics(execution, *, workspace=None, plan=None, sources=None
                 source = record['source'].replace('stdout:', stream + ':')
                 records.append({**record, 'id': f"{step['id']}:{stream}:{len(records)}",
                                 'step_id': step['id'], 'source': f"{step['id']}:{source}"})
+    if execution.get('success') is True and workspace is not None and sources is not None:
+        from src.author_output_metrics import read_output_metrics
+        output_records, output_errors = read_output_metrics(
+            execution.get('author_output_receipts') or [], workspace, sources)
+        records.extend(output_records)
+        errors.extend(output_errors)
     return records, errors
 
 
@@ -278,7 +284,10 @@ def validate_comparisons(payload, packet, workspace, records):
                 raise ValueError('Reference metric needs explicit matching F1 averaging evidence; binary, macro and micro differ')
         # Ground the table row and dataset header separately, so a baseline
         # number elsewhere on the same page cannot serve as the method row.
-        if not _label_present(reference.get('method'), [{'source': 'pdf', 'quote': quote}]):
+        transposed = dataset_row_header(reference, quote, reference.get('column_quote'))
+        if transposed and not any(quote in ref['quote'] and reference['column_quote'] in ref['quote'] for ref in pdf_refs):
+            raise ValueError('Dataset row and method header must be exact same-page evidence')
+        if not transposed and not _label_present(reference.get('method'), [{'source': 'pdf', 'quote': quote}]):
             label = _quoted_method_typography(reference.get('method'), quote)
             if label is None:
                 raise ValueError('Reference quotation must identify the method row')
@@ -389,7 +398,7 @@ def validate_comparisons(payload, packet, workspace, records):
             runs = node.get('runs')
             if runs is not None and (type(runs) is not int or runs < 1
                     or (runs > 1 and not (node is actual and record.get('runs') == runs)
-                        and not _has_value(runs, refs))):
+                        and not _has_value(runs, refs) and not repetition_count_supported(node, refs))):
                 raise ValueError('Repetition count needs original evidence')
         p_unit, a_unit = metric_unit(reference), metric_unit(explicit=actual.get('unit'))
         if p_unit not in {'percent', 'fraction', 'scalar'} or a_unit not in {'percent', 'fraction', 'scalar', ''}:
@@ -543,13 +552,19 @@ def compare_author_claims(llm, packet, plan, workspace, execution, *, sources=No
               'metric_records': records, 'parse_errors': errors, 'comparisons': [], 'citations': [],
               'validation_errors': [],
               'reason': '未找到可与论文宣称配对的作者输出；代码运行结果不受影响。'}
+    prepared_packet = None
+    if not records and llm is not None and not getattr(llm, 'mock_mode', False):
+        from src.author_unlabelled_metrics import interpret_numeric_summaries
+        prepared_packet = prepare_comparison_packet(packet, plan, workspace)
+        records, interpretation = interpret_numeric_summaries(llm, prepared_packet, plan, workspace, execution)
+        result.update(metric_records=records, numeric_summary_interpretation=interpretation)
     if not records:
         result['reason'] = '作者输出中未识别到可比较的数值指标；代码运行结果不受影响。'
         return result
     if llm is None or getattr(llm, 'mock_mode', False):
         result['reason'] = '未配置可用于论文指标对比的真实模型；保留实际指标，代码运行结果不受影响。'
         return result
-    packet = prepare_comparison_packet(packet, plan, workspace)
+    packet = prepared_packet or prepare_comparison_packet(packet, plan, workspace)
     result['comparison_source_discovery'] = deepcopy(packet['comparison_source_discovery'])
     schema = """{citations:[{id,evidence_id}],comparisons:[{actual_id,
 reference:{name,value,std:number_or_null,unit:'percent|fraction|scalar',dataset,method,split:'test|validation|train',
@@ -572,8 +587,11 @@ settings:{status:'matched|different|unknown',reason,citations:[PDF and repositor
         'record name only after verifying the paper reports that metric; binary F1, macro F1 and micro F1 are distinct. '
         'Omit records with no corresponding paper metric. Put dataset, method and split in their separate fields. Do not pair a baseline row, another dataset, validation '
         'score or another model variant with the method test result. Reference value_quote must be an exact '
-        'short PDF substring containing both the number and the method row, with separate cited table headers '
+        'short PDF substring containing the complete result row, with separate cited table headers '
         'for dataset and units. All citations must select provided evidence_excerpts IDs. '
+        'Tables can have methods in rows and datasets in columns OR datasets in rows and methods in columns. '
+        'For dataset rows, quote that complete dataset row and the complete method header; column_labels '
+        'contains only the selected original HEADER path, not the row label. Never transpose the actual text. '
         'Method fields must use literal original names already present in their own citations. '
         'Select the specific method variant documented by the executed implementation and its matching PDF row; '
         'do not choose the base model when original sources identify a named variant. Use original literal labels '

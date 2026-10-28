@@ -18,6 +18,14 @@ def test_only_explicit_repetition_counts_bind_the_runs_field(count):
     assert check['status'] == 'verified' and check['value'] == 7
 
 
+@pytest.mark.parametrize('literal,count', [('ten', 10), ('seven', 7), ('twenty-five', 25), ('thirty two', 32)])
+def test_english_number_words_are_bound_to_repetition_context(literal, count):
+    check = evidence('We report mean test accuracy over ' + literal + ' runs.', runs=count)['runs']
+    assert check['status'] == 'verified' and check['value'] == count
+    assert evidence('We train for ' + literal + ' epochs.', runs=count)['runs']['status'] == 'unknown'
+    assert evidence('We use ' + literal + ' runs.', runs=count + 1)['runs']['status'] == 'contradicted'
+
+
 @pytest.mark.parametrize('count', ['7 epochs', '7 optimizer updates', 'batch_size=7', 'seed=7'])
 def test_training_counts_and_one_seed_value_do_not_prove_repetitions(count):
     assert evidence('Mean accuracy. ' + count)['runs']['status'] == 'unknown'

@@ -1,5 +1,6 @@
 """Model failure analysis is bounded and cannot rewrite author constraints."""
 import json
+import pytest
 
 from discovered_fixtures import make_experiment
 from src.author_failure_analysis import analyze_author_failure
@@ -14,7 +15,10 @@ class FakeLLM:
 
     def chat(self, prompt, **kwargs):
         self.calls.append((json.loads(prompt), kwargs))
-        return json.dumps(next(self.responses))
+        response = next(self.responses)
+        if isinstance(response, BaseException):
+            raise response
+        return response if isinstance(response, str) else json.dumps(response)
 
 
 class TwoRunExecutor:
@@ -141,3 +145,122 @@ def test_model_reads_actual_traceback_location_and_previous_repair_outcomes(tmp_
     assert 'specific failure here' in context['source_excerpts']['nested.py']
     assert '351' in context['source_excerpts']['nested.py']
     assert context['previous_repairs'][0]['status'] == 'failed_with_new_error'
+
+
+@pytest.mark.parametrize('invalid', [
+    '{"action":', [], {'action': []}, {'action': 'blocked', 'reason': {}},
+    {'request_files': ['../../outside.py']}, {'request_files': ['README.md', 'README.md']},
+    {'request_files': ['README.md'], 'command': 'untrusted command'},
+])
+@pytest.mark.parametrize('action', ['blocked', 'replace_compatibility_pin'])
+def test_invalid_response_feedback_can_recover_within_same_failure(tmp_path, invalid, action):
+    fixture, packet, plan, environment = prepared(tmp_path)
+    result = {'final': {'stderr': 'No matching distribution found for numpy==1.24.0 (from versions: 1.24.4)'}}
+    final = {'action': action, 'reason': 'resolver evidence checked'}
+    if action == 'replace_compatibility_pin':
+        final['requirement'] = 'numpy==1.24.4'
+    llm = FakeLLM([invalid, final])
+    data = {}
+    repair = analyze_author_failure(llm, result, plan, packet, fixture['workspace'],
+                                    environment, tmp_path, data)
+    assert (repair is not None) is (action == 'replace_compatibility_pin')
+    assert len(llm.calls) == 2
+    feedback = llm.calls[1][0]['analysis_feedback']
+    assert len(feedback) == 1 and feedback[0]['call'] == 1
+    assert 0 < len(feedback[0]['error']) <= 500
+    record = data['failure_analyses'][0]
+    assert record['source_reads'] == []
+    assert 'analysis_error' not in record
+    assert record['action'] == action
+    assert 'response_errors' in json.loads((tmp_path / 'failure_analyses.json').read_text(encoding='utf-8'))[0]
+
+
+def test_response_correction_and_source_read_share_three_call_budget(tmp_path):
+    fixture, packet, plan, environment = prepared(tmp_path)
+    result = {'final': {'stderr': 'No matching distribution found for numpy==1.24.0 (from versions: 1.24.4)'}}
+    llm = FakeLLM(['not json', {'request_files': ['README.md']},
+                   {'action': 'replace_compatibility_pin', 'requirement': 'numpy==1.24.4'}])
+    data = {}
+    repair = analyze_author_failure(llm, result, plan, packet, fixture['workspace'],
+                                    environment, tmp_path, data)
+    assert repair['requirement'] == 'numpy==1.24.4'
+    assert len(llm.calls) == 3
+    assert 'README.md' in llm.calls[2][0]['source_excerpts']
+    assert data['failure_analyses'][0]['source_reads'] == ['README.md']
+    assert len(data['failure_analyses'][0]['response_errors']) == 1
+
+
+def test_invalid_responses_exhaust_shared_budget_and_do_not_bypass_fingerprint(tmp_path):
+    fixture, packet, plan, environment = prepared(tmp_path)
+    result = {'final': {'stderr': 'RuntimeError: failure'}}
+    llm = FakeLLM(['not json'] * 4)
+    data = {}
+    for _ in range(2):
+        assert analyze_author_failure(llm, result, plan, packet, fixture['workspace'],
+                                      environment, tmp_path, data) is None
+    assert len(llm.calls) == 3
+    assert len(llm.calls[2][0]['analysis_feedback']) == 2
+    assert len(data['failure_analyses']) == 1
+    assert len(data['failure_analyses'][0]['response_errors']) == 3
+    assert data['failure_analyses'][0]['analysis_error']
+    assert data['failure_analyses'][0]['action'] == 'blocked'
+
+
+@pytest.mark.parametrize('api_error', ['[LLM API Error: HTTP 401 api_key=',
+                                     '[LLM API Error: HTTP 429 token=',
+                                     '[LLM API Error: connection failed authorization='])
+def test_api_failure_is_redacted_and_not_retried(tmp_path, api_error):
+    fixture, packet, plan, environment = prepared(tmp_path)
+    result = {'final': {'stderr': 'RuntimeError: failure'}}
+    secret = 'sk-' + 'fakevalue' * 4
+    llm = FakeLLM([api_error + secret + ' ' + 'error details ' * 100 + ']', {'action': 'blocked', 'reason': 'unused'}])
+    data = {}
+    assert analyze_author_failure(llm, result, plan, packet, fixture['workspace'],
+                                  environment, tmp_path, data) is None
+    assert len(llm.calls) == 1
+    assert not data['failure_analyses'][0]['response_errors']
+    assert len(data['failure_analyses'][0]['analysis_error']) <= 500
+    assert secret not in json.dumps(data)
+    assert secret not in (tmp_path / 'failure_analyses.json').read_text(encoding='utf-8')
+
+
+def test_transport_exception_is_not_retried(tmp_path):
+    fixture, packet, plan, environment = prepared(tmp_path)
+    llm = FakeLLM([ConnectionError('server unavailable'), {'action': 'blocked', 'reason': 'unused'}])
+    data = {}
+    assert analyze_author_failure(llm, {'final': {'stderr': 'failure'}}, plan, packet,
+                                  fixture['workspace'], environment, tmp_path, data) is None
+    assert len(llm.calls) == 1
+    assert data['failure_analyses'][0]['analysis_error'] == 'server unavailable'
+
+
+def test_api_error_json_credentials_are_redacted_before_recording(tmp_path):
+    fixture, packet, plan, environment = prepared(tmp_path)
+    secret = 'invented-test-credential'
+    llm = FakeLLM(['[LLM API Error: HTTP 401 ' + json.dumps({'api_key': secret}) + ']'])
+    data = {}
+    analyze_author_failure(llm, {'final': {'stderr': 'failure'}}, plan, packet,
+                           fixture['workspace'], environment, tmp_path, data)
+    assert secret not in json.dumps(data)
+    assert '[REDACTED]' in data['failure_analyses'][0]['analysis_error']
+
+
+def test_missing_model_configuration_does_not_request_analysis(tmp_path):
+    fixture, packet, plan, environment = prepared(tmp_path)
+    llm = FakeLLM([])
+    llm.base_url, llm.model = '', 'configured-model'
+    data = {}
+    assert analyze_author_failure(llm, {'final': {'stderr': 'failure'}}, plan, packet,
+                                  fixture['workspace'], environment, tmp_path, data) is None
+    assert not llm.calls
+    assert not data
+
+
+def test_valid_blocked_analysis_does_not_consume_correction_budget(tmp_path):
+    fixture, packet, plan, environment = prepared(tmp_path)
+    llm = FakeLLM([{'action': 'blocked', 'reason': 'original hardware unavailable'}, 'not used'])
+    data = {}
+    assert analyze_author_failure(llm, {'final': {'stderr': 'CUDA unavailable'}}, plan, packet,
+                                  fixture['workspace'], environment, tmp_path, data) is None
+    assert len(llm.calls) == 1
+    assert data['failure_analyses'][0]['reason'] == 'original hardware unavailable'

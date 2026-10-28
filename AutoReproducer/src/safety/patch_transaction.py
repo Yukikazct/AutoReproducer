@@ -18,7 +18,9 @@ class PatchTransaction:
     """All-or-nothing candidate with rollback unless the caller explicitly commits.
 
     The caller owns the isolated workspace and must stop its processes before
-    entering or leaving the transaction. Shared repository caches are unsuitable.
+    entering or leaving the transaction. If cleanup cannot be confirmed after
+    execution, defer_rollback retains the uncommitted candidate for later cleanup.
+    Shared repository caches are unsuitable.
     Only existing regular source files can be replaced; additions/deletions and
     executable commands are deliberately outside the proposal format.
     """
@@ -32,6 +34,8 @@ class PatchTransaction:
         self.restored = []
         self.removed = []
         self.rollback_error = None
+        self.rollback_deferred = False
+        self.rollback_deferred_reason = None
         if not isinstance(patches, list) or not 1 <= len(patches) <= MAX_PATCH_FILES_PER_CANDIDATE:
             raise ValueError(f"a candidate requires 1-{MAX_PATCH_FILES_PER_CANDIDATE} patches")
         seen = set()
@@ -50,6 +54,20 @@ class PatchTransaction:
                 raise ValueError(f"patch target is not a regular file: {decision.path}")
             content = patch.get("content")
             base = patch.get("base_sha256")
+            if 'edits' in patch:
+                if 'content' in patch or not isinstance(patch['edits'], list) or not 1 <= len(patch['edits']) <= 16:
+                    raise ValueError('patch needs either complete content or one to sixteen exact edits')
+                content = path.read_bytes().decode('utf-8')
+                for edit in patch['edits']:
+                    if not isinstance(edit, dict) or set(edit) - {'before', 'after', 'count'}:
+                        raise ValueError('each exact edit needs before, after and optional occurrence count')
+                    before, after, count = edit.get('before'), edit.get('after'), edit.get('count', 1)
+                    if (not isinstance(before, str) or not before or not isinstance(after, str)
+                            or type(count) is not int or not 1 <= count <= 32
+                            or content.count(before) != count):
+                        found = content.count(before) if isinstance(before, str) and before else 0
+                        raise ValueError(f'exact edit occurrence count mismatch: requested {count}, actual {found}; use unique context or the actual count')
+                    content = content.replace(before, after)
             if not isinstance(content, str) or not isinstance(base, str) or not re.fullmatch(r"[0-9a-f]{64}", base):
                 raise ValueError("patch requires text content and an exact base_sha256")
             raw = content.encode("utf-8")
@@ -107,7 +125,18 @@ class PatchTransaction:
     def commit(self):
         if self.snapshot is None:
             raise RuntimeError("the patch transaction has not started")
+        if self.rollback_deferred:
+            raise RuntimeError("a candidate awaiting process cleanup cannot be committed")
         self.committed = True
+
+    def defer_rollback(self, reason):
+        """Retain an uncommitted tree while its process cleanup is unconfirmed."""
+        if self.snapshot is None or self.committed:
+            raise RuntimeError("only an active uncommitted candidate can defer rollback")
+        if not isinstance(reason, str) or not reason.strip():
+            raise ValueError("deferred rollback requires a reason")
+        self.rollback_deferred = True
+        self.rollback_deferred_reason = reason
 
     def _rollback(self, original_error=None):
         try:
@@ -136,6 +165,6 @@ class PatchTransaction:
                 checked.unlink()
 
     def __exit__(self, error_type, error, traceback):
-        if error is not None or not self.committed:
+        if not self.rollback_deferred and (error is not None or not self.committed):
             self._rollback(error)
         return False

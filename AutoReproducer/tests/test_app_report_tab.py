@@ -70,6 +70,54 @@ def test_author_execution_completion_is_displayed_without_numerical_reproduction
     assert not any('论文数值复现通过' in item.value for item in app.success)
 
 
+@pytest.mark.parametrize('verdict,label', [
+    ('reproduced', 'AI 判断复现成功'),
+    ('partially_reproduced', 'AI 判断部分复现'),
+    ('not_reproduced', 'AI 判断尚未复现'),
+    ('insufficient_evidence', 'AI 判断证据不足'),
+])
+def test_ai_assessment_takes_precedence_over_code_completion_and_optional_strict_check(tmp_path, monkeypatch, verdict, label):
+    from streamlit.testing.v1 import AppTest
+
+    monkeypatch.setattr(hm, 'get_project_data_dir', lambda: tmp_path)
+    monkeypatch.delenv('AUTOREPRO_RESUME_PROGRESS', raising=False)
+    app = AppTest.from_file(APP_PATH, default_timeout=120)
+    app.session_state['result'] = {'state': 'COMPLETED', 'data': {'validation': {
+        'status': 'author_code_completed', 'is_reproduced': None, 'paper_metrics_verified': False,
+        'reproduction_assessment': {'status': 'completed', 'source': 'ai', 'verdict': verdict,
+            'reason': '误差与论文报告的随机波动一致。', 'confidence': 0.87,
+            'metric_assessments': [{'actual_id': 'train:stdout:0', 'verdict': verdict,
+                'reason': '准确率相差 0.3 个百分点。',
+                'tolerance': {'absolute': None, 'relative': 0.02, 'reason': '综合单次与均值的差异。'}}],
+            'limitations': ['单次运行与论文多次均值仍有统计差别。']}}}}
+    app.run()
+    assert not app.exception
+    feedback = app.success if verdict == 'reproduced' else app.warning
+    assert any(label in item.value and '随机波动' in item.value for item in feedback)
+    captions = '\n'.join(item.value for item in app.caption)
+    assert '相对误差 2.00%' in captions and '综合单次与均值的差异' in captions
+    assert '模型置信度：87%' in captions
+    assert '单次运行与论文多次均值' in captions
+    assert '严格独立复算为可选核验' in captions
+    assert not any('所选仓库代码已运行完成' in item.value for item in app.success)
+
+
+def test_unavailable_ai_keeps_completed_execution_visible(tmp_path, monkeypatch):
+    from streamlit.testing.v1 import AppTest
+
+    monkeypatch.setattr(hm, 'get_project_data_dir', lambda: tmp_path)
+    monkeypatch.delenv('AUTOREPRO_RESUME_PROGRESS', raising=False)
+    app = AppTest.from_file(APP_PATH, default_timeout=120)
+    app.session_state['result'] = {'state': 'COMPLETED', 'data': {'validation': {
+        'status': 'author_code_completed', 'is_reproduced': None,
+        'reproduction_assessment': {'status': 'unavailable', 'reason': '模型暂不可用。'}}}}
+    app.run()
+    assert not app.exception
+    assert any('所选仓库代码已运行完成' in item.value for item in app.success)
+    assert any('AI 复现判断尚未完成：模型暂不可用。' in item.value for item in app.caption)
+    assert not any('AI 判断复现成功' in item.value for item in app.success)
+
+
 def test_report_is_rendered_through_native_markdown(at_report):
     """报告经原生 st.markdown 上屏：围栏原样保留，无自绘面板残留。"""
     assert not at_report.exception

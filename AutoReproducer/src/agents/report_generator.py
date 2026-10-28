@@ -216,12 +216,68 @@ def _comparison_field_lines(node, side):
     return lines
 
 
-def _author_claim_comparison_lines(comparison):
+_AI_REPRODUCTION_LABELS = {
+    'reproduced': 'AI 判断复现成功',
+    'partially_reproduced': 'AI 判断部分复现',
+    'not_reproduced': 'AI 判断尚未复现',
+    'insufficient_evidence': 'AI 判断证据不足',
+}
+
+
+def _reproduction_assessment_lines(assessment, comparison=None):
+    """Show the ordinary AI decision separately from optional strict checks."""
+    if not isinstance(assessment, dict) or not assessment:
+        return []
+    lines = ['', '### AI 复现判断', '']
+    if assessment.get('status') != 'completed':
+        lines += ['AI 判断尚未完成；保留作者程序的实际执行结果。',
+                  '- **原因**: ' + _markdown_text(_txt(assessment.get('reason'), '未记录'))]
+        return lines + ['']
+    label = _AI_REPRODUCTION_LABELS.get(assessment.get('verdict'), 'AI 判断证据不足')
+    lines += ['- **结论**: ' + label,
+              '- **范围**: 本次实际执行的实验；不代表整篇论文所有实验均已复现。',
+              '- **判断方式**: AI 结合论文指标、实际差异与实验设置选择合理误差；固定 5% 参考线不作为普通复现的硬门槛。',
+              '- **模型置信度**: ' + _fmt(assessment.get('confidence'), '.0%') + '（模型自评）',
+              '- **理由**: ' + _markdown_text(_txt(assessment.get('reason')))]
+    rows = {row.get('actual_id') or (row.get('actual') or {}).get('id'): row
+            for row in (comparison or {}).get('comparisons', [])
+            if isinstance(row, dict)}
+    for item in assessment.get('metric_assessments') or []:
+        if not isinstance(item, dict):
+            continue
+        row = rows.get(item.get('actual_id')) or {}
+        name = item.get('metric') or row.get('metric') or item.get('actual_id') or '指标'
+        verdict = _AI_REPRODUCTION_LABELS.get(item.get('verdict'), 'AI 判断证据不足')
+        lines.append('- **指标判断**: ' + _markdown_text(_txt(name)) + '；' + verdict + '；'
+                     + _markdown_text(_txt(item.get('reason'))))
+        tolerance = item.get('tolerance') or {}
+        if not isinstance(tolerance, dict):
+            continue
+        bounds = []
+        if type(tolerance.get('relative')) in (int, float):
+            bounds.append('相对误差 ' + _fmt(tolerance['relative'], '.2%'))
+        if type(tolerance.get('absolute')) in (int, float):
+            unit = {'percentage_points': ' 个百分点', 'fraction': '（比例）'}.get(
+                item.get('difference_unit') or row.get('difference_unit'), '（指标原单位）')
+            bounds.append('绝对误差 ' + _fmt(tolerance['absolute'], '.4g') + unit)
+        if tolerance.get('reason') or bounds:
+            lines.append('- **容许误差依据**: ' + _markdown_text('；'.join(bounds + [
+                _txt(tolerance.get('reason'))]).strip('；')))
+    for limitation in assessment.get('limitations') or []:
+        lines.append('- **判断局限**: ' + _markdown_text(_txt(limitation)))
+    return lines + ['']
+
+
+def _author_claim_comparison_lines(comparison, assessment=None):
     if not comparison:
         return []
+    ai_completed = isinstance(assessment, dict) and assessment.get('status') == 'completed'
+    ai_metrics = {item.get('actual_id'): item for item in (assessment or {}).get('metric_assessments', [])
+                  if isinstance(item, dict)} if ai_completed else {}
     lines = ['', '### 作者输出与论文宣称对比', '',
              _markdown_text(_txt(comparison.get('reason'))), '',
-             '本表使用作者程序输出，尚未独立复算。数值对比不影响代码完成状态。']
+             '本表使用作者程序输出，尚未独立复算。数值对比不影响代码完成状态。'
+             + (' 普通复现结论见上方 AI 判断；独立复算为可选核验。' if ai_completed else '')]
     rows = comparison.get('comparisons') or []
     if not rows:
         note = ('实际输出中的指标保留在下方证据表；未将其他数据集或基线指标作为参考。'
@@ -244,14 +300,21 @@ def _author_claim_comparison_lines(comparison):
             relative = row.get('relative_difference')
             if relative is not None:
                 delta += f"；相对差异 {relative:+.2%}"
-        verdict = {'not_comparable': '设置或指标不对应', 'reference_only': '仅供参考，尚未验收'}.get(row['status'])
+        verdict = {'not_comparable': '设置或指标不对应',
+                   'reference_only': ('存在设置或统计差异，见 AI 判断' if ai_completed
+                                      else '仅供参考，尚未验收')}.get(row['status'])
         if verdict is None:
             verdict = ('达到参考' if row['meets_reference'] else '未达到参考') if row.get('meets_reference') is not None else (
                 '在误差范围内' if row.get('within_tolerance') else '超出误差范围')
+        metric_assessment = ai_metrics.get(actual.get('id'))
+        if metric_assessment:
+            verdict = _AI_REPRODUCTION_LABELS.get(metric_assessment.get('verdict'), 'AI 判断证据不足')
         cells = [f"{row['metric']} / {paper.get('dataset')} / {paper.get('method')}",
                  value_cell(paper), value_cell(actual), delta, verdict]
         lines.append('| ' + ' | '.join(_markdown_text(cell) for cell in cells) + ' |')
-    lines += ['', f"参考阈值为项目约定的 {comparison.get('relative_tolerance', 0.05):.0%} 相对误差，非论文提供的标准。"]
+    lines += ['', f"原始数值参考线为项目约定的 {comparison.get('relative_tolerance', 0.05):.0%} 相对误差，非论文提供的标准；"
+              + ('最终普通复现结论由 AI 结合具体论文与合理误差判断。' if ai_completed
+                 else '该参考线本身不等于复现结论。')]
     citations = {ref['id']: ref for ref in comparison.get('citations', [])}
     for row in rows:
         paper, actual = row['reference'], row['actual']
@@ -519,10 +582,13 @@ def _discovered_plan_lines(data):
     if not plan:
         return []
     if plan.get('scope') == 'author_code_execution':
+        ai_assessment = (data.get('validation') or {}).get('reproduction_assessment') or {}
         lines = ['### 本次 PDF 与作者源码确定的运行计划', '',
                  '- **运行范围**: 所选作者入口及其原始参数。',
                  '- **结束条件**: 全部所选命令正常返回、退出码为 0，所属进程已结束并清理。',
-                 '- **运行结果**: 记录作者输出和实际训练更新；不进行论文、协议或数值审核。',
+                 '- **运行结果**: 记录作者输出和实际训练更新；'
+                 + ('由 AI 结合论文指标、实际差异和合理误差判断复现情况。' if ai_assessment else
+                    '不进行论文、协议或数值审核。'),
                  '', '**原始作者命令**', '']
         for step in plan.get('steps', []):
             lines += ['- ' + _markdown_text(_txt(step.get('id'))) + '，目录：' +
@@ -906,6 +972,14 @@ class ReportGeneratorAgent(BaseAgent):
                     + outcomes.get(item.get('status'), '未完成') + '；'
                     + _markdown_text(_txt(item.get('reason'))))
         runtime_repairs = data.get('dependency_repair_attempts') or []
+        if data.get('data_repair_attempts'):
+            lines += ['', '### AI 自动恢复缺失数据', '',
+                      '依据作者资料中的公开引用下载真实输入，保留原命令和实验设置；下载摘要用于核对本次输入，独立数据认证另行记录。']
+            for repair in data['data_repair_attempts']:
+                lines += ['- 文件：' + _markdown_text(repair['target']) + '；大小：' + str(repair['bytes']) + ' 字节',
+                          '- 来源：' + _markdown_text(repair['url']),
+                          '- SHA-256：`' + repair['sha256'] + '`',
+                          '- 选择依据：' + _markdown_text(repair.get('reason', ''))]
         if runtime_repairs:
             lines += ['', '### 根据运行报错补充依赖', '']
             for repair in runtime_repairs:
@@ -1085,7 +1159,10 @@ class ReportGeneratorAgent(BaseAgent):
         # 5. 验证结果 + 指标对比
         # 四态：复现成功 / 复现失败 / 无法验证（代码没跑起来，不能算复现失败）/
         # 无法核对（跑了，但论文信息不足、代码是占位实现——既不判成功也不判失败）
-        if validation.get("status") == "needs_pdf":
+        assessment = validation.get('reproduction_assessment') or {}
+        if assessment.get('status') == 'completed':
+            state_text = _AI_REPRODUCTION_LABELS.get(assessment.get('verdict'), 'AI 判断证据不足') + '（本次执行实验）'
+        elif validation.get("status") == "needs_pdf":
             state_text = "⏳ 待补充论文 PDF（作者代码尚未执行）"
         elif validation.get("status") == "insufficient_evidence":
             state_text = ("⚠️ 无法核验（运行环境不受支持，未执行论文实验）"
@@ -1152,13 +1229,14 @@ class ReportGeneratorAgent(BaseAgent):
         reason = _txt(validation.get("reason")).strip()
         if reason and reason not in _txt(
                 (validation.get("validation") or {}).get("analysis")):
-            lines.append(f"- **判定原因**: {reason}")
+            lines.append(f"- **判定原因**: {_markdown_text(reason) if assessment else reason}")
         source_request = data.get("source_request") or {}
         if source_request.get("next_action"):
             lines.append("- **下一步**: " + _markdown_text(_txt(source_request["next_action"])))
         for warning in validation.get('warnings', []):
             lines.append('- **运行说明**: ' + _markdown_text(_txt(warning)))
         lines.extend(_numeric_compatibility_lines(validation))
+        lines.extend(_reproduction_assessment_lines(assessment, validation.get('author_claim_comparison')))
         for receipt in validation.get('author_execution', []):
             step = receipt.get('step') or {}
             lines.append('- **作者命令结束记录**: ' + _markdown_text(_txt(step.get('id'))) +
@@ -1221,7 +1299,7 @@ class ReportGeneratorAgent(BaseAgent):
                     av = metric_cell(av, metrics_comp.get("actual_units") or {}, ak)
                     lines.append(f"| {name} | {pv} | {av} |")
         lines += _runtime_dataset_lines(validation.get('runtime_dataset_evidence'))
-        lines += _author_claim_comparison_lines(validation.get('author_claim_comparison'))
+        lines += _author_claim_comparison_lines(validation.get('author_claim_comparison'), assessment)
         lines += _outcome_diagnosis_lines(data)
         records = validation.get("metric_records") or []
         if records:
