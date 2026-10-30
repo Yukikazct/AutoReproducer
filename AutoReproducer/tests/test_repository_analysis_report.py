@@ -60,6 +60,24 @@ def test_report_shows_verified_self_repair_outcomes_separately_from_paper_verdic
     assert '论文数值复现成功' not in report
 
 
+@pytest.mark.parametrize('phase', ['environment_preparation', 'dataset_preparation', None])
+def test_legacy_repair_without_author_stage_uses_scoped_retry_wording(phase):
+    repair = {'status': 'resolved', 'reason': '修复后的原命令已实际重跑并正常退出。',
+              'attempts': [{'status': 'resolved', 'round': 1, 'reason': '重试原作者命令'}]}
+    if phase:
+        repair['recovered_phase'] = phase
+    report = build({'self_repair': repair})
+    assert '受控步骤命令重跑通过' in report
+    assert '原命令已实际重跑' not in report and '原作者命令重跑通过' not in report
+    assert ('历史记录未保存修复阶段' in report) is (phase is None)
+
+
+def test_confirmed_author_repair_retains_author_retry_wording():
+    report = build({'self_repair': {'status': 'resolved', 'recovered_phase': 'author_execution',
+                                  'reason': '修复后的原命令已实际重跑并正常退出。'}})
+    assert '原作者命令重跑通过' in report
+
+
 def test_current_author_run_report_has_completion_and_metrics_without_old_review_requirements():
     report = build({
         'grounded_repository_plan': {'scope': 'author_code_execution', 'steps': [
@@ -118,7 +136,7 @@ def test_result_report_explains_accepted_summary_with_one_real_call_and_scope(re
     assert "The selected experiment has close numerical results." in report
     assert "| mse | 0.375 | 0.3841444 | 0.0091444 | 2.44% |" in report
     assert "Only one selected experiment is covered." in report
-    assert "用户授权的 MSE、MAE、已完成轮数、协议核验与独立复算状态摘要" in report
+    assert "本次已记录的实际指标、训练进展、协议核验与独立复算状态摘要" in report
     assert "选定论文实验数值复现通过" in report
     assert "最终结论由确定性核验给出" in report
 

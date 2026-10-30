@@ -469,6 +469,8 @@ with st.sidebar:
     source_repair = False
     source_repair_auto = False
     source_repair_editable = []
+    intelligent_recovery = False
+    intelligent_recovery_mode = 'collaborative'
     if (input_mode == "上传PDF" and uploaded_file and not st.session_state.mock_mode
             and not experiment_profile and not corpus_paper):
         requested_method = st.text_input(
@@ -480,6 +482,16 @@ with st.sidebar:
             disabled=st.session_state.running)
         experiment_request = {name: text.strip() for name, text in
             (("method", requested_method), ("dataset", requested_dataset)) if text.strip()}
+        intelligent_recovery = st.checkbox(
+            "智能调查与排障", key="pdf_intelligent_recovery", value=True,
+            disabled=st.session_state.running,
+            help="遇到实际失败时，在固定预算内调查源码、作者环境和公开产物；处理过程与证据写入报告，不改变实验协议。")
+        if intelligent_recovery:
+            intelligent_recovery_mode = st.selectbox(
+                '调查方式', ['collaborative', 'single'], key='pdf_intelligent_recovery_mode',
+                format_func=lambda mode: {'collaborative': '多智能体协作（独立反证审查）',
+                                          'single': '单智能体（自检）'}[mode],
+                disabled=st.session_state.running)
         def _select_pdf_execution_mode(selected, alternative):
             if st.session_state.get(selected):
                 st.session_state[alternative] = False
@@ -619,6 +631,8 @@ if start_btn and not st.session_state.running:
                 source_repair=source_repair,
                 source_repair_auto=source_repair_auto,
                 source_repair_editable=source_repair_editable,
+                intelligent_recovery=intelligent_recovery,
+                intelligent_recovery_mode=intelligent_recovery_mode,
                 **({"preferred_repo_url": manual_repo_url} if manual_repo_url else {}),
                 corpus_paper=corpus_paper,
                 experiment_profile=experiment_profile,
@@ -904,6 +918,18 @@ with tab1:
         st.info("正在准备实验，阶段状态将在这里更新。")
     if snap:
         render_activity(snap, st_module=st)
+    collaboration_messages = (snap or {}).get('agent_messages', [])
+    if not collaboration_messages and st.session_state.result:
+        result_data = st.session_state.result.get('data') or {}
+        collaboration_messages = (result_data.get('agent_collaboration') or {}).get('messages', [])
+    if collaboration_messages:
+        with st.expander(f"Agent 协作记录（{len(collaboration_messages)} 条）", expanded=False):
+            st.caption("查看证据交接、补充请求和校验反馈。协作消息不代表实验已核验通过。")
+            for message in collaboration_messages[-40:]:
+                st.markdown(f"**{message['sender']} → {message['recipient']}** · {message['kind']}")
+                if message.get('reply_to'):
+                    st.caption('回复：' + str(message['reply_to']))
+                st.json(message.get('content'), expanded=False)
     if snap and snap.get("execution_output"):
         with st.expander("代码执行输出（最近16000字符）", expanded=True):
             if active_executions:

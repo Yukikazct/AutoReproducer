@@ -241,8 +241,18 @@ def retry_requested_python_conflict(packet, managed_root, environment, selected_
                                     preparation, run_preflight, *, offline=False, on_switch=None):
     """Retry the unchanged preflight only for a proven requested-package conflict."""
     from src.agents.code_executor import _requested_python_conflict
+    from src.intelligent_recovery import current_investigation
+    from src.repository_repairer import repair_is_stopped
     attempted = {tuple(int(part) for part in selected_python['python_version'].split('.'))}
     while preparation.get('success') is not True:
+        # A cancelled installer or unconfirmed process cleanup is not evidence
+        # authorizing another interpreter and another installation process.
+        if repair_is_stopped(preparation):
+            session = current_investigation()
+            if session:
+                session.record_execution(preparation)
+                session.ensure_running()
+            break
         effective = preparation.get('effective_env_config') or {}
         if effective.get('dependency_failure_kind') != 'python_incompatible':
             break
@@ -255,15 +265,39 @@ def retry_requested_python_conflict(packet, managed_root, environment, selected_
                     break
         if not conflict:
             break
-        replacement = select_author_python(packet, managed_root, offline=offline,
-            exclude_versions=set(attempted), required_python=conflict.get('requires_python'),
-            additional_python_requirements=([{'path': environment.get('required_python_source',
-                'actual_requested_dependency'), 'specifier': environment['required_python']}]
-                if environment.get('required_python') else []))
-        attempted.add(tuple(int(part) for part in replacement['python_version'].split('.')))
-        replacement['selected_for'] = conflict
-        environment.update(replacement)
-        if on_switch:
-            on_switch(replacement)
-        preparation = run_preflight(environment)
+        def switch_and_verify():
+            replacement = select_author_python(packet, managed_root, offline=offline,
+                exclude_versions=set(attempted), required_python=conflict.get('requires_python'),
+                additional_python_requirements=([{'path': environment.get('required_python_source',
+                    'actual_requested_dependency'), 'specifier': environment['required_python']}]
+                    if environment.get('required_python') else []))
+            attempted.add(tuple(int(part) for part in replacement['python_version'].split('.')))
+            replacement['selected_for'] = conflict
+            environment.update(replacement)
+            if on_switch:
+                on_switch(replacement)
+            return run_preflight(environment)
+
+        session = current_investigation()
+        if session:
+            with session.phase('environment_preparation'):
+                preparation = session.run_action('select_compatible_author_python', switch_and_verify,
+                    problem='Requested author dependency is incompatible with the selected Python',
+                    evidence={'conflict': conflict, 'python_version': environment.get('python_version'),
+                              'requirements_txt': effective.get('requirements_txt'),
+                              'repository': packet.get('repository', {}).get('revision')},
+                    role='EnvBuilder', review={'status': 'accepted',
+                        'reviewer': 'requested_dependency_rules',
+                        'reason': 'A real installer diagnostic proves the interpreter constraint; author requirements remain unchanged.'},
+                    verify=lambda result: {'success': (result.get('success') is True
+                        if result.get('executed') is True or (result.get('final') or {}).get('executed') is True else None),
+                        'recovered_phase': ('environment_preparation' if result.get('success') is True and
+                            (result.get('executed') is True or (result.get('final') or {}).get('executed') is True) else None),
+                        'reason': 'Unchanged native preflight rerun under the selected interpreter',
+                        'evidence': {'execution_dir': result.get('run_dir'),
+                                     'cleanup_confirmed': result.get('cleanup_confirmed')}})
+                session.record_execution(preparation)
+                session.ensure_running()
+        else:
+            preparation = switch_and_verify()
     return preparation

@@ -7,6 +7,7 @@ from unittest.mock import Mock
 import pytest
 
 from src import result_diagnosis as diagnosis
+from src.agent_collaboration import CollaborationSession
 from src.agents.report_generator import ReportGeneratorAgent, _outcome_diagnosis_lines
 
 
@@ -324,3 +325,200 @@ def test_report_discloses_model_failure_and_escapes_generated_markdown(case):
     report = '\n'.join(_outcome_diagnosis_lines(case['data']))
     assert '**模型补充分析**' in report and 'failed \\*\\*untrusted\\*\\*' in report
     assert 'private-value' not in report
+
+
+def test_blocking_checks_are_prioritized_and_merge_all_related_metric_evidence(case):
+    second = deepcopy(case['row'])
+    second.update(metric='f1', status='not_comparable')
+    second['actual'].update(unit=None, dataset='Other', runs=None)
+    case['row']['actual']['dataset'] = 'Other'
+    case['validation']['author_claim_comparison']['comparisons'].append(second)
+    llm = Model({'hypotheses': [{'category': 'execution', 'message': '可进一步核对自然结束范围。',
+                               'evidence_ids': ['execution']}]})
+    result = run(case, llm)
+    checks = result['next_steps']
+    assert [item['rank'] for item in checks] == list(range(1, len(checks) + 1))
+    assert [item['priority'] for item in checks] == sorted(item['priority'] for item in checks)
+    assert checks[0]['category'] == 'evidence' and checks[0]['priority'] == 1
+    data_check = next(item for item in checks if item['category'] == 'data')
+    assert set(data_check['evidence_ids']) == {'comparison_1', 'comparison_2', 'validation'}
+    model_check = next(item for item in checks if item['category'] == 'execution')
+    assert model_check['basis'] == 'model_hypothesis' and model_check['priority'] == 3
+    assert model_check['blocker'] is False
+    known = {item['id'] for item in result['evidence']}
+    assert all(set(item['evidence_ids']) <= known for item in checks)
+    assert result['assessment']['comparison_coverage'] == {
+        'total': 2, 'comparable': 1, 'reference_only': 0, 'not_comparable': 1, 'outside_reference': 2}
+    assert result['assessment']['evidence_status'] == 'limited'
+    assert result['assessment']['cause_status'] == 'unconfirmed'
+    assert case['validation']['is_reproduced'] is None
+
+
+def test_completed_execution_does_not_create_a_redundant_execution_check(case):
+    result = run(case)
+    assert any(item['category'] == 'execution' for item in result['facts'])
+    assert not any(item['category'] == 'execution' for item in result['next_steps'])
+    metric = result['assessment']['metric_outcomes'][0]
+    assert metric['evidence_id'] == 'comparison_1'
+    assert metric['difference'] == case['row']['difference']
+    assert metric['reference_rule'] == 'not_met'
+
+
+def test_explicit_unit_conversion_is_recorded_without_asking_to_repeat_it(case):
+    case['row']['reference'].update(value=90.0, unit='percent')
+    case['row']['difference_unit'] = 'percentage_points'
+    result = run(case)
+    assert not any(item['category'] == 'unit' for item in result['next_steps'])
+    assert any('已按显式单位换算' in item['message'] for item in result['facts'])
+
+
+def test_incomplete_field_evidence_stays_a_gap_instead_of_aborting_diagnosis(case):
+    case['row']['reference']['field_evidence'] = {'unit': None}
+    result = run(case)
+    assert any(item['category'] == 'unit' and item['blocker'] for item in result['next_steps'])
+
+
+def test_identical_verified_inputs_reuse_analysis_and_persist_reuse_count(case):
+    llm = Model()
+    with CollaborationSession().scope():
+        first = run(case, llm)
+        second = run(case, llm)
+    assert first is second and len(llm.calls) == 1
+    assert second['efficiency']['cache_hits'] == 1
+    saved = json.loads((case['run_dir'] / 'outcome_diagnosis.json').read_text('utf-8'))
+    assert saved == second
+
+
+@pytest.mark.parametrize('change', ['stdout_tail', 'validation_tail', 'source_hash', 'run_dir', 'workspace', 'model'])
+def test_reuse_identity_covers_complete_inputs_and_run_bindings(case, change):
+    llm = Model()
+    if change == 'stdout_tail':
+        case['execution']['steps'][0]['stdout'] = 'x' * 5000 + 'before'
+    elif change == 'validation_tail':
+        case['validation']['details'] = 'x' * 5000 + 'before'
+    elif change == 'source_hash':
+        source = case['workspace'] / 'train.py'
+        source.write_text('x' * 5000 + 'before', encoding='utf-8')
+        case['packet']['file_inventory']['train.py']['sha256'] = hashlib.sha256(source.read_bytes()).hexdigest()
+    first = run(case, llm)
+    if change == 'stdout_tail':
+        case['execution']['steps'][0]['stdout'] = 'x' * 5000 + 'after'
+    elif change == 'validation_tail':
+        case['validation']['details'] = 'x' * 5000 + 'after'
+    elif change == 'source_hash':
+        source.write_text('x' * 5000 + 'after', encoding='utf-8')
+        case['packet']['file_inventory']['train.py']['sha256'] = hashlib.sha256(source.read_bytes()).hexdigest()
+    elif change == 'run_dir':
+        case['run_dir'] = case['run_dir'].parent / 'another-run'
+    elif change == 'workspace':
+        original = (case['workspace'] / 'train.py').read_bytes()
+        case['workspace'] = case['workspace'].parent / 'another-workspace'
+        case['workspace'].mkdir()
+        (case['workspace'] / 'train.py').write_bytes(original)
+    else:
+        llm.model = 'another-model'
+    second = run(case, llm)
+    assert second is not first and second['fingerprint'] != first['fingerprint']
+    assert len(llm.calls) == 2
+    assert second['path'] == str(case['run_dir'] / 'outcome_diagnosis.json')
+
+
+def test_diagnosis_is_not_reused_across_collaboration_runs(case):
+    llm = Model()
+    with CollaborationSession().scope():
+        first = run(case, llm)
+    with CollaborationSession().scope():
+        second = run(case, llm)
+    assert len(llm.calls) == 2 and first['fingerprint'] != second['fingerprint']
+
+
+def test_edited_diagnosis_is_not_reused_as_model_or_observed_evidence(case):
+    llm = Model()
+    first = run(case, llm)
+    first['facts'][0]['message'] = 'untrusted edited conclusion'
+    second = run(case, llm)
+    assert len(llm.calls) == 2 and second is not first
+    assert 'untrusted edited conclusion' not in json.dumps(llm.calls[1][0])
+
+
+def test_diagnosis_consumes_navigation_and_hands_off_report_without_new_authority(case):
+    session, llm = CollaborationSession(), Model()
+    with session.scope():
+        earlier = session.send('FailureAnalyst', 'RepositoryRepairer', 'failure_findings',
+            {'reason': 'Earlier dependency failure was already resolved.'})
+        direct = session.send('PlanValidator', 'ResultDiagnosis', 'feedback',
+            {'reason': 'Check the frozen protocol only.'})
+        result = run(case, llm)
+        reused = run(case, llm)
+    context = llm.calls[0][0]
+    assert {earlier['id'], direct['id']} <= {item['id'] for item in context['agent_messages']}
+    assert all(item['id'] not in {earlier['id'], direct['id']} for item in result['evidence'])
+    assert 'never message IDs' in llm.calls[0][1]['system_prompt']
+    messages = session.snapshot()['messages']
+    reports = [item for item in messages if item['sender'] == 'ResultDiagnosis'
+               and item['recipient'] == 'ReportGenerator']
+    assert len(reports) == 2 and reports[-1]['content']['reused'] is True
+    assert reports[-1]['content']['cause_status'] == 'unconfirmed'
+    assert reports[-1]['content']['artifact'] == 'outcome_diagnosis.json'
+    assert reused is result and len(llm.calls) == 1
+
+
+def test_model_cannot_cite_upstream_message_as_verified_result_evidence(case):
+    session = CollaborationSession()
+    with session.scope():
+        message = session.send('FailureAnalyst', 'ResultDiagnosis', 'feedback', {'reason': 'A hypothesis'})
+        llm = Model({'hypotheses': [{'category': 'metric', 'message': '尚需核查。',
+                                   'evidence_ids': [message['id']]}]})
+        result = run(case, llm)
+    assert result['model_analysis']['status'] == 'failed' and not result['hypotheses']
+
+
+@pytest.mark.parametrize('marker', [
+    {'timed_out': True}, {'cleanup_unconfirmed': True}, {'cleanup_confirmed': False},
+    {'final': {'exit_code': 130}}, {'process_cleanup': {'confirmed': False}},
+])
+def test_stopped_or_unclean_execution_never_spends_diagnostic_model_calls(case, marker):
+    case['execution'].update(marker)
+    llm, session = Model(), CollaborationSession()
+    with session.scope():
+        assert run(case, llm) is None
+    assert not llm.calls and not session.snapshot()['messages']
+    assert 'outcome_diagnosis' not in case['data']
+
+
+def test_interrupted_diagnosis_is_handed_off_as_interrupted_without_findings(case):
+    session = CollaborationSession()
+    with session.scope(), pytest.raises(KeyboardInterrupt):
+        run(case, Model(KeyboardInterrupt()))
+    responses = [item for item in session.snapshot()['messages'] if item['sender'] == 'ResultDiagnosis']
+    assert responses and all(item['content']['status'] == 'interrupted' for item in responses)
+    assert any(item['kind'] == 'analysis_interrupted' for item in responses)
+    assert case['data']['outcome_diagnosis']['hypotheses'] == []
+
+
+@pytest.mark.parametrize('status', ['cancelled', 'timed_out', 'cleanup_failed', 'cleanup_unconfirmed'])
+def test_terminal_validation_stop_status_also_blocks_model_analysis(case, status):
+    case['validation']['status'] = status
+    llm = Model()
+    assert run(case, llm) is None and not llm.calls
+
+
+def test_interrupted_model_response_is_not_reused_as_a_finished_diagnosis(case):
+    llm = Model(KeyboardInterrupt())
+    with pytest.raises(KeyboardInterrupt):
+        run(case, llm)
+    llm.response = {'hypotheses': []}
+    result = run(case, llm)
+    assert len(llm.calls) == 2 and result['model_analysis']['status'] == 'completed'
+
+
+def test_unsupported_plan_values_are_not_formatted_or_sent_to_the_model(case):
+    class PrivateValue:
+        def __str__(self):
+            raise AssertionError('must not inspect private value')
+
+        __repr__ = __str__
+    case['plan']['untrusted_extra'] = PrivateValue()
+    result = run(case, Model())
+    assert result['model_analysis']['status'] == 'completed'
+    assert '[unsupported evidence value]' in json.dumps(result)

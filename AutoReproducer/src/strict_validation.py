@@ -19,6 +19,8 @@ def normalize_strict_validation_request(request):
         raise ValueError('Reproduction request must be an object')
     from src.source_repair import normalize_source_repair_request
     request = normalize_source_repair_request(request)
+    from src.intelligent_recovery_request import normalize_intelligent_recovery_request
+    request = normalize_intelligent_recovery_request(request)
     from src.experiment_request import normalize_experiment_request
     request = {**request, 'experiment_request': normalize_experiment_request(request.get('experiment_request'))}
     strict = request.get('strict_validation', False)

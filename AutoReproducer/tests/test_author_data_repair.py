@@ -63,6 +63,35 @@ def test_missing_input_is_downloaded_then_original_command_actually_succeeds(con
     assert hashlib.sha256((root / 'train.py').read_bytes()).hexdigest() == packet['file_inventory']['train.py']['sha256']
 
 
+def test_data_recovery_uses_the_shared_model_budget(context, monkeypatch):
+    from src.intelligent_recovery import RecoverySession
+    root, plan, packet, runner, llm, _ = context
+    monkeypatch.setattr(repair, 'download_data', Mock(return_value=b'actual-test-dataset-bytes'))
+    session = RecoverySession(llm, budget={'max_model_requests': 1})
+    failed = runner.run(root, plan['steps'], {})
+    with session.scope():
+        recovered = repair.recover_author_data(llm, failed, plan, packet, root, root, {}, lambda: None)
+    assert recovered and session.state['usage']['model_requests'] == 1
+    assert session.state['usage']['roles']['author_data_recovery']['model_requests'] == 1
+    assert llm.chat.call_count == 1
+
+
+def test_exhausted_shared_budget_blocks_data_download(context, monkeypatch):
+    from src.intelligent_recovery import RecoverySession, RecoveryBudgetExceeded
+    root, plan, packet, runner, llm, _ = context
+    download = Mock(return_value=b'must-not-be-written')
+    monkeypatch.setattr(repair, 'download_data', download)
+    session = RecoverySession(llm, budget={'max_model_requests': 1})
+    failed = runner.run(root, plan['steps'], {})
+    with session.scope():
+        session.wrap_llm().chat('{}', task='author_failure_analysis')
+        with pytest.raises(RecoveryBudgetExceeded):
+            repair.recover_author_data(llm, failed, plan, packet, root, root, {}, lambda: None)
+    assert llm.chat.call_count == 1
+    download.assert_not_called()
+    assert not (root / 'data/cora.npz').exists()
+
+
 @pytest.mark.parametrize('field', ['cleanup_unconfirmed', 'cancelled', 'timed_out'])
 def test_data_repair_never_runs_after_terminal_lifecycle(context, field):
     root, plan, packet, runner, _, _ = context

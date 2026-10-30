@@ -20,6 +20,7 @@ import time
 import warnings
 import io
 import zipfile
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -89,10 +90,24 @@ def configure_page(page, args, credential):
     return config
 
 
-def configure_execution_mode(page, strict_validation):
+def execution_settings(args):
+    mode = getattr(args, 'intelligent_recovery_mode', 'off')
+    if mode not in {'off', 'single', 'collaborative'}:
+        raise ValueError('Unknown intelligent recovery mode')
+    repair = getattr(args, 'allow_source_repair', False)
+    strict = getattr(args, 'strict_validation', False)
+    if strict and repair:
+        raise ValueError('--allow-source-repair cannot be combined with --strict-validation')
+    return {'intelligent_recovery_mode': mode, 'source_repair': repair,
+            'strict_validation': strict}
+
+
+def configure_execution_mode(page, strict_validation, *, recovery_mode='off', source_repair=False):
     """Set the real PDF controls, including when a browser session has old state."""
+    execution_settings(SimpleNamespace(strict_validation=strict_validation,
+        allow_source_repair=source_repair, intelligent_recovery_mode=recovery_mode))
     repair = page.get_by_label("兼容性源码修复：失败后自动重试", exact=True)
-    if repair.is_checked():
+    if repair.is_checked() is not source_repair:
         repair.press("Space")
     strict = page.get_by_label("严格核验：重载模型并独立复算指标", exact=True)
     if strict.is_checked() is not strict_validation:
@@ -100,7 +115,60 @@ def configure_execution_mode(page, strict_validation):
         # Use its supported keyboard interaction instead of clicking the input.
         strict.press("Space")
     assert strict.is_checked() is strict_validation, "The browser strict-validation checkbox differs from the requested mode"
-    assert repair.is_checked() is False, "Source repair and strict acceptance must not run together"
+    assert repair.is_checked() is source_repair, "The browser source repair checkbox differs from the requested mode"
+    recovery = page.get_by_label('智能调查与排障', exact=True)
+    if recovery.is_checked() is not (recovery_mode != 'off'):
+        recovery.press('Space')
+    assert recovery.is_checked() is (recovery_mode != 'off')
+    if recovery_mode != 'off':
+        label = {'single': '单智能体（自检）',
+                 'collaborative': '多智能体协作（独立反证审查）'}[recovery_mode]
+        page.get_by_label('调查方式', exact=True).click()
+        page.get_by_role('option', name=label, exact=True).click()
+    if source_repair:
+        editable = page.get_by_label('限定修复文件（可选，每行一个仓库相对路径）', exact=True)
+        editable.fill('')
+        editable.press('Tab')
+
+
+def verify_recovery_request(result, requested):
+    data = result.get('data') or {}
+    recovery = data.get('intelligent_recovery') or {}
+    enabled = requested['intelligent_recovery_mode'] != 'off'
+    assert (recovery.get('enabled') is True) is enabled, 'Backend intelligent recovery differs from the browser request'
+    if enabled:
+        assert recovery.get('mode') == requested['intelligent_recovery_mode'], 'Backend investigation role mode differs'
+        assert isinstance(recovery.get('usage'), dict), 'Actual recovery usage is missing'
+    repair = data.get('source_repair') or {}
+    assert (repair.get('requested') is True) is requested['source_repair'], 'Backend source repair authorization differs'
+    return {'requested': requested, 'actual_mode': recovery.get('mode') if enabled else 'off',
+            'status': recovery.get('status', 'disabled'), 'usage': recovery.get('usage', {}),
+            'requires_human': recovery.get('requires_human'),
+            'source_repair_status': repair.get('status', 'not_requested')}
+
+
+def outcome_levels(result):
+    from src.result_conclusion import build_reproduction_conclusion
+    conclusion = build_reproduction_conclusion(result.get('data') or {})
+    return {key: conclusion[key] for key in ('scope', 'execution', 'comparison', 'independent', 'is_reproduced')}
+
+
+def verify_author_run(result, pdf_hash, expected_repo, *, source_repair=False):
+    data = result.get('data') or {}
+    if data.get('execution_source') != 'patched_author_repository':
+        return verify_author_completion(result, pdf_hash, expected_repo)
+    assert source_repair is True, 'Repaired source execution was not authorized'
+    assert result.get('state') == 'COMPLETED'
+    assert data.get('reproduction_scope') == 'patched_author_code_execution'
+    assert data['pdf_input']['sha256'] == pdf_hash
+    assert repository_key(data['resources']['code_repo_url']) == repository_key(expected_repo)
+    assert data.get('repository_executed') is True
+    from src.source_repair import verify_repaired_execution
+    validation = verify_repaired_execution(data['grounded_repository_plan'], data, data['execution'])
+    for field in ('status', 'source_modified', 'source_repair_manifest_sha256', 'completion_checks',
+                  'protocol_pass', 'independent_metrics_pass', 'is_reproduced'):
+        assert validation[field] == data['validation'].get(field), 'Saved repaired execution evidence differs: ' + field
+    return validation
 
 
 def configure_experiment_request(page, args):
@@ -475,16 +543,46 @@ def verify_report_reconnect(page, args, progress, runtime, result):
         return table.inner_text()
     displayed = show_report()
     content = []
-    for label, suffix in [('下载报告', '.md'), ('下载报告和图片（ZIP）', '.zip')]:
+    for label, suffix in [('下载报告', '.md'), ('下载报告与证据（ZIP）', '.zip')]:
         with page.expect_download(timeout=30000) as received:
             page.get_by_role('button', name=label, exact=True).click()
         path = runtime / (args.tag + '_downloaded_report' + suffix)
         received.value.save_as(str(path))
         content.append(path.read_bytes())
     with zipfile.ZipFile(io.BytesIO(content[1])) as archive:
-        names = [name for name in archive.namelist() if name.endswith('.md')]
-        assert len(names) == 1 and archive.read(names[0]) == content[0]
         report_path = Path(result['report_path'])
+        names = archive.namelist()
+        assert len(names) == len(set(names)), 'Downloaded ZIP contains duplicate member names'
+        assert report_path.name in names and archive.read(report_path.name) == content[0], (
+            'Downloaded ZIP main report differs from the Markdown download')
+        manifest_name = report_path.stem + '.manifest.json'
+        evidence_name = report_path.stem + '.evidence.json'
+        assert manifest_name in names and evidence_name in names, 'Downloaded ZIP has no manifest or evidence'
+        manifest = json.loads(archive.read(manifest_name))
+        assert manifest.get('report') == report_path.name and manifest.get('evidence') == evidence_name
+        assert manifest.get('hash_algorithm') == 'sha256'
+        members = manifest.get('files')
+        assert isinstance(members, list) and all(isinstance(row, dict) for row in members)
+        paths = [row.get('path') for row in members]
+        assert len(paths) == len(set(paths)) and set(paths) == set(names) - {manifest_name}, (
+            'Downloaded ZIP manifest does not cover every payload member exactly once')
+        for row in members:
+            raw = archive.read(row['path'])
+            assert type(row.get('bytes')) is int and row['bytes'] == len(raw), 'ZIP member byte length differs'
+            assert row.get('sha256') == hashlib.sha256(raw).hexdigest(), 'ZIP member SHA-256 differs'
+        from src.author_claim_comparison import _redact_evidence
+        from src.report_revisions import sanitize_report_result
+        from src.result_conclusion import build_reproduction_conclusion
+        safe = _redact_evidence(sanitize_report_result(result), '')
+        evidence = json.loads(archive.read(evidence_name))
+        assert evidence.get('state') == safe.get('state') and evidence.get('error') == safe.get('error')
+        assert evidence.get('report') == {'filename': report_path.name,
+                                         'sha256': hashlib.sha256(content[0]).hexdigest()}
+        saved_evidence = evidence.get('data') or {}
+        assert saved_evidence.get('validation') == safe['data'].get('validation'), (
+            'Downloaded evidence validation differs from the saved result')
+        assert saved_evidence.get('reproduction_conclusion') == build_reproduction_conclusion(safe['data']), (
+            'Downloaded evidence has a stale reproduction conclusion')
         attachment = report_path.with_name(report_path.stem + '_execution.txt')
         assert archive.read(attachment.name) == attachment.read_bytes()
         assert (Path(result['data']['run_dir']) / attachment.name).read_bytes() == attachment.read_bytes()
@@ -499,6 +597,7 @@ def verify_report_reconnect(page, args, progress, runtime, result):
     assert show_report() == displayed
     assert set(runtime.glob('progress_*.jsonl')) == before
     return {'comparison_table': displayed, 'markdown_zip_identical': True,
+            'bundle_manifest_verified': True, 'bundle_evidence_consistent': True,
             'full_output_attachment_identical': True,
             'report_sha256': hashlib.sha256(content[0]).hexdigest(), 'reconnect_preserved_comparison': True,
             **saved}
@@ -537,6 +636,7 @@ def main(args):
     pdf_hash = hashlib.sha256(pdf.read_bytes()).hexdigest()
     credential = ""
     strict_requested = getattr(args, 'strict_validation', False)
+    settings = execution_settings(args)
 
     def verify_frozen():
         return verify_acceptance_source(args, freeze, pdf_hash)
@@ -573,7 +673,8 @@ def main(args):
                 page.screenshot(path=str(runtime / f"{args.tag}_preview_failed.png"), full_page=True)
                 save("preview_failed", {"body_text": page.locator("body").inner_text(), "task_submitted": False})
                 raise
-            configure_execution_mode(page, strict_requested)
+            configure_execution_mode(page, strict_requested,
+                recovery_mode=settings['intelligent_recovery_mode'], source_repair=settings['source_repair'])
             experiment_request = configure_experiment_request(page, args)
             page.screenshot(path=str(runtime / f"{args.tag}_preview.png"), full_page=True)
             assert page.get_by_label("API Key", exact=True).input_value() == credential, "Credential changed during PDF upload"
@@ -589,7 +690,8 @@ def main(args):
             progress = created.pop()
             save("request", {"progress_file": str(progress), "input": "real_browser_pdf_upload",
                              "author_execution_only": not strict_requested,
-                             "strict_validation": strict_requested, "source_repair": False, "llm": config,
+                             "strict_validation": strict_requested, "source_repair": settings['source_repair'], "llm": config,
+                             "intelligent_recovery_mode": settings['intelligent_recovery_mode'],
                              "experiment_request": experiment_request,
                              "repository_preview_required": not args.allow_no_preview_link,
                              "data_root": str(data_root), "deps_root": str(deps_root),
@@ -632,7 +734,8 @@ def main(args):
                     save("cleanup", cleanup)
                     eligibility = verify_frozen()
                     validation = (verify_strict_completion(result, pdf_hash, args.repo) if strict_requested else
-                                  verify_author_completion(result, pdf_hash, args.repo))
+                                  verify_author_run(result, pdf_hash, args.repo, source_repair=settings['source_repair']))
+                    recovery = verify_recovery_request(result, settings)
                     verify_experiment_request(result, experiment_request, strict_requested)
                     if strict_requested and freeze.get('paper'):
                         eligibility['repository'] = verify_trial_repository(result, freeze)
@@ -664,6 +767,7 @@ def main(args):
                     record = {"input": "real_browser_pdf_upload", "state": result["state"], "progress_file": str(progress),
                               "freeze": freeze, "pdf_sha256": pdf_hash, "validation": validation,
                               "eligibility": eligibility,
+                              "recovery": recovery, "outcome_levels": outcome_levels(result),
                               "run_dir": result["data"]["run_dir"], "execution_run_starts": len(starts),
                               "execution_run_ends": len(ends), "observations": observations,
                               "cleanup": cleanup, "live_page_completed": True,
@@ -707,6 +811,10 @@ def build_parser():
     mode.add_argument("--strict-validation", action="store_true",
                       help="Request the real browser strict mode and require complete independent numerical evidence and matching reports; regression papers are allowed")
     parser.add_argument("--allow-no-preview-link", action="store_true")
+    parser.add_argument('--intelligent-recovery-mode', choices=['off', 'single', 'collaborative'], default='off',
+                        help='Set the real PDF investigation mode; default off. Does not authorize source patches.')
+    parser.add_argument('--allow-source-repair', action='store_true',
+                        help='Explicitly enable automatic bounded compatibility repair; incompatible with strict validation')
     parser.add_argument("--require-comparison", action="store_true",
                         help="Require verified paper comparisons, matching downloads and browser reconnect")
     parser.add_argument("--require-install-progress", action="store_true",

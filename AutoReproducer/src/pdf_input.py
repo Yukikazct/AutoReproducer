@@ -3,24 +3,30 @@
 PDF parsers are imported lazily so the bootstrap can recover missing application
 dependencies. Text in the abstract, body or references cannot select a profile.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import hashlib
 from io import BytesIO
 from pathlib import Path
 import re
+import json
 
 from src.title_routing import match_paper_title, resolve_title_request
 from src.repository_routing import (REZERO_PROFILE_ID, extract_current_repository_links,
                                     match_repository_profile)
+from src.pdf_markdown import convert_pdf_pages
 
 
 PDF_INPUT_API_VERSION = 3
 # Record the source generation owned by this module. A long-running web host
 # must not mistake the same public API for the same extraction implementation.
-PDF_SOURCE_FINGERPRINT = hashlib.sha256(b"".join(
-    Path(__file__).with_name(name).read_bytes()
-    for name in ("pdf_input.py", "repository_routing.py", "repository_evidence.py")
-)).hexdigest()
+def _source_fingerprint():
+    return hashlib.sha256(b"".join(
+        Path(__file__).with_name(name).read_bytes()
+        for name in ("pdf_input.py", "pdf_markdown.py", "repository_routing.py", "repository_evidence.py")
+    )).hexdigest()
+
+
+PDF_SOURCE_FINGERPRINT = _source_fingerprint()
 
 
 class PDFInputError(ValueError):
@@ -41,6 +47,7 @@ class PDFInput:
     byte_size: int
     repository_links: tuple = ()
     page_texts: tuple = ()
+    extraction: dict = field(default_factory=dict)
 
 
 def _pypdf_page_content(page, page_number):
@@ -73,7 +80,9 @@ def _pypdf_page_content(page, page_number):
                 bottom, top = min(float(rect[1]), float(rect[3])), max(float(rect[1]), float(rect[3]))
                 nearby = [fragment for fragment in fragments if bottom - 24 <= fragment[1] <= top + 24]
             context = " ".join(fragment[2] for fragment in sorted(nearby, key=lambda item: (-item[1], item[0])))
-            annotations.append({"page": page_number, "raw_url": uri,
+            # PDF string objects subclass str. Keep their exact characters in
+            # a plain value so safe evidence reuse never needs custom objects.
+            annotations.append({"page": page_number, "raw_url": str.__str__(uri),
                                 "context": context or str(annotation.get("/Contents", ""))})
         except Exception:
             # A malformed optional annotation must not invalidate readable text.
@@ -132,8 +141,45 @@ def _extraction_damage(text):
     return glyphs, numeric_layout
 
 
+def _evidence_cache_identity(digest):
+    """Bind reuse to current bytes, loaded implementation and parser versions."""
+    from importlib.metadata import PackageNotFoundError, version
+    from src import pdf_markdown
+    try:
+        if _source_fingerprint() != PDF_SOURCE_FINGERPRINT:
+            return None  # A stale web module must not reuse old extraction.
+        dependencies = {}
+        for name in ('PyPDF2', 'pdfplumber', 'pdfminer.six', 'markitdown'):
+            try:
+                dependencies[name] = version(name)
+            except PackageNotFoundError:
+                dependencies[name] = ''
+        functions = (_extract_pdf_payload, _extract_pypdf, _extract_pdfplumber,
+                     _pypdf_page_content, _extraction_damage, convert_pdf_pages,
+                     extract_current_repository_links, pdf_markdown._converter,
+                     pdf_markdown._page_payloads, pdf_markdown._geometry_tables,
+                     pdf_markdown._rejection)
+        identity = {'pdf_sha256': digest, 'source': PDF_SOURCE_FINGERPRINT,
+                    'functions': [id(function) for function in functions],
+                    'dependencies': dependencies}
+        return hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+    except Exception:
+        return None  # Metadata/source probing cannot prevent a fresh parse.
+
+
+def _conversion_cacheable(document):
+    if type(document.extraction) is not dict:
+        return False
+    pages = document.extraction.get('pages', [])
+    return type(pages) in (list, tuple) and bool(pages) and all(
+        type(page) is dict and type(page.get('reason')) is str
+        and page['reason'] not in {'markitdown_dependency_unavailable', 'page_count_mismatch',
+                                  'page_serialization_failed', 'conversion_resource_limit'}
+        and not page['reason'].startswith('conversion_failed:') for page in pages)
+
+
 def extract_pdf_input(pdf_path):
-    """Read immutable bytes; recover glyph/layout defects using complete pages."""
+    """Read current bytes; reuse matching canonical evidence only within this run."""
     try:
         payload = Path(pdf_path).read_bytes()
     except (OSError, TypeError, ValueError) as exc:
@@ -141,7 +187,37 @@ def extract_pdf_input(pdf_path):
     if b"%PDF-" not in payload[:1024]:
         raise PDFInputError("文件不是有效 PDF，本次未生成或运行代码")
 
+    from src.agent_collaboration import current_collaboration
+    session = current_collaboration()
+    if session is not None and any(not callable(getattr(session, name, None)) for name in (
+            'evidence_cache_scope', 'cached_evidence', 'cache_evidence', 'reject_evidence_cache')):
+        session = None  # A long-running host may still own the older mailbox.
+    if session is None:
+        return _extract_pdf_payload(payload)[0]
+    digest = hashlib.sha256(payload).hexdigest()
+    with session.evidence_cache_scope():
+        identity = _evidence_cache_identity(digest)
+        if identity is None:
+            return _extract_pdf_payload(payload)[0]
+        cached = session.cached_evidence(identity)
+        if cached is not None:
+            cached['repository_links'] = tuple(cached['repository_links'])
+            cached['page_texts'] = tuple(cached['page_texts'])
+            return PDFInput(**cached)
+        document, parser_healthy = _extract_pdf_payload(payload)
+        if (parser_healthy and _conversion_cacheable(document)
+                and identity == _evidence_cache_identity(digest)):
+            session.cache_evidence(identity, vars(document))
+        else:
+            session.reject_evidence_cache()
+        return document
+
+
+def _extract_pdf_payload(payload):
+    """Perform the original complete extraction; failures are never reusable."""
+
     unavailable, empty, candidate = 0, False, None
+    parser_healthy = True
     annotation_sources = []
     for parser in (_extract_pypdf, _extract_pdfplumber):
         try:
@@ -151,8 +227,10 @@ def extract_pdf_input(pdf_path):
             annotations = extracted[2] if len(extracted) > 2 else ()
         except ImportError:
             unavailable += 1
+            parser_healthy = False
             continue
         except Exception:
+            parser_healthy = False
             continue
         text = "\n".join(pages)
         if not text.strip():
@@ -181,11 +259,13 @@ def extract_pdf_input(pdf_path):
 
     if candidate is not None:
         pages, metadata_title, annotations, _ = candidate
-        return PDFInput(text="\n".join(pages), first_page_text=pages[0] if pages else "",
+        markdown_pages, extraction = convert_pdf_pages(payload, pages)
+        document = PDFInput(text="\n".join(markdown_pages), first_page_text=pages[0] if pages else "",
                         metadata_title=metadata_title, page_count=len(pages),
                         sha256=hashlib.sha256(payload).hexdigest(), byte_size=len(payload),
                         repository_links=tuple(extract_current_repository_links(pages, annotation_sources)),
-                        page_texts=tuple(pages))
+                        page_texts=markdown_pages, extraction=extraction)
+        return document, parser_healthy
 
     if unavailable:
         raise PDFParserUnavailable("PDF 解析依赖缺失，需要自动准备应用运行环境后重试")

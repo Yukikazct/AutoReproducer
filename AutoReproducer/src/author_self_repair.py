@@ -159,9 +159,22 @@ def save_repair_state(run_dir, data, on_event, *, status, reason, current=None):
 
 
 def record_repair(run_dir, data, on_event, result, action, reason):
+    from src.intelligent_recovery import current_investigation
+    from src.task_recovery import classify_execution_scope
+    investigation = current_investigation()
+    scope = (investigation.execution_scope(result) if investigation else classify_execution_scope(result))
+    if investigation:
+        ledger_action = investigation.record_external_repair(action,
+            problem=failure_diagnostic(result), evidence={'failure_fingerprint': failure_fingerprint(result),
+                'reason': reason}, reason=reason)
+        ledger_action['phase'] = scope
+        investigation.persist()
     state = data.setdefault('self_repair', {'attempts': []})
+    state['phase'] = scope
+    state.pop('recovered_phase', None)
     state['attempts'].append({'round': len(state['attempts']) + 1, 'action': action,
         'reason': reason, 'status': 'retrying', 'failed_execution_dir': result.get('run_dir'),
+        'phase': scope,
         'failure_fingerprint': failure_fingerprint(result),
         'diagnostic': failure_diagnostic(result)[-4000:]})
     save_repair_state(run_dir, data, on_event, status='retrying', reason=reason, current=result)
@@ -172,12 +185,27 @@ def verify_repair_result(run_dir, data, on_event, result):
     attempts = state.get('attempts') or []
     if not attempts or attempts[-1].get('status') != 'retrying':
         return
+    from src.intelligent_recovery import current_investigation
+    if current_investigation():
+        current_investigation().verify_external_repair(result)
     attempt = attempts[-1]
+    from src.task_recovery import classify_execution_scope
+    scope = classify_execution_scope(result, attempt.get('phase'))
+    ran = result.get('executed') is True or (result.get('final') or {}).get('executed') is True
     attempt['verification_execution_dir'] = result.get('run_dir')
-    if result.get('success'):
+    attempt['original_command_rerun'] = ran and scope == 'author_execution'
+    if result.get('success') and ran:
         attempt['status'] = 'resolved'
+        attempt['recovered_phase'] = scope
+        state['recovered_phase'] = scope
         save_repair_state(run_dir, data, on_event, status='resolved',
-                          reason='修复后的原命令已实际重跑并正常退出。')
+            reason={'environment_preparation': '修复后的原生环境预检已实际重跑并正常退出；作者实验尚未核验。',
+                    'dataset_preparation': '修复后的数据准备步骤已实际重跑并正常退出；作者实验尚未核验。',
+                    'author_execution': '修复后的原作者命令已实际重跑并正常退出。'}[scope])
+    elif result.get('success'):
+        attempt['status'] = 'unverified'
+        save_repair_state(run_dir, data, on_event, status='unverified',
+                          reason='准备记录返回成功，但缺少受控步骤实际执行凭据，修复效果尚未核验。')
     elif result.get('cancelled') or result.get('interrupted') or (result.get('final') or {}).get('cancelled'):
         attempt['status'] = 'interrupted'
     else:

@@ -31,9 +31,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from src.process_lifecycle import CREATE_SUSPENDED, ProcessJob, validate_windows_venv
+from src.posix_process_scope import PosixSessionScope, managed_process_options
 from src.safety.paths import workspace_path
 
 
+OWNED_PROCESS_API_VERSION = 1
 SUPPORTED_VERSIONS = {(3, 11), (3, 12)}
 # The ordinary installer and automatic host recovery share one production
 # manifest. Resolve it from this source checkout, independently of the cwd.
@@ -154,9 +156,47 @@ def _clean_environment(env=None):
     return environment
 
 
+class _UnreapedProcessWatch:
+    """Observe exit without releasing the PID that anchors an owned session."""
+    def __init__(self, process):
+        import select
+        self.process = process
+        self.queue = None
+        self.exited = False
+        if hasattr(select, "kqueue"):
+            self.queue = select.kqueue()
+            try:
+                events = self.queue.control([select.kevent(
+                    process.pid, filter=select.KQ_FILTER_PROC,
+                    flags=select.KQ_EV_ADD | select.KQ_EV_ONESHOT,
+                    fflags=select.KQ_NOTE_EXIT)], 1, 0)
+                for event in events:
+                    if event.flags & select.KQ_EV_ERROR:
+                        raise OSError(event.data, "Could not observe the owned worker exit")
+                self.exited = bool(events)
+            except BaseException:
+                self.queue.close()
+                raise
+        elif not hasattr(os, "waitid") or not hasattr(os, "WNOWAIT"):
+            raise OSError("This POSIX host cannot retain the worker PID while observing exit")
+
+    def running(self):
+        if not self.exited:
+            if self.queue is not None:
+                self.exited = bool(self.queue.control(None, 1, 0))
+            else:
+                self.exited = os.waitid(os.P_PID, self.process.pid,
+                                       os.WEXITED | os.WNOHANG | os.WNOWAIT) is not None
+        return not self.exited
+
+    def close(self):
+        if self.queue is not None:
+            self.queue.close()
+
+
 def run_owned_process(argv, *, cwd=None, env=None, input=None, timeout_s=900,
                       cancel_check=None, on_poll=None, on_cleanup=None, max_output_bytes=2*1024*1024,
-                      clean_env=True):
+                      clean_env=True, contain_session=False):
     """Run an argv with bounded polling, stdin delivery and descendant cleanup.
 
     Returns subprocess.CompletedProcess with UTF-8 text stdout/stderr. Input is
@@ -168,6 +208,8 @@ def run_owned_process(argv, *, cwd=None, env=None, input=None, timeout_s=900,
     ``timeout_s=None`` waits without a deadline while still polling cancellation.
     ``clean_env=False`` preserves an already prepared code-execution environment.
     ``max_output_bytes=None`` retains the full output of an author program.
+    ``contain_session=True`` owns every process group in a private POSIX worker
+    session, including nested managed installers and repository supervisors.
     """
     if timeout_s is not None and (isinstance(timeout_s, bool) or not isinstance(timeout_s, (int, float))
                                  or not math.isfinite(timeout_s) or timeout_s <= 0):
@@ -175,6 +217,9 @@ def run_owned_process(argv, *, cwd=None, env=None, input=None, timeout_s=900,
     deadline = None if timeout_s is None else time.monotonic() + timeout_s
     _check(cancel_check, deadline)
     process, job, writer = None, None, None
+    session_scope, exit_watch = None, None
+    session_scope_requested = contain_session and os.name == "posix"
+    result_code = -1
     timeout_error = None
     payload = input.encode("utf-8") if isinstance(input, str) else input
     with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
@@ -184,8 +229,12 @@ def run_owned_process(argv, *, cwd=None, env=None, input=None, timeout_s=900,
                                        env=_clean_environment(env) if clean_env else env,
                                        stdin=subprocess.PIPE if payload is not None else subprocess.DEVNULL,
                                        stdout=out, stderr=err, shell=False,
-                                       start_new_session=(os.name == "posix"),
+                                       **({"start_new_session": True} if contain_session and os.name == "posix"
+                                          else managed_process_options()),
                                        creationflags=(CREATE_SUSPENDED | subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW) if os.name == "nt" else 0)
+            if session_scope_requested:
+                session_scope = PosixSessionScope(process)
+                exit_watch = _UnreapedProcessWatch(process)
             job.assign(process)
             job.resume(process)
             if payload is not None:
@@ -197,32 +246,35 @@ def run_owned_process(argv, *, cwd=None, env=None, input=None, timeout_s=900,
                         pass
                 writer = threading.Thread(target=send, name="runtime-stdin", daemon=True)
                 writer.start()
-            while process.poll() is None:
+            while (exit_watch.running() if exit_watch is not None else process.poll() is None):
                 _check(cancel_check, deadline)
                 if on_poll:
                     on_poll(process)
                 time.sleep(.1)
-            result_code = process.returncode
         except RuntimePreparationTimeout as exc:
             timeout_error = exc
         finally:
             active_failure = sys.exc_info()[1]
             try:
+                if session_scope is not None:
+                    session_scope.close()
                 if job:
                     job.close()
                 if process:
-                    if os.name == "posix":
+                    if os.name == "posix" and session_scope is None:
                         try:
                             os.killpg(process.pid, signal.SIGKILL)
                         except ProcessLookupError:
                             pass
                     if process.poll() is None:
                         process.kill()
-                    process.wait(timeout=5)
+                    result_code = process.wait(timeout=5)
                     if writer:
                         writer.join(timeout=1)
                     if process.stdin and not process.stdin.closed:
                         process.stdin.close()
+                if session_scope_requested and (session_scope is None or not session_scope.closed):
+                    raise OSError("The complete POSIX worker session cleanup was not confirmed")
                 if on_cleanup:
                     on_cleanup()
             except BaseException as cleanup_failure:
@@ -235,6 +287,9 @@ def run_owned_process(argv, *, cwd=None, env=None, input=None, timeout_s=900,
                     "errors": [{"reason": safe_runtime_diagnostic(cleanup_failure)}]}
                 failure.add_note("子进程清理失败：" + safe_runtime_diagnostic(cleanup_failure))
                 raise failure from cleanup_failure
+            finally:
+                if exit_watch is not None:
+                    exit_watch.close()
         def captured(stream):
             if max_output_bytes is None:
                 stream.seek(0)

@@ -61,9 +61,14 @@ def test_upgrade_is_local_and_keeps_original_evidence(legacy_result, tmp_path, f
     assert report_format_version(upgraded["data"]["report"]) == REPORT_FORMAT_VERSION
     assert "| 指标 | 实测值 |" in upgraded["data"]["report"]
     assert "| accuracy | 0.845 | fraction | test | author | stdout |" in upgraded["data"]["report"]
-    assert "UNCHANGED LOG TAIL" in upgraded["data"]["report"]
+    from src.report_details import report_details_bytes
+    assert "UNCHANGED LOG TAIL" not in upgraded["data"]["report"]
+    assert any(b"UNCHANGED LOG TAIL" in raw for raw in report_details_bytes(
+        upgraded["data"]["report"], upgraded["report_path"]).values())
     assert upgraded["state"] == before["state"]
     assert upgraded["data"]["validation"] == before["data"]["validation"]
+    assert upgraded["data"]["reproduction_conclusion"]["is_reproduced"] is None
+    assert "## 本次复现结论" in upgraded["data"]["report"]
     assert upgraded["data"]["execution"] == before["data"]["execution"]
     assert upgraded["data"]["audit_stats"] == before["data"]["audit_stats"]
     assert load_report_revision_source(tmp_path / "report.md") == before
@@ -78,7 +83,10 @@ def test_reopened_result_display_markdown_and_zip_use_same_revision(legacy_resul
     ui = Mock()
     render_report(reopened["data"]["report"], reopened["report_path"], st_module=ui)
     report_downloads(legacy_result, key="history", st_module=ui)
-    markdown, bundle = [call.kwargs["data"] for call in ui.download_button.call_args_list]
+    markdown = next(call.kwargs['data'] for call in ui.download_button.call_args_list
+                    if call.kwargs['file_name'] == Path(reopened['report_path']).name)
+    bundle = next(call.kwargs['data'] for call in ui.download_button.call_args_list
+                  if call.kwargs['mime'] == 'application/zip')
     assert markdown == reopened["data"]["report"]
     with zipfile.ZipFile(io.BytesIO(bundle)) as archive:
         assert archive.read(Path(reopened["report_path"]).name).decode() == markdown
@@ -130,7 +138,7 @@ def test_current_old_tab_upgrade_and_server_restart(legacy_result, tmp_path, mon
     upgraded = app.session_state["result"]
     assert "| accuracy | 0.845 |" in "\n".join(item.value for item in app.markdown)
     assert not any(item.key == "upgrade_current_report" for item in app.button)
-    assert len(app.get("download_button")) == 2
+    assert len(app.get("download_button")) == 3
 
     # The original persisted done event still holds the old report. A new server
     # session resolves the saved rendering automatically, without rewriting it.
@@ -197,7 +205,9 @@ def test_upgrade_preserves_verified_figures_after_original_collection_cleanup(le
     ui.image.assert_called_once_with(raw, caption="运行结果图 1")
     ui.warning.assert_not_called()
     report_downloads(updated, key="figures", st_module=ui)
-    with zipfile.ZipFile(io.BytesIO(ui.download_button.call_args_list[1].kwargs["data"])) as archive:
+    bundle = next(call.kwargs['data'] for call in ui.download_button.call_args_list
+                  if call.kwargs['mime'] == 'application/zip')
+    with zipfile.ZipFile(io.BytesIO(bundle)) as archive:
         images = [name for name in archive.namelist() if name.endswith(".png")]
         assert len(images) == 1
         assert archive.read(images[0]) == raw

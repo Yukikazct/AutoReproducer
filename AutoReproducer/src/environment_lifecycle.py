@@ -225,6 +225,46 @@ class _EnvironmentRun:
         self.training_locks = {}
         self.cleanup_receipt = None
 
+    @staticmethod
+    def _synchronize_recovery_cleanup(data, receipt, run_dir):
+        """Late process uncertainty stops the saved ledger, without a new session.
+
+        File/cache release failures are publication failures. Only explicit
+        process cleanup evidence changes the task's recovery/execution boundary.
+        Lifecycle receipts add wrappers beyond ordinary execution records.
+        """
+        from src.execution_safety import cleanup_is_unconfirmed
+        from src.task_recovery import summarize_recovery_state
+        pending, seen, unconfirmed = [receipt], set(), False
+        while pending:
+            record = pending.pop()
+            if not isinstance(record, (dict, list, tuple)) or id(record) in seen:
+                continue
+            seen.add(id(record))
+            if cleanup_is_unconfirmed(record):
+                unconfirmed = True
+                break
+            pending.extend(record.values() if isinstance(record, dict) else record)
+        recovery = data.get('intelligent_recovery')
+        if unconfirmed:
+            data['process_cleanup_confirmed'] = False
+        if isinstance(recovery, dict):
+            if unconfirmed:
+                recovery.update(status='stopped', requires_human=True, cleanup_confirmed=False,
+                    stop_reason='environment_process_cleanup_unconfirmed')
+                recovery['cleanup_evidence'] = {'source': 'environment_cleanup.json',
+                                                'process_cleanup_confirmed': False}
+                for action in recovery.get('actions') or []:
+                    if isinstance(action, dict) and action.get('status') == 'executing':
+                        action.update(status='stopped', verification={'success': False,
+                            'reason': 'Owned process cleanup was not confirmed at task finalization'})
+            if run_dir:
+                from src.safety.paths import workspace_path
+                recovery['artifact_path'] = str(workspace_path(run_dir, 'intelligent_recovery.json',
+                                                               'recovery artifact'))
+            data['recovery_summary'] = summarize_recovery_state(recovery)
+        return unconfirmed
+
     def record(self, receipt):
         result = self.result if isinstance(self.result, dict) else None
         data = result.setdefault("data", {}) if result is not None else {}
@@ -238,8 +278,10 @@ class _EnvironmentRun:
                 data = result.setdefault("data", {})
         if result is not None:
             data["environment_cleanup"] = receipt
-            if receipt["status"] == "error":
-                reason = "运行环境自动释放失败；详情见 environment_cleanup"
+            process_unconfirmed = self._synchronize_recovery_cleanup(data, receipt, run_dir)
+            if receipt["status"] == "error" or process_unconfirmed:
+                reason = ("所属进程清理未确认；详情见 environment_cleanup" if process_unconfirmed else
+                          "运行环境自动释放失败；详情见 environment_cleanup")
                 result["state"] = "ERROR"
                 if reason not in (result.get("error") or ""):
                     result["error"] = "; ".join(filter(None, [result.get("error"), reason]))
@@ -281,6 +323,11 @@ class _EnvironmentRun:
                     _write_text(path, data["report"])
         if run_dir:
             directory = Path(run_dir)
+            recovery = data.get('intelligent_recovery')
+            if isinstance(recovery, dict):
+                _write_json(workspace_path(directory, 'intelligent_recovery.json', 'recovery artifact'),
+                            sanitize_report_result({'data': {'intelligent_recovery': recovery}})
+                                ['data']['intelligent_recovery'])
             _write_json(workspace_path(directory, "environment_cleanup.json", "cleanup receipt"), receipt)
             path = workspace_path(directory, "result.json", "run result")
             if path.is_file():

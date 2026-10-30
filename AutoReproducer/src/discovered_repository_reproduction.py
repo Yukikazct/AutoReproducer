@@ -4,7 +4,7 @@ No paper identity is registered here. The frozen plan is derived from the actual
 PDF and pinned repository, then executed with the repository process owner.
 """
 from copy import deepcopy
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 import hashlib
 import json
 import os
@@ -27,6 +27,7 @@ from src.repository_runner import RepositoryRunner
 from src.runtime_preparation import run_owned_process
 from src.safety.paths import workspace_path
 from src.environment_lifecycle import bind_environment_run, release_run_environment
+from src.intelligent_recovery import current_investigation, investigating_run, InvestigationStopped
 
 
 _MAX_DATA_BYTES = 512 * 1024 * 1024
@@ -35,7 +36,7 @@ _SHA = re.compile(r"[0-9a-f]{40}")
 
 
 def _diagnose_outcome(llm, plan, packet, workspace, execution, validation, run_dir, data, emit):
-    """Auxiliary analysis must not turn completed author work into failure."""
+    """Keep analysis errors informational; propagate process safety stops."""
     from src.result_diagnosis import diagnose_experiment_result
     try:
         repaired = data.get('source_repair') or {}
@@ -47,8 +48,17 @@ def _diagnose_outcome(llm, plan, packet, workspace, execution, validation, run_d
             packet = {**packet, 'file_inventory': {
                 name: {**inventory.get(name, {}), 'sha256': sha}
                 for name, sha in repaired['effective_source_files'].items()}}
-        return diagnose_experiment_result(llm, plan, packet, workspace, execution,
-                                          validation, run_dir, data, emit)
+        investigation = current_investigation()
+        diagnosis = diagnose_experiment_result(investigation.wrap_llm(llm) if investigation else llm,
+            plan, packet, workspace, execution, validation, run_dir, data, emit)
+        if investigation and diagnosis:
+            investigation.investigate(trigger='result_discrepancy', plan=plan, packet=packet,
+                workspace=workspace, environment=execution.get('effective_env_config') or data.get('env_config') or {},
+                execution=execution, validation=validation)
+            investigation.ensure_running()
+        return diagnosis
+    except InvestigationStopped:
+        raise
     except Exception as exc:
         # Keep raw exception text out of the artifact: a provider may include
         # credentials or submitted source in its error message.
@@ -327,11 +337,16 @@ print(json.dumps(record), flush=True)
 '''
 
 
+from src.agent_collaboration import collaborative_run, current_collaboration
+
+
 class DiscoveredRepositoryReproduction:
     def __init__(self, root, logger, use_docker=False, llm=None):
         self.root, self.logger, self.use_docker, self.llm = Path(root), logger, use_docker, llm
         self.runner = RepositoryRunner(logger=logger)
 
+    @collaborative_run
+    @investigating_run
     @termination_signals()
     @release_run_environment
     def run(self, request, on_event=None):
@@ -355,6 +370,8 @@ class DiscoveredRepositoryReproduction:
             finally:
                 status["finished_at"] = time.time()
                 write_json(run_dir / "run_status.json", status)
+                if current_collaboration():
+                    current_collaboration().persist(run_dir)
 
     def _run(self, request, on_event, run_dir):
         from src.agents.report_generator import ReportGeneratorAgent
@@ -395,6 +412,12 @@ class DiscoveredRepositoryReproduction:
                 "optimization": {"mode": "off", "available": False, "optimized": False,
                                  "status": "disabled", "reason": "运行已冻结作者实验协议"}}
         data['reproduction_scope'] = 'author_code_execution'
+        collaboration = current_collaboration()
+        if collaboration:
+            collaboration.attach(data)
+        investigation = current_investigation()
+        if investigation:
+            investigation.attach(data, run_dir)
         data['strict_validation'] = {'requested': strict_requested,
             'status': 'pending' if strict_requested else 'not_requested'}
         data['source_repair'] = {'requested': request['source_repair'],
@@ -419,11 +442,18 @@ class DiscoveredRepositoryReproduction:
                     repository_identity={"status": "user_supplied_unconfirmed", "source": "user_supplied_repository",
                         "author_identity_confirmed": False, "reason": "用户补充的仓库，论文与实现关系尚未核验", "evidence": deepcopy(evidence)})
             data["pdf_input"] = {"sha256": document.sha256, "pages": document.page_count,
-                                 "bytes": document.byte_size, "readable": True}
+                                 "bytes": document.byte_size, "readable": True,
+                                 "extraction": document.extraction}
+            if investigation:
+                investigation.freeze_goal({'author_pdf_sha256': document.sha256,
+                    'author_experiment_request': deepcopy(request['experiment_request'])})
+            from src.pdf_markdown import write_markdown_evidence
+            data['paper_markdown'] = write_markdown_evidence(run_dir, document)
             pin = (data["resources"].get("repo_discovery") or {}).get("pinned_revision", "")
             offline = bool(request.get("offline"))
             unique = repository_candidates(document, evidence, data['resources'], execution_only=execution_only)
             attempts, packet, selected, plan, last_plan_error = [], None, False, None, None
+            workspace = None
             data['repository_identity_attempts'] = attempts
             data['planning_trace'] = []
 
@@ -473,6 +503,17 @@ class DiscoveredRepositoryReproduction:
                 data["paper_info"]["metrics"] = {item["name"]: item["reference"] for item in candidate_plan["metrics"]}
                 data["paper_info"]["required_metrics"] = [item["name"] for item in candidate_plan["metrics"]]
                 candidate_environment = environment_for_plan(candidate_plan)
+                from src.planning_recovery import validate_plan_consistency
+                data['plan_consistency'] = validate_plan_consistency(
+                    candidate_plan, candidate_packet, workspace, candidate_environment)
+                write_json(run_dir / 'plan_consistency.json', data['plan_consistency'])
+                if investigation:
+                    investigation.remember_fact('validated_author_plan', {
+                        'spec_sha256': data['spec_sha256'], 'pdf_sha256': candidate_plan['pdf_sha256'],
+                        'repository': candidate_plan['repository'],
+                        'experiment_request': request['experiment_request'],
+                        'consistency': data['plan_consistency']})
+                self._receive_author_plan('EnvBuilder', candidate_plan)
                 candidate_environment["offline"] = offline
                 data["env_config"] = deepcopy(candidate_environment)
                 data["experiment_spec"] = {"id": "discovered_author_experiment", "adapter_id": "discovered",
@@ -502,101 +543,128 @@ class DiscoveredRepositoryReproduction:
                 attempts.append(attempt)
                 data['planning_trace'].append(attempt)
                 try:
-                    self.logger.log("ResourceFinder", phase, "RUNNING", f"正在定位候选仓库版本（{index}/{len(unique)}）：{candidate_url}")
-                    revision, pin_evidence = resolve_repository_revision(
-                        candidate_url, pin if candidate_url.casefold() == url.casefold() else "", offline=offline)
-                    workspace = run_dir / ("repo" if index == 1 else f"candidate_repos/{index}")
-                    self.logger.log("ResourceFinder", phase, "RUNNING", "正在获取源码：" + revision)
-                    snapshot = export_repository(self.root, {"repository": {"url": candidate_url, "revision": revision}},
-                                                 workspace, offline=offline, required_files=[], include_submodules=False)
-                    if snapshot.get("resolved_sha") != revision or snapshot.get("url") != candidate_url:
-                        raise ValueError("导出的仓库与所选作者来源或固定版本不一致")
-                    attempt.update(revision=revision, archive_sha256=snapshot.get("archive_sha256"),
-                                   workspace=str(workspace.resolve()))
-                    if not manual:
-                        # Planning can fail before execute_candidate. Never let
-                        # caller-supplied verification survive that error path.
-                        record_candidate_identity(candidate_url, candidate, revision)
-                    # Allow discovered/user-provided URLs without a literal
-                    # author-code statement in the PDF. This flag only controls
-                    # evidence acquisition; execution mode skips the reviewer.
-                    self.logger.log("ResourceFinder", phase, "RUNNING", "源码已就绪；正在读取 README、依赖声明与论文运行线索")
-                    packet = build_evidence_packet(request["pdf_path"], workspace, snapshot, for_identity_review=True)
-                    packet['author_execution_only'] = not strict_requested
-                    if request['experiment_request']:
-                        packet['experiment_request'] = deepcopy(request['experiment_request'])
-                    if not strict_requested:
-                        packet['limits']['training_timeout_s'] = None
-                    bind_full_paper_notes(packet, request)
-                    if manual:
-                        packet["repository_input"] = {"source": "user_supplied", "url": url}
-                    elif candidate.get('source') == 'model_discovered':
-                        packet['repository_input'] = {'source': 'model_discovered', 'url': candidate_url}
-                    if packet["pdf"]["sha256"] != document.sha256:
-                        raise ValueError("原始 PDF 在仓库准备期间发生变化，不能使用不同论文继续规划")
-                    write_json(run_dir / f"repository_identity_packet_{index}.json", packet)
-                    if snapshot.get('submodules_pending'):
-                        materialize_submodules(self.root, snapshot, offline=offline)
-                        packet = build_evidence_packet(request['pdf_path'], workspace, snapshot, for_identity_review=True)
+                    def prepare_candidate():
+                        nonlocal workspace, packet, plan, phase
+                        self.logger.log("ResourceFinder", phase, "RUNNING", f"正在定位候选仓库版本（{index}/{len(unique)}）：{candidate_url}")
+                        revision, pin_evidence = resolve_repository_revision(
+                            candidate_url, pin if candidate_url.casefold() == url.casefold() else "", offline=offline)
+                        workspace = run_dir / ("repo" if index == 1 else f"candidate_repos/{index}")
+                        self.logger.log("ResourceFinder", phase, "RUNNING", "正在获取源码：" + revision)
+                        snapshot = export_repository(self.root, {"repository": {"url": candidate_url, "revision": revision}},
+                                                     workspace, offline=offline, required_files=[], include_submodules=False)
+                        if snapshot.get("resolved_sha") != revision or snapshot.get("url") != candidate_url:
+                            raise ValueError("导出的仓库与所选作者来源或固定版本不一致")
+                        attempt.update(revision=revision, archive_sha256=snapshot.get("archive_sha256"),
+                                       workspace=str(workspace.resolve()))
+                        if not manual:
+                            # Planning can fail before execute_candidate. Never let
+                            # caller-supplied verification survive that error path.
+                            record_candidate_identity(candidate_url, candidate, revision)
+                        # Allow discovered/user-provided URLs without a literal
+                        # author-code statement in the PDF. This flag only controls
+                        # evidence acquisition; execution mode skips the reviewer.
+                        self.logger.log("ResourceFinder", phase, "RUNNING", "源码已就绪；正在读取 README、依赖声明与论文运行线索")
+                        packet = build_evidence_packet(request["pdf_path"], workspace, snapshot, for_identity_review=True)
                         packet['author_execution_only'] = not strict_requested
                         if request['experiment_request']:
                             packet['experiment_request'] = deepcopy(request['experiment_request'])
                         if not strict_requested:
                             packet['limits']['training_timeout_s'] = None
                         bind_full_paper_notes(packet, request)
-                        packet['repository_input'] = {'source': candidate['source'], 'url': candidate_url}
-                    packet['repository_identity_pending'] = False
-                    event('prepare_repository', 'success')
-                    phase = 'plan_repository'; event(phase, 'running')
-                    data['resources']['selected_repo'] = candidate_url
-                    write_json(run_dir / 'source_packet.json', packet)
-                    from src.author_execution_plan import propose_author_execution_plan
-                    try:
-                        if strict_requested:
-                            from src.agents.experiment_protocol import ExperimentProtocolAgent
-                            from src.discovered_repository_plan import propose_plan
-                            author_packet = deepcopy(packet)
-                            try:
-                                protocol = ExperimentProtocolAgent(self.llm, self.logger).run(packet, workspace)
-                                packet['experiment_protocol'] = protocol
-                                write_json(run_dir / 'experiment_protocol.json', protocol)
-                                plan = propose_plan(self.llm, packet, workspace)
-                                from src.strict_validation import assert_strict_plan
-                                assert_strict_plan(plan, packet, workspace)
-                            except PlanEvidenceError as strict_error:
-                                # Eligibility limits the acceptance claim, not the
-                                # ability to run the original author command.
-                                # Never downgrade changed frozen inputs to a warning.
-                                verify_snapshot(workspace, snapshot, {})
-                                if digest(request['pdf_path']) != document.sha256:
-                                    raise ValueError('原始 PDF 在严格规划期间发生变化') from strict_error
-                                rejection_packet = ('strict_rejection_packet.json' if index == 1
-                                                    else f'strict_rejection_packet_{index}.json')
-                                write_json(run_dir / rejection_packet, packet)
-                                data['strict_validation'].update(status='unavailable', reason=str(strict_error),
-                                    failure_kind=strict_error.category,
-                                    rejection_packet=rejection_packet,
-                                    evidence=deepcopy(getattr(strict_error, 'planning_evidence', None)))
-                                write_json(run_dir / 'strict_validation.json', data['strict_validation'])
-                                self.logger.log('PaperReader', 'strict_validation', 'WARNING',
-                                    '严格验收暂不可用，继续运行原作者命令：' + str(strict_error))
-                                # Strict discovery must not spend the ordinary
-                                # planner's source budget or leave rejected
-                                # protocol state in its execution evidence.
-                                packet = author_packet
-                                packet['author_execution_only'] = True
+                        if manual:
+                            packet["repository_input"] = {"source": "user_supplied", "url": url}
+                        elif candidate.get('source') == 'model_discovered':
+                            packet['repository_input'] = {'source': 'model_discovered', 'url': candidate_url}
+                        if packet["pdf"]["sha256"] != document.sha256:
+                            raise ValueError("原始 PDF 在仓库准备期间发生变化，不能使用不同论文继续规划")
+                        write_json(run_dir / f"repository_identity_packet_{index}.json", packet)
+                        if snapshot.get('submodules_pending'):
+                            materialize_submodules(self.root, snapshot, offline=offline)
+                            packet = build_evidence_packet(request['pdf_path'], workspace, snapshot, for_identity_review=True)
+                            packet['author_execution_only'] = not strict_requested
+                            if request['experiment_request']:
+                                packet['experiment_request'] = deepcopy(request['experiment_request'])
+                            if not strict_requested:
                                 packet['limits']['training_timeout_s'] = None
-                                plan = propose_author_execution_plan(self.llm, packet, workspace)
-                        else:
-                            plan = propose_author_execution_plan(self.llm, packet, workspace)
-                    except BaseException:
-                        try:
-                            write_json(run_dir / 'source_packet.json', packet)
-                        except OSError as storage_error:
-                            data['source_packet_persistence_error'] = str(storage_error)
-                        raise
-                    else:
+                            bind_full_paper_notes(packet, request)
+                            packet['repository_input'] = {'source': candidate['source'], 'url': candidate_url}
+                        packet['repository_identity_pending'] = False
+                        event('prepare_repository', 'success')
+                        phase = 'plan_repository'; event(phase, 'running')
+                        data['resources']['selected_repo'] = candidate_url
                         write_json(run_dir / 'source_packet.json', packet)
+                        if collaboration:
+                            collaboration.send('ResourceFinder', 'AuthorPlanner', 'handoff', {
+                                'repository': {'url': candidate_url, 'revision': revision},
+                                'selection': candidate.get('source'),
+                                'experiment_request': request['experiment_request'],
+                                'pdf_sha256': packet['pdf']['sha256']})
+                            collaboration.send('SourceReader', 'AuthorPlanner', 'evidence', {
+                                'source_paths': list(packet.get('repository', {}).get('files') or {})[:40],
+                                'inventory_count': len(packet.get('file_inventory') or {}),
+                                'source_packet': 'source_packet.json',
+                                'rule': 'Only hash-validated original source and paper evidence authorize a plan.'})
+                        from src.author_execution_plan import propose_author_execution_plan
+                        try:
+                            if strict_requested:
+                                from src.agents.experiment_protocol import ExperimentProtocolAgent
+                                from src.discovered_repository_plan import propose_plan
+                                author_packet = deepcopy(packet)
+                                try:
+                                    protocol = ExperimentProtocolAgent(self.llm, self.logger).run(packet, workspace)
+                                    packet['experiment_protocol'] = protocol
+                                    if collaboration:
+                                        collaboration.send('ExperimentProtocol', 'AuthorPlanner', 'protocol', {
+                                            'status': protocol.get('status'),
+                                            'protocol': protocol,
+                                            'authority': 'The frozen protocol is validated separately from messages.'})
+                                    write_json(run_dir / 'experiment_protocol.json', protocol)
+                                    plan = propose_plan(self.llm, packet, workspace)
+                                    from src.strict_validation import assert_strict_plan
+                                    assert_strict_plan(plan, packet, workspace)
+                                except PlanEvidenceError as strict_error:
+                                    # Eligibility limits the acceptance claim, not the
+                                    # ability to run the original author command.
+                                    # Never downgrade changed frozen inputs to a warning.
+                                    verify_snapshot(workspace, snapshot, {})
+                                    if digest(request['pdf_path']) != document.sha256:
+                                        raise ValueError('原始 PDF 在严格规划期间发生变化') from strict_error
+                                    rejection_packet = ('strict_rejection_packet.json' if index == 1
+                                                        else f'strict_rejection_packet_{index}.json')
+                                    write_json(run_dir / rejection_packet, packet)
+                                    data['strict_validation'].update(status='unavailable', reason=str(strict_error),
+                                        failure_kind=strict_error.category,
+                                        rejection_packet=rejection_packet,
+                                        evidence=deepcopy(getattr(strict_error, 'planning_evidence', None)))
+                                    write_json(run_dir / 'strict_validation.json', data['strict_validation'])
+                                    self.logger.log('PaperReader', 'strict_validation', 'WARNING',
+                                        '严格验收暂不可用，继续运行原作者命令：' + str(strict_error))
+                                    # Strict discovery must not spend the ordinary
+                                    # planner's source budget or leave rejected
+                                    # protocol state in its execution evidence.
+                                    packet = author_packet
+                                    packet['author_execution_only'] = True
+                                    packet['limits']['training_timeout_s'] = None
+                                    plan = propose_author_execution_plan(self.llm, packet, workspace)
+                            else:
+                                plan = propose_author_execution_plan(self.llm, packet, workspace)
+                        except BaseException:
+                            try:
+                                write_json(run_dir / 'source_packet.json', packet)
+                            except OSError as storage_error:
+                                data['source_packet_persistence_error'] = str(storage_error)
+                            raise
+                        else:
+                            write_json(run_dir / 'source_packet.json', packet)
+                        return {'plan': plan, 'packet': packet, 'snapshot': snapshot,
+                                'revision': revision, 'pin_evidence': pin_evidence}
+
+                    from src.planning_recovery import alternative_candidate_attempt
+                    prepared = alternative_candidate_attempt(prepare_candidate, candidate=candidate,
+                        previous_attempts=attempts[:-1], pdf_sha256=document.sha256,
+                        experiment_request=request['experiment_request'])
+                    snapshot, revision, pin_evidence = (prepared[key] for key in
+                        ('snapshot', 'revision', 'pin_evidence'))
                     execute_candidate(candidate_url, candidate, plan, packet, snapshot, revision, pin_evidence)
                     selected = True
                     attempt.update(accepted=True, revision=revision, planning_status='accepted',
@@ -625,6 +693,8 @@ class DiscoveredRepositoryReproduction:
                     if getattr(exc, 'process_cleanup_confirmed', True) is False:
                         attempt.update(error=str(exc), planning_status='execution_failed',
                                        failure_kind='cleanup_unconfirmed')
+                        raise
+                    if isinstance(exc, InvestigationStopped):
                         raise
                     if getattr(exc, 'reproduction_phase', None) == 'prepare_environment':
                         attempt.update(error=str(exc), planning_status='environment_blocked',
@@ -668,6 +738,8 @@ class DiscoveredRepositoryReproduction:
                 raise ValueError("无法获取候选仓库源码。" + "；".join(attempt.get("error", "") for attempt in attempts))
         except (KeyboardInterrupt, SystemExit) as exc:
             phase = getattr(exc, "reproduction_phase", phase)
+            if investigation:
+                investigation.stop('cancelled', requires_human=False)
             data["interrupted"] = True
             if getattr(exc, 'process_cleanup_confirmed', True) is False:
                 data['environment_cleanup'] = deepcopy(exc.cleanup_receipt)
@@ -700,6 +772,9 @@ class DiscoveredRepositoryReproduction:
                                       "reason": "实验已中断，未完成的训练和指标不能当作成功"}
                 reason = data['validation']['reason']
             event(phase, "interrupted", reason)
+            if collaboration:
+                collaboration.attach(data)
+                collaboration.persist(run_dir)
             data['total_llm_calls'] = (self.llm.get_call_count() if self.llm else 0) - before_calls
             self.logger.add_llm_calls(data['total_llm_calls'])
             data['audit_stats'] = self.logger.get_stats()
@@ -719,6 +794,15 @@ class DiscoveredRepositoryReproduction:
             if getattr(exc, 'process_cleanup_confirmed', True) is False:
                 data['environment_cleanup'] = deepcopy(exc.cleanup_receipt)
                 exc.category = 'cleanup_unconfirmed'
+            if investigation:
+                # Retain concrete preparation blockers even when no controlled
+                # repair is possible (missing hardware/data is not a new plan).
+                investigation.record_issue(error, evidence={
+                    'failure_kind': getattr(exc, 'category', 'runtime_error'),
+                    'pdf_sha256': data.get('pdf_input', {}).get('sha256'),
+                    'repository': data.get('resources', {}).get('selected_repo'),
+                    'planning_evidence': getattr(exc, 'planning_evidence', None)},
+                    role=next((item[2] for item in phases if item[0] == phase), 'Coordinator'))
             if phase == "prepare_repository":
                 try:
                     fallback_pdf = extract_pdf_input(request["pdf_path"])
@@ -743,9 +827,18 @@ class DiscoveredRepositoryReproduction:
         self.logger.add_llm_calls(data["total_llm_calls"])
         data["audit_stats"] = self.logger.get_stats()
         data["run_elapsed_s"] = time.monotonic() - started
+        if collaboration:
+            collaboration.send('CodeExecutor', 'ReportGenerator', 'result', {
+                'execution': {key: (data.get('execution') or {}).get(key) for key in
+                    ('success', 'executed', 'cancelled', 'timed_out', 'cleanup_confirmed')},
+                'validation_status': (data.get('validation') or {}).get('status'),
+                'error': error,
+                'rule': 'Command completion does not establish independent numerical reproduction.'})
+            collaboration.attach(data)
+            collaboration.persist(run_dir)
         event("generate_report", "running")
         try:
-            data["report"] = ReportGeneratorAgent(self.logger).run(data, report_path=data["report_path"])["report"]
+            data.update(ReportGeneratorAgent(self.logger).run(data, report_path=data["report_path"]))
             (run_dir / "report.md").write_text(data["report"], encoding="utf-8")
             result = {"state": "ERROR" if error else "COMPLETED", "data": data, "error": error}
             write_json(run_dir / "result.json", result)
@@ -776,8 +869,33 @@ class DiscoveredRepositoryReproduction:
                 pass
             return result
 
+    @staticmethod
+    def _receive_author_plan(role, plan):
+        """Acknowledge the planner's evidence against the actual frozen input.
+
+        The program receives a validated plan, not model-authored instructions
+        from a mailbox. Stale or mismatched messages cannot replace that plan.
+        """
+        collaboration = current_collaboration()
+        if collaboration is None:
+            return
+        from src.discovered_repository_plan import _canonical
+        import hashlib
+        expected = hashlib.sha256(_canonical(plan).encode('utf-8')).hexdigest()
+        for message in collaboration.context(role):
+            content = message.get('content')
+            if (message['sender'] != 'AuthorPlanner' or message['kind'] != 'handoff'
+                    or not isinstance(content, dict)):
+                continue
+            matched = content.get('plan_sha256') == expected
+            collaboration.reply(message, role, {
+                'status': 'accepted' if matched else 'ignored', 'plan_sha256': expected,
+                'reason': ('交接与本次已校验的原始作者计划一致，按该计划处理。' if matched else
+                           '交接不属于本次冻结计划，保留当前计划并忽略该消息。')}, kind='acknowledgement')
+
     def _execute_frozen(self, request, data, plan, snapshot, workspace, run_dir, environment, emit, event):
         """Materialize project capture utilities, then run and independently check."""
+        self._receive_author_plan('CodeExecutor', plan)
         from src.discovered_repository_runtime import CAPTURE_DIR
         phase = "prepare_environment"
         try:
@@ -1061,11 +1179,21 @@ class DiscoveredRepositoryReproduction:
                 return effective
 
             def run_steps(selected, runtime_environment):
+                if current_investigation():
+                    current_investigation().ensure_running()
                 from src.author_runtime_dependencies import run_with_dependency_repair
                 from src.author_failure_analysis import analyze_author_failure
                 def analyze_failure(result, effective):
+                    investigation = current_investigation()
+                    if investigation:
+                        task = investigation.investigate(trigger='execution_failure', plan=plan, packet=packet,
+                            workspace=workspace, environment=effective, execution=result)
+                        investigation.ensure_running()
+                        if task and task['status'] != 'repair_proposed':
+                            return None
                     before = len(data.get('failure_analyses') or [])
-                    suggestion = analyze_author_failure(self.llm, result, plan, packet, workspace,
+                    suggestion = analyze_author_failure(investigation.wrap_llm() if investigation else self.llm,
+                                                        result, plan, packet, workspace,
                                                         effective, run_dir, data)
                     if len(data.get('failure_analyses') or []) > before:
                         analysis = data['failure_analyses'][-1]
@@ -1093,19 +1221,29 @@ class DiscoveredRepositoryReproduction:
                         write_json(run_dir / 'adapter_manifest.json', {'files': generated,
                             'note': '作者源码和命令保持不变；记录有作者来源引用的缺失输入自动恢复。'})
                     return recovered
-                result = run_with_dependency_repair(self.runner, workspace, selected, runtime_environment,
-                    plan, packet, run_dir, data, progress, verify_frozen_inputs, repair_numeric, repair_path,
-                    analyze_failure, repair_pyg=repair_pyg, prepare_environment=prepare_runtime_environment,
-                    repair_data=repair_missing_data)
-                if result.get('cleanup_unconfirmed') or result.get('process_cleanup_confirmed') is False:
-                    failure = RuntimeError('作者进程清理未确认；保留环境和失败证据，停止后续运行。')
-                    failure.process_cleanup_confirmed = False
-                    failure.cleanup_receipt = result.get('cleanup_receipt') or {
-                        'status': 'error', 'process_cleanup_confirmed': False,
-                        'errors': result.get('cleanup_errors') or [failure.args[0]]}
-                    failure.execution = result
-                    raise failure
-                return result
+                investigation = current_investigation()
+                identifiers = {step.get('id') for step in selected} if isinstance(selected, list) else set()
+                recovery_phase = ('environment_preparation' if 'native_preflight' in identifiers else
+                                  'dataset_preparation' if 'prepare_author_datasets' in identifiers else
+                                  'author_execution')
+                with investigation.phase(recovery_phase) if investigation else nullcontext():
+                    result = run_with_dependency_repair(self.runner, workspace, selected, runtime_environment,
+                        plan, packet, run_dir, data, progress, verify_frozen_inputs, repair_numeric, repair_path,
+                        analyze_failure, repair_pyg=repair_pyg, prepare_environment=prepare_runtime_environment,
+                        repair_data=repair_missing_data)
+                    if investigation:
+                        investigation.record_execution(result)
+                    if result.get('cleanup_unconfirmed') or result.get('process_cleanup_confirmed') is False:
+                        failure = RuntimeError('作者进程清理未确认；保留环境和失败证据，停止后续运行。')
+                        failure.process_cleanup_confirmed = False
+                        failure.cleanup_receipt = result.get('cleanup_receipt') or {
+                            'status': 'error', 'process_cleanup_confirmed': False,
+                            'errors': result.get('cleanup_errors') or [failure.args[0]]}
+                        failure.execution = result
+                        raise failure
+                    if investigation:
+                        investigation.ensure_running()
+                    return result
 
             preflight = [{"id": "native_preflight", "kind": "check", "required": True,
                           "argv": ["python", "-u", f"{CAPTURE_DIR}/preflight.py"], "cwd": ".",
@@ -1216,6 +1354,8 @@ class DiscoveredRepositoryReproduction:
                 write_json(run_dir / 'original_execution.json', execution)
                 execution = repair_author_failure(self.runner, self.llm, request, plan, snapshot,
                     workspace, run_dir, data, execution, verify_frozen_inputs, emit)
+            if current_investigation():
+                current_investigation().record_execution(execution)
             data["execution"] = execution
             training_ids = {step["id"] for step in plan["steps"] if step["kind"] == "train"}
             data["repository_executed"] = any(step.get("id") in training_ids and step.get("executed")

@@ -399,8 +399,21 @@ def test_stop_download_remains_pending_until_cleanup_then_reset_preserves_log(ap
 def test_progress_timer_fragment_can_run_again_after_stage_summary(app, tmp_path, monkeypatch):
     import inspect
     from dataclasses import replace
+    from streamlit.runtime.fragment import MemoryFragmentStorage
+    from streamlit.runtime.scriptrunner_utils.script_requests import ScriptRequests
     from streamlit.testing.v1.local_script_runner import LocalScriptRunner
     from frontend.task_control import register_task
+    # AppTest creates a new runner on each run; recent releases keep fragment
+    # storage on that runner instead of AppTest. Preserve the same storage as a
+    # browser session does, so timer ticks execute the original saved closure.
+    fragment_storage = MemoryFragmentStorage()
+    original_init = LocalScriptRunner.__init__
+
+    def session_runner(runner, *args, **kwargs):
+        original_init(runner, *args, **kwargs)
+        runner._fragment_storage = fragment_storage
+
+    monkeypatch.setattr(LocalScriptRunner, "__init__", session_runner)
     progress = tmp_path / "fragment-download.jsonl"
     control = register_task(progress)
     store = pipeline.ProgressStore(str(progress))
@@ -410,13 +423,17 @@ def test_progress_timer_fragment_can_run_again_after_stage_summary(app, tmp_path
         app.session_state["progress_file"] = str(progress)
         app.run()
         assert not app.exception
-        fragment_ids = [identifier for identifier, fragment in app._fragment_storage._fragments.items()
+        fragment_ids = [identifier for identifier, fragment in fragment_storage._fragments.items()
                         if getattr(inspect.getclosurevars(fragment).nonlocals.get("non_optional_func"),
                                    "__name__", "") == "poll_live_progress"]
         assert len(fragment_ids) == 1
+        original_fragment = fragment_storage._fragments[fragment_ids[0]]
         original = LocalScriptRunner.request_rerun
 
         def timer_tick(runner, data):
+            # New runners queue an initial full-app run; replace that request
+            # rather than coalescing it with the timer (full-app reruns win).
+            runner._requests = ScriptRequests()
             return original(runner, replace(data, fragment_id_queue=fragment_ids,
                                              is_auto_rerun=True))
 
@@ -426,6 +443,7 @@ def test_progress_timer_fragment_can_run_again_after_stage_summary(app, tmp_path
         for _ in range(2):
             app.run()
             assert not app.exception
+            assert fragment_storage._fragments[fragment_ids[0]] is original_fragment
             assert any("监控每 2 秒" in item.value for item in app.caption)
     finally:
         control.finish()

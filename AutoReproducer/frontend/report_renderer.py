@@ -60,7 +60,12 @@ def report_image_bytes(target, report_path):
 
 
 def render_report(report, report_path=None, *, st_module=None):
-    """Keep text/code as native Markdown and serve verified images via st.image."""
+    """Render persisted model-derived Markdown; do not derive another verdict.
+
+    V6 live reports and saved revisions are generated from ReportViewModel by
+    the shared report builder. This presentation layer serves those same bytes
+    used by Markdown/ZIP downloads, with verified images via ``st.image``.
+    """
     if st_module is None:
         import streamlit as st_module
     report_path = report_path or DEFAULT_REPORT_PATH
@@ -75,8 +80,8 @@ def render_report(report, report_path=None, *, st_module=None):
                 st_module.image(raw, caption=f"运行结果图 {part['number']}")
 
 
-def build_report_bundle(report, report_path):
-    """Package a report and its verified companion assets for offline viewing."""
+def build_report_bundle(report, report_path, *, result=None):
+    """Package verified report assets, saved evidence and a content manifest."""
     report_file = Path(report_path)
     if not report_file.is_absolute():
         report_file = PROJECT_ROOT / report_file
@@ -104,13 +109,23 @@ def build_report_bundle(report, report_path):
     buffer = io.BytesIO()
     from src.source_repair_evidence import report_evidence_bytes
     repair_evidence = report_evidence_bytes(report, report_file)
+    from src.pdf_markdown import report_markdown_bytes
+    reading_evidence = report_markdown_bytes(report, report_file)
+    from src.report_details import report_details_bytes
+    details = report_details_bytes(report, report_file)
+    members = {report_file.name: report.encode('utf-8'), **figures,
+               **repair_evidence, **reading_evidence, **details}
+    if attachment is not None:
+        members[attachment_name] = attachment.read_bytes()
+    from src.report_bundle import report_evidence_bytes, report_manifest_bytes
+    evidence_name = None
+    if result is not None:
+        evidence_name = report_file.stem + '.evidence.json'
+        members[evidence_name] = report_evidence_bytes(result, report, report_file.name)
+    manifest_name = report_file.stem + '.manifest.json'
+    members[manifest_name] = report_manifest_bytes(members, report_file.name, evidence_name)
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr(report_file.name, report)
-        for target, raw in figures.items():
-            archive.writestr(target, raw)
-        if attachment is not None:
-            archive.write(attachment, attachment_name)
-        for name, raw in repair_evidence.items():
+        for name, raw in members.items():
             archive.writestr(name, raw)
     return buffer.getvalue()
 
@@ -128,7 +143,16 @@ def report_downloads(result, *, key, st_module=None, data_root=None):
     st_module.download_button("下载报告", data=report, file_name=path.name,
                               mime="text/markdown", key=f"{key}_markdown")
     try:
-        st_module.download_button("下载报告和图片（ZIP）", data=build_report_bundle(report, path),
+        from src.report_details import report_details_bytes
+        for name, raw in report_details_bytes(report, path).items():
+            st_module.download_button('下载完整依据与执行详情', data=raw, file_name=name,
+                                      mime='text/markdown', key=f'{key}_details')
+        from src.pdf_markdown import report_markdown_bytes
+        for name, raw in report_markdown_bytes(report, path).items():
+            if name.endswith('.md'):
+                st_module.download_button('下载论文 Markdown', data=raw, file_name='paper_markdown.md',
+                                          mime='text/markdown', key=f'{key}_paper_markdown')
+        st_module.download_button("下载报告与证据（ZIP）", data=build_report_bundle(report, path, result=current),
                                   file_name=path.stem + ".zip", mime="application/zip",
                                   key=f"{key}_zip")
     except ValueError as exc:

@@ -48,10 +48,23 @@ def verify_runtime(family, deps):
         sparse = SparseTensor(row=torch.tensor([0, 1]), col=torch.tensor([1, 0]), sparse_sizes=(2, 2))
         assert sparse.matmul(torch.ones(2, 1)).tolist() == [[1], [1]]
         assert GCNConv(2, 2)(torch.ones(2, 2), torch.tensor([[0, 1], [1, 0]])).shape == (2, 2)
+    # Wheel metadata can permit NumPy 1 while the compiled module requires 2.
+    # Exercise the application's table and plot stack under the native overlay.
+    import pandas as pd
+    import pyarrow as pa
+    from matplotlib.figure import Figure
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    table = pa.Table.from_pandas(pd.DataFrame({'value': np.array([1.0, 2.0])}))
+    assert table.column('value').to_pylist() == [1.0, 2.0]
+    figure = Figure(figsize=(1, 1))
+    figure.add_subplot().plot(np.array([1.0, 2.0]))
+    FigureCanvasAgg(figure).draw()
+    application_versions = {name: metadata.version(name) for name in ('pandas', 'pyarrow', 'matplotlib')}
     versions = {d.metadata['Name']: d.version for d in metadata.distributions(path=[str(deps)])}
     (deps / '.ready').touch()
     return {'family': family, 'python': sys.version, 'deps': str(deps), 'versions': versions,
-            'native_operations_passed': True}
+            'native_operations_passed': True, 'application_operations_passed': True,
+            'application_versions': application_versions}
 
 
 def main():

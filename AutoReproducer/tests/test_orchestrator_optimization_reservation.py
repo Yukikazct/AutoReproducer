@@ -52,7 +52,10 @@ def test_reserved_flag_never_runs_optimization_or_creates_workspace(tmp_path, re
     }
     report = result["data"]["report"]
     original, marker, summary = report.partition("\n\n<!-- autoreproducer-run-finalization:start -->\n")
+    original, conclusion_marker, conclusion = original.partition("\n\n<!-- autoreproducer-conclusion:start -->\n")
     assert original == "Reserved optimization interface"
+    assert conclusion_marker and "本次复现结论" in conclusion
+    assert result["data"]["reproduction_conclusion"]["status"] == "mock_demo"
     assert marker and report.count("<!-- autoreproducer-run-finalization:start -->") == 1
     assert report.count("<!-- autoreproducer-run-finalization:end -->") == 1
     assert "**总任务状态**: 已完成" in summary

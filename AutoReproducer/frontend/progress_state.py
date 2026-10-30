@@ -50,6 +50,7 @@ def read_progress_snapshot(path: str, *, include_pending_result: bool = False) -
         "pdf_resolution": {},
         "activities": [],
         "dependency_installations": [],
+        "agent_messages": [],
     }
     stages: Dict[str, Dict[str, Any]] = {}
     stage_order: List[str] = []
@@ -296,7 +297,20 @@ def read_progress_snapshot(path: str, *, include_pending_result: bool = False) -
             continue
         etype = ev.get("type")
         event_sequence += 1
-        if etype == "pipeline_plan":
+        if etype == "agent_message":
+            message = ev.get('message')
+            if not isinstance(message, dict) or not all(
+                    isinstance(message.get(key), str) and 0 < len(message[key]) <= 160
+                    for key in ('id', 'sender', 'recipient', 'kind')):
+                continue
+            if not any(item['id'] == message['id'] for item in view['agent_messages']):
+                # The producer already bounds and redacts messages. Keep this
+                # display path bounded even when reading malformed JSONL.
+                encoded = json.dumps(message, ensure_ascii=False)
+                if len(encoded) <= 16384:
+                    view['agent_messages'].append(message)
+                    del view['agent_messages'][:-80]
+        elif etype == "pipeline_plan":
             planned = ev.get("stages")
             if not isinstance(planned, list):
                 continue

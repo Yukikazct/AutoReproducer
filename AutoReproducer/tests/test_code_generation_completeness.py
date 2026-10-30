@@ -341,13 +341,8 @@ class TestReportSurfacesSanitize:
         report = self._report({"code": "a = 1\n", "stages": [], "final": {}})
         assert "清洗丢弃" not in report
 
-    def test_report_embeds_full_output_without_truncation(self):
-        """报告全文内嵌代码与执行输出，不截断。
-
-        此前 `_clip` 把 code/stdout/stderr 砍到 6000/6000/3000 字符，实测
-        一次 10627 字符的输出在报告里只剩前 6000——读报告的人拿到半截内容。
-        代价是长输出会把页面拉长，这是刻意换来的：可读性优先于版面。
-        """
+    def test_report_moves_full_output_to_details_without_truncation(self):
+        """正文保留实验结果，代码与输出全文保存为可核对的详情附件。"""
         code = "# 生成代码\n" + "\n".join(
             f"print('step {i}')" for i in range(400))          # ≈ 8000 字符
         stdout = "\n".join(f"result[{i}] = {i * 1.5:.3f}"
@@ -356,10 +351,12 @@ class TestReportSurfacesSanitize:
             "code": code, "stages": [], "final": {"stdout": stdout},
         })
 
-        assert code.splitlines()[-1] in report       # 代码末行必须在
-        assert stdout.splitlines()[-1] in report     # 输出末行必须在
-        assert "截断" not in report
-        assert len(report) > len(code) + len(stdout)
+        assert code.splitlines()[-1] not in report
+        assert stdout.splitlines()[-1] not in report
+        from src.execution_artifacts import default_report_path
+        from src.report_details import report_details_bytes
+        details = next(iter(report_details_bytes(report, default_report_path()).values())).decode('utf-8')
+        assert code in details and stdout in details
 
     def test_none_stdout_still_renders_report(self):
         """stdout/requirements 为 None 时报告仍须生成（曾整段崩在 join 上）。
@@ -431,7 +428,7 @@ class TestReportSurfacesVerdictBasis:
                                    "actual": {"accuracy": 0.85}},
         })
         assert "无法比对的指标" in report
-        assert "| f1_score | 0.8 | N/A |" in report
+        assert "| f1\\_score | 0.8 | 未取得 |" in report
 
 
 class TestReportSurfacesBestEffort:

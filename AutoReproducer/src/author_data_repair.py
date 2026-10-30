@@ -183,6 +183,11 @@ def download_data(url):
 def recover_author_data(llm, result, plan, packet, workspace, run_dir, data, verify_inputs):
     if llm is None or getattr(llm, 'mock_mode', False) or plan.get('scope') != 'author_code_execution':
         return None
+    from src.intelligent_recovery import current_investigation
+    investigation = current_investigation()
+    if investigation is not None:
+        investigation.ensure_running()
+        llm = investigation.wrap_llm(llm)
     target = missing_data_target(result, workspace, {**packet, '_repair_steps': plan['steps']})
     if not target:
         return None

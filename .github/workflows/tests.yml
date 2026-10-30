@@ -11,9 +11,10 @@ permissions:
 jobs:
   tests:
     runs-on: ${{ matrix.os }}
-    # Windows runs both complete suites (~14 min each) plus installation and
-    # management checks. Leave enough time to finish and retain both reports.
-    timeout-minutes: 45
+    # Windows runs both complete encoding selections sequentially. The main
+    # branch already needed 43 minutes before adding the recovery regressions;
+    # keep room for dependency setup and uploading both result files.
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 60 || 30 }}
     strategy:
       fail-fast: false
       matrix:
@@ -27,6 +28,9 @@ jobs:
       MPLBACKEND: Agg
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Recovery integration imports a real frozen baseline checkout.
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}

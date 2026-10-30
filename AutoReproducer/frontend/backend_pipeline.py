@@ -35,7 +35,7 @@ from src.project_paths import get_data_root
 
 
 # Contract checked by the web loader before starting a new background thread.
-BACKEND_API_VERSION = 13
+BACKEND_API_VERSION = 16
 WORKER_CANCEL_GRACE_SECONDS = 5
 
 
@@ -56,9 +56,9 @@ def _cancellation_message(control, diagnostic=''):
 
 
 def _force_stop_contains_worker_children():
-    # Windows jobs contain nested sessions. A POSIX process group does not
-    # contain inner runners that deliberately start their own session.
-    return os.name == "nt"
+    # Windows jobs and the retained POSIX session owner both confirm the full
+    # managed worker scope before publishing cleanup or allowing another task.
+    return os.name in {"nt", "posix"}
 
 
 def __getattr__(name):
@@ -148,6 +148,11 @@ def _sync_run_report(result: dict) -> None:
     report = Path(result["report_path"])
     from src.source_repair_evidence import report_evidence_bytes
     repair_evidence = report_evidence_bytes(report.read_text(encoding='utf-8'), report)
+    from src.pdf_markdown import report_markdown_bytes
+    repair_evidence.update(report_markdown_bytes(report.read_text(encoding='utf-8'), report))
+    from src.report_details import report_details_bytes
+    for name, raw in report_details_bytes(report.read_text(encoding='utf-8'), report).items():
+        _write_report_copy(workspace_path(run_dir, name, 'run report details'), raw)
     assets = report.with_name(report.stem + "_assets")
     if assets.exists():
         for image in assets.iterdir():
@@ -235,6 +240,8 @@ def run_pipeline_core(progress_path: str,
                       source_repair: bool = False,
                       source_repair_auto: bool = False,
                       source_repair_editable: Optional[List[str]] = None,
+                      intelligent_recovery: bool = False,
+                      intelligent_recovery_mode: str = 'collaborative',
                       _managed_runtime: bool = False,
                       _append_progress: bool = False,
                       _runtime_preparation: Optional[dict] = None) -> Dict[str, Any]:
@@ -255,6 +262,16 @@ def run_pipeline_core(progress_path: str,
     if source_repair_auto is True and source_repair_editable is None:
         source_repair_editable = []
     store = ProgressStore(progress_path, reset=not _append_progress)
+    if type(intelligent_recovery) is not bool:
+        return _reject_pdf_input(store, "intelligent_recovery 必须是显式布尔值")
+    from src.intelligent_recovery_request import normalize_intelligent_recovery_request
+    try:
+        recovery_request = normalize_intelligent_recovery_request({
+            'intelligent_recovery': intelligent_recovery,
+            'intelligent_recovery_mode': intelligent_recovery_mode})
+        intelligent_recovery_mode = recovery_request['intelligent_recovery_mode']
+    except ValueError as exc:
+        return _reject_pdf_input(store, str(exc))
     from src.experiment_request import normalize_experiment_request
     try:
         experiment_request = normalize_experiment_request(experiment_request)
@@ -273,6 +290,8 @@ def run_pipeline_core(progress_path: str,
             "source_repair": source_repair,
             "source_repair_auto": source_repair_auto,
             "source_repair_editable": source_repair_editable,
+            "intelligent_recovery": intelligent_recovery,
+            "intelligent_recovery_mode": intelligent_recovery_mode,
             "base_url": base_url, "api_key": api_key, "mock_mode": mock_mode,
             "max_trials": max_trials, "use_docker": use_docker,
             "workspace_dir": workspace_dir, "experiment_profile": experiment_profile,
@@ -304,6 +323,8 @@ def run_pipeline_core(progress_path: str,
                 "source_repair": source_repair,
                 "source_repair_auto": source_repair_auto,
                 "source_repair_editable": source_repair_editable,
+                "intelligent_recovery": intelligent_recovery,
+                "intelligent_recovery_mode": intelligent_recovery_mode,
                 "experiment_profile": experiment_profile}
     pdf_parser_reason = None
     if pdf_path:
@@ -410,7 +431,7 @@ def run_pipeline_core(progress_path: str,
                     # the lease otherwise reloads the bare service result.
                     environment.result = checkpoint
                 store.emit({**event, 'result': checkpoint})
-            elif event.get("type") in {"repository_step", "repository_output", "execution_step", "execution_output", "execution_run", "repository_environment", "dependency_install_progress"}:
+            elif event.get("type") in {"repository_step", "repository_output", "execution_step", "execution_output", "execution_run", "repository_environment", "dependency_install_progress", "agent_message"}:
                 store.emit(event)
             elif event.get("type") == "pipeline_plan":
                 store.emit({**event, "stages": [
@@ -429,6 +450,8 @@ def run_pipeline_core(progress_path: str,
                 "source_repair": source_repair,
                 "source_repair_auto": source_repair_auto,
                 "source_repair_editable": source_repair_editable,
+                "intelligent_recovery": intelligent_recovery,
+                "intelligent_recovery_mode": intelligent_recovery_mode,
                 "prepare_only": prepare_only, "offline": offline,
                 "use_llm_review": use_llm_review,
                 "allow_result_summary_review": allow_result_summary_review,
@@ -473,9 +496,7 @@ def run_pipeline_core(progress_path: str,
                 report_file.write_text(report_text, encoding="utf-8")
                 report_path = str(report_file)
 
-                # 完整执行输出附件：报告现已**全文内嵌** code/stdout/stderr，
-                # 附件保留作为可直接下载/归档的纯文本旁路（终端里 wc/grep、
-                # 或想脱离 Markdown 单独留档时用）。
+                # 主报告保留实验设置与结果；详情与纯文本附件保存完整输出。
                 execution_raw = data.get("execution", {}) or {}
                 final_raw = execution_raw.get("final", {}) or {}
                 attach_lines = ["# 完整执行输出（未被截断）",
@@ -575,9 +596,11 @@ def _run_prepared_pipeline(store: ProgressStore, request: dict, reason: str, *, 
     Only the request pipe carries credentials. The existing progress file remains
     the single source of truth for the page throughout recovery and training.
     """
-    from src.runtime_preparation import (
-        prepare_runtime, run_owned_process, safe_runtime_diagnostic, release_worker_environment,
-    )
+    from frontend.runtime_entrypoint import load_runtime_preparation
+    runtime = load_runtime_preparation()
+    prepare_runtime, run_owned_process = runtime.prepare_runtime, runtime.run_owned_process
+    safe_runtime_diagnostic = runtime.safe_runtime_diagnostic
+    release_worker_environment = runtime.release_worker_environment
     from frontend.task_control import current_task
     control = current_task()
     if control is not None and cancel_check is None:
@@ -718,12 +741,12 @@ def _run_prepared_pipeline(store: ProgressStore, request: dict, reason: str, *, 
             timeout_s=None,
             cancel_check=worker_cancelled,
             on_cleanup=confirmed_cleanup,
+            contain_session=True,
         )
         # Normal return also carries the run_owned_process cleanup contract.
         confirmed_cleanup()
         if not worker_cleaned:
-            from src.runtime_preparation import ProcessCleanupError
-            raise ProcessCleanupError("外层进程退出不足以确认独立会话中的子进程已回收")
+            raise runtime.ProcessCleanupError("外层进程退出不足以确认独立会话中的子进程已回收")
         cancelled = bool(cancel_check and cancel_check())
         finish_worker("interrupted" if cancelled else "success" if completed.returncode == 0 else "error",
                       _cancellation_message(control) if cancelled else None)
@@ -811,6 +834,8 @@ def run_pipeline_background(progress_path: str, *,
                             source_repair: bool = False,
                             source_repair_auto: bool = False,
                             source_repair_editable: Optional[List[str]] = None,
+                            intelligent_recovery: bool = False,
+                            intelligent_recovery_mode: str = 'collaborative',
                             cleanup_pdf: bool = True,
                             on_done=None) -> threading.Thread:
     """启动后台线程执行流水线；返回守护线程句柄。
@@ -838,6 +863,8 @@ def run_pipeline_background(progress_path: str, *,
                 source_repair=source_repair,
                 source_repair_auto=source_repair_auto if source_repair is True else False,
                 source_repair_editable=source_repair_editable if source_repair is True else [],
+                intelligent_recovery=intelligent_recovery,
+                intelligent_recovery_mode=intelligent_recovery_mode,
                 corpus_paper=corpus_paper, model_name=model_name,
                 base_url=base_url, api_key=api_key, mock_mode=mock_mode,
                 max_trials=max_trials, use_docker=use_docker,

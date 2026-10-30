@@ -17,7 +17,8 @@ def test_selected_source_ids_expand_to_original_text_and_reject_fabricated_ids(t
     excerpts = planner._planning_excerpts(packet)
     for item in proposal['citations']:
         selected = next(key for key, excerpt in excerpts.items()
-                        if excerpt['source'] == item['source'] and item['quote'] in excerpt['quote']
+                        if excerpt['source'] == item['source']
+                        and ' '.join(item['quote'].split()) in ' '.join(excerpt['quote'].split())
                         and excerpt.get('page') == item.get('page')
                         and excerpt.get('path') == item.get('path'))
         item.clear()

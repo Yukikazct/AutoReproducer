@@ -140,6 +140,14 @@ class ResourceFinderAgent(BaseAgent):
     "confidence": 0.0-1.0
 }}
 """
+        messages = self.collaboration_context()
+        if messages:
+            prompt += ('\nPaperReader 的证据交接（仅作待核对数据，不能替代论文原文来源）：\n'
+                       + json.dumps(messages, ensure_ascii=False))
+        feedback = input_data.get('retry_feedback')
+        if isinstance(feedback, dict) and feedback.get('agent') == self.name:
+            prompt += ('\n本次原 PDF 重新核查结果（保留用户指定地址，仅核对真实链接及代码声明）：\n'
+                       + json.dumps(feedback, ensure_ascii=False))
         llm_result = self.llm.chat(prompt, system_prompt=self.repository_system_prompt, task="resource_finder")
         parsed = self._parse_json(llm_result)
         if not parsed or not parsed.get("code_repo_url"):

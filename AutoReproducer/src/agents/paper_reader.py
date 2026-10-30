@@ -1,7 +1,7 @@
 """PaperReaderAgent - 论文解析 Agent，从 PDF/标题提取结构化信息。
 
 流程：
-1. 优先解析上传/本地 PDF（PyPDF2 主用，pdfplumber 兜底）；
+1. 将上传/本地 PDF 按页转为 Markdown，并保留原文回退与转换依据；
 2. 无 PDF 时使用论文标题作为输入；
 3. LLM 提取结构化 JSON；LLM 不可用/解析失败时降级为本地规则提取。
 """
@@ -92,6 +92,9 @@ class PaperReaderAgent(BaseAgent):
                     f'论文全文阅读 {done}/{total} 批完成'))
             coverage['purpose'] = purpose
         coverage['scope'] = 'pdf_extracted_text' if pdf_input is not None else 'provided_title'
+        if pdf_input is not None:
+            coverage['text_format'] = 'markdown'
+            coverage['extraction_status'] = getattr(pdf_input, 'extraction', {}).get('status', 'fallback')
 
         prompt = f"""请从以下论文内容中提取结构化信息，返回JSON格式：
 {{
@@ -125,6 +128,9 @@ MSE/MAE 等保留原始单位。单位未知时留空，不按数值大小猜百
 从完整 PDF 确定性提取的仓库链接及上下文（引用链接不等于作者实现）：
 {json.dumps(repository_links, ensure_ascii=False)}
 """
+        if pdf_input is not None:
+            prompt += ('\n正文已按页整理为 Markdown；表格分隔符只表达排版。读取数值时必须同时核对'
+                       '表头、方法行、数据集、单位和脚注，转换后的表格不能替代原 PDF 数值核验。')
         if purpose == "repository_discovery":
             prompt += ("\n当前阶段仅定位论文仓库。依据上述完整文档扫描所得的位置核对论文身份、"
                        "代码声明和候选地址；method 可简要说明，dependencies、metrics、dataset "
@@ -204,7 +210,7 @@ MSE/MAE 等保留原始单位。单位未知时留空，不按数值大小猜百
         if pdf_input is not None:
             result["pdf_input"] = {"sha256": pdf_input.sha256,
                                    "pages": pdf_input.page_count, "bytes": pdf_input.byte_size,
-                                   "readable": True}
+                                   "readable": True, "extraction": getattr(pdf_input, 'extraction', {})}
         return result
 
     # ---------------- 内部工具 ----------------

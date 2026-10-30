@@ -4,6 +4,7 @@ import io
 import shutil
 import zipfile
 from pathlib import Path
+from urllib.parse import unquote
 from unittest.mock import Mock
 
 import pytest
@@ -48,7 +49,10 @@ def test_report_bundle_remains_readable_after_moving_and_removing_original_image
     elsewhere = tmp_path / "另一台电脑"
     elsewhere.mkdir()
     with zipfile.ZipFile(io.BytesIO(zipped)) as archive:
-        assert len(archive.namelist()) == 2
+        assert set(archive.namelist()) == {
+            path.name, path.stem + '.manifest.json',
+            unquote(next(part['target'] for part in report_parts(text) if part['type'] == 'image')),
+        }
         archive.extractall(elsewhere)
     original.unlink()
     shutil.rmtree(path.parent)

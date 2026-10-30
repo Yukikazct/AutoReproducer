@@ -23,6 +23,7 @@ from src.execution_plan import declared_paths, plan_steps
 from src.safety.paths import filesystem_path, is_link, relative_path, workspace_path
 from src.dependency_cache import DependencyCacheBusy
 from src.process_lifecycle import CREATE_SUSPENDED, ProcessJob, termination_signals, validate_windows_venv
+from src.posix_process_scope import managed_process_options
 from src.runtime_platform import runtime_fingerprint
 
 # Evidence can be a model checkpoint; the report image budget is far too small.
@@ -278,7 +279,7 @@ class RepositoryRunner:
                 job = ProcessJob()
                 process = subprocess.Popen(command, cwd=step["cwd"], env=environment,
                                            stdout=out, stderr=err, shell=False,
-                                           start_new_session=(os.name == "posix"),
+                                           **managed_process_options(),
                                            # Suspend first so the job object claims the
                                            # supervisor before it can spawn descendants;
                                            # NEW_PROCESS_GROUP isolates console Ctrl+C so
