@@ -5,6 +5,7 @@ import math
 import re
 
 from src.metric_keys import norm_metric_key
+from src.author_comparison_semantics import _exact_repetition_context
 
 METRICS_MARKER = "AUTOREPRO_METRICS:"
 NUMBER_PATTERN = r"[+-]?(?:(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?|nan|inf(?:inity)?)"
@@ -26,8 +27,11 @@ _SUMMARY_RE = re.compile(
 _AGGREGATIONS = {'single', 'mean', 'median', 'best', 'unknown'}
 _STAT_NAMES = {'mean', 'average', 'avg', 'std', 'stdev', 'stddev', 'median', 'best',
                'runs', 'trials', 'seeds', 'n'}
-_RUNS_RE = re.compile(r"\b(?:(\d+)\s+(?:runs|trials|seeds|repeats)|"
-                      r"(?:runs|trials|seeds|repeats|n)\s*[:=]\s*(\d+))\b", re.I)
+_RUN_COUNT = r'(?:[1-9]\d{0,2}(?:,\d{3})+|\d+)'
+_RUNS_RE = re.compile(r'(?<![\w.,+−–—-])(?:(?P<before>' + _RUN_COUNT + r')\s+'
+    r'(?:(?:independent|random|repeated)\s+)?(?:runs|trials|seeds|repeats)|'
+    r'(?P<label>runs|trials|seeds|repeats)\s*[:=]\s*(?P<after>' + _RUN_COUNT + r'))\b', re.I)
+_RUN_WORDS = re.compile(r'\b(?:runs|trials|seeds|repeats)\b', re.I)
 _STD_RE = re.compile(r"(?:\b(?:std(?:dev)?|stdev|standard\s+deviation)\s*[:=]?\s*|"
                      r"(?:±|\+/-)\s*)(?P<std>" + NUMBER_PATTERN + r")(?![\w.])", re.I)
 _OTHER_UNCERTAINTY = re.compile(r"\b(?:ci|confidence\s+interval|sem|stderr|standard\s+error)\b", re.I)
@@ -41,6 +45,80 @@ _LOGGER_RUN = re.compile(r'^\s*Run\s+(\d+)\s*:\s*$', re.I)
 _LOGGER_ALL = re.compile(r'^\s*All\s+runs\s*:\s*$', re.I)
 _LOGGER_FINAL = re.compile(r'^\s*Final\s+(?P<split>train|valid|validation|test)\s*:\s*'
                            r'(?P<value>' + NUMBER_PATTERN + r')(?![\w.])\s*(?P<percent>%)?', re.I)
+_SUMMARY_RUN_HEADER = re.compile(
+    r'^\s*(?:(?:(?:final|overall)\s+)?(?:results|summary)\s+(?:over|across|from|of)\s+'
+    r'(?P<summary_count>\d+)\s+(?:(?:completed|independent|repeated)\s+)?'
+    r'(?:runs|trials|seeds|repeats|experiments)|'
+    r'[\w.+-]+\s+on\s+dataset\s+[\w.+-]+,\s+in\s+(?P<experiment_count>\d+)'
+    r'\s+repeated\s+experiments?)\s*:\s*$', re.I)
+
+
+def _summary_run_header(line, line_number):
+    """A reported summary count, never a configured or independently checked count."""
+    match = _SUMMARY_RUN_HEADER.fullmatch(line)
+    if not match or _REFERENCE_RE.search(line):
+        return None
+    count = _run_count(match['summary_count'] or match['experiment_count'])
+    if count is None or count < 1:
+        return None
+    return {'value': count, 'source': f'stdout:{line_number}',
+            'source_quote': line.strip(), 'kind': 'reported_summary'}
+
+
+def _run_count(value):
+    try:
+        return int(value.replace(',', ''))
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _reported_run_counts(text):
+    """Read exact counts without turning bounds, seed IDs or fragments into counts."""
+    if _REFERENCE_RE.search(text):
+        return set(), bool(_RUN_WORDS.search(text))
+    counts, rejected = set(), False
+    matches = list(_RUNS_RE.finditer(text))
+    for match in matches:
+        count = _run_count(match['before'] or match['after'])
+        statistics = list(_STD_RE.finditer(text[:match.start()]))
+        preceding_statistic = bool(statistics and
+            text[statistics[-1].end():match.start()].strip() in {',', ';'})
+        if (count is None or not _exact_repetition_context(
+                text, match.start(), match.end(), number_follows_label=bool(match['label']),
+                preceding_statistic=preceding_statistic)
+                or match['label'] and match['label'].lower() == 'seeds'
+                and not re.search(r'\b(?:number|count)\s+of\s*$', text[:match.start()], re.I)):
+            rejected = True
+        else:
+            counts.add(count)
+    if not matches and _RUN_WORDS.search(text):
+        rejected = True
+    return counts, rejected
+
+
+def _bind_summary_runs(records, start, header, line):
+    """Only the immediately following, wholly statistical line belongs to a header."""
+    rows = records[start:]
+    if (not header or header.get('ambiguous') or not rows
+            or any(row.get('aggregation') not in {'mean', 'median', 'best'} for row in rows)
+            or _REFERENCE_RE.search(line)):
+        return []
+    counts, rejected_counts = _reported_run_counts(line)
+    if rejected_counts:
+        return []
+    if len(counts) > 1:
+        for row in rows:
+            row.pop('runs', None)
+        return [f"{rows[0]['source']}: Metric line reports conflicting repetition counts"]
+    errors = []
+    for row in rows:
+        if row.get('runs', header['value']) != header['value']:
+            row.pop('runs', None)
+            errors.append(f"{row['source']}: Summary header and metric report different repetition counts")
+        else:
+            row['runs'] = header['value']
+            row['runs_source'] = dict(header)
+    return errors
 
 
 def _printed_logger_context(line):
@@ -128,10 +206,9 @@ def _statistics(prefix, suffix, summary=None):
         aggregation = match.group(1) if match else None
     if aggregation:
         fields['aggregation'] = {'average': 'mean', 'avg': 'mean'}.get(aggregation.lower(), aggregation.lower())
-    counts = {int(a or b) for a, b in _RUNS_RE.findall(prefix + ' ' + suffix)}
-    if summary is not None and summary.group('runs') is not None:
-        counts.add(int(summary.group('runs')))
-    if len(counts) == 1:
+    count_context = prefix + ' ' + (summary.group() if summary is not None else '') + ' ' + suffix
+    counts, rejected_counts = _reported_run_counts(count_context)
+    if len(counts) == 1 and not rejected_counts:
         fields['runs'] = counts.pop()
     std = _STD_RE.search(suffix)
     uncertainty_context = prefix + ' ' + suffix
@@ -204,6 +281,9 @@ def _structured_records(payload, source, preserve_contexts=False):
         record = {**entry, "value": value, "unit": metric_unit(entry), "source": source,
                   "stage": str(entry.get("stage") or "final").lower(),
                   "split": str(entry.get("split") or "").lower()}
+        # Header provenance is derived from this stream's actual text, never
+        # accepted as a structured producer's claim about another line.
+        record.pop('runs_source', None)
         errors.extend(_statistic_errors(record))
         records.append(record)
     records = _select_records(records, preserve_contexts)
@@ -228,17 +308,24 @@ def parse_runtime_metrics(text, structured=None, expected_names=(), *, preserve_
             return [], [f"stdout:{line_number}: 最终结构化指标不是合法 JSON"]
         return _structured_records(decoded, f"stdout:{line_number}", preserve_contexts)
 
-    records = []
+    records, errors = [], []
     known_names = _TEXT_METRICS | {norm_metric_key(key) for key in expected_names}
     logger, current_run, all_runs, completed_runs = {}, None, False, {}
+    pending_summary = None
     for line_number, line in enumerate(lines, 1):
+        summary_context, pending_summary = pending_summary, _summary_run_header(line, line_number)
+        if pending_summary is not None:
+            if summary_context is not None:
+                pending_summary = {'ambiguous': True}
+            continue
+        line_start = len(records)
         context = _printed_logger_context(line)
         if context is not None:
             logger, current_run, all_runs, completed_runs = context, None, False, {}
             continue
         run_header = _LOGGER_RUN.fullmatch(line)
         if run_header:
-            current_run, all_runs = int(run_header[1]), False
+            current_run, all_runs = _run_count(run_header[1]), False
         if _LOGGER_ALL.fullmatch(line):
             current_run, all_runs = None, True
         final = _LOGGER_FINAL.match(line) if logger.get('metric') else None
@@ -313,8 +400,9 @@ def parse_runtime_metrics(text, structured=None, expected_names=(), *, preserve_
                             "unit": "percent" if match["percent"] else "",
                             "split": split, "stage": stage, "source": f"stdout:{line_number}",
                             "source_quote": line.strip(), **stats})
+        errors.extend(_bind_summary_runs(records, line_start, summary_context, line))
     records = _select_records(records, preserve_contexts)
-    errors = [f"{r['name']}: 指标不是有限数值" for r in records if r["value"] is None]
+    errors.extend(f"{r['name']}: 指标不是有限数值" for r in records if r["value"] is None)
     for record in records:
         errors.extend(_statistic_errors(record))
     return records, errors

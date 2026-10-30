@@ -190,6 +190,11 @@ def collect_author_metrics(execution, *, workspace=None, plan=None, sources=None
             errors.extend(f"{step['id']}:{stream}: {error}" for error in failures)
             for record in parsed:
                 source = record['source'].replace('stdout:', stream + ':')
+                provenance = record.get('runs_source')
+                if (isinstance(provenance, dict) and isinstance(provenance.get('source'), str)
+                        and provenance['source'].startswith('stdout:')):
+                    record['runs_source'] = {**provenance,
+                        'source': f"{step['id']}:" + provenance['source'].replace('stdout:', stream + ':')}
                 records.append({**record, 'id': f"{step['id']}:{stream}:{len(records)}",
                                 'step_id': step['id'], 'source': f"{step['id']}:{source}"})
     if execution.get('success') is True and workspace is not None and sources is not None:

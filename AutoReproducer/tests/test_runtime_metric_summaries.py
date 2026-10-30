@@ -231,3 +231,181 @@ def test_f1_averaging_methods_remain_distinct(macro, micro):
     assert not errors
     assert {r['name']: r['value'] for r in records} == {
         'f1_score': 0.9702, 'f1_macro': 0.6859, 'f1_micro': 0.9433}
+
+
+@pytest.mark.parametrize('header,count', [
+    ('GPRGNN on dataset cora, in 100 repeated experiment:', 100),
+    ('Estimator-42 on dataset benchmark_v2, in 7 repeated experiments:', 7),
+    ('Final results over 5 completed trials:', 5),
+    ('Summary of 12 independent seeds:', 12),
+    ('Results across 3 runs:', 3),
+])
+def test_adjacent_reported_summary_header_preserves_count_and_its_exact_provenance(header, count):
+    line = 'test acc mean = 79.6319 \t test acc std = 1.7389 \t val acc mean = 81.2941'
+    rows, errors = parse_runtime_metrics(header + '\n' + line, preserve_contexts=True)
+    assert not errors and len(rows) == 2
+    assert {row['runs'] for row in rows} == {count}
+    assert rows[0]['value'] == 79.6319 and rows[0]['std'] == 1.7389
+    assert all(row['source_quote'] == line for row in rows)
+    assert all(row['runs_source'] == {'value': count, 'source': 'stdout:1',
+        'source_quote': header, 'kind': 'reported_summary'} for row in rows)
+    assert all(row['unit'] == '' for row in rows)
+
+
+@pytest.mark.parametrize('header', [
+    'Planned results over 100 runs:', 'Summary of up to 100 runs:',
+    'Summary of at least 100 runs:', 'Summary of 100 unfinished runs:',
+    'Not a summary of 100 runs:', 'Paper results over 100 runs:',
+    'Reference on dataset cora, in 100 repeated experiment:',
+    'Summary of 0 completed runs:', 'Summary of 100 or 200 runs:',
+    'Namespace(runs=100)', '--runs 100', 'for RP in range(100):',
+])
+def test_plans_bounds_negation_configuration_and_reference_headers_do_not_prove_runs(header):
+    rows, errors = parse_runtime_metrics(header + '\nTest accuracy mean=0.8', preserve_contexts=True)
+    assert not errors and len(rows) == 1
+    assert 'runs' not in rows[0] and 'runs_source' not in rows[0]
+
+
+@pytest.mark.parametrize('gap', ['\n', 'Training started\n', 'Epoch: 1\n',
+    'Summary of 20 runs:\n', 'Summary of 10 runs:\n'])
+def test_summary_header_cannot_cross_a_gap_or_competing_header(gap):
+    rows, errors = parse_runtime_metrics('Summary of 10 runs:\n' + gap + 'Test accuracy mean=0.8')
+    assert not errors and len(rows) == 1 and 'runs' not in rows[0]
+
+
+def test_summary_header_does_not_turn_a_single_measurement_into_a_repeated_summary():
+    rows, errors = parse_runtime_metrics('Summary of 10 runs:\nTest accuracy:0.8')
+    assert not errors and 'runs' not in rows[0] and 'aggregation' not in rows[0]
+    rows, errors = parse_runtime_metrics('Summary of 10 runs:\nTest accuracy mean=0.8; Loss:0.1')
+    assert not errors and all('runs' not in row for row in rows)
+
+
+def test_summary_header_is_consumed_by_one_physical_line_only():
+    rows, errors = parse_runtime_metrics('Summary of 10 runs:\nTest accuracy mean=0.8\nTest F1 mean=0.7')
+    assert not errors
+    assert rows[0]['runs'] == 10 and 'runs' not in rows[1]
+
+
+def test_conflicting_header_and_metric_counts_remain_an_error():
+    rows, errors = parse_runtime_metrics('Summary of 10 runs:\nTest accuracy of 20 runs: mean 0.8')
+    assert errors and 'different repetition counts' in errors[0]
+    assert 'runs' not in rows[0] and 'runs_source' not in rows[0]
+
+
+def test_same_line_explicit_count_can_agree_with_header():
+    rows, errors = parse_runtime_metrics('Summary of 10 runs:\nTest accuracy of 10 runs: mean 0.8')
+    assert not errors and rows[0]['runs'] == 10
+
+
+@pytest.mark.parametrize('line,values', [
+    ('Test accuracy mean=0.8; 10 runs; 20 runs', [0.8]),
+    ('Test accuracy mean=0.8; runs=10; runs=20', [0.8]),
+    ('Test accuracy mean=0.8; 20 runs; 30 runs', [0.8]),
+    ('Test accuracy of 10 runs: mean 0.8; Test F1 of 20 runs: mean 0.7', [0.8, 0.7]),
+])
+def test_summary_header_cannot_resolve_conflicting_inline_counts(line, values):
+    rows, errors = parse_runtime_metrics('Summary of 10 runs:\n' + line, preserve_contexts=True)
+    assert [row['value'] for row in rows] == values
+    assert any('conflicting repetition counts' in error for error in errors)
+    assert all('runs' not in row and 'runs_source' not in row for row in rows)
+
+
+@pytest.mark.parametrize('counts', ['10 runs; 10 trials', 'runs=10; trials=10'])
+def test_repeated_matching_inline_counts_keep_the_summary_provenance(counts):
+    rows, errors = parse_runtime_metrics('Summary of 10 runs:\nTest accuracy mean=0.8; ' + counts)
+    assert not errors and rows[0]['value'] == 0.8 and rows[0]['runs'] == 10
+    assert rows[0]['runs_source']['source'] == 'stdout:1'
+
+
+def test_later_summary_never_borrows_an_earlier_header():
+    rows, errors = parse_runtime_metrics('Summary of 10 runs:\nTest accuracy mean=0.8\n'
+        'New evaluation\nTest accuracy mean=0.9')
+    assert not errors and rows[0]['value'] == 0.9 and 'runs' not in rows[0]
+
+
+def test_structured_output_does_not_borrow_text_header_count():
+    rows, errors = parse_runtime_metrics('Summary of 10 runs:\nTest accuracy mean=0.8',
+        structured=[{'name': 'accuracy', 'value': 0.9, 'aggregation': 'mean'}])
+    assert not errors and rows[0]['value'] == 0.9 and 'runs' not in rows[0]
+
+
+@pytest.mark.parametrize('count', [
+    '-2 runs', '+2 runs', '−2 runs', '5/10 runs', '5-10 runs', '5 to 10 runs',
+    'at least 10 runs', 'at most 10 runs', 'up to 10 runs', 'approximately 10 trials',
+    'about 10 repeats', '10 runs or fewer', '10 runs at most', 'runs: 7+',
+    'runs: 7/10', 'runs: 7.5', 'runs: 7,8', '100, 007 runs', 'seeds: 42', 'n=10',
+    'planned 10 runs', 'will use 10 runs', '10 runs were not completed',
+    'paper reports 10 runs', 'reference: 10 trials', 'target: 10 repeats',
+])
+def test_runtime_count_qualifiers_identifiers_and_number_fragments_stay_unknown(count):
+    rows, errors = parse_runtime_metrics('Test accuracy mean=0.8; ' + count)
+    assert not errors and rows[0]['value'] == 0.8
+    assert 'runs' not in rows[0]
+
+
+@pytest.mark.parametrize('count', ['at most 10 runs', '-2 runs', '5/10 runs', 'seeds: 42',
+                                 'paper reports 10 runs'])
+def test_summary_header_does_not_hide_an_uncertain_inline_run_count(count):
+    rows, errors = parse_runtime_metrics('Summary of 10 runs:\nTest accuracy mean=0.8; ' + count)
+    assert not errors and rows[0]['value'] == 0.8
+    assert 'runs' not in rows[0] and 'runs_source' not in rows[0]
+
+
+@pytest.mark.parametrize('suffix,count', [
+    ('over 10 runs', 10), ('runs=10', 10), ('10 independent runs', 10),
+    ('1,007 trials', 1007), ('number of seeds: 10', 10),
+])
+def test_complete_exact_inline_counts_remain_bound_to_the_metric(suffix, count):
+    rows, errors = parse_runtime_metrics('Test accuracy mean=0.8, std=0.01, ' + suffix)
+    assert not errors and rows[0]['runs'] == count and rows[0]['value'] == 0.8
+
+
+@pytest.mark.parametrize('style', ['summary_header', 'inline', 'logger'])
+def test_unparseable_large_counts_do_not_discard_valid_metric_values(style):
+    huge = '9' * 5000
+    if style == 'summary_header':
+        text = 'Summary of ' + huge + ' runs:\nTest accuracy mean=0.8'
+    elif style == 'inline':
+        text = 'Test accuracy mean=0.8; runs=' + huge
+    else:
+        text = "Namespace(metric='acc', runs=2)\nRun " + huge + ':\nFinal Test:0.8'
+    rows, errors = parse_runtime_metrics(text)
+    assert not errors and rows[0]['value'] == 0.8
+    assert 'runs' not in rows[0]
+
+
+@pytest.mark.parametrize('source', [10, None, 'stdout:999'])
+def test_structured_producer_cannot_inject_derived_header_provenance(source):
+    payload = [{'name': 'accuracy', 'value': 0.9, 'runs': 5, 'runs_source': {
+        'kind': 'reported_summary', 'value': 5, 'source': source, 'source_quote': 'invented'}}]
+    rows, errors = collect_author_metrics({'steps': [{'id': 'eval', 'success': True, 'exit_code': 0,
+        'metric_records': payload}]})
+    assert not errors and rows[0]['runs'] == 5 and 'runs_source' not in rows[0]
+
+
+def test_summary_count_does_not_cross_failed_steps_other_steps_or_output_streams():
+    execution = {'steps': [
+        {'id': 'old', 'success': False, 'exit_code': 1,
+         'stdout': 'Summary of 100 runs:\nTest accuracy mean=0.99'},
+        {'id': 'header_only', 'success': True, 'exit_code': 0, 'stdout': 'Summary of 100 runs:'},
+        {'id': 'current', 'success': True, 'exit_code': 0,
+         'stderr': 'Summary of 100 runs:', 'stdout': 'Test accuracy mean=0.8'}]}
+    rows, errors = collect_author_metrics(execution)
+    assert not errors and len(rows) == 1 and rows[0]['value'] == 0.8
+    assert 'runs' not in rows[0]
+
+
+@pytest.mark.parametrize('stream', ['stdout', 'stderr'])
+def test_summary_count_evidence_keeps_its_step_stream_and_header_line(stream):
+    from src.author_comparison_semantics import context_evidence
+    header = 'Final results over 10 completed trials:'
+    rows, errors = collect_author_metrics({'steps': [{'id': 'evaluate', 'success': True, 'exit_code': 0,
+        stream: header + '\nTest accuracy mean=0.8'}]})
+    assert not errors and len(rows) == 1
+    row = rows[0]
+    assert row['source'] == f'evaluate:{stream}:2'
+    assert row['runs_source']['source'] == f'evaluate:{stream}:1'
+    evidence = context_evidence({'runs': 10}, [], observed=row)['runs']
+    assert evidence['status'] == 'verified' and evidence['value'] == 10
+    assert evidence['quote'] == header and evidence['citation'] == f'evaluate:{stream}:1'
+    assert 'not independently counted' in evidence['reason']

@@ -104,7 +104,7 @@ def _scopes(node, refs, field):
     return [(ref['quote'], ref['id']) for ref in refs]
 
 
-def _exact_repetition_context(text, start, end):
+def _exact_repetition_context(text, start, end, *, number_follows_label=False, preceding_statistic=False):
     """A bound, estimate, range or negated plan is not an exact run count."""
     if re.search(r'\bapprox\.\s*$', text[:start], re.I):
         return False
@@ -113,8 +113,11 @@ def _exact_repetition_context(text, start, end):
     if re.search(r"\b(?:no|not|never|neither|without|would|could|should|can|might|may|will|"
                  r"plan(?:ned)?|intend(?:ed)?)\b|\b\w+n['’]t\b", prefix, re.I):
         return False
-    if re.search(r'\d(?:,\s*|\s+)$|\b(?:hundred|thousand|million|billion)\s*$', prefix, re.I):
+    if not (number_follows_label or preceding_statistic) and re.search(
+            r'\d(?:,\s*|\s+)$|\b(?:hundred|thousand|million|billion)\s*$', prefix, re.I):
         return False  # A trailing number fragment is not the complete count.
+    if number_follows_label and _COUNT_LIST_SUFFIX.match(suffix):
+        return False
     if re.match(r'\s*(?:in\s+(?:total|all)\s+)?'
                 r'(?:(?:is|are|was|were|has|have|had|be|been|being)\s+)*'
                 r"(?:not|never|will|would|could|should|can|might|may|planned|proposed|"
@@ -424,8 +427,15 @@ def context_evidence(node, refs, *, observed=None, source_texts=None):
         for field in checks:
             value = observed.get(field)
             if value not in (None, '', 'unknown'):
-                checks[field] = _support('verified', value=value, quote=observed.get('source_quote', ''),
-                                         source=observed.get('source'), reason='Authoritative observed metric field')
+                provenance = observed.get('runs_source') if field == 'runs' else None
+                if (isinstance(provenance, dict) and provenance.get('kind') == 'reported_summary'
+                        and provenance.get('value') == value):
+                    checks[field] = _support('verified', value=value,
+                        quote=provenance.get('source_quote', ''), source=provenance.get('source'),
+                        reason='Run count reported in the adjacent author summary header; not independently counted')
+                else:
+                    checks[field] = _support('verified', value=value, quote=observed.get('source_quote', ''),
+                                             source=observed.get('source'), reason='Authoritative observed metric field')
     return checks
 
 
