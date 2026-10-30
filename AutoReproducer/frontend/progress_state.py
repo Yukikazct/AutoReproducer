@@ -4,7 +4,7 @@ import math
 from pathlib import Path
 from typing import Any, Dict, List
 
-PROGRESS_VIEW_VERSION = 4
+PROGRESS_VIEW_VERSION = 5
 INSTALLATION_HISTORY_LIMIT = 40
 INSTALLATION_LIMIT = 10
 
@@ -66,6 +66,7 @@ def read_progress_snapshot(path: str, *, include_pending_result: bool = False) -
     step_end_order = {}
     event_sequence = 0
     terminal_request = None
+    result_checkpoint = None
     output_key = None
     labeled_output = False
 
@@ -452,6 +453,15 @@ def read_progress_snapshot(path: str, *, include_pending_result: bool = False) -
             if text:
                 output_boundary(context)
                 view["execution_output"] = (view["execution_output"] + text)[-16000:]
+        elif etype == "result_checkpoint":
+            candidate = ev.get("result")
+            data = candidate.get("data") if isinstance(candidate, dict) else None
+            if (view["running"] and isinstance(data, dict) and candidate.get("state") == "ERROR"
+                    and data.get("interrupted") is True and isinstance(data.get("run_dir"), str)
+                    and data["run_dir"]):
+                # Evidence for the owner, never a terminal request or a signal
+                # that the worker, descendants or cleanup have finished.
+                result_checkpoint = candidate
         elif etype in {"done", "error"}:
             if (not view["running"] and view["state"] == "ERROR" and etype == "done"
                     and (ev.get("result") or {}).get("state") != "ERROR"):
@@ -488,6 +498,7 @@ def read_progress_snapshot(path: str, *, include_pending_result: bool = False) -
         view["pending_result"] = (terminal_request.get("result")
                                   if terminal_request is not None
                                   and terminal_request["type"] == "done" else None)
+        view["result_checkpoint"] = result_checkpoint
     for row in view["pipeline_stages"]:
         reported = row["status"]
         end_sequence = row.pop("_end_sequence", None)

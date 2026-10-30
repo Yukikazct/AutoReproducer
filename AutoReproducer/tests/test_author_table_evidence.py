@@ -338,6 +338,65 @@ def test_identical_values_in_distinct_columns_still_have_explicit_positions():
     assert result['status'] == 'verified' and result['column_index'] == 1
 
 
+def caption_case(*, duplicate_row=False):
+    caption = 'Table 2: Mean accuracy on the node classification task.'
+    ref, row, header, _ = table({'metric_quote': caption})
+    second = row if duplicate_row else 'Ablated 70.0 ±0.5 65.0 ±0.8'
+    page = ('Paper page heading\n' + caption + ' Additional caption text.\n' + header + '\n'
+            + row + '\nTable 3: Ablation results.\n' + header + '\n' + second + '\n')
+    return ref, row, header, page
+
+
+@pytest.mark.parametrize('duplicate_row', [False, True])
+def test_unique_numbered_caption_binds_repeated_headers_with_original_page_offsets(duplicate_row):
+    case = caption_case(duplicate_row=duplicate_row)
+    before = deepcopy(case)
+    result = locate(case)
+    assert result['status'] == 'verified'
+    assert result['value'] == 81.5 and result['column_index'] == 0
+    assert case == before
+    for field, quoted in [('row_span', case[1]), ('header_span', case[2])]:
+        assert case[3][slice(*result[field])] == quoted
+    scope = result['table_scope']
+    assert case[3][slice(*scope['caption_span'])] == case[0]['metric_quote']
+    assert scope['scope_span'][1] == case[3].index('Table 3:')
+    assert 'unique_original_table_caption' in result['basis']
+
+
+@pytest.mark.parametrize('caption', [None, 'Mean accuracy on the node classification task.',
+    'Table 3: Ablation results.', 'Table 9: Missing caption.'])
+def test_repeated_headers_need_a_unique_exact_caption_containing_the_row(caption):
+    ref, row, header, page = caption_case()
+    ref['metric_quote'] = caption
+    assert locate_table_value(ref, row, header, page_text=page)['status'] == 'unknown'
+
+
+@pytest.mark.parametrize('mutation', ['duplicate_caption', 'inline_caption', 'duplicate_header',
+                                    'duplicate_row', 'next_figure'])
+def test_caption_scope_does_not_resolve_remaining_ambiguity_or_cross_boundaries(mutation):
+    ref, row, header, page = caption_case()
+    caption = ref['metric_quote']
+    if mutation == 'duplicate_caption':
+        page += caption + '\n'
+    elif mutation == 'inline_caption':
+        page = page.replace(caption, 'See ' + caption)
+    elif mutation == 'duplicate_header':
+        page = page.replace(row, header + '\n' + row)
+    elif mutation == 'duplicate_row':
+        page = page.replace(row, row + '\n' + row)
+    else:
+        page = page.replace(header, 'Figure 4: Unrelated content.\n' + header, 1)
+    assert locate_table_value(ref, row, header, page_text=page)['status'] == 'unknown'
+
+
+def test_scoped_table_still_rejects_wrong_column_value_and_method_variant():
+    ref, row, header, page = caption_case()
+    ref['value'] = 79.4
+    assert locate_table_value(ref, row, header, page_text=page)['status'] == 'rejected'
+    ref.update(value=81.5, method='Signal-v2')
+    assert locate_table_value(ref, row, header, page_text=page)['status'] == 'rejected'
+
+
 @pytest.mark.parametrize('dataset_index,child_index', [(i, j) for i in range(4) for j in range(3)])
 def test_arbitrary_names_and_reordered_protocol_labels_use_positions_not_values(dataset_index, child_index):
     datasets = ['Network-27', 'Network-3', 'Network-90', 'Network-6']

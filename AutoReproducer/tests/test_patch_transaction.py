@@ -52,6 +52,24 @@ def test_exact_edits_preserve_other_bytes_and_rollback(workspace):
     assert (workspace / 'model.py').read_bytes() == b'VALUE = 1\n'
 
 
+@pytest.mark.parametrize('long_path', [False, True])
+def test_failed_generated_module_does_not_leave_importable_bytecode(workspace, long_path):
+    from pathlib import Path
+    from src.safety.paths import filesystem_path
+    directory = 'observer' if not long_path else 'observer_' + 'x' * max(20, 232 - len(str(workspace)))
+    relative = directory + '/helper.py'
+    transaction = PatchTransaction(workspace, [patch(workspace, 'model.py', 'VALUE = 2\n')], PatchPolicy())
+    with transaction:
+        generated = Path(filesystem_path(workspace / relative))
+        generated.parent.mkdir()
+        generated.write_text('VALUE = 7\n', encoding='utf-8')
+        cached = py_compile.compile(str(generated), doraise=True)
+        assert os.path.isfile(cached)
+    assert not generated.exists()
+    assert not os.path.exists(cached)
+    assert relative in transaction.removed
+
+
 @pytest.mark.parametrize('edits', [
     [{'before': '', 'after': 'anything'}],
     [{'before': 'VALUE = 1', 'after': 'VALUE = 2', 'count': 2}],
@@ -64,6 +82,26 @@ def test_invalid_exact_edits_never_mutate_source(workspace, edits):
     with pytest.raises(ValueError):
         PatchTransaction(workspace, [proposal], PatchPolicy())
     assert (workspace / 'model.py').read_bytes() == b'VALUE = 1\n'
+
+
+def test_rejected_edit_feedback_identifies_actual_fragment_and_remaining_counts(workspace):
+    content = 'a = old_api()\nb = old_api()\nc = old_api()\n'
+    (workspace / 'model.py').write_text(content, encoding='utf-8')
+    proposal = patch(workspace, 'model.py', '')
+    proposal.pop('content')
+    proposal['edits'] = [
+        {'before': 'a = old_api()', 'after': 'a = new_api()'},
+        {'before': 'old_api()', 'after': 'new_api()'},
+        {'before': 'old_api()', 'after': 'new_api()'},
+    ]
+    with pytest.raises(ValueError) as error:
+        PatchTransaction(workspace, [proposal], PatchPolicy())
+    feedback = str(error.value)
+    assert "model.py, edit 2: requested 1, actual 2" in feedback
+    assert "before='old_api()'" in feedback
+    assert 'edit 3: requested 1, actual 2' in feedback
+    assert 'do not duplicate or overlap' in feedback
+    assert (workspace / 'model.py').read_text('utf-8') == content
 
 
 @pytest.mark.parametrize("invalid", ["hash", "protected", "syntax", "duplicate", "too_many", "size"])

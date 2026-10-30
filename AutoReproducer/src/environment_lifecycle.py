@@ -291,6 +291,9 @@ class _EnvironmentRun:
                     saved["error"] = result.get("error")
                     if result.get("state") is not None:
                         saved["state"] = result["state"]
+                    for key in ("session_id", "audit_logs", "audit_stats", "report_path"):
+                        if key in result:
+                            saved[key] = result[key]
                 elif receipt["status"] == "error":
                     saved["state"] = "ERROR"
                 _write_json(path, sanitize_report_result(saved))

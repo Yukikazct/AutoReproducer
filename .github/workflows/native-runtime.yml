@@ -77,6 +77,7 @@ jobs:
           tests/test_column_label_capture.py tests/test_mixed_author_selectors.py
           tests/test_author_dataset_wrapper.py
           tests/test_source_repair_service.py
+          tests/test_source_repair_continuity.py
           tests/test_runtime_dataset_evidence.py::test_real_pyg_dataset_files_still_verify_without_links
           --junitxml=native-tests.xml
       - name: Run DGL native selection

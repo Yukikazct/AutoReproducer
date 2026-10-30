@@ -46,7 +46,7 @@ class RepositoryRunner:
     def run_with_repairs(self, workspace, steps, env_config, *, llm, editable,
                          max_rounds=2, on_event=None, initial_execution=None,
                          verify_candidate=None, validate_patches=None, select_sources=None,
-                         compatibility_source_files=None):
+                         compatibility_source_files=None, execute_candidate=None):
         """Explicit compatibility-repair mode for a caller-owned isolated tree.
 
         Ordinary run() never rewrites author sources. This separate entry point
@@ -60,7 +60,8 @@ class RepositoryRunner:
             compatibility_source_files=compatibility_source_files), max_rounds=max_rounds)
         return repairer.run(workspace, steps, env_config, on_event=on_event,
                             initial_execution=initial_execution, verify_candidate=verify_candidate,
-                            validate_patches=validate_patches, select_sources=select_sources)
+                            validate_patches=validate_patches, select_sources=select_sources,
+                            execute_candidate=execute_candidate)
 
     @staticmethod
     def cached_environment(env_config):

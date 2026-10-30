@@ -112,6 +112,28 @@ def test_failed_candidate_is_fully_restored_before_second_proposal(runner, works
     assert not (workspace / "failed-output").exists()
 
 
+def test_candidate_instrumentation_and_long_outputs_roll_back_before_retry(runner, workspace):
+    before = snapshot_workspace(workspace)
+    generated = 'observer/' + 'a' * 100 + '/' + 'b' * 100 + '/output.txt'
+    attempts = []
+    def propose(context, call):
+        assert snapshot_workspace(workspace) == before
+        if call == 1:
+            return proposal(context, {'train.py': "raise RuntimeError('candidate still fails')\n"})
+        return valid_proposal(context, call)
+    def execute(root, files, environment, on_event):
+        target = Path(filesystem_path(root / generated))
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b'current candidate output')
+        attempts.append([item['path'] for item in files])
+        return runner.run(root, plan(), environment, on_event=on_event)
+    result = runner.run_with_repairs(workspace, plan(), {}, llm=RepairLLM(propose),
+        editable=['model.py', 'train.py'], execute_candidate=execute)
+    assert result['success'] and len(attempts) == 2
+    assert generated in result['repair_attempts'][0]['removed']
+    assert Path(filesystem_path(workspace / generated)).read_bytes() == b'current candidate output'
+
+
 def test_second_repair_context_bounds_large_logs_without_truncating_audit_evidence(runner, workspace):
     def propose(context, call):
         if call == 1:

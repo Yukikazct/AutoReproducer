@@ -11,8 +11,9 @@ permissions:
 jobs:
   tests:
     runs-on: ${{ matrix.os }}
-    # Windows runs the complete suite in both locale and UTF-8 modes.
-    timeout-minutes: 30
+    # Windows runs both complete suites (~14 min each) plus installation and
+    # management checks. Leave enough time to finish and retain both reports.
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:

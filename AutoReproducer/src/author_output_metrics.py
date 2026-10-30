@@ -2,12 +2,14 @@
 import csv
 import hashlib
 from io import StringIO
+from pathlib import Path
 
 from src.runtime_metrics import parse_runtime_metrics
-from src.safety.paths import workspace_path
+from src.safety.paths import filesystem_path, workspace_path
 
 
 def read_output_metrics(receipts, workspace, sources):
+    workspace = Path(filesystem_path(Path(workspace).absolute()))
     records, errors = [], []
     if not isinstance(receipts, list):
         return [], ['Author output receipts must be a list']

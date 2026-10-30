@@ -64,6 +64,29 @@ def test_real_offline_training_venv_is_released_after_report(roots, exception):
     assert not (deps / training.JOURNAL).exists()
 
 
+@pytest.mark.skipif(os.name != 'nt', reason='Windows managed venv path limit')
+def test_long_training_root_bootstraps_pip_and_releases_all_files(roots):
+    data, deps = roots
+    root = data / ('nested_' * 7) / 'training_python'
+    from src.safety.paths import filesystem_path
+    with lifecycle.managed_environment() as lease:
+        selected = author_python.select_author_python({'repository': {'files': {}}}, root, offline=True)
+        executable = Path(selected['python_executable'])
+        probe = subprocess.run([str(executable), '-I', '-m', 'pip', '--version'],
+                               capture_output=True, text=True, timeout=15, check=True)
+        assert 'pip ' in probe.stdout and executable.is_relative_to(root)
+        # Python <=3.11 bundles setuptools with deep resource fixtures. A
+        # long child also exercises cleanup when newer ensurepip omits it.
+        nested = root / 'envs' / ('resources_' * 14) / 'payload.bin'
+        physical = Path(filesystem_path(nested))
+        physical.parent.mkdir(parents=True, exist_ok=True)
+        physical.write_bytes(b'owned runtime data')
+        lease.result = {'state': 'COMPLETED', 'data': {}}
+    cleanup = lease.result['data']['environment_cleanup']
+    assert cleanup['status'] == cleanup['training_python']['status'] == 'released'
+    assert not root.exists() and not (deps / training.JOURNAL).exists()
+
+
 def test_python_conflict_removes_old_runtime_and_packages_before_replacement(roots, tmp_path, monkeypatch):
     data, deps = roots
     root = data / "training_python"

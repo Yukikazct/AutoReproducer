@@ -13,6 +13,43 @@ Dataset: cora Test accuracy of 10 runs: mean 0.83280, std 0.00040
 """
 
 
+@pytest.mark.parametrize('label', ['Test acc.', 'Test accuracy.', 'Eval F1.', 'Test MSE.'])
+def test_abbreviation_period_before_separator_keeps_the_final_metric(label):
+    records, errors = parse_runtime_metrics(label + ':8.53e1', preserve_contexts=True)
+    assert not errors and len(records) == 1
+    assert records[0]['value'] == 85.3 and records[0]['split'] == 'test'
+    assert records[0]['stage'] == 'final' and records[0]['unit'] == ''
+    assert records[0]['source_quote'] == label + ':8.53e1'
+
+
+def test_adjacent_metrics_inherit_only_their_own_explicit_split_clause():
+    text = ('Epoch:17 train loss:0.23 acc:71.0 | val loss:0.41 acc:62.0\n'
+            'Test acc.:73.2\n')
+    records, errors = parse_runtime_metrics(text, preserve_contexts=True)
+    assert not errors
+    assert {(r['name'], r['split']): r['value'] for r in records} == {
+        ('loss', 'train'): .23, ('accuracy', 'train'): 71.0,
+        ('loss', 'validation'): .41, ('accuracy', 'validation'): 62.0,
+        ('accuracy', 'test'): 73.2}
+    final = next(row for row in parse_runtime_metrics(text)[0] if row['name'] == 'accuracy')
+    assert final['value'] == 73.2 and final['split'] == 'test'
+
+
+def test_split_context_never_crosses_clause_or_line_and_uses_nearest_label():
+    records, _ = parse_runtime_metrics('train loss:1 acc:0.7 val loss:2 acc:0.6 | MSE:0.2\nF1:0.5',
+                                       preserve_contexts=True)
+    assert {(row['name'], row['split']) for row in records} == {
+        ('loss', 'train'), ('accuracy', 'train'), ('loss', 'validation'),
+        ('accuracy', 'validation'), ('mse', ''), ('f1_score', '')}
+
+
+def test_dotted_object_attributes_and_reference_claims_are_not_measurements():
+    records, errors = parse_runtime_metrics('model.acc:0.99\nPaper test acc.:99 | Test acc.:81',
+                                            preserve_contexts=True)
+    assert not errors and len(records) == 1
+    assert records[0]['value'] == 81 and records[0]['split'] == 'test'
+
+
 def test_dgc_final_ten_trial_summary_replaces_last_trial():
     execution = {'steps': [{'id': 'train', 'success': True, 'exit_code': 0,
                             'stdout': DGC_OUTPUT, 'stderr': ''}]}

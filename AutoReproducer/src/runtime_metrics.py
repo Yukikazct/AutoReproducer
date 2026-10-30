@@ -14,12 +14,12 @@ _METRIC_LABEL = (
     r"mean[_\s-]?squared[_\s-]?error|测试集准确率|准确率|精确率|召回率|损失|"
     r"[A-Za-z_][A-Za-z0-9_-]*(?:\s+score)?")
 _METRIC_RE = re.compile(
-    r"(?<![\w])(?P<name>" + _METRIC_LABEL + r")"
-    r"\s*(?P<sep>[:：=])\s*(?P<value>" + NUMBER_PATTERN + r")(?![\w.])\s*(?P<percent>%)?",
+    r"(?<![\w.])(?P<name>" + _METRIC_LABEL + r")"
+    r"\.?\s*(?P<sep>[:：=])\s*(?P<value>" + NUMBER_PATTERN + r")(?![\w.])\s*(?P<percent>%)?",
     re.IGNORECASE,
 )
 _SUMMARY_RE = re.compile(
-    r"(?<![\w])(?P<name>" + _METRIC_LABEL + r")"
+    r"(?<![\w.])(?P<name>" + _METRIC_LABEL + r")\.?"
     r"(?:\s+(?:of|over|across|from)\s+(?P<runs>\d+)\s+(?:runs|trials|seeds|repeats))?"
     r"\s*[:=]?\s+(?P<aggregation>mean|average|avg|median|best)\s*[:=]?\s*"
     r"(?P<value>" + NUMBER_PATTERN + r")(?![\w.])\s*(?P<percent>%)?", re.I)
@@ -273,15 +273,20 @@ def parse_runtime_metrics(text, structured=None, expected_names=(), *, preserve_
         matches.sort(key=lambda item: item[0].start())
         for index, (match, summary) in enumerate(matches):
             # 脚本自印的论文参考值不能覆盖真实测量。
-            prefix = re.split(r"[,;，；]", line[previous_end:match.start()])[-1]
+            prefix = re.split(r"[,;，；|]", line[previous_end:match.start()])[-1]
             previous_end = match.end()
-            reference_prefix = re.split(r"[,;，；]", line[:match.start()])[-1]
+            reference_prefix = re.split(r"[,;，；|]", line[:match.start()])[-1]
             if _REFERENCE_RE.search(reference_prefix):
                 continue
+            # Several metrics can share one explicit split label, e.g.
+            # "train loss:... acc:... | val loss:... acc:...". Inherit it
+            # only within this delimited clause, using the nearest label.
+            split_prefix = reference_prefix
             name = norm_metric_key(match["name"])
             qualified = re.fullmatch(r"(test|eval|evaluation|validation|valid|val|train|training)_(.+)", name)
             if preserve_contexts and qualified:
                 prefix += " " + qualified[1]
+                split_prefix += " " + qualified[1]
                 name = norm_metric_key(qualified[2])
             if name in {"epoch", "step", "seed", "version"} | _STAT_NAMES:
                 continue
@@ -289,11 +294,14 @@ def parse_runtime_metrics(text, structured=None, expected_names=(), *, preserve_
                 continue
             stage = "final" if re.search(r"\bfinal\b|最终", prefix, re.I) else ""
             split = ""
-            if re.search(r"\b(?:test|eval|evaluation)\b|测试|评估", prefix, re.I):
+            splits = list(re.finditer(r"\b(?:test|eval|evaluation|validation|valid|val|train|training)\b|测试|评估|验证|训练",
+                                      split_prefix, re.I))
+            closest_split = splits[-1].group().lower() if splits else ''
+            if closest_split in {'test', 'eval', 'evaluation', '测试', '评估'}:
                 split, stage = "test", "final"
-            elif re.search(r"\b(?:validation|valid|val)\b|验证", prefix, re.I):
+            elif closest_split in {'validation', 'valid', 'val', '验证'}:
                 split, stage = "validation", "validation"
-            elif re.search(r"\b(?:train|training)\b|训练", prefix, re.I):
+            elif closest_split in {'train', 'training', '训练'}:
                 split, stage = "train", "train"
             # Statistics may follow this metric, but never borrow a second
             # metric's uncertainty/count on the same line.

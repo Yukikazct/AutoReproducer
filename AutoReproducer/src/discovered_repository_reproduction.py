@@ -700,7 +700,16 @@ class DiscoveredRepositoryReproduction:
                                       "reason": "实验已中断，未完成的训练和指标不能当作成功"}
                 reason = data['validation']['reason']
             event(phase, "interrupted", reason)
-            write_json(run_dir / "result.json", {"state": "ERROR", "data": data, "error": "interrupted"})
+            data['total_llm_calls'] = (self.llm.get_call_count() if self.llm else 0) - before_calls
+            self.logger.add_llm_calls(data['total_llm_calls'])
+            data['audit_stats'] = self.logger.get_stats()
+            data['run_elapsed_s'] = time.monotonic() - started
+            interrupted_result = {"state": "ERROR", "data": data, "error": "interrupted",
+                                  "audit_stats": data['audit_stats']}
+            write_json(run_dir / "result.json", interrupted_result)
+            # The owner may have to stop this worker while its environment is
+            # still being released. Retain evidence without publishing done.
+            emit({"type": "result_checkpoint", "result": deepcopy(interrupted_result)})
             raise
         except Exception as exc:
             phase = getattr(exc, "reproduction_phase", phase)
@@ -747,7 +756,10 @@ class DiscoveredRepositoryReproduction:
             data["report_error"] = {"phase": "generate_report", "reason": str(exc) or "报告生成已中断"}
             event("generate_report", "error", "报告生成已中断")
             try:
-                write_json(run_dir / "result.json", {"state": "ERROR", "data": data, "error": "interrupted"})
+                interrupted_result = {"state": "ERROR", "data": data, "error": "interrupted",
+                                      "audit_stats": data['audit_stats']}
+                write_json(run_dir / "result.json", interrupted_result)
+                emit({"type": "result_checkpoint", "result": deepcopy(interrupted_result)})
             except Exception:
                 # Preserve the cancellation even when diagnostic persistence
                 # is unavailable; completed training evidence stays in memory.

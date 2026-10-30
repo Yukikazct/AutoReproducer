@@ -7,6 +7,7 @@ import ast
 import re
 
 from src.metric_keys import norm_metric_key
+from src.evidence_quotes import original_quote_spans
 
 
 _SPLITS = {
@@ -22,12 +23,21 @@ for _tens, _word in enumerate('twenty thirty forty fifty sixty seventy eighty ni
         _unit = next(word for word, number in _COUNT_WORDS.items() if number == _one)
         _COUNT_WORDS[_word + '-' + _unit] = _tens * 10 + _one
         _COUNT_WORDS[_word + ' ' + _unit] = _tens * 10 + _one
-_COUNT = r'(?:\d+|' + '|'.join(re.escape(word) for word in sorted(_COUNT_WORDS, key=len, reverse=True)) + ')'
+_COUNT = r'(?:[1-9]\d{0,2}(?:,\d{3})+|\d+|' + '|'.join(re.escape(word) for word in sorted(_COUNT_WORDS, key=len, reverse=True)) + ')'
 _RUNS = re.compile(
-    r'(?<![\w.+-])(?:(?P<before>' + _COUNT + r')\s+(?:independent\s+|random\s+|repeated\s+)?'
+    r'(?<![\w.,+-])(?:(?P<before>' + _COUNT + r')\s+(?:independent\s+|random\s+|repeated\s+)?'
     r'(?:runs|trials|seeds|repetitions|repeats)|'
     r'(?P<label>runs|trials|seeds|repetitions|repeats)\s*(?:=|:)\s*(?P<after>' + _COUNT + r'))\b', re.I)
-_SINGLE = re.compile(r'\b(?:a\s+single|single|one|1)\s+(?:run|trial|seed)\b', re.I)
+_SINGLE = re.compile(r'(?<![\w.,+-])(?:a\s+single|single|one|1)\s+(?:run|trial|seed)\b', re.I)
+_COUNT_LIST_SUFFIX = re.compile(
+    r'(?:\s*[,;:/&.±−–—-]\s*|\s+(?:and|or|to|through)\s+|\s+)[+-]?\d', re.I)
+_EXPERIMENT_TIMES = re.compile(
+    r'\b(?:(?:run|ran|repeat(?:ed)?|conduct(?:ed)?|perform(?:ed)?)\s+'
+    r'(?:each|every|the)\s+experiments?\s+|'
+    r'(?:each|every|the)\s+experiment\s+(?:is|was|has\s+been)\s+'
+    r'(?:run|repeated|conducted|performed)\s+)'
+    r'(?P<count>' + _COUNT + r')\s+times\b'
+    r'(?!\s+(?:faster|slower|larger|smaller|as)\b)', re.I)
 _AGGREGATIONS = {
     'mean': r'\b(?:mean|average|averaged|avg)\b|均值|平均',
     'median': r'\bmedian\b|中位数',
@@ -43,7 +53,20 @@ def _snippet(text, match, limit=400):
     """Keep the actual supporting line, never a model-written explanation."""
     start = text.rfind('\n', 0, match.start()) + 1
     end = text.find('\n', match.end())
-    return text[start:end if end >= 0 else len(text)][:limit]
+    # Keep a visibly wrapped word with its continuation. Otherwise a PDF line
+    # ending in "mean clas-" loses the result-statistic context on the next
+    # line. The evidence remains the unchanged original substring.
+    while (end >= 0 and end - start < limit
+            and re.search(r'[A-Za-z]{2}-[ \t]*$', text[start:end])
+            and re.match(r'[ \t]*[A-Za-z]{2}', text[end + 1:])):
+        end = text.find('\n', end + 1)
+    end = end if end >= 0 else len(text)
+    if match.end() - start > limit:
+        start = max(start, match.start() - limit // 2)
+    # Never discard the phrase that supports the field. A whitespace-wrapped
+    # match can exceed the normal excerpt budget and must remain verbatim.
+    end = max(match.end(), min(end, start + limit))
+    return text[start:end]
 
 
 def _support(status, *, value=None, quote='', source=None, reason=''):
@@ -67,44 +90,101 @@ def _scopes(node, refs, field):
     if quote is not None:
         if not isinstance(quote, str) or not 4 <= len(quote) <= 1200:
             raise ValueError('Comparison context quotation must be a bounded exact string')
-        supported = [ref for ref in refs if quote in ref['quote']]
-        if not supported:
-            # Recover PDF line wrapping exactly as citation validation does:
-            # every non-whitespace character must remain identical. Persist
-            # only the recovered original text as supporting field evidence.
-            pattern = r'\s+'.join(re.escape(part) for part in quote.split())
-            recovered = [(match.group(), ref['id']) for ref in refs
-                         if (match := re.search(pattern, ref['quote']))]
-            if recovered:
-                return recovered
+        recovered = original_quote_spans(quote, ((ref['quote'], ref['id']) for ref in refs))
+        if not recovered:
+            recovered = original_quote_spans(quote, ((ref['quote'], ref['id']) for ref in refs
+                                                     if ref.get('source') == 'pdf'), pdf_wrapping=True)
+        if not recovered:
             raise ValueError(f'context_quotes.{field} must occur in its own original citations; '
                              'copy an exact original span with its source citation, or omit this optional '
                              'context field when unavailable. Proposed quotation: ' + repr(quote[:160]))
-        return [(quote, ref['id']) for ref in supported]
+        return recovered
     if field == 'split' and node.get('value_quote'):
         return [(node['value_quote'], ref['id']) for ref in refs if node['value_quote'] in ref['quote']]
     return [(ref['quote'], ref['id']) for ref in refs]
 
 
-def _repetitions(node, refs):
+def _exact_repetition_context(text, start, end):
+    """A bound, estimate, range or negated plan is not an exact run count."""
+    if re.search(r'\bapprox\.\s*$', text[:start], re.I):
+        return False
+    prefix = re.split(r'[.!?;]', text[:start])[-1]
+    suffix = text[end:]
+    if re.search(r"\b(?:no|not|never|neither|without|would|could|should|can|might|may|will|"
+                 r"plan(?:ned)?|intend(?:ed)?)\b|\b\w+n['’]t\b", prefix, re.I):
+        return False
+    if re.search(r'\d(?:,\s*|\s+)$|\b(?:hundred|thousand|million|billion)\s*$', prefix, re.I):
+        return False  # A trailing number fragment is not the complete count.
+    if re.match(r'\s*(?:in\s+(?:total|all)\s+)?'
+                r'(?:(?:is|are|was|were|has|have|had|be|been|being)\s+)*'
+                r"(?:not|never|will|would|could|should|can|might|may|planned|proposed|"
+                r"intended|required|recommended|expected|sufficient|necessary|hypothetical|"
+                r"suggested|\w+n['’]t)\b", suffix, re.I):
+        return False
+    if re.search(r'\b(?:at\s+(?:least|most)|up\s+to|more\s+than|less\s+than|fewer\s+than|'
+                 r'approximately|about|around|roughly|nearly|under)\s*$|'
+                 r'\b(?:use[ds]?|perform(?:ed)?|conduct(?:ed)?)\s+over\s*$|'
+                 r'(?:\b(?:to|through|and|or)|[/−–—-]|[~≈≤≥<>])\s*$', prefix, re.I):
+        return False
+    return not re.match(r'\s*(?:[+~≈≤≥<>]|or\s+(?:more|less|fewer)\b|'
+                        r'at\s+(?:most|least)\b|maximum\b|minimum\b|'
+                        r'faster\b|slower\b|larger\b|smaller\b|as\b|if\b|unless\b|'
+                        r'per\s+(?:second|minute|hour|epoch|batch|iteration|step)\b)', suffix, re.I)
+
+
+def _exact_repetition(text, source, match, refs, source_texts=None):
+    # Verify both crop boundaries: the selected context within its citation,
+    # and that citation within the hash-checked original page or source file.
+    found = False
+    for ref in refs:
+        if ref['id'] != source:
+            continue
+        cited = ref['quote']
+        original = (source_texts or {}).get(source, cited)
+        citation_offset = 0
+        while (citation_offset := original.find(cited, citation_offset)) >= 0:
+            offset = 0
+            while (offset := cited.find(text, offset)) >= 0:
+                found = True
+                start = citation_offset + offset + match.start()
+                end = citation_offset + offset + match.end()
+                original_match = match.re.match(original, start)
+                if original_match is None or original_match.end() != end:
+                    return False  # Cropping cannot create a number/word boundary.
+                if original_match.groupdict().get('after') and _COUNT_LIST_SUFFIX.match(original[end:]):
+                    return False
+                if not _exact_repetition_context(original, start, end):
+                    return False
+                offset += 1
+            citation_offset += 1
+    return found
+
+
+def _repetitions(node, refs, source_texts=None):
     proposed = node.get('runs')
     if proposed is None:
         return _support('unknown', reason='No repetition count was specified')
     candidates = []
     for text, source in _scopes(node, refs, 'runs'):
         for match in _RUNS.finditer(text):
+            if not _exact_repetition(text, source, match, refs, source_texts):
+                continue
             if (match['label'] and match['label'].casefold() == 'seeds'
                     and not re.search(r'\b(?:number|count)\s+of\s*$', text[:match.start()], re.I)):
                 continue  # Even a single listed seed may identify an ID, not a count.
-            if match['after'] and re.match(
-                    r'(?:\s*[,;:/&.±−–—-]\s*|\s+(?:and|or|to|through)\s+|\s+)[+-]?\d',
-                    text[match.end():], re.I):
-                continue  # A list of IDs, progress fraction or range is not a count.
             literal = (match['before'] or match['after']).casefold()
-            count = int(literal) if literal.isdigit() else _COUNT_WORDS[literal]
+            numeric = literal.replace(',', '')
+            count = int(numeric) if numeric.isdigit() else _COUNT_WORDS[literal]
             candidates.append((count, _snippet(text, match), source))
+        for match in _EXPERIMENT_TIMES.finditer(text):
+            if _exact_repetition(text, source, match, refs, source_texts):
+                literal = match['count'].casefold()
+                numeric = literal.replace(',', '')
+                count = int(numeric) if numeric.isdigit() else _COUNT_WORDS[literal]
+                candidates.append((count, _snippet(text, match), source))
         for match in _SINGLE.finditer(text):
-            candidates.append((1, _snippet(text, match), source))
+            if _exact_repetition(text, source, match, refs, source_texts):
+                candidates.append((1, _snippet(text, match), source))
     values = {item[0] for item in candidates}
     if len(values) == 1 and proposed in values:
         value, quote, source = candidates[0]
@@ -114,9 +194,9 @@ def _repetitions(node, refs):
     return _support('unknown', reason='Repetitions need an explicit, unambiguous runs/trials/seeds statement')
 
 
-def repetition_count_supported(node, refs):
+def repetition_count_supported(node, refs, *, source_texts=None):
     """Support an explicitly scoped count, including English number words."""
-    return _repetitions(node, refs)['status'] == 'verified'
+    return _repetitions(node, refs, source_texts)['status'] == 'verified'
 
 
 def _aggregation(node, refs):
@@ -132,7 +212,7 @@ def _aggregation(node, refs):
                 # means are not repetition statistics.
                 if (kind in {'mean', 'median'} and not (
                         _RUNS.search(line) or _METRICS.search(line)
-                        or re.search(r'\b(?:results?|scores?|report(?:ed|ing)?)\b', line, re.I))):
+                        or re.search(r'\b(?:results?|scores?|report(?:s|ed|ing)?)\b', line, re.I))):
                     continue
                 if (kind in {'mean', 'median'} and re.search(r'\.\s*(?:mean|median)\s*\(', line)
                         and not _RUNS.search(line)):
@@ -336,10 +416,10 @@ def _implementation_units(node, refs):
                     value=value, quote=quote, source=source, reason='Static original metric arithmetic')
 
 
-def context_evidence(node, refs, *, observed=None):
+def context_evidence(node, refs, *, observed=None, source_texts=None):
     """Return derived field evidence, ignoring any model-provided status flags."""
     checks = {'unit': _unit(node, refs), 'split': _split(node, refs),
-              'aggregation': _aggregation(node, refs), 'runs': _repetitions(node, refs)}
+              'aggregation': _aggregation(node, refs), 'runs': _repetitions(node, refs, source_texts)}
     if observed is not None:
         for field in checks:
             value = observed.get(field)
@@ -358,6 +438,18 @@ def reference_uncertainty(node, refs):
     else:
         scopes = [(text, ref['id']) for ref in refs for text in
                   (node.get('metric_quote', ''), node.get('value_quote', '')) if text and text in ref['quote']]
+        expected = norm_metric_key(node.get('name') or node.get('metric'))
+        for field in ('unit', 'aggregation'):
+            if not isinstance(contexts, dict) or contexts.get(field) is None:
+                continue
+            for text, source in _scopes(node, refs, field):
+                # A selected metric caption can define both units/statistics
+                # and uncertainty. Require the same cited result row and
+                # metric; unrelated captions remain outside this inference.
+                if (expected and expected in {norm_metric_key(m.group()) for m in _METRICS.finditer(text)}
+                        and node.get('value_quote') and any(ref['id'] == source
+                            and node['value_quote'] in ref['quote'] for ref in refs)):
+                    scopes.append((text, source))
     matches = []
     for text, source in scopes:
         sem = re.search(r'\b(?:sem|stderr|standard\s+error)\b', text, re.I)
@@ -366,7 +458,7 @@ def reference_uncertainty(node, refs):
             kind = 'standard_error' if sem else 'confidence_interval'
             confidence = re.search(r'\b(\d+(?:\.\d+)?)\s*%\s*(?:ci|confidence\s+interval)\b', text, re.I)
             level = float(confidence[1]) if confidence and 0 < float(confidence[1]) < 100 else None
-            matches.append((kind, level, text[:800], source))
+            matches.append((kind, level, _snippet(text, sem or ci, limit=800), source))
     if not matches or len({(item[0], item[1]) for item in matches}) != 1:
         return None
     kind, level, quote, source = matches[0]

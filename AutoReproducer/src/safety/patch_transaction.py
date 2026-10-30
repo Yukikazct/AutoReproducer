@@ -10,7 +10,7 @@ import stat
 import tempfile
 
 from src.safety.patch_policy import MAX_PATCH_FILES_PER_CANDIDATE, PatchPolicy
-from src.safety.paths import workspace_path
+from src.safety.paths import filesystem_path, workspace_path
 from src.safety.workspace_snapshot import restore_snapshot, snapshot_workspace
 
 
@@ -58,7 +58,7 @@ class PatchTransaction:
                 if 'content' in patch or not isinstance(patch['edits'], list) or not 1 <= len(patch['edits']) <= 16:
                     raise ValueError('patch needs either complete content or one to sixteen exact edits')
                 content = path.read_bytes().decode('utf-8')
-                for edit in patch['edits']:
+                for index, edit in enumerate(patch['edits'], 1):
                     if not isinstance(edit, dict) or set(edit) - {'before', 'after', 'count'}:
                         raise ValueError('each exact edit needs before, after and optional occurrence count')
                     before, after, count = edit.get('before'), edit.get('after'), edit.get('count', 1)
@@ -66,7 +66,15 @@ class PatchTransaction:
                             or type(count) is not int or not 1 <= count <= 32
                             or content.count(before) != count):
                         found = content.count(before) if isinstance(before, str) and before else 0
-                        raise ValueError(f'exact edit occurrence count mismatch: requested {count}, actual {found}; use unique context or the actual count')
+                        remaining = [f"edit {number}: requested {item.get('count', 1)}, actual {content.count(item['before'])}"
+                                     for number, item in enumerate(patch['edits'], 1)
+                                     if number >= index and isinstance(item, dict)
+                                     and isinstance(item.get('before'), str) and item['before']]
+                        raise ValueError(f'exact edit occurrence count mismatch in {decision.path}, edit {index}: '
+                            f'requested {count}, actual {found}; before={str(before)[:160]!r}. '
+                            'Each edit replaces ALL matches; do not duplicate or overlap a replaced fragment. '
+                            'Remaining counts at this failure state (later edits may change after earlier replacements): '
+                            + '; '.join(remaining))
                     content = content.replace(before, after)
             if not isinstance(content, str) or not isinstance(base, str) or not re.fullmatch(r"[0-9a-f]{64}", base):
                 raise ValueError("patch requires text content and an exact base_sha256")
@@ -141,8 +149,11 @@ class PatchTransaction:
     def _rollback(self, original_error=None):
         try:
             self.restored, self.removed = restore_snapshot(self.root, self.snapshot)
-            for file in self.files:
-                self._invalidate_bytecode(file["path"])
+            # Snapshots intentionally omit caches. Generated observer/helpers
+            # removed by rollback must lose their bytecode as well; otherwise
+            # a later candidate inherits files from the failed execution.
+            for relative in {file['path'] for file in self.files} | set(self.removed):
+                self._invalidate_bytecode(relative)
         except BaseException as exc:
             self.rollback_error = f"{type(exc).__name__}: {exc}"
             if original_error is not None:
@@ -154,13 +165,14 @@ class PatchTransaction:
         source = Path(relative)
         if source.suffix.lower() != ".py":
             return
-        directory = workspace_path(self.root, source.parent / "__pycache__", "bytecode cache", forbid_git=True)
+        root = Path(filesystem_path(self.root))
+        directory = workspace_path(root, source.parent / "__pycache__", "bytecode cache", forbid_git=True)
         candidates = list(directory.iterdir()) if directory.is_dir() else []
         candidates = [file for file in candidates if file.name.startswith(source.stem + ".")
                       and file.suffix == ".pyc"]
-        candidates.extend(self.root / source.with_suffix(extension) for extension in (".pyc", ".pyo"))
+        candidates.extend(root / source.with_suffix(extension) for extension in (".pyc", ".pyo"))
         for candidate in candidates:
-            checked = workspace_path(self.root, candidate.relative_to(self.root), "bytecode cache", forbid_git=True)
+            checked = workspace_path(root, candidate.relative_to(root), "bytecode cache", forbid_git=True)
             if checked.is_file():
                 checked.unlink()
 

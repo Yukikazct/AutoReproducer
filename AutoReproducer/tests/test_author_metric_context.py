@@ -149,3 +149,32 @@ def test_equal_metric_values_on_one_line_keep_their_own_deviation():
     parsed, _ = parse_runtime_metrics('AUC: 0.80 (0.01); Macro-F1: 0.80 (0.03)')
     result = annotate_uncertainty(parsed, source, 'report.py', 'd' * 64)
     assert {r['name']: r['std'] for r in result} == {'auc': 0.01, 'f1_macro': 0.03}
+
+
+@pytest.mark.parametrize('spread', ['np.std(scores)', 'np.round(np.std(scores), 2)',
+                                  'np.around(np.std(scores), 2)'])
+def test_comma_summary_requires_matching_original_reductions(spread):
+    source = 'import numpy as np\nprint(f"Test accuracy: {np.mean(scores)}, {' + spread + '}")'
+    parsed, errors = parse_runtime_metrics('Test accuracy: 87.34, 1.19', preserve_contexts=True)
+    assert not errors and 'std' not in parsed[0]
+    result = annotate_uncertainty(parsed, source, 'evaluate.py', 'a' * 64)
+    assert (result[0]['value'], result[0]['std'], result[0]['aggregation']) == (87.34, 1.19, 'mean')
+    assert result[0]['uncertainty_source']['std_expression'] == spread
+    assert 'runs' not in result[0] and 'std' not in parsed[0]
+
+
+@pytest.mark.parametrize('spread', ['np.var(scores)', 'np.std(other_scores)',
+    'np.round(np.std(scores), precision)', 'custom_round(np.std(scores), 2)',
+    'np.clip(np.std(scores), 0, 2)'])
+def test_comma_summary_cannot_guess_variance_or_transformed_uncertainty(spread):
+    source = 'import numpy as np\nprint(f"Test accuracy: {np.mean(scores)}, {' + spread + '}")'
+    parsed, _ = parse_runtime_metrics('Test accuracy: 87.34, 1.19', preserve_contexts=True)
+    assert 'std' not in annotate_uncertainty(parsed, source, 'evaluate.py', 'a' * 64)[0]
+
+
+def test_same_comma_output_from_std_and_other_statistic_is_ambiguous():
+    source = ('import numpy as np\n'
+              'def a(scores):\n    print(f"Test accuracy: {np.mean(scores)}, {np.round(np.std(scores), 2)}")\n'
+              'def b(scores):\n    print(f"Test accuracy: {np.mean(scores)}, {np.var(scores)}")\n')
+    parsed, _ = parse_runtime_metrics('Test accuracy: 87.34, 1.19', preserve_contexts=True)
+    assert 'std' not in annotate_uncertainty(parsed, source, 'evaluate.py', 'a' * 64)[0]

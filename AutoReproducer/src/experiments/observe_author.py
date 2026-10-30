@@ -46,7 +46,7 @@ script = (workspace / entrypoint['source_path']).resolve(strict=True)
 if not directory.is_relative_to(workspace) or not script.is_relative_to(workspace):
     raise ValueError('Author command escaped its workspace')
 for item in step.get('output_directories', []):
-    if config['source_files'].get(item['source_path']) != item['source_sha256']:
+    if config.get('original_source_files', config['source_files']).get(item['source_path']) != item['source_sha256']:
         raise ValueError('Author output parent lacks pinned source evidence')
     relative = Path(item['path'])
     if relative.is_absolute() or '..' in relative.parts or '.git' in relative.parts:

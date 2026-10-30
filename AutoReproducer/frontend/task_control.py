@@ -7,11 +7,13 @@ from pathlib import Path
 import tempfile
 import threading
 import uuid
+from datetime import datetime, timezone
 
 _tasks = {}
 _blocked_roots = {}
 _guard = threading.RLock()
 _local = threading.local()
+_CANCELLATION_SOURCES = frozenset({'user', 'time_budget', 'agent', 'system'})
 
 
 def current_task():
@@ -30,6 +32,42 @@ def _paths(path):
     path = Path(path)
     return (path.with_suffix(".control.json"), path.with_suffix(".owner.lock"),
             path.with_suffix(".cancel"))
+
+
+def _cancellation_path(path, token):
+    # Separate generations cannot overwrite each other's request or attribution.
+    # Old on-disk records validate token length, not its character set.
+    identifier = hashlib.sha256(token.encode('utf-8')).hexdigest()
+    return Path(path).with_suffix('.cancel-' + identifier + '.json')
+
+
+def _read_cancellation(path, token):
+    try:
+        record = json.loads(_cancellation_path(path, token).read_text(encoding='utf-8'))
+        if (not isinstance(record, dict) or record.get('version') != 1
+                or record.get('token') != token or not isinstance(record.get('source'), str)
+                or record['source'] not in _CANCELLATION_SOURCES
+                or not isinstance(record.get('requested_at'), str)):
+            return None
+        if datetime.fromisoformat(record['requested_at']).tzinfo is None:
+            return None
+        return {key: record[key] for key in ('source', 'requested_at')}
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def _write_cancellation(path, token, source):
+    record = {'version': 1, 'token': token, 'source': source,
+              'requested_at': datetime.now(timezone.utc).isoformat()}
+    try:
+        # The first recorded request wins, including across processes. Readers
+        # ignore a partial JSON write; the legacy signal is sent after close.
+        with _cancellation_path(path, token).open('x', encoding='utf-8') as stream:
+            json.dump(record, stream)
+    except OSError:
+        # Provenance must not prevent stopping; absent/malformed metadata is
+        # explicitly unknown instead of being attributed to a user by default.
+        pass
 
 
 def _root_paths(root, path=None):
@@ -182,9 +220,12 @@ class TaskControl:
             raise
 
     def _data(self, state):
-        return {"version": 1, "pid": os.getpid(), "token": self.token,
+        data = {"version": 1, "pid": os.getpid(), "token": self.token,
                 "state": state, "deps_root": self.deps_root, "platform": os.name,
                 "progress_path": _key(self.path)}
+        if self.cancelled():
+            data['cancellation'] = self.cancellation()
+        return data
 
     def _save(self, state):
         _write_record(self.record, self._data(state))
@@ -195,6 +236,9 @@ class TaskControl:
     def cancelled(self):
         if self.event.is_set():
             return True
+        if _read_cancellation(self.path, self.token) is not None:
+            self.event.set()
+            return True
         try:
             requested = self.cancel_file.read_text(encoding="ascii", errors="replace") == self.token
         except OSError:
@@ -202,6 +246,9 @@ class TaskControl:
         if requested:
             self.event.set()
         return requested
+
+    def cancellation(self):
+        return _read_cancellation(self.path, self.token) or {'source': 'unknown'}
 
     def finish(self, *, cleanup_failed=False, process_cleanup_confirmed=True):
         with self._finish_guard:
@@ -303,8 +350,10 @@ def task_status(path):
     with _guard:
         control = _tasks.get(_key(path))
     if control is not None:
+        cancelling = not control.finished and control.cancelled()
         return {"managed": True, "active": not control.finished,
-                "cancelling": control.cancelled()}
+                "cancelling": cancelling,
+                "cancellation": control.cancellation() if cancelling else None}
     record, lock_path, cancel_file = _paths(path)
     try:
         data = _read_task_record(path)
@@ -318,7 +367,10 @@ def task_status(path):
             cancelling = cancel_file.read_text(encoding="ascii", errors="replace") == data["token"]
         except OSError:
             cancelling = False
+        details = _read_cancellation(path, data['token'])
+        cancelling = data['state'] == 'running' and (cancelling or details is not None)
         return {"managed": True, "active": active, "cancelling": cancelling,
+                "cancellation": details or ({'source': 'unknown'} if cancelling else None),
                 "orphaned": not active and data.get("state") in {"running", "cleanup_unconfirmed"},
                 "cleanup_failed": data.get("state") in {"cleanup_failed", "cleanup_unconfirmed"},
                 "cleanup_unconfirmed": data.get("state") == "cleanup_unconfirmed", "record": data}
@@ -326,16 +378,33 @@ def task_status(path):
         return {"managed": False, "active": False, "cancelling": False}
 
 
-def request_cancel(path):
-    """Return promptly; the supervisor confirms cleanup before allowing reset."""
+def request_cancel(path, *, source='user'):
+    """Request a stop; only the supervisor can confirm process cleanup.
+
+    UI callers default to user. Automated callers should identify themselves
+    as time_budget, agent or system; only these fixed labels are persisted.
+    """
+    if not isinstance(source, str) or source not in _CANCELLATION_SOURCES:
+        raise ValueError('Unknown cancellation source')
     with _guard:
         control = _tasks.get(_key(path))
-    if control is not None:
-        control.event.set()
-        return True
+        if control is not None:
+            if control.finished:
+                return False
+            if not control.cancelled():
+                _write_cancellation(path, control.token, source)
+                control.event.set()
+            return True
     status = task_status(path)
-    if status["managed"] and status["active"]:
-        _paths(path)[2].write_text(status["record"]["token"], encoding="ascii")
+    if status["managed"] and status["active"] and status['record']['state'] == 'running':
+        if status['cancelling']:
+            return True
+        token = status['record']['token']
+        _write_cancellation(path, token, source)
+        try:
+            _paths(path)[2].write_text(token, encoding="ascii")
+        except OSError:
+            return _read_cancellation(path, token) is not None
         return True
     return False
 

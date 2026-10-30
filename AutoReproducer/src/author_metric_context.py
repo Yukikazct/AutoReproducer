@@ -33,7 +33,13 @@ def _variable(node):
 
 
 def _reduction_operand(node, operation, numpy_aliases):
-    """Recognize direct mean/std reductions without guessing variable meanings."""
+    """Recognize reductions and explicit NumPy decimal rounding, without guessing."""
+    if (isinstance(node, ast.Call) and _attribute(node.func) in
+            [[alias, name] for alias in numpy_aliases for name in ('round', 'around')]
+            and not node.keywords and 1 <= len(node.args) <= 2
+            and (len(node.args) == 1 or isinstance(node.args[1], ast.Constant)
+                 and type(node.args[1].value) is int and 0 <= node.args[1].value <= 15)):
+        node = node.args[0]
     if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
         return None
     if node.func.attr != operation or node.keywords:
@@ -80,12 +86,15 @@ def _print_template(node, numpy_aliases):
     return re.compile(r'\s*' + ''.join(parts) + r'\s*'), fields, literals
 
 
-def _parenthesized_std_candidates(record, match, fields, literals, numpy_aliases):
+def _summary_std_candidates(record, match, fields, literals, numpy_aliases):
     candidates = []
     for index in range(1, len(fields)):
         operand = _reduction_operand(fields[index - 1], 'mean', numpy_aliases)
+        separator = literals[index].strip()
+        supported_separator = (separator == ',' or separator == '('
+                               and literals[index + 1].lstrip().startswith(')'))
         if (operand is None or operand != _reduction_operand(fields[index], 'std', numpy_aliases)
-                or literals[index].strip() != '(' or not literals[index + 1].lstrip().startswith(')')
+                or not supported_separator
                 or metric_number(match[f'v{index - 1}']) != record['value']):
             continue
         # Tie the pair to this metric, including equal values on one line.
@@ -100,7 +109,7 @@ def _parenthesized_std_candidates(record, match, fields, literals, numpy_aliases
     return candidates
 
 
-def _annotate_parenthesized_std(records, nodes, numpy_aliases, path, source_sha256):
+def _annotate_summary_std(records, nodes, numpy_aliases, path, source_sha256):
     templates = []
     for node in nodes:
         template = _print_template(node, numpy_aliases)
@@ -114,7 +123,7 @@ def _annotate_parenthesized_std(records, nodes, numpy_aliases, path, source_sha2
             match = pattern.fullmatch(record.get('source_quote', ''))
             if not match:
                 continue
-            candidates = _parenthesized_std_candidates(record, match, fields, literals, numpy_aliases)
+            candidates = _summary_std_candidates(record, match, fields, literals, numpy_aliases)
             if not candidates:
                 # A different helper can print the exact same line using SEM
                 # or an untyped value. Static source matching cannot identify
@@ -134,7 +143,8 @@ def annotate_uncertainty(records, text, path, source_sha256):
     """Keep observed values; CI half-widths must not masquerade as SD.
 
     Matching mean/std reductions on the same operand establish parenthesized
-    SD, including inside functions. CI half-widths separately require the
+    or comma-separated SD, including explicit NumPy rounding and function
+    scopes. CI half-widths separately require the
     original Seaborn ci(bootstrap(...), confidence) assignment. Unrelated
     keywords or model suggestions are insufficient for either rule.
     """
@@ -145,7 +155,7 @@ def annotate_uncertainty(records, text, path, source_sha256):
                for alias in node.names if alias.name == 'seaborn'}
     numpy_aliases = {alias.asname or alias.name for node in nodes if isinstance(node, ast.Import)
                      for alias in node.names if alias.name == 'numpy'}
-    _annotate_parenthesized_std(result, ast.walk(tree), numpy_aliases, path, source_sha256)
+    _annotate_summary_std(result, ast.walk(tree), numpy_aliases, path, source_sha256)
     definitions = {}
     for node in nodes:
         if not isinstance(node, ast.Assign) or len(node.targets) != 1 or not isinstance(node.targets[0], ast.Name):

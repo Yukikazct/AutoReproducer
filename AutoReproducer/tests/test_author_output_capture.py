@@ -1,5 +1,6 @@
 import builtins
 import hashlib
+from pathlib import Path
 
 import pytest
 
@@ -48,6 +49,21 @@ def test_new_csv_metrics_are_captured_without_reading_historical_example(tmp_pat
     assert rows[0]['split'] == 'test'
     assert rows[0]['source_quote'] == 'tau,lr,data,test_acc\n2,0.01,cora,0.81'
     assert ':file:log.txt@bytes' in rows[0]['source']
+
+
+def test_deep_workspace_keeps_long_capture_paths_and_original_prefix(tmp_path, monkeypatch):
+    # Ordinary Windows source paths still fit, but per-attempt output paths
+    # exceed MAX_PATH. Capture and the subsequent reader must both support it.
+    root = tmp_path / ('nested_' + 'x' * max(1, 190 - len(str(tmp_path))))
+    root.mkdir()
+    outputs, sources, log = observe(root, monkeypatch,
+        "with open('log.txt', 'a', encoding='utf-8') as out:\n    print('Test Accuracy: 0.81', file=out)\n")
+    assert log.read_bytes() == b'test_acc\n0.99\n'
+    assert len(outputs) == 1
+    assert len(str(root / outputs[0]['captured_path'])) > 260
+    rows, errors = read_output_metrics([{'step': {'id': 'train'}, 'natural_return': True,
+                                        'output_files': outputs}], root, sources)
+    assert not errors and len(rows) == 1 and rows[0]['value'] == .81
 
 
 def test_untracked_outputs_keep_their_original_path_and_file_exists_behavior(tmp_path, monkeypatch):

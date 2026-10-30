@@ -404,6 +404,14 @@ def _repair_author_failure(runner, llm, request, plan, snapshot, workspace, run_
     target = run_dir / 'repair_workspace'
     initial_files = dict(snapshot['files'])
     frozen_data = _frozen_data(data['dataset_provenance'])
+    from src.source_repair_runtime import original_observation, observed_input_files
+    observation_config = original_observation(workspace, plan, snapshot, data['spec_sha256'])
+    if observation_config is not None:
+        for name, record in observed_input_files(workspace, observation_config).items():
+            if name in frozen_data and any(frozen_data[name].get(key) != record.get(key)
+                                          for key in ('sha256', 'bytes')):
+                raise ValueError('已观测兼容输入与冻结数据冲突：' + name)
+            frozen_data[name] = record
     for name, record in frozen_data.items():
         if name in initial_files and initial_files[name] != record['sha256']:
             raise ValueError('冻结源码与数据的路径冲突：' + name)
@@ -497,8 +505,33 @@ def _repair_author_failure(runner, llm, request, plan, snapshot, workspace, run_
         validate_compatibility_changes(workspace, root, files)
         expected = {**initial_files, **{change['path']: change['sha256'] for change in files}}
         _verify_files(root, expected)
+        if observation_config is not None:
+            from src.author_execution_plan import verify_author_execution
+            from src.discovered_repository_runtime import CAPTURE_DIR
+            observation = state['observation']
+            _verify_files(root, observation['generated_files'])
+            observation['validation'] = verify_author_execution(plan, root, _execution, data['spec_sha256'])
+            observation['receipt_files'] = {
+                f"{CAPTURE_DIR}/author_{step['id']}.json": digest(root / CAPTURE_DIR / f"author_{step['id']}.json")
+                for step in plan['steps']}
         current_files.clear()
         current_files.update(expected)
+
+    def execute_observed_candidate(root, files, effective_environment, notify):
+        from src.source_repair_runtime import COMPATIBILITY_FIELDS, materialize_candidate_observation
+        verify_inputs()
+        effective_sources = {**snapshot['files'], **{file['path']: file['sha256'] for file in files}}
+        _verify_files(root, {**initial_files, **effective_sources})
+        materialized = materialize_candidate_observation(workspace, root, plan, snapshot,
+            data['spec_sha256'], observation_config, effective_sources, frozen_data)
+        for step in materialized['steps']:
+            step['env'] = _relocate_environment(original_steps[step['id']].get('env', {}), workspace, root)[0]
+        observed_plan = build_plan(profile='source_repair_observed_author_experiment', spec_sha256=data['spec_sha256'],
+            workspace=root, repository=plan['repository'], dataset=data['dataset_provenance'], steps=materialized['steps'])
+        state['observation'] = {'generated_files': materialized['files'], 'execution_plan': observed_plan,
+            'original_compatibility': {field: deepcopy(observation_config.get(field, [])) for field in COMPATIBILITY_FIELDS}}
+        write_json(run_dir / 'source_repair_observation.json', state['observation'])
+        return runner.run(root, observed_plan, effective_environment, on_event=notify)
 
     result = None
     try:
@@ -513,6 +546,8 @@ def _repair_author_failure(runner, llm, request, plan, snapshot, workspace, run_
                 if Path(name).suffix.lower() == '.py' and _compatibility_policy([name]).decide(
                     name, workspace=str(target)).allowed]
         options = {'select_sources': select_sources} if automatic else {}
+        if observation_config is not None:
+            options['execute_candidate'] = execute_observed_candidate
         result = runner.run_with_repairs(target, repaired_plan, environment, llm=llm,
             editable=editable, compatibility_source_files=editable, max_rounds=2, **options,
             initial_execution=execution, verify_candidate=verify_candidate,
@@ -540,12 +575,18 @@ def _repair_author_failure(runner, llm, request, plan, snapshot, workspace, run_
                           'AI 已在隔离副本中修复实际报错的兼容接口，并重跑完整原作者命令。')
             verify_repair_result(run_dir, data, on_event, result)
             state['manifest_path'] = str(run_dir / 'source_repair_manifest.json')
+            if observation_config is not None:
+                repaired_plan = state['observation']['execution_plan']
+                write_json(run_dir / 'source_repair_execution_plan.json', repaired_plan)
+                write_json(run_dir / 'source_repair_observation.json', state['observation'])
             write_json(run_dir / 'source_repair_manifest.json', {
                 'scope': 'patched_author_code_execution', 'repository': plan['repository'],
                 'original_source_files': snapshot['files'], 'effective_source_files': state['effective_source_files'],
                 'changed_files': state['changed_files'], 'spec_sha256': data['spec_sha256'],
                 'prepared_runtime': prepared_runtime,
-                'execution_plan': repaired_plan, 'frozen_input_files': frozen_data})
+                'execution_plan': repaired_plan, 'frozen_input_files': frozen_data,
+                **({'observation': state['observation'], 'original_author_steps': plan['steps']}
+                   if observation_config is not None else {})})
             state['manifest_sha256'] = digest(run_dir / 'source_repair_manifest.json')
             data['original_execution_plan'] = data['execution_plan']
             data['execution_plan'] = repaired_plan
@@ -598,7 +639,7 @@ def verify_repaired_execution(plan, data, execution):
                 or Path(actual.get('cwd', '')).resolve() != expected_cwd.resolve()
                 or actual.get('kind') != original['kind'] or actual.get('required') != original['required']):
             raise ValueError('修复后的运行记录改变了冻结命令、目录或步骤要求')
-    return {'status': 'author_code_completed', 'result_level': 'author_code_completed',
+    validation = {'status': 'author_code_completed', 'result_level': 'author_code_completed',
         'execution_status': 'author_code_completed', 'is_reproduced': None,
         'paper_metrics_verified': False, 'protocol_pass': None, 'independent_metrics_pass': None,
         'training_observed': False, 'source_modified': True,
@@ -608,3 +649,18 @@ def verify_repaired_execution(plan, data, execution):
                               'owned_processes_finished': True, 'observed_training_updates': False},
         'warnings': ['执行使用明确授权的兼容性源码补丁；未独立核验算法语义、训练更新或论文数值。'],
         'reason': '兼容性源码修改后的完整原命令已正常结束；原始来源保留，尚未判定论文数值复现。'}
+    observation = frozen.get('observation')
+    if observation is not None:
+        from src.author_execution_plan import verify_author_execution
+        if frozen.get('original_author_steps') != plan['steps']:
+            raise ValueError('源码修复观测改变了冻结的原始作者命令。')
+        _verify_files(state['workspace'], observation['generated_files'])
+        _verify_files(state['workspace'], observation['receipt_files'])
+        observed = verify_author_execution(plan, state['workspace'], execution, data['spec_sha256'])
+        if observed != observation['validation']:
+            raise ValueError('源码修复的训练观测与完成凭据不一致。')
+        validation.update(observed, source_modified=True,
+            source_repair_manifest_sha256=state['manifest_sha256'],
+            warnings=['执行使用经过校验的兼容性源码补丁；训练与输出已观测，尚未独立核验算法语义或论文数值。'],
+            reason='兼容性源码修改后的完整原命令已自然结束，并保留实际训练与输出观测；尚未判定论文数值复现。')
+    return validation

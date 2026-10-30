@@ -35,8 +35,24 @@ from src.project_paths import get_data_root
 
 
 # Contract checked by the web loader before starting a new background thread.
-BACKEND_API_VERSION = 12
+BACKEND_API_VERSION = 13
 WORKER_CANCEL_GRACE_SECONDS = 5
+
+
+def _cancellation_details(control):
+    # A warm web host can retain controllers created by the previous backend.
+    reader = getattr(control, 'cancellation', None)
+    return reader() if callable(reader) else {'source': 'unknown'}
+
+
+def _cancellation_message(control, diagnostic=''):
+    message = {
+        'user': '用户已停止本任务',
+        'time_budget': '运行时间预算已到，本任务已停止',
+        'agent': '代理已停止本任务',
+        'system': '系统已停止本任务',
+    }.get(_cancellation_details(control)['source'], '本任务已停止（取消来源未记录）')
+    return message + ('：' + diagnostic if diagnostic and diagnostic != message else '')
 
 
 def _force_stop_contains_worker_children():
@@ -382,6 +398,18 @@ def run_pipeline_core(progress_path: str,
                 if event.get("phase_id"):
                     state["phase_id"] = event["phase_id"]
                 store.emit({**event, "agent": display_names.get(event.get("agent"), event.get("agent", ""))})
+            elif event.get("type") == "result_checkpoint":
+                checkpoint = {**event['result'], 'session_id': logger.session_id,
+                              'audit_logs': logger.get_summary(), 'report_path': ''}
+                checkpoint_data = checkpoint.get('data') or {}
+                if (environment is not None and checkpoint.get('state') == 'ERROR'
+                        and checkpoint_data.get('interrupted') is True
+                        and checkpoint_data.get('run_dir')
+                        and Path(checkpoint_data['run_dir']) == environment.run_dir):
+                    # Keep pipeline metadata through graceful cancellation too:
+                    # the lease otherwise reloads the bare service result.
+                    environment.result = checkpoint
+                store.emit({**event, 'result': checkpoint})
             elif event.get("type") in {"repository_step", "repository_output", "execution_step", "execution_output", "execution_run", "repository_environment", "dependency_install_progress"}:
                 store.emit(event)
             elif event.get("type") == "pipeline_plan":
@@ -575,7 +603,7 @@ def _run_prepared_pipeline(store: ProgressStore, request: dict, reason: str, *, 
         for installation in snapshot.get("dependency_installations", []):
             if installation.get("status") == "running":
                 store.emit({"type": "dependency_install_progress", **installation,
-                            "status": "cancelled", "message": "用户停止任务，安装进程已结束"})
+                            "status": "cancelled", "message": _cancellation_message(control) + "，安装进程已结束"})
 
     def confirmed_cleanup():
         nonlocal worker_cleaned
@@ -585,6 +613,7 @@ def _run_prepared_pipeline(store: ProgressStore, request: dict, reason: str, *, 
         nonlocal worker_finished, supervisor_cleanup
         if not worker_started or worker_finished:
             return
+        interrupted = status == 'interrupted' or bool(cancel_check and cancel_check())
         # Only the process owner can confirm cleanup after its retained job has
         # closed. A stale child's log cannot prove that its processes exited.
         if worker_cleaned:
@@ -610,8 +639,10 @@ def _run_prepared_pipeline(store: ProgressStore, request: dict, reason: str, *, 
         try:
             if worker_cleaned:
                 snapshot = ProgressStore.read_snapshot(str(store.path), include_pending_result=True)
-                result = snapshot.get("pending_result")
+                result = snapshot.get("pending_result") or snapshot.get("result_checkpoint")
                 if isinstance(result, dict):
+                    if interrupted:
+                        result.setdefault('data', {})['cancellation'] = _cancellation_details(control)
                     # Keep the owned scope open until every saved copy includes
                     # the supervisor receipt. Closing it first publishes the
                     # child's earlier done while these files are still changing.
@@ -695,7 +726,7 @@ def _run_prepared_pipeline(store: ProgressStore, request: dict, reason: str, *, 
             raise ProcessCleanupError("外层进程退出不足以确认独立会话中的子进程已回收")
         cancelled = bool(cancel_check and cancel_check())
         finish_worker("interrupted" if cancelled else "success" if completed.returncode == 0 else "error",
-                      "用户已停止本任务" if cancelled else None)
+                      _cancellation_message(control) if cancelled else None)
         snapshot = ProgressStore.read_snapshot(str(store.path))
         if snapshot.get("done") and isinstance(snapshot.get("result"), dict):
             return snapshot["result"]
@@ -707,7 +738,9 @@ def _run_prepared_pipeline(store: ProgressStore, request: dict, reason: str, *, 
         cancelled = isinstance(exc, KeyboardInterrupt) or bool(cancel_check and cancel_check())
         unconfirmed = forced_cleanup_unconfirmed or getattr(exc, "process_cleanup_confirmed", True) is False
         diagnostic = safe_runtime_diagnostic(exc)
-        cancellation_message = "用户已停止本任务" + ("：" + diagnostic if diagnostic and diagnostic != "用户已停止本任务" else "")
+        if worker_started and cancelled and diagnostic == "运行环境准备已取消":
+            diagnostic = "后台执行已取消"
+        cancellation_message = _cancellation_message(control, diagnostic)
         message = ("本任务子进程回收未确认，已阻止新任务；请停止原服务后恢复" if unconfirmed else
                    cancellation_message if cancelled else diagnostic)
         failure_receipt = getattr(exc, "cleanup_receipt", None)
@@ -744,6 +777,7 @@ def _run_prepared_pipeline(store: ProgressStore, request: dict, reason: str, *, 
             result["data"]["environment_cleanup"] = supervisor_cleanup
         if cancelled:
             result["data"]["run_status"] = "interrupted"
+            result['data']['cancellation'] = _cancellation_details(control)
         store.emit({"type": "done", "result": result})
         if isinstance(exc, KeyboardInterrupt):
             raise
@@ -814,7 +848,7 @@ def run_pipeline_background(progress_path: str, *,
                 optimization_mode=optimization_mode, max_candidates=max_candidates, budget_seconds=budget_seconds,
                 title_resolution=title_resolution, pdf_resolution=pdf_resolution)
             if control.cancelled():
-                raise KeyboardInterrupt("用户已停止本任务")
+                raise KeyboardInterrupt(_cancellation_message(control))
             # Normalize requests before the handoff; the owned worker performs
             # PDF parsing and execution even on a healthy host.
             result = run_pipeline_core(**request)
@@ -826,13 +860,24 @@ def run_pipeline_background(progress_path: str, *,
         except (Exception, KeyboardInterrupt) as e:
             from src.runtime_preparation import safe_runtime_diagnostic
             diagnostic = safe_runtime_diagnostic(e)
-            cancellation_message = "用户已停止本任务" + ("：" + diagnostic if diagnostic and diagnostic != "用户已停止本任务" else "")
+            cancellation_message = _cancellation_message(control, diagnostic)
             message = ("本任务子进程回收未确认，已阻止新任务；请停止原服务后恢复"
                        if getattr(e, "process_cleanup_confirmed", True) is False else
                        cancellation_message if isinstance(e, KeyboardInterrupt) else diagnostic)
             if api_key:
                 message = message.replace(api_key, "[REDACTED]")
-            store.emit({"type": "error", "error": message})
+            snapshot = ProgressStore.read_snapshot(progress_path)
+            retained = snapshot.get("result") or {}
+            finalized_interruption = (
+                isinstance(e, KeyboardInterrupt)
+                and getattr(e, "process_cleanup_confirmed", True) is not False
+                and snapshot.get("done") and retained.get("state") == "ERROR"
+                and (retained.get("data") or {}).get("interrupted") is True)
+            # The supervisor has already saved the task-specific failure and
+            # cleanup receipt. Its original cancellation exception can contain
+            # an obsolete bootstrap message; do not overwrite that result.
+            if not finalized_interruption:
+                store.emit({"type": "error", "error": message})
             if on_done:
                 try:
                     on_done(None)

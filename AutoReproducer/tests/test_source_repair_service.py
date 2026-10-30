@@ -543,7 +543,8 @@ def test_real_service_two_file_repair_keeps_pinned_export_and_labels_report(
     assert data["validation"]["source_modified"] is True
     assert data["validation"]["is_reproduced"] is None
     assert data["validation"]["paper_metrics_verified"] is False
-    assert data["validation"]["training_observed"] is False
+    assert data["validation"]["training_observed"] is True
+    assert data['validation']['author_execution'][0]['optimizer_steps'] == 40
     assert data["validation"]["author_claim_comparison"]["basis"] == "patched_author_output"
     assert data["validation"]["author_claim_comparison"]["source_modified"] is True
     assert data["execution_source"] == "patched_author_repository"
@@ -555,8 +556,9 @@ def test_real_service_two_file_repair_keeps_pinned_export_and_labels_report(
     state = data["source_repair"]
     assert {change["path"] for change in state["changed_files"]} == {"train.py", "author_model.py"}
     assert Path(state["manifest_path"]).is_file()
-    assert data["execution_plan"]["steps"][0]["argv"] == fixture["proposal"]["steps"][0]["argv"]
-    assert data["execution_plan"]["steps"][0]["cwd"] == fixture["proposal"]["steps"][0]["cwd"]
+    assert data['validation']['author_execution'][0]['step']['argv'] == fixture['proposal']['steps'][0]['argv']
+    assert data['validation']['author_execution'][0]['step']['cwd'] == fixture['proposal']['steps'][0]['cwd']
+    assert data['execution_plan'] == state['observation']['execution_plan']
     report = (Path(data["run_dir"]) / "report.md").read_text(encoding="utf-8")
     assert report == data["report"]
     assert "source_repair" in report or "源码修复" in report

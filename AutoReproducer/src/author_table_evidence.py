@@ -43,6 +43,35 @@ def _span(text, quote):
     return [start, start + len(quote)], None
 
 
+def _caption_scope(reference, text, row, header):
+    """Resolve repetition only inside an exact, uniquely numbered table caption.
+
+    Offsets stay relative to the complete original page. A model-proposed value
+    never chooses a table, and another table/figure/section ends the scope.
+    """
+    caption = reference.get('metric_quote')
+    if (not isinstance(caption, str) or len(caption) > _MAX_QUOTE
+            or not re.match(r'^Table[ \t]+\d+[A-Za-z]?[ \t]*[:.][ \t]+\S', caption, re.I)):
+        return None
+    caption_span, error = _span(text, caption)
+    if error or text[text.rfind('\n', 0, caption_span[0]) + 1:caption_span[0]].strip():
+        return None
+    boundary = re.search(r'(?im)^[ \t]*(?:Table|Figure|Fig\.|Section)[ \t]+\d+(?=[\s.:A-Za-z])',
+                         text[caption_span[0] + 1:])
+    end = caption_span[0] + 1 + boundary.start() if boundary else len(text)
+    if caption_span[1] >= end:
+        return None
+    start = caption_span[1]
+    scoped_row, row_error = _span(text[start:end], row)
+    scoped_header, header_error = _span(text[start:end], header)
+    if row_error or header_error:
+        return None
+    return ([offset + start for offset in scoped_row],
+            [offset + start for offset in scoped_header],
+            {'caption_quote': caption, 'caption_span': caption_span,
+             'scope_span': [caption_span[0], end], 'basis': 'unique_original_table_caption'})
+
+
 def _whole_lines(text, span):
     start, end = span
     return (not text[text.rfind('\n', 0, start) + 1:start].strip()
@@ -321,10 +350,14 @@ def locate_table_value(reference, quote, header, *, page_text=None):
         return _result('unknown', 'Table evidence exceeds the bounded text budget')
     row_span, row_error = _span(page_text, quote)
     header_span, header_error = _span(page_text, header)
+    table_scope = None
     if row_error == 'missing' or header_error == 'missing':
         return _result('rejected', 'Row/header is not exact same-page evidence')
     if row_error or header_error:
-        return _result('unknown', 'Repeated row/header text cannot identify a unique table')
+        scoped = _caption_scope(reference, page_text, quote, header)
+        if scoped is None:
+            return _result('unknown', 'Repeated row/header text cannot identify a unique table')
+        row_span, header_span, table_scope = scoped
     if not _whole_lines(page_text, row_span) or not _whole_lines(page_text, header_span):
         return _result('unknown', 'A truncated physical row or header cannot establish column positions')
     if header_span[1] >= row_span[0]:
@@ -358,6 +391,9 @@ def locate_table_value(reference, quote, header, *, page_text=None):
                 'orientation': 'datasets_in_rows' if transposed else 'methods_in_rows',
                 'row_span': row_span, 'header_span': header_span, 'basis': rules,
                 'cell_span': selected['span'], 'cell_quote': quote[slice(*selected['span'])]}
+    if table_scope is not None:
+        evidence['table_scope'] = table_scope
+        evidence['basis'].append(table_scope['basis'])
     if selected.get('missing'):
         return _result('rejected', 'Quoted dataset/metric column has no reported value', **evidence)
     if 'parts' in selected:

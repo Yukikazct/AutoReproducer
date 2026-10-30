@@ -855,3 +855,132 @@ def test_nonfinite_rejected_row_does_not_preempt_other_valid_comparisons(sources
     assert attempt['status'] == 'validation_failed' and attempt['validation_errors']
     assert attempt['proposal']['comparisons'][1]['reference']['value'] == str(invalid_number)
     json.dumps(result, allow_nan=False)
+
+
+def test_invalid_method_feedback_points_to_original_excerpts_without_rewriting_proposal(sources):
+    fixture, packet, _, payload = sources
+    rejected = deepcopy(payload)
+    rejected['comparisons'][0]['actual_context']['method'] = 'Signal Linear (invented combined label)'
+    llm = Mock(mock_mode=False)
+    llm.chat.side_effect = [json.dumps(rejected), json.dumps(payload)]
+    result = compare_author_claims(llm, packet, fixture['proposal'], fixture['workspace'], actual_execution())
+    attempt = result['extraction_attempts'][0]
+    assert attempt['status'] == 'validation_failed'
+    assert attempt['proposal'] == rejected
+    hints = attempt['label_evidence_hints']
+    assert hints and all(item['field'] == 'actual_context.method' for item in hints)
+    from src.author_comparison_context import comparison_view, prepare_comparison_packet
+    view = comparison_view(prepare_comparison_packet(packet, fixture['proposal'], fixture['workspace']),
+                           fixture['proposal'], result['metric_records'])
+    for item in hints:
+        excerpt = view['evidence_excerpts'][item['evidence_id']]
+        assert excerpt['source'] == 'repository'
+        assert item['quote'] in excerpt['quote'] and len(item['quote']) <= 600
+    feedback = llm.chat.call_args_list[1].args[0].split('\n\nCorrection feedback', 1)[1]
+    assert hints[0]['evidence_id'] in feedback and 'navigation only' in feedback
+    assert result['status'] == 'compared' and llm.chat.call_count == 2
+
+
+def test_label_feedback_never_synthesizes_an_unsupported_name_or_unprovided_source(sources):
+    fixture, packet, _, payload = sources
+    payload['comparisons'][0]['actual_context']['method'] = 'EntirelyInventedMethod'
+    llm = Mock(mock_mode=False, chat=Mock(return_value=json.dumps(payload)))
+    result = compare_author_claims(llm, packet, fixture['proposal'], fixture['workspace'], actual_execution())
+    assert result['status'] == 'unavailable' and not result['comparisons']
+    assert not result['extraction_attempts'][0].get('label_evidence_hints')
+
+
+_CITATION_CONTEXT_CASES = [
+    ('We use at most 7 runs.', '7 runs', 7, 'unknown'),
+    ('We do not use 7 runs.', '7 runs', 7, 'unknown'),
+    ('7 runs were not performed.', '7 runs', 7, 'unknown'),
+    ('We plan 7 runs.', '7 runs', 7, 'unknown'),
+    ('We use 7 runs or fewer.', '7 runs', 7, 'unknown'),
+    ('We use 1,007 runs.', '7 runs', 7, 'unknown'),
+    ('We use runs: 70.', 'runs: 7', 7, 'unknown'),
+    ('We use runs: 7/10.', 'runs: 7', 7, 'unknown'),
+    ('We use 7 runstats.', '7 runs', 7, 'unknown'),
+    ('We report results over 7 runs.', '7 runs', 7, 'verified'),
+    ('We use at most 200 epochs. We report results over 7 runs.', '7 runs', 7, 'verified'),
+    ('We use at most 7 runs. Other experiments use 7 runs.', '7 runs', 7, 'unknown'),
+    ('We use at most 7 runs. Other experiments use 7 runs.', 'Other experiments use 7 runs.', 7, 'verified'),
+]
+
+@pytest.mark.parametrize('side', ['reference', 'actual_context'])
+@pytest.mark.parametrize('statement,quote,count,status', _CITATION_CONTEXT_CASES)
+def test_citation_crop_cannot_hide_run_count_boundary(sources, side, statement, quote, count, status):
+    fixture, packet, records, payload = sources
+    node = payload['comparisons'][0][side]
+    node.update(runs=count, context_quotes={'runs': quote})
+    node['citations'].append('run_count')
+    if side == 'reference':
+        page = packet['pdf']['pages'][-1]
+        page['text'] += '\n' + statement
+        page['sha256'] = hashlib.sha256(page['text'].encode()).hexdigest()
+        citation = {'id': 'run_count', 'source': 'pdf', 'page': page['page'], 'quote': quote}
+    else:
+        source = packet['repository']['files']['README.md']
+        source['text'] += '\n' + statement
+        raw = source['text'].encode()
+        source.update(sha256=hashlib.sha256(raw).hexdigest(), bytes=len(raw))
+        (fixture['workspace'] / 'README.md').write_bytes(raw)
+        packet['file_inventory']['README.md'].update(sha256=source['sha256'], bytes=len(raw))
+        citation = {'id': 'run_count', 'source': 'repository', 'path': 'README.md', 'quote': quote}
+    citation['source_texts'] = {'run_count': quote}
+    payload['source_texts'] = {'run_count': quote}
+    payload['citations'].append(citation)
+    from copy import deepcopy
+    before = deepcopy(payload)
+    rows, accepted_citations = validate_comparisons(payload, packet, fixture['workspace'], records)
+    accepted = rows[0]['reference' if side == 'reference' else 'actual']
+    assert accepted['field_evidence']['runs']['status'] == status
+
+    assert payload == before
+    accepted_citation = next(item for item in accepted_citations if item['id'] == 'run_count')
+    assert accepted_citation['quote'] == quote
+    assert 'source_texts' not in accepted_citation
+
+@pytest.mark.parametrize('side', ['reference', 'actual_context'])
+def test_selected_excerpt_boundary_keeps_original_qualifier(sources, side):
+    from src.discovered_repository_plan import _planning_excerpts
+    fixture, packet, records, payload = sources
+    node = payload['comparisons'][0][side]
+    node.update(runs=7, context_quotes={'runs': '7 runs'})
+    node['citations'].append('run_count')
+    if side == 'reference':
+        original = packet['pdf']['pages'][-1]
+    else:
+        original = packet['repository']['files']['README.md']
+    # Force the second selectable excerpt to begin immediately after "at most".
+    original['text'] = original['text'].rstrip() + '. '
+    original['text'] += 'x' * (5000 - len(original['text']) - len(' at most ')) + ' at most 7 runs. End.' + 'x' * 1200
+    raw = original['text'].encode()
+    original.update(sha256=hashlib.sha256(raw).hexdigest(), bytes=len(raw))
+    if side == 'actual_context':
+        (fixture['workspace'] / 'README.md').write_bytes(raw)
+        packet['file_inventory']['README.md'].update(sha256=original['sha256'], bytes=len(raw))
+    excerpts = _planning_excerpts(packet)
+    expected_source = 'pdf' if side == 'reference' else 'repository'
+    identifier = next(key for key, ref in excerpts.items()
+                      if ref['source'] == expected_source and ref['quote'].startswith('7 runs'))
+    payload['citations'].append({'id': 'run_count', 'evidence_id': identifier})
+    rows, _ = validate_comparisons(payload, packet, fixture['workspace'], records)
+    accepted = rows[0]['reference' if side == 'reference' else 'actual']
+    assert accepted['field_evidence']['runs']['status'] == 'unknown'
+
+
+@pytest.mark.parametrize('field',['unit','aggregation'])
+@pytest.mark.parametrize('definition,kind',[('95% confidence interval','confidence_interval'),('standard error','standard_error')])
+def test_metric_caption_uncertainty_is_kept_without_redundant_uncertainty_quote(sources,field,definition,kind):
+    caption=f'Test accuracy (%) with {definition}, in a single run.'
+    fixture,packet,records,payload=_replace_comparison_table(sources,'Method SignGrid OtherGrid',
+        'Signal Linear test 100.0 ±0.1 98.0 ±0.2',caption)
+    payload['comparisons'][0]['reference'].update(std=0.1,context_quotes={field:caption})
+    rows,_=validate_comparisons(payload,packet,fixture['workspace'],records)
+    reference=rows[0]['reference']
+    assert reference.get('std') is None
+    assert reference['reported_uncertainty']==0.1
+    assert reference['uncertainty_kind']==kind
+    assert reference['uncertainty_source']['quote']==caption
+    assert reference.get('confidence_level')==(95 if kind=='confidence_interval' else None)
+    assert any('误差类型' in item for item in rows[0]['limitations'])

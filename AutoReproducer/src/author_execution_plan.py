@@ -162,8 +162,13 @@ steps:[{id,kind:'train|eval',argv:['python','original.py',...] OR ['python','-m'
             'experimental evidence and cannot change the original training settings. '
             'Paper metric agreement, checkpoint export and independent predictions are subsequent work; '
             'their absence must not block a valid original author training command in this execution objective. '
-            'Select the original author training commands needed for one experiment, preferring README examples and small '
-            'author-supported datasets. If the method requires prerequisite training (such as teacher then student '
+            'Select the original author training commands needed for one experiment. Prefer an author-designated '
+            'paper/table reproduction command for the selected method and dataset over a quick-start or '
+            'demonstration command when both are available. Read the linked reproduction launcher or configuration '
+            'before choosing the invocation; preserve its repetition count, learning rate, seed and stopping '
+            'settings. When no matching reproduction command is documented, an original README example remains '
+            'valid. Prefer small author-supported datasets when the user has not selected a dataset. '
+            'If the method requires prerequisite training (such as teacher then student '
             'distillation), include both original commands in order with depends_on. Up to four training stages '
             'are supported. Completing only a teacher or baseline is not completing the paper method. Preserve '
             'matching dataset, experiment setting and output/input paths across the stages. Prefer the actual '
@@ -182,8 +187,10 @@ steps:[{id,kind:'train|eval',argv:['python','original.py',...] OR ['python','-m'
             'when several experiments share a script basename, read the relevant sources and explicitly '
             'choose the corresponding cwd. Never assume a basename exists at the repository root. '
             'An original training entrypoint invoked by an author batch launcher '
-            'is also allowed: run that single invocation rather than the entire paper repetition sweep. '
-            'Keep its native training and stopping behavior. A documented example is allowed but '
+            'is also allowed: select one matching dataset/configuration invocation rather than unrelated '
+            'experiments from the batch. Preserve the selected invocation\'s full repetitions and native '
+            'training/stopping behavior, including literal values supplied by launcher variables. '
+            'Do not replace it with a shorter demo solely to reduce runtime. A documented example is allowed but '
             'must remain identified as that example, never as the whole paper. Do not invent a replacement '
             'implementation, reduce epochs/data/repetitions or add a new loop. The command must train the '
             'paper method on its actual complete real data, not --help, a dry run or import-only smoke test. '
@@ -534,13 +541,24 @@ def plan_from_author_commands(packet, workspace, *, required_entrypoint=None,
                             + '; '.join(failures[-3:]))
 
 
-def materialize_author_execution(workspace, plan, spec_sha256, snapshot):
+def materialize_author_execution(workspace, plan, spec_sha256, snapshot, *, retained_files=None):
     from src.discovered_repository_runtime import CAPTURE_DIR
     workspace = Path(workspace)
     runtime = workspace / CAPTURE_DIR
-    if runtime.exists() or any(name.startswith(CAPTURE_DIR + '/') for name in snapshot['files']):
+    if any(name.startswith(CAPTURE_DIR + '/') for name in snapshot['files']):
         raise ValueError('Author execution cannot overwrite repository files')
-    runtime.mkdir()
+    if runtime.exists():
+        if retained_files is None:
+            raise ValueError('Author execution cannot overwrite repository files')
+        from src.safety.workspace_snapshot import iter_workspace_files
+        from src.safety.paths import filesystem_path
+        for path in iter_workspace_files(runtime, skip_dirs=(), skip_files=()):
+            relative = path.relative_to(Path(filesystem_path(workspace))).as_posix()
+            record = retained_files.get(relative, {})
+            if (not relative.startswith(CAPTURE_DIR + '/author_data/')
+                    or digest(path) != record.get('sha256') or path.stat().st_size != record.get('bytes')):
+                raise ValueError('Retained observer directory contains an unverified file')
+    runtime.mkdir(exist_ok=retained_files is not None)
     config = {'spec_sha256': spec_sha256, 'capture': plan['capture'],
               'steps': plan['steps'], 'source_files': snapshot['files'],
               'repository_namespaces': plan['requirements'].get('repository_namespaces', []),

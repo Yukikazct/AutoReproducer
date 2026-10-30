@@ -37,6 +37,8 @@ Each patch has path and base_sha256 (the exact supplied source hash). Prefer
 edits:[{before:"exact original substring",after:"replacement",count:1}] for
 small changes. count must equal the exact number of occurrences being replaced;
 include surrounding context for a unique occurrence. Edits apply in order.
+Each edit replaces ALL occurrences, not just the first count occurrences. Do
+not repeat an identical before fragment or overlap a fragment already replaced.
 Alternatively provide content (the complete UTF-8 replacement), never both.
 Only propose minimal compatibility fixes to
 the listed editable source files. Do not change algorithms, training settings,
@@ -163,11 +165,12 @@ class RepositoryRepairer:
                 pass
         sources, available = {}, []
         remaining = MAX_CONTEXT_BYTES
+        filesystem_root = Path(filesystem_path(root))
         files = sorted(iter_workspace_files(root),
-                       key=lambda path: (path.relative_to(root).as_posix() not in preferred,
-                                         path.relative_to(root).as_posix()))
+                       key=lambda path: (path.relative_to(filesystem_root).as_posix() not in preferred,
+                                         path.relative_to(filesystem_root).as_posix()))
         for path in files:
-            relative = path.relative_to(root).as_posix()
+            relative = path.relative_to(filesystem_root).as_posix()
             if selected_sources is not None and relative not in selected_sources:
                 continue
             if (path.suffix.lower() != ".py" or not self.policy.decide(relative, workspace=str(root)).allowed
@@ -213,7 +216,7 @@ class RepositoryRepairer:
 
     def run(self, workspace, steps, env_config, *, on_event=None,
             initial_execution=None, verify_candidate=None, validate_patches=None,
-            select_sources=None):
+            select_sources=None, execute_candidate=None):
         root = workspace_path(workspace, ".", "repair workspace", must_exist=True)
         if (root / ".git").exists():
             raise ValueError("source repair requires an exported isolated workspace, not a Git checkout")
@@ -226,6 +229,8 @@ class RepositoryRepairer:
             raise ValueError("validate_patches must be callable")
         if select_sources is not None and not callable(select_sources):
             raise ValueError("select_sources must be callable")
+        if execute_candidate is not None and not callable(execute_candidate):
+            raise ValueError("execute_candidate must be callable")
         if initial_execution is None:
             execution = self.runner.run(root, steps, deepcopy(environment), on_event=on_event)
         else:
@@ -345,7 +350,14 @@ class RepositoryRepairer:
                     with transaction:
                         baseline = transaction.snapshot
                         try:
-                            candidate = self.runner.run(root, deepcopy(steps), deepcopy(environment), on_event=on_event)
+                            if execute_candidate is None:
+                                candidate = self.runner.run(root, deepcopy(steps), deepcopy(environment), on_event=on_event)
+                            else:
+                                # Trusted caller instrumentation belongs inside
+                                # the transaction: failed candidates must also
+                                # roll back generated observers and receipts.
+                                candidate = execute_candidate(root, deepcopy(transaction.files),
+                                                              deepcopy(environment), on_event)
                             attempt["execution"] = candidate
                             if self._cleanup_unconfirmed(candidate):
                                 transaction.defer_rollback('Candidate process cleanup is unconfirmed; retain the isolated workspace.')

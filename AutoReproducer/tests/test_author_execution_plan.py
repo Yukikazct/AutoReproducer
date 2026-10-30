@@ -56,6 +56,18 @@ def fixture_packet(tmp_path):
     return fixture, packet
 
 
+@pytest.mark.parametrize('relative', ['config.json', '__pycache__/payload.pyc', '.pytest_cache/payload'])
+def test_retained_observer_accepts_no_files_outside_verified_author_data(tmp_path, relative):
+    fixture, packet = fixture_packet(tmp_path)
+    plan = author.validate_author_execution_plan(execution_proposal(fixture), packet, fixture['workspace'])
+    path = fixture['workspace'] / '_autorepro_capture' / relative
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b'not verified author data')
+    with pytest.raises(ValueError, match='unverified file'):
+        author.materialize_author_execution(fixture['workspace'], plan, 'f' * 64,
+                                            fixture['snapshot'], retained_files={})
+
+
 def test_teacher_student_plan_keeps_both_commands_and_student_dependencies(tmp_path):
     fixture, _ = fixture_packet(tmp_path)
     student = fixture['workspace'] / 'student.py'
