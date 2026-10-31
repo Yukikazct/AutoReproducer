@@ -101,6 +101,12 @@ def validate_author_execution_plan(payload, packet, workspace):
             warnings.append('Citation review deferred: ' + str(exc))
     claims = payload.get('claims') if isinstance(payload.get('claims'), dict) else {}
     steps = _steps(payload.get('steps'), citations, packet, workspace, device=device)
+    from src.author_experiment_selection import bind_author_dataset_selection
+    selection = bind_author_dataset_selection(steps, packet, workspace)
+    if selection and (selection['dataset_status'] == 'unverified' or selection['request'].get('method')):
+        warnings.append('Requested experiment selection remains partly unverified: only a static '
+                        'author dataset CLI choice can be checked before execution; method and runtime '
+                        'dataset identity still need source/runtime evidence.')
     for step in steps:
         if step['entrypoint']['kind'] in {'script', 'module'}:
             from src.author_command_validation import missing_required_options
@@ -180,6 +186,7 @@ def validate_author_execution_plan(payload, packet, workspace):
             'parameters': {}, 'metrics': [], 'capture': {'kind': 'author_process', 'device': device},
             'author_environment': environment,
             'planning_warnings': warnings, 'pre_execution_review': 'disabled', 'reviews_removed': True,
+            **({'experiment_selection': selection} if selection else {}),
             'pdf_sha256': packet['pdf']['sha256'],
             'evidence_sha256': hashlib.sha256(_canonical(packet).encode('utf-8')).hexdigest()}
 
@@ -441,7 +448,8 @@ def _plan_from_available_sources(packet, workspace, discovery, **completion):
         if documented and not completion.get('required_entrypoint'):
             raise
         from src.author_command_inference import select_author_command
-        selected = select_author_command(discovery, required_entrypoint=completion.get('required_entrypoint'))
+        selected = select_author_command(discovery, required_entrypoint=completion.get('required_entrypoint'),
+                                         dataset=(packet.get('experiment_request') or {}).get('dataset'))
         original_arguments = completion.get('required_arguments')
         if selected is None and completion.get('required_entrypoint') and original_arguments is not None:
             matching = [item for item in discovery['candidates']
@@ -536,7 +544,7 @@ def plan_from_author_commands(packet, workspace, *, required_entrypoint=None,
     names.sort(key=lambda name: (0 if name in readmes else 1,
         0 if Path(name).name.lower().startswith('readme') else 1,
         len(Path(name).parts), name))
-    failures = []
+    failures, unverified = [], None
     for name in names:
         try:
             source = _load_execution_source(packet, workspace, name)
@@ -544,7 +552,7 @@ def plan_from_author_commands(packet, workspace, *, required_entrypoint=None,
             continue
         cwd = Path(name).parent.as_posix() if name.endswith('.sh') else '.'
         cwd_quote = None
-        bindings = {}
+        bindings, loop_choices = {}, {}
         for line in source['text'].replace('\\\r\n', ' ').replace('\\\n', ' ').splitlines():
             stripped = line.strip().removeprefix('$ ').strip('`').strip()
             if Path(name).name.lower().startswith('readme'):
@@ -562,9 +570,11 @@ def plan_from_author_commands(packet, workspace, *, required_entrypoint=None,
                     values = []
                 if values and all(not re.search(r'[$`<>;|&()]', value) for value in values):
                     bindings[loop[1]] = values[0]
+                    loop_choices[loop[1]] = values
                 continue
             if stripped == 'done':
                 bindings.clear()
+                loop_choices.clear()
                 continue
             if re.fullmatch(r'cd\s+[\w./-]+', stripped):
                 cwd, cwd_quote = stripped.split(maxsplit=1)[1], line
@@ -577,6 +587,7 @@ def plan_from_author_commands(packet, workspace, *, required_entrypoint=None,
                     if token in ('>', '>>', '2>', '2>>', '&', '&&', ';', '|'):
                         argv = argv[:index]
                         break
+                template = list(argv)
                 argv = [re.sub(r'\$(?:\{([A-Za-z_]\w*)\}|([A-Za-z_]\w*))',
                                lambda match: bindings.get(match[1] or match[2], match[0]), arg)
                         for arg in argv]
@@ -589,6 +600,12 @@ def plan_from_author_commands(packet, workspace, *, required_entrypoint=None,
                 if (cwd_quote is None and len(argv) > 1 and not (directory / argv[1]).is_file()
                         and (Path(workspace) / argv[1]).is_file()):
                     cwd = '.'
+                if loop_choices:
+                    from src.author_experiment_selection import select_dataset_loop_bindings
+                    bindings = select_dataset_loop_bindings(template, loop_choices, packet, workspace, cwd)
+                    argv = [re.sub(r'\$(?:\{([A-Za-z_]\w*)\}|([A-Za-z_]\w*))',
+                                   lambda match: bindings.get(match[1] or match[2], match[0]), arg)
+                            for arg in template]
                 declarations = _author_declaration_lines(packet)
                 proposal = {'version': 1, 'scope': SCOPE,
                     'repository': {key: packet['repository'][key] for key in ('url', 'revision')},
@@ -610,6 +627,11 @@ def plan_from_author_commands(packet, workspace, *, required_entrypoint=None,
                                           'template_bindings': dict(bindings)}
                 if cwd_quote is not None:
                     plan['command_source']['cwd_quote'] = cwd_quote
+                if ((packet.get('experiment_request') or {}).get('dataset')
+                        and plan['experiment_selection']['dataset_status'] == 'unverified'):
+                    if unverified is None:
+                        unverified = (proposal, deepcopy(plan['command_source']))
+                    continue  # Prefer a later command with an observed matching dataset.
                 return plan
             except (ValueError, TypeError, KeyError, OSError) as exc:
                 failures.append(str(exc))
@@ -630,9 +652,20 @@ def plan_from_author_commands(packet, workspace, *, required_entrypoint=None,
             plan = validate_author_execution_plan(proposal, packet, workspace)
             plan['command_source'] = {'path': 'README.md', 'quote': name,
                                       'sha256': packet['file_inventory'][name]['sha256']}
+            if ((packet.get('experiment_request') or {}).get('dataset')
+                    and plan['experiment_selection']['dataset_status'] == 'unverified'):
+                if unverified is None:
+                    unverified = (proposal, deepcopy(plan['command_source']))
+                continue
             return plan
         except (ValueError, TypeError, KeyError, OSError) as exc:
             failures.append(str(exc))
+    if unverified is not None:
+        # Subsequent source reads changed the packet: bind the final plan to
+        # that full packet rather than returning an earlier evidence digest.
+        plan = validate_author_execution_plan(unverified[0], packet, workspace)
+        plan['command_source'] = unverified[1]
+        return plan
     if failures and any('CUDA' in failure for failure in failures):
         raise PlanEvidenceError(failures[-1], category='hardware_unavailable')
     raise PlanEvidenceError('README/launchers contain no supported literal Python entrypoint. '
