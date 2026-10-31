@@ -43,11 +43,21 @@ small changes. count must equal the exact number of occurrences being replaced;
 include surrounding context for a unique occurrence. Edits apply in order.
 Each edit replaces ALL occurrences, not just the first count occurrences. Do
 not repeat an identical before fragment or overlap a fragment already replaced.
+For the same API token at multiple call sites, prefer one exact token or
+qualified-expression edit with count equal to its actual matches in content.
+Do not split it into duplicate or overlapping edits. Copy before verbatim from
+the supplied content; do not guess indentation, surrounding text or counts.
 Alternatively provide content (the complete UTF-8 replacement), never both.
 Only propose minimal compatibility fixes to
 the listed editable source files. Do not change algorithms, training settings,
 data loading, splits, evaluation logic, metrics, target values or run counts.
 Do not add commands, dependencies, files, downloads or credential handling.
+For a missing attribute or unexpected keyword, first try a direct rename of
+the reported API attribute or keyword at existing call sites, preserving the
+receiver, arguments and statement structure. The compatibility validator
+preserves the original AST structure: do not add aliases, assignments, imports,
+wrapper functions, conditionals, try/except fallbacks or monkeypatches. A
+compatibility shim is not an alternative to a direct API spelling change.
 For a proven deprecated collections ABC ImportError, move only the matching
 import to collections.abc, preserving all imported names and aliases.
 The original complete command plan will be rerun unchanged. If this failure

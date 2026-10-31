@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import tempfile
 import threading
+import time
 import uuid
 from datetime import datetime, timezone
 
@@ -14,6 +15,7 @@ _blocked_roots = {}
 _guard = threading.RLock()
 _local = threading.local()
 _CANCELLATION_SOURCES = frozenset({'user', 'time_budget', 'agent', 'system'})
+TASK_CONTROL_API_VERSION = 2
 
 
 def current_task():
@@ -85,6 +87,8 @@ def _write_record(path, data):
                                          suffix=".tmp", delete=False) as output:
             temporary = Path(output.name)
             json.dump(data, output)
+            output.flush()
+            os.fsync(output.fileno())
         temporary.replace(path)
     finally:
         if temporary is not None:
@@ -296,12 +300,12 @@ class TaskControl:
                             _tasks.pop(_key(self.path), None)
 
 
-def register_task(path):
+def register_task(path, *, deps_root=None):
     from src.project_paths import get_deps_root
     with _guard:
         if _key(path) in _tasks:
             raise RuntimeError("本任务的后台持有者仍在运行")
-        root = _key(get_deps_root())
+        root = _key(get_deps_root(deps_root))
         if _blocked_roots.get(root):
             raise RuntimeError("该依赖目录仍有清理失败或进程回收未确认的任务，请先恢复原任务")
         directory, root_lock_path, _ = _root_paths(root)
@@ -344,6 +348,79 @@ def _check_local_receipts(path, root):
             raise RuntimeError("该依赖目录仍有未完成清理的任务，请先恢复原任务：" + record.name)
 
 
+def _invalid_owner_status(path):
+    """Retain an unreadable receipt as a gate, rather than losing ownership."""
+    from src.project_paths import get_deps_root
+    record, lock_path, _ = _paths(path)
+    try:
+        root = _read_record(record)["deps_root"]
+    except (OSError, ValueError):
+        root = get_deps_root()
+    shared = _root_paths(root, path)[2]
+    if not record.exists() and not shared.exists():
+        return {"managed": False, "active": False, "cancelling": False}
+    try:
+        with _OwnerLock(lock_path).acquire(timeout=0):
+            active = False
+    except (OSError, _OwnerLockBusy):
+        active = True  # An unreadable/held lock never permits detaching.
+    return {"managed": True, "active": active, "cancelling": False,
+            "record_invalid": True, "cleanup_failed": True,
+            "cleanup_unconfirmed": True, "isolated_restart_available": not active}
+
+
+def create_isolated_restart(path):
+    """Reserve a fresh data root without changing an unknown owner's files.
+
+    This only detaches the UI from an unreadable receipt whose owner lock is
+    free. It does not assert process cleanup, remove a gate, or reuse any old
+    dependencies, training interpreter, runtime cache, or output directory.
+    """
+    from src.project_paths import get_data_root
+    from src.safety.paths import is_link, workspace_path
+    status = task_status(path)
+    if not status.get("isolated_restart_available"):
+        raise RuntimeError("原任务仍被持有或控制记录已变化，不能切换到新环境")
+    try:
+        with _OwnerLock(_paths(path)[1]).acquire(timeout=0):
+            try:
+                _read_task_record(path)
+            except (OSError, ValueError, TypeError):
+                pass
+            else:
+                raise RuntimeError("原任务控制记录已恢复，请刷新后重试")
+            base = get_data_root()
+            if any(is_link(item) for item in (base, *base.parents)):
+                raise ValueError("新环境目录不能包含符号链接或目录联接")
+            base.mkdir(parents=True, exist_ok=True)
+            # Serialize parent creation across services. On Windows a parent
+            # appearing during Path.resolve can change ERROR_PATH_NOT_FOUND
+            # into ERROR_FILE_NOT_FOUND and retain a \\?\ prefix on only one
+            # side of a containment check. Keep the parent stable first.
+            with _guard:
+                reservation = _OwnerLock(base / ".recovery.reserve.lock")
+                deadline = time.monotonic() + 2
+                while True:
+                    try:
+                        reservation.acquire(timeout=0)
+                        break
+                    except _OwnerLockBusy:
+                        if time.monotonic() >= deadline:
+                            raise RuntimeError("另一任务正在准备新环境，请稍后重试") from None
+                        time.sleep(.01)
+                with reservation:
+                    directory = workspace_path(base, "recovery", "isolated restart parent")
+                    directory.mkdir(parents=True, exist_ok=True)
+                    root = workspace_path(directory, uuid.uuid4().hex, "isolated restart data")
+                    root.mkdir(exist_ok=False)
+                    _write_record(root / ".restart.json", {
+                        "version": 1, "progress_path": _key(path),
+                        "original_cleanup": "unconfirmed"})
+                    return str(root)
+    except _OwnerLockBusy:
+        raise RuntimeError("原任务仍被后台持有，不能切换到新环境") from None
+
+
 def task_status(path):
     if not path:
         return {"managed": False, "active": False, "cancelling": False}
@@ -375,7 +452,7 @@ def task_status(path):
                 "cleanup_failed": data.get("state") in {"cleanup_failed", "cleanup_unconfirmed"},
                 "cleanup_unconfirmed": data.get("state") == "cleanup_unconfirmed", "record": data}
     except (OSError, ValueError, TypeError):
-        return {"managed": False, "active": False, "cancelling": False}
+        return _invalid_owner_status(path)
 
 
 def request_cancel(path, *, source='user'):
@@ -396,7 +473,7 @@ def request_cancel(path, *, source='user'):
                 control.event.set()
             return True
     status = task_status(path)
-    if status["managed"] and status["active"] and status['record']['state'] == 'running':
+    if status["managed"] and status["active"] and status.get('record', {}).get('state') == 'running':
         if status['cancelling']:
             return True
         token = status['record']['token']
@@ -417,6 +494,8 @@ def recover_orphaned_task(path, store_type):
     cleanup-unconfirmed receipts therefore remain blocked after a service crash.
     """
     status = task_status(path)
+    if status.get("record_invalid"):
+        return False
     if status.get("active") or (not status.get("orphaned") and not status.get("cleanup_failed")):
         return False
     expected = status["record"]

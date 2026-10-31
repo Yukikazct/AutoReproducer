@@ -208,6 +208,52 @@ def test_malformed_model_response_is_fed_back_before_second_attempt(runner, work
     assert llm.calls[1][0]['diagnostic'] == llm.calls[0][0]['diagnostic']
 
 
+@pytest.mark.parametrize('first_candidate', ['direct', 'alias', 'wrong_count', 'duplicate'])
+def test_repeated_api_rename_preserves_ast_and_exact_edit_guards(runner, workspace, first_candidate):
+    from src.source_repair import validate_compatibility_proposal
+
+    source = 'values = dict(answer=7)\n' + 'print(list(values.iteritems())[0][1])\n' * 5
+    (workspace / 'train.py').write_text(source, encoding='utf-8')
+    steps = [{'id': 'train', 'argv': ['python', 'train.py'], 'cwd': '.'}]
+    before = snapshot_workspace(workspace)
+    executions = []
+
+    def propose(context, call):
+        patch = {'path': 'train.py', 'base_sha256': context['sources']['train.py']['base_sha256']}
+        edit = {'before': 'values.iteritems(', 'after': 'values.items(', 'count': 5}
+        if call == 1 and first_candidate == 'alias':
+            patch['content'] = source.replace('values = dict(answer=7)\n',
+                'values = dict(answer=7)\nitems = values.items\n').replace('values.iteritems(', 'items(')
+        else:
+            patch['edits'] = [edit]
+            if call == 1 and first_candidate == 'wrong_count':
+                edit['count'] = 1
+            elif call == 1 and first_candidate == 'duplicate':
+                patch['edits'].append(dict(edit))
+        if call == 2:
+            assert snapshot_workspace(workspace) == before
+            assert context['previous_attempts'][0]['status'] == 'rejected'
+            assert context['previous_attempts'][0]['error']
+        return {'reason': 'Use the supported mapping API without changing the calls.', 'patches': [patch]}
+
+    def validate(root, files, execution):
+        validate_compatibility_proposal(root, files, execution['final']['stderr'])
+
+    def execute(root, files, environment, on_event):
+        executions.append(files)
+        return runner.run(root, steps, environment, on_event=on_event)
+
+    llm = RepairLLM(propose)
+    result = runner.run_with_repairs(workspace, steps, {}, llm=llm, editable=['train.py'],
+                                    validate_patches=validate, execute_candidate=execute)
+    assert result['success'], result
+    assert result['final']['stdout'].splitlines() == ['7'] * 5
+    assert len(executions) == 1  # Rejected proposals never reach the original command.
+    assert len(llm.calls) == (1 if first_candidate == 'direct' else 2)
+    assert (workspace / 'train.py').read_text(encoding='utf-8') == source.replace('.iteritems(', '.items(')
+    assert (workspace / 'data' / 'split.csv').read_bytes() == b'unchanged split\n'
+
+
 def test_failed_patch_difference_guides_cumulative_second_repair(runner, workspace):
     def propose(context, call):
         if call == 1:

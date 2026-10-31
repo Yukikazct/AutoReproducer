@@ -20,6 +20,7 @@ import json
 import os
 import re
 import shutil
+import sys
 import tempfile
 import threading
 import time
@@ -35,7 +36,7 @@ from src.project_paths import get_data_root
 
 
 # Contract checked by the web loader before starting a new background thread.
-BACKEND_API_VERSION = 16
+BACKEND_API_VERSION = 17
 WORKER_CANCEL_GRACE_SECONDS = 5
 
 
@@ -837,6 +838,7 @@ def run_pipeline_background(progress_path: str, *,
                             intelligent_recovery: bool = False,
                             intelligent_recovery_mode: str = 'collaborative',
                             cleanup_pdf: bool = True,
+                            isolated_data_root: Optional[str] = None,
                             on_done=None) -> threading.Thread:
     """启动后台线程执行流水线；返回守护线程句柄。
 
@@ -844,14 +846,49 @@ def run_pipeline_background(progress_path: str, *,
     （cleanup_pdf）。on_done(result) 在线程收尾时回调（可选）。
     """
     from frontend.task_control import register_task, bind_task
-    control = register_task(progress_path)
+    if isolated_data_root is not None:
+        # Check this before registering ownership. A warm service with old
+        # project_paths must fail safely, without starting or leaking a task.
+        from src.project_paths import task_data_scope
+        if mock_mode or use_docker:
+            raise RuntimeError("新隔离环境仅支持真实本机模式，请关闭 Mock 和 Docker")
+        from src.safety.paths import workspace_path
+        candidate = Path(isolated_data_root).absolute()
+        if uuid.UUID(hex=candidate.name).hex != candidate.name:
+            raise ValueError("无效的新隔离环境标识")
+        checked = workspace_path(get_data_root(), "recovery/" + candidate.name,
+                                 "isolated restart data", must_exist=True)
+        if candidate != checked:
+            raise ValueError("新隔离环境必须由恢复入口创建")
+        isolated_data_root = str(checked)
+        marker = json.loads((Path(isolated_data_root) / ".restart.json").read_text(encoding="utf-8"))
+        if (not isinstance(marker, dict) or type(marker.get("version")) is not int or marker["version"] != 1
+                or marker.get("original_cleanup") != "unconfirmed"):
+            raise ValueError("无效的新隔离环境")
+        if not Path(progress_path).resolve().is_relative_to(Path(isolated_data_root)):
+            raise ValueError("新任务进度必须保存在新隔离环境中")
+        if workspace_dir is not None and not Path(workspace_dir).resolve().is_relative_to(Path(isolated_data_root)):
+            raise ValueError("新任务工作区必须保存在新隔离环境中")
+        canonical_runtime = sys.modules.get("src.runtime_preparation")
+        if canonical_runtime is not None:
+            # Cleanup helpers can still import the canonical module even when
+            # the worker runner has an upgraded alias. Require its environment
+            # handoff to understand the scope before admitting a restart.
+            clean_environment = getattr(canonical_runtime, "_clean_environment", None)
+            with task_data_scope(isolated_data_root):
+                compatible = (callable(clean_environment) and
+                              clean_environment().get("AUTOREPRO_TASK_DATA_ROOT") == isolated_data_root)
+            if not compatible:
+                raise RuntimeError("请重启网页服务以加载新版环境清理功能，再使用新环境恢复")
+    control = register_task(progress_path, **({"deps_root": Path(isolated_data_root) / "deps"}
+                                            if isolated_data_root is not None else {}))
     try:
         store = ProgressStore(progress_path)
     except BaseException:
         control.finish()
         raise
 
-    def _worker() -> None:
+    def _execute() -> None:
         bind_task(control)
         try:
             request = dict(
@@ -923,6 +960,16 @@ def run_pipeline_background(progress_path: str, *,
             control.finish(cleanup_failed=bool(receipt.get("errors")),
                            process_cleanup_confirmed=receipt.get("process_cleanup_confirmed", True))
             bind_task(None)
+
+    def _worker() -> None:
+        if isolated_data_root is None:
+            _execute()
+        else:
+            # Scope must be entered inside the new thread. Every real local
+            # task hands off before importing author code to a fresh worker;
+            # that process receives these roots before its module imports.
+            with task_data_scope(isolated_data_root):
+                _execute()
 
     t = threading.Thread(target=_worker, name="autorepro-pipeline",
                          daemon=True)

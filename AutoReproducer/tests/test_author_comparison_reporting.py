@@ -9,7 +9,7 @@ import pytest
 from frontend.report_renderer import render_report, report_downloads
 from src.agents.report_generator import (
     ReportGeneratorAgent, _author_claim_comparison_lines, _metric_value_text,
-    _reproduction_assessment_lines,
+    _reproduction_assessment_lines, _raw_author_observation_lines,
 )
 
 
@@ -217,6 +217,52 @@ def test_unavailable_ai_preserves_completion_and_explains_missing_decision(state
     assert '作者仓库代码运行完成' in report
     assert 'AI 判断尚未完成' in report and assessment['reason'] in report
     assert 'AI 判断复现成功' not in report
+
+
+def test_literal_output_table_preserves_labels_qualifiers_values_and_scope(tmp_path):
+    from src.author_literal_observations import collect_author_observations
+    from src.report_view_model import ReportViewModel
+    output = ('orig ROC:0.9124, precision @ rank n:0.4595\n'
+              'new ROC:0.9263, precision @ rank n:0.5405\n'
+              'orig moa ROC:0.9164, precision @ rank n:0.4595\n'
+              'new moa ROC:0.9307, precision @ rank n:0.5405\nFit time: 33.71004581451416')
+    execution = {'mode': 'repository', 'executed': True, 'success': True,
+                 'steps': [{'id': 'train', 'success': True, 'exit_code': 0, 'stdout': output, 'stderr': ''}]}
+    observations, errors = collect_author_observations(execution)
+    comparison = {'status': 'unavailable', 'metric_records': [], 'comparisons': [],
+                  'raw_observations': observations, 'reason': '原始数值已保留，含义尚未核验。'}
+    data = {'execution': execution, 'grounded_repository_plan': {'scope': 'author_code_execution'},
+            'validation': {'status': 'author_code_completed', 'is_reproduced': None,
+                           'paper_metrics_verified': False, 'metric_records': [],
+                           'raw_observations': observations, 'raw_observation_errors': errors,
+                           'author_claim_comparison': comparison}}
+    before = deepcopy(data)
+    reports = [ReportGeneratorAgent._build_report(data),
+               ReportGeneratorAgent._build_readable_report(ReportViewModel.from_data(data), data,
+                                                          report_path=tmp_path / 'report.md')]
+    for report in reports:
+        assert '### 作者原始数值输出' in report
+        assert '| 输出标签 | 指标原文 | 实际数值 | 来源 |' in report
+        assert '| orig | ROC | 0.9124 | train:stdout:1 |' in report
+        assert '| new | precision @ rank n | 0.5405 | train:stdout:2 |' in report
+        assert '| orig moa | ROC | 0.9164 | train:stdout:3 |' in report
+        assert '| new moa | ROC | 0.9307 | train:stdout:4 |' in report
+        assert '| 未单列 | Fit time | 33.71004581451416 | train:stdout:5 |' in report
+        assert '指标含义、单位和实验协议尚未核验' in report
+        assert '不参与论文指标配对或复现结论' in report
+        assert '作者仓库代码运行完成' in report and 'AI 判断复现成功' not in report
+        assert '作者输出中未识别到可比较的数值指标。' not in report
+    assert data == before
+
+
+def test_literal_observation_cells_are_escaped_as_plain_markdown_text():
+    observations = [{'row_label': 'orig | new', 'metric_label': '<ROC> [link]',
+                     'value': .9, 'value_text': '0.9', 'source': 'train:stdout:1\n| inserted'}]
+    before = deepcopy(observations)
+    text = '\n'.join(_raw_author_observation_lines(observations))
+    assert r'orig \| new' in text and r'\<ROC\> \[link\]' in text
+    assert r'train:stdout:1 \| inserted' in text
+    assert observations == before
 
 
 def test_ai_explanations_are_plain_text_and_do_not_change_the_assessment():

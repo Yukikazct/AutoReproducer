@@ -32,10 +32,11 @@ from pathlib import Path
 
 from src.process_lifecycle import CREATE_SUSPENDED, ProcessJob, validate_windows_venv
 from src.posix_process_scope import PosixSessionScope, managed_process_options
+from src.project_paths import get_deps_root, get_task_data_root
 from src.safety.paths import workspace_path
 
 
-OWNED_PROCESS_API_VERSION = 1
+OWNED_PROCESS_API_VERSION = 2
 SUPPORTED_VERSIONS = {(3, 11), (3, 12)}
 # The ordinary installer and automatic host recovery share one production
 # manifest. Resolve it from this source checkout, independently of the cwd.
@@ -145,6 +146,12 @@ def _check(cancel_check, deadline):
 
 def _clean_environment(env=None):
     environment = dict(os.environ if env is None else env)
+    task_root = get_task_data_root()
+    if task_root is not None:
+        environment["AUTOREPRO_TASK_DATA_ROOT"] = str(task_root)
+        environment["AUTOREPRO_DATA_ROOT"] = str(task_root)
+        environment["AUTOREPRO_DEPS_ROOT"] = str(get_deps_root())
+        environment["AUTOREPRO_EXPERIENCE_DIR"] = str(task_root / "experience")
     for name in ("PYTHONHOME", "PYTHONPATH", "VIRTUAL_ENV", "__PYVENV_LAUNCHER__"):
         environment.pop(name, None)
     environment["PYTHONNOUSERSITE"] = "1"
@@ -626,6 +633,13 @@ def _install_app_dependencies(executable, root, *, cancel_check, deadline, progr
     raise RuntimePreparationError("独立运行环境依赖安装失败：" + diagnostic[-4000:])
 
 
+def _runtime_cache_root(project_root):
+    task_root = get_task_data_root()
+    if task_root is not None:
+        return workspace_path(task_root, f"runtime/{_machine_key(project_root)}", "runtime cache")
+    return workspace_path(project_root, f"data/runtime/{_machine_key(project_root)}", "runtime cache")
+
+
 def prepare_runtime(project_root=None, *, cancel_check=None, progress_callback=None,
                     timeout_s=900, allow_download=True, offline=False):
     """Reuse a healthy runtime, repair our cache, or bootstrap official Python.
@@ -640,7 +654,7 @@ def prepare_runtime(project_root=None, *, cancel_check=None, progress_callback=N
     deadline = time.monotonic() + timeout_s
     reason = runtime_requirement() or "使用兼容的标准 Python 运行预设"
     _emit(progress_callback, "discover", reason)
-    root = workspace_path(project_root, f"data/runtime/{_machine_key(project_root)}", "runtime cache")
+    root = _runtime_cache_root(project_root)
     root.mkdir(parents=True, exist_ok=True)
     with _runtime_lock(root, cancel_check=cancel_check, deadline=deadline), _cleanup_failed_preparation(root):
         # Probe our cache before system paths so future runs are independent of
@@ -711,7 +725,7 @@ def release_runtime_downloads(project_root=None):
     download paths in this machine's managed cache are eligible for removal.
     """
     project_root = Path(project_root or Path(__file__).resolve().parents[1]).resolve(strict=True)
-    root = workspace_path(project_root, f"data/runtime/{_machine_key(project_root)}", "runtime cache")
+    root = _runtime_cache_root(project_root)
     if not root.is_dir():
         return {"status": "released", "removed": [], "freed_bytes": 0, "errors": []}
     with _runtime_lock(root, cancel_check=None, deadline=time.monotonic() + 60):
@@ -770,7 +784,7 @@ def release_worker_environment(prepared):
     """
     try:
         from src.environment_lifecycle import release_abandoned_environment
-        return release_abandoned_environment()
+        return release_abandoned_environment(get_deps_root())
     except ModuleNotFoundError:
         project_root = Path(__file__).resolve().parents[1]
         program = ("import sys,json;sys.path.insert(0,sys.argv[1]);"

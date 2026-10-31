@@ -1,5 +1,7 @@
 """Real offline pip and owned cleanup with Win32 long paths disabled or enabled."""
 import csv
+import base64
+import hashlib
 import io
 import json
 import os
@@ -30,11 +32,16 @@ def managed_root(tmp_path):
     return root
 
 
-def make_wheel(tmp_path):
+def make_wheel(tmp_path, *, with_scripts=False):
     dist = "longpath_demo-1.0.dist-info/"
     contents = {"longpath_demo/__init__.py": b"VALUE = 7\n", NATIVE: b"offline path fixture\n",
         dist + "METADATA": b"Metadata-Version: 2.1\nName: longpath-demo\nVersion: 1.0\n",
         dist + "WHEEL": b"Wheel-Version: 1.0\nGenerator: path-test\nRoot-Is-Purelib: true\nTag: py3-none-any\n"}
+    if with_scripts:
+        contents['longpath_demo/__init__.py'] = b'VALUE = 7\ndef main():\n    print(VALUE)\n'
+        contents['longpath_demo-1.0.data/scripts/path-fixture-legacy'] = (
+            b'#!python\nfrom longpath_demo import main\nmain()\n')
+        contents[dist + 'entry_points.txt'] = b'[console_scripts]\npath-fixture-entry = longpath_demo:main\n'
     rows = io.StringIO(newline="")
     writer = csv.writer(rows)
     for name in [*contents, dist + "RECORD"]:
@@ -81,6 +88,39 @@ def test_managed_pip_installs_wheel_with_a_long_extraction_path(tmp_path):
         receipt, = instance.env_config["dependency_temporary_files"]
         assert receipt["status"] == "removed"
         assert not Path(receipt["path"]).exists()
+    finally:
+        clean_owned_fixture(root, tmp_path)
+
+
+def test_managed_pip_rehashes_legacy_script_record_and_retains_long_extraction(tmp_path):
+    root = managed_root(tmp_path)
+    instance = CodeExecutorAgent(None, logger=Mock())
+    instance.deps_cache_root = root
+    instance.env_config = {'auto_prepare': False}
+    wheel = make_wheel(tmp_path, with_scripts=True)
+    target = tmp_path / 'target'
+    try:
+        result = instance._run_dependency_command([sys.executable, '-m', 'pip', 'install',
+            '--disable-pip-version-check', '--no-user', '--no-index', '--no-deps',
+            '--target', str(target), str(wheel)], timeout=60, env=instance._pip_env())
+        assert result.returncode == 0, result.stderr
+        assert (target / NATIVE).read_bytes() == b'offline path fixture\n'
+        legacy = target / 'bin/path-fixture-legacy'
+        assert legacy.read_bytes().startswith(b'#!') and not legacy.read_bytes().startswith(b'#!python\n')
+        imported = subprocess.run([sys.executable, '-I', '-c',
+            f'import sys,runpy; sys.path.insert(0, {str(target)!r}); runpy.run_path({str(legacy)!r}, run_name="__main__")'],
+            capture_output=True, text=True, timeout=10, check=True)
+        assert imported.stdout.strip() == '7'
+        entry = target / 'bin/path-fixture-entry.exe'
+        launched = subprocess.run([str(entry)], env={**os.environ, 'PYTHONPATH': str(target)},
+            capture_output=True, text=True, timeout=10, check=True)
+        assert launched.stdout.strip() == '7'
+        rows = list(csv.reader((target / 'longpath_demo-1.0.dist-info/RECORD').read_text('utf-8').splitlines()))
+        script_record, = [row for row in rows if row[0].endswith('/path-fixture-legacy')]
+        expected = base64.urlsafe_b64encode(hashlib.sha256(legacy.read_bytes()).digest()).rstrip(b'=').decode('ascii')
+        assert script_record[1] == 'sha256=' + expected and int(script_record[2]) == legacy.stat().st_size
+        receipt, = instance.env_config['dependency_temporary_files']
+        assert receipt['status'] == 'removed' and not Path(receipt['path']).exists()
     finally:
         clean_owned_fixture(root, tmp_path)
 

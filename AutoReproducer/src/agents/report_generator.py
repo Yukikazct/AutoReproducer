@@ -317,6 +317,21 @@ def _reproduction_assessment_lines(assessment, comparison=None):
     return lines + ['']
 
 
+def _raw_author_observation_lines(observations, errors=()):
+    if not observations:
+        return []
+    lines = ['', '### 作者原始数值输出', '',
+             '以下数值仅按作者打印的标签保留；指标含义、单位和实验协议尚未核验，不参与论文指标配对或复现结论。', '',
+             '| 输出标签 | 指标原文 | 实际数值 | 来源 |', '|---|---|---|---|']
+    for observation in observations:
+        cells = [observation.get('row_label') or '未单列', observation.get('metric_label'),
+                 observation.get('value_text') or _fmt(observation.get('value'), '.12g'), observation.get('source')]
+        lines.append('| ' + ' | '.join(_markdown_text(_txt(cell)) for cell in cells) + ' |')
+    if errors:
+        lines += ['', '部分原始数值输出未采纳：' + '；'.join(_markdown_text(_txt(error)) for error in errors)]
+    return lines
+
+
 def _author_claim_comparison_lines(comparison, assessment=None, *, include_table=True):
     if not comparison:
         return []
@@ -330,7 +345,8 @@ def _author_claim_comparison_lines(comparison, assessment=None, *, include_table
     rows = comparison.get('comparisons') or []
     if not rows:
         note = ('实际输出中的指标保留在下方证据表；未将其他数据集或基线指标作为参考。'
-                if comparison.get('metric_records') else '作者输出中未识别到可比较的数值指标。')
+                if comparison.get('metric_records') else '作者打印的原始数值保留在下方表格，含义、单位和实验协议尚未核验。'
+                if comparison.get('raw_observations') else '作者输出中未识别到可比较的数值指标。')
         diagnostic = comparison.get('diagnostic')
         saved_error = comparison.get('persistence_error')
         return (lines + [note] + (['未完成原因：' + _markdown_text(str(diagnostic)[:2000])] if diagnostic else [])
@@ -1146,6 +1162,9 @@ class ReportGeneratorAgent(BaseAgent):
                          record.get('unit') or '未记录', record.get('split') or '未记录',
                          record.get('stage') or '未记录', record.get('source') or '未记录']
                 lines.append('| ' + ' | '.join(_markdown_text(_txt(cell)) for cell in cells) + ' |')
+        lines += _raw_author_observation_lines(validation.get('raw_observations') or
+            (validation.get('author_claim_comparison') or {}).get('raw_observations'),
+            validation.get('raw_observation_errors'))
         lines += _numeric_compatibility_lines(validation)
         lines += _runtime_dataset_lines(readable.get('runtime_dataset_evidence') or validation.get('runtime_dataset_evidence'))
         lines += _outcome_diagnosis_lines(readable)
@@ -1718,6 +1737,9 @@ class ReportGeneratorAgent(BaseAgent):
                          record.get("split") or "未标注", record.get("stage") or "未标注",
                          record.get("source")]
                 lines.append("| " + " | ".join(_markdown_text(_txt(c)) for c in cells) + " |")
+        lines += _raw_author_observation_lines(validation.get('raw_observations') or
+            (validation.get('author_claim_comparison') or {}).get('raw_observations'),
+            validation.get('raw_observation_errors'))
         protocol = execution.get("protocol_verification") or {}
         independent = execution.get("independent_metrics") or {}
         if protocol:

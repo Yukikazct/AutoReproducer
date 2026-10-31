@@ -519,3 +519,132 @@ def test_terminal_task_can_reset_and_start_again(app, tmp_path, monkeypatch, ter
     next(b for b in app.sidebar.button if "开始复现" in b.label).click().run()
     assert not app.exception
     start.assert_called_once()
+
+
+def _corrupt_detached_task(progress):
+    from frontend import task_control
+    control = task_control.register_task(progress)
+    store = pipeline.ProgressStore(str(progress))
+    store.emit({"type": "pipeline_worker", "worker_id": "lost-owner", "status": "running"})
+    store.emit({"type": "state", "state": "BUILD_ENV", "agent": "EnvBuilder",
+                "status": "running", "reason": "retained interrupted preparation"})
+    control.finish(cleanup_failed=True)
+    for path in (control.record, control.shared_record):
+        path.write_bytes(b"\x00" * 327)
+    return control
+
+
+def test_corrupt_owner_can_reset_into_fresh_environment_and_start_locally(app, tmp_path, monkeypatch):
+    from frontend import task_control
+    monkeypatch.setenv("AUTOREPRO_DATA_ROOT", str(tmp_path / "data"))
+    monkeypatch.setattr(history, "get_project_data_dir", lambda: tmp_path / "data")
+    monkeypatch.setattr(task_control, "_blocked_roots", {})
+    progress = tmp_path / "old-session" / "progress.jsonl"
+    control = _corrupt_detached_task(progress)
+    preserved = {path: path.read_bytes() for path in (progress, control.record, control.shared_record)}
+    start = Mock()
+    monkeypatch.setattr(pipeline, "run_pipeline_background", start)
+    app.session_state["progress_file"] = str(progress)
+    app.run()
+
+    assert not app.exception
+    assert app.session_state["running"] is True
+    assert next(b for b in app.sidebar.button if b.label == "重置").disabled
+    isolated = app.sidebar.button(key="isolated_restart")
+    assert not isolated.disabled
+    assert any("无法确认进程清理" in item.value for item in app.sidebar.warning)
+    isolated.click().run()
+
+    assert not app.exception
+    assert app.session_state["running"] is False
+    assert app.session_state["progress_file"] is None
+    assert app.session_state["current_state"] == "INIT"
+    fresh = Path(app.session_state["isolated_data_root"])
+    assert fresh.is_dir() and fresh.parent == tmp_path / "data" / "recovery"
+    assert (fresh / ".restart.json").is_file()
+    assert {path: path.read_bytes() for path in preserved} == preserved
+    assert task_control.task_status(progress)["cleanup_unconfirmed"] is True
+    with pytest.raises(RuntimeError, match="清理|恢复"):
+        task_control.register_task(tmp_path / "same-old-root" / "blocked.jsonl")
+
+    app.sidebar.toggle[0].set_value(False).run()
+    app.sidebar.text_input(key="llm_model").set_value("fixture-model").run()
+    app.sidebar.text_input(key="paper_title_input").set_value("Isolated local restart").run()
+    next(b for b in app.sidebar.button if b.label == "开始复现").click().run()
+
+    assert not app.exception
+    start.assert_called_once()
+    new_progress = Path(start.call_args.args[0])
+    assert new_progress.parent == fresh / "runtime"
+    assert start.call_args.kwargs["isolated_data_root"] == str(fresh)
+    assert start.call_args.kwargs["mock_mode"] is False
+    assert start.call_args.kwargs["use_docker"] is False
+    assert {path: path.read_bytes() for path in preserved} == preserved
+
+
+def test_corrupt_owner_with_held_lock_rejects_even_stale_isolated_restart_click(app, tmp_path, monkeypatch):
+    import streamlit as st
+    from frontend import task_control
+    monkeypatch.setenv("AUTOREPRO_DATA_ROOT", str(tmp_path / "data"))
+    monkeypatch.setattr(history, "get_project_data_dir", lambda: tmp_path / "data")
+    monkeypatch.setattr(task_control, "_blocked_roots", {})
+    progress = tmp_path / "old-session" / "progress.jsonl"
+    control = _corrupt_detached_task(progress)
+    preserved = {path: path.read_bytes() for path in (progress, control.record, control.shared_record)}
+    app.session_state["progress_file"] = str(progress)
+    with task_control._OwnerLock(task_control._paths(progress)[1]).acquire(timeout=0):
+        app.run()
+        assert not app.exception
+        assert app.sidebar.button(key="isolated_restart").disabled
+        original_button = st.button
+
+        def stale_button(label, *args, **kwargs):
+            clicked = original_button(label, *args, **kwargs)
+            return True if kwargs.get("key") == "isolated_restart" else clicked
+
+        monkeypatch.setattr(st, "button", stale_button)
+        app.run()
+        assert not app.exception
+        assert app.session_state["running"] is True
+        assert app.session_state["progress_file"] == str(progress)
+        assert app.session_state["isolated_data_root"] is None
+        assert any("仍被持有" in item.value for item in app.sidebar.error)
+        assert not (tmp_path / "data" / "recovery").exists()
+    assert {path: path.read_bytes() for path in preserved} == preserved
+
+
+def test_fresh_browser_reconnects_marked_isolated_run_without_starting_task(tmp_path, monkeypatch):
+    from frontend import task_control
+    from frontend.live_progress import progress_run_id
+    data_root = tmp_path / "data"
+    monkeypatch.setenv("AUTOREPRO_DATA_ROOT", str(data_root))
+    monkeypatch.setenv("AUTOREPRO_DEPS_ROOT", str(tmp_path / "dependencies"))
+    monkeypatch.setattr(history, "get_project_data_dir", lambda: data_root)
+    monkeypatch.setattr(task_control, "_blocked_roots", {})
+    original = tmp_path / "old-session" / "progress.jsonl"
+    control = _corrupt_detached_task(original)
+    fresh_root = Path(task_control.create_isolated_restart(original))
+    progress = fresh_root / "runtime" / "progress_1790000000000.jsonl"
+    pipeline.ProgressStore(str(progress)).emit({"type": "done", "result": {
+        "state": "ERROR", "error": "saved isolated terminal result", "data": {}}})
+    token = progress_run_id(data_root, progress)
+    assert token == fresh_root.name + "__" + progress.name
+    preserved = {path: path.read_bytes() for path in (original, control.record, control.shared_record, progress)}
+    start = Mock()
+    monkeypatch.setattr(pipeline, "run_pipeline_background", start)
+    browser = AppTest.from_file(str(Path(__file__).parents[1] / "app.py"), default_timeout=30)
+    browser.session_state["docker_probe"] = (True, None)
+    browser.query_params["run"] = token
+    browser.run()
+
+    assert not browser.exception
+    assert browser.session_state["progress_file"] == str(progress)
+    assert browser.session_state["isolated_data_root"] == str(fresh_root)
+    assert browser.session_state["running"] is False
+    assert browser.session_state["current_state"] == "ERROR"
+    assert not next(b for b in browser.sidebar.button if b.label == "重置").disabled
+    assert not next(b for b in browser.sidebar.button if b.label == "开始复现").disabled
+    assert all(b.key != "stop_pipeline" for b in browser.sidebar.button)
+    assert browser.query_params["run"] in (token, [token])
+    start.assert_not_called()
+    assert {path: path.read_bytes() for path in preserved} == preserved

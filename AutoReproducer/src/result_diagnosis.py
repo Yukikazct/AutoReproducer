@@ -330,8 +330,8 @@ def diagnose_experiment_result(llm, plan, packet, workspace, execution, validati
             for item in ai_judgment.get('metric_assessments') or []:
                 if not isinstance(item, dict) or actual_id is None or item.get('actual_id') != actual_id:
                     continue
-                tolerance = item.get('tolerance') or {}
-                tolerance_reason = tolerance.get('reason') if isinstance(tolerance, dict) else None
+                assessment_tolerance = item.get('tolerance') or {}
+                tolerance_reason = assessment_tolerance.get('reason') if isinstance(assessment_tolerance, dict) else None
                 message = f'{name} 的 AI 逐项判断为 {item.get("verdict")}：' + str(item.get('reason') or '未提供说明')
                 if tolerance_reason:
                     message += '；容许误差依据：' + str(tolerance_reason)

@@ -2062,9 +2062,16 @@ class CodeExecutorAgent(BaseAgent):
             from src.runtime_preparation import RuntimePreparationTimeout, run_owned_process
             validate_windows_venv()
             try:
+                from src.pip_windows_target import target_install_command
+                process_command = target_install_command(command)
                 monitor = getattr(self, '_dependency_install_monitor', None)
                 callbacks = {'on_poll': monitor} if monitor is not None else {}
-                return run_owned_process(command, timeout_s=timeout, env=env, **callbacks)
+                result = run_owned_process(process_command, timeout_s=timeout, env=env, **callbacks)
+                if process_command is not command:
+                    # Preserve the requested pip argv in installer receipts;
+                    # process ownership still records the actual child argv.
+                    return subprocess.CompletedProcess(command, result.returncode, result.stdout, result.stderr)
+                return result
             except RuntimePreparationTimeout as exc:
                 raise subprocess.TimeoutExpired(command, timeout, output=exc.stdout,
                                                 stderr=exc.stderr) from exc
