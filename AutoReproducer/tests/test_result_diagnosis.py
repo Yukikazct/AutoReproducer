@@ -203,6 +203,35 @@ def test_ai_unresolved_verdict_drives_diagnosis_and_preserves_error_basis(case, 
         assert result['status'] == 'evidence_limited'
 
 
+@pytest.mark.parametrize('direction,relative_difference,reference_rule', [
+    ('higher', .01, 'unknown'), ('higher', -.2, 'not_met'), ('lower', .2, 'not_met')])
+def test_reference_only_ai_tolerance_keeps_comparison_numeric_and_verdict_unchanged(
+        case, direction, relative_difference, reference_rule):
+    # Reference-only rows retain unknown acceptance even when the AI provides
+    # an absolute/relative tolerance explanation for the same actual metric.
+    case['row'].update(status='reference_only', direction=direction,
+                       meets_reference=None, within_tolerance=None,
+                       relative_difference=relative_difference)
+    case['row']['actual']['id'] = 'train:stdout:0'
+    assessment = ai_assessment('partially_reproduced')
+    case['validation'].update(status='ai_partially_reproduced',
+                              reproduction_assessment=assessment)
+    before = deepcopy(case['validation'])
+    original_source = (case['workspace'] / 'train.py').read_bytes()
+
+    result = run(case, Model())
+
+    assert result['status'] == 'evidence_limited'
+    assert result['trigger'] == ['ai_partially_reproduced']
+    assert result['assessment']['metric_outcomes'][0]['reference_rule'] == reference_rule
+    assert any(assessment['metric_assessments'][0]['tolerance']['reason'] in fact['message']
+               for fact in result['facts'])
+    assert case['validation'] == before
+    assert result['actions'] == {'mutated': False, 'retrained': False}
+    assert (case['workspace'] / 'train.py').read_bytes() == original_source
+    assert json.loads((case['run_dir'] / 'outcome_diagnosis.json').read_text('utf-8')) == result
+
+
 def test_ai_insufficient_evidence_without_comparison_still_records_assessment(case):
     case['validation']['reproduction_assessment'] = ai_assessment('insufficient_evidence')
     case['validation']['author_claim_comparison']['comparisons'] = []
