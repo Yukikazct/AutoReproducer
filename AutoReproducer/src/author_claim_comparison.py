@@ -9,7 +9,7 @@ import json
 import math
 import re
 
-from src.author_comparison_context import comparison_plan, comparison_view, prepare_comparison_packet
+from src.author_comparison_context import comparison_plan, comparison_view, frozen_cli_inputs, prepare_comparison_packet
 from src.author_comparison_feedback import context_quote_hints, correction_source_view
 from src.author_literal_observations import collect_author_observations
 from src.author_comparison_semantics import _scopes, context_evidence, reference_uncertainty, repetition_count_supported, settings_evidence
@@ -125,7 +125,10 @@ def _correction_feedback(attempt, accepted, credential, records=()):
     feedback = ('\n\nCorrection feedback for the current extraction attempt. Return exactly one valid JSON object '
                 'with double-quoted keys, correct commas, and escaped quotes/newlines in strings; no prose or code fences. '
                 'Preserve measured values, all source checks and already accepted rows. '
-                'Use only provided evidence IDs. Return corrected rows and their supporting citations.'
+                'Use only provided evidence IDs. Return corrected rows and their supporting citations. '
+                'Unknown citation IDs prevent downstream row validation: also recheck every method and dataset '
+                'label against its own cited original. Do not append scheme or implementation explanations '
+                'to an original label; put source-backed explanations in settings.reason.'
                 '\nAccepted actual_ids: ' + _bounded_excerpt(_redact_text(_canonical(list(accepted)), credential), 500))
     def section(label, value, limit):
         return label + _bounded_excerpt(_redact_text(value, credential), limit)
@@ -190,8 +193,18 @@ def _correction_feedback(attempt, accepted, credential, records=()):
                                 'field. Do not join pages or excerpts. If already_selected is false, explicitly '
                                 'select that evidence_id before quoting it:\n',
                                 attempt['context_quote_hints'], 3000)
+        if attempt.get('citation_id_catalog'):
+            feedback += navigation('\nValid source excerpt IDs (navigation only; read their complete original '
+                'excerpts in the supplied sources). Citation id is a local alias; evidence_id must be an '
+                'exact key from evidence_excerpts. Change each rejected citations entry evidence_id itself; '
+                'editing the reason does not correct an invalid ID. Remove an unsupported optional citation '
+                'and its dependent claim rather than inventing an ID. Do not guess a replacement or rewrite '
+                'the original quotations:\n', attempt['citation_id_catalog'], 2200)
     if attempt.get('error'):
         feedback += section('\nCurrent error: ', attempt['error'], 1000)
+    if attempt.get('additional_correction_actual_ids'):
+        feedback += section('\nThis is the final correction, limited to these actual_ids; do not add other rows: ',
+                            _canonical(attempt['additional_correction_actual_ids']), 1000)
     location = attempt.get('json_error')
     if location:
         feedback += section('\nJSON parser: ',
@@ -205,6 +218,22 @@ def _correction_feedback(attempt, accepted, credential, records=()):
     remaining = _FEEDBACK_LIMIT - len(feedback) - len(header) - len(footer)
     feedback += header + _bounded_excerpt(_redact_text(previous, credential), min(remaining, _RESPONSE_EXCERPT_LIMIT)) + footer
     return feedback
+
+
+def _exposed_validation_retry(attempts, errors):
+    """Allow one last literal-label correction after unknown IDs hid it.
+
+    A repeated unknown ID or a different row never earns another request. The
+    original two-request budget remains in force for every other failure.
+    """
+    if len(attempts) != 2 or not errors:
+        return False
+    blocked_rows = {error.get('actual_id') for error in attempts[0].get('validation_errors', [])
+                    if error.get('rejected_evidence_id') and isinstance(error.get('actual_id'), str)}
+    return bool(blocked_rows) and all(
+        not error.get('rejected_evidence_id') and isinstance(error.get('actual_id'), str)
+        and error['actual_id'] in blocked_rows and error.get('validation_stage') == 'literal_labels'
+        for error in errors)
 
 
 def _context_check(side, check, *args, **kwargs):
@@ -645,7 +674,8 @@ def validate_comparisons(payload, packet, workspace, records):
     return comparisons, list(citations.values())
 
 
-def _validated_rows(payload, packet, workspace, records, accepted, known_citations, citation_repairs=None):
+def _validated_rows(payload, packet, workspace, records, accepted, known_citations, citation_repairs=None,
+                    *, allowed_actual_ids=None):
     """One bad row/citation cannot discard another verified comparison."""
     if not isinstance(payload, dict) or not isinstance(payload.get('comparisons'), list):
         raise ValueError('Expected a JSON object with comparisons')
@@ -658,6 +688,10 @@ def _validated_rows(payload, packet, workspace, records, accepted, known_citatio
         identifier = item.get('actual_id') if isinstance(item, dict) else None
         if isinstance(identifier, str) and identifier in accepted:
             continue  # Corrections never replace already verified rows.
+        if allowed_actual_ids is not None and (not isinstance(identifier, str) or identifier not in allowed_actual_ids):
+            errors.append({'index': index, 'actual_id': identifier, 'field': 'correction_scope',
+                           'error': 'Final correction cannot add rows outside its exposed validation scope'})
+            continue
         try:
             if not isinstance(item, dict):
                 raise ValueError('Each comparison must be an object')
@@ -688,6 +722,20 @@ def _validated_rows(payload, packet, workspace, records, accepted, known_citatio
                               'reason': 'Selected exact evidence ID omitted from citation declarations'}
                     if citation_repairs is not None and repair not in citation_repairs:
                         citation_repairs.append(repair)
+            if excerpts is None and any(isinstance(ref.get('evidence_id'), str) for ref in selected):
+                excerpts = _planning_excerpts(packet)
+            unknown = [ref for ref in selected if isinstance(ref.get('evidence_id'), str)
+                       and ref['evidence_id'] not in excerpts]
+            if unknown:
+                # Report every selected unknown ID together. The model must
+                # replace the declaration against the originals; no automatic
+                # alias guessing or source quotation rewrite is permitted.
+                errors.extend({'index': index, 'actual_id': identifier,
+                    'field': 'citations.' + str(ref.get('id')) + '.evidence_id',
+                    'citation_id': ref.get('id'), 'rejected_evidence_id': ref['evidence_id'],
+                    'error': 'Citation refers to an unknown source excerpt ID: ' + ref['evidence_id']}
+                    for ref in unknown)
+                continue
             rows, verified = validate_comparisons({'comparisons': [item], 'citations': selected},
                                                    packet, workspace, records)
             for ref in verified:
@@ -699,7 +747,14 @@ def _validated_rows(payload, packet, workspace, records, accepted, known_citatio
         except _ContextQuotationErrors as exc:
             errors.extend({'index': index, 'actual_id': identifier, **error} for error in exc.errors)
         except (ValueError, TypeError, KeyError) as exc:
-            errors.append({'index': index, 'actual_id': identifier, 'error': str(exc)})
+            error = {'index': index, 'actual_id': identifier, 'error': str(exc)}
+            # This check is reached only after original citations, source
+            # hashes, observed values and context quotations passed validation.
+            if re.fullmatch(r'(?:reference|actual_context)\.(?:method|dataset) [\s\S]+ must occur '
+                            r'in its cited original evidence; use an original literal label, '
+                            r'not an inferred variant name', str(exc)):
+                error['validation_stage'] = 'literal_labels'
+            errors.append(error)
     return errors
 
 
@@ -712,6 +767,8 @@ def compare_author_claims(llm, packet, plan, workspace, execution, *, sources=No
     result = {'status': 'unavailable', 'basis': 'author_output', 'relative_tolerance': TOLERANCE,
               'metric_records': records, 'parse_errors': errors, 'comparisons': [], 'citations': [],
               'raw_observations': observations, 'raw_observation_errors': observation_errors,
+              'frozen_cli_inputs': frozen_cli_inputs(packet, plan,
+                  metric_workspace if metric_workspace is not None else workspace),
               'validation_errors': [],
               'reason': '未找到可与论文宣称配对的作者输出；代码运行结果不受影响。'}
     prepared_packet = None
@@ -753,6 +810,8 @@ settings:{status:'matched|different|unknown',reason,citations:[PDF and repositor
         'score or another model variant with the method test result. Reference value_quote must be an exact '
         'short PDF substring containing the complete result row, with separate cited table headers '
         'for dataset and units. All citations must select provided evidence_excerpts IDs. '
+        'Citation id is your local alias; evidence_id must copy an exact key from evidence_excerpts, '
+        'never another local alias or a descriptive name such as paper_setup. '
         'Tables can have methods in rows and datasets in columns OR datasets in rows and methods in columns. '
         'For dataset rows, quote that complete dataset row and the complete method header; column_labels '
         'contains only the selected original HEADER path, not the row label. Never transpose the actual text. '
@@ -777,6 +836,11 @@ settings:{status:'matched|different|unknown',reason,citations:[PDF and repositor
         'Do not describe the standard deviation across repeated runs as within-run variation. '
         'Keep the settings explanation consistent with the observed aggregation and chosen run count; '
         'mark unresolved execution context unknown rather than inventing a shorter experiment. '
+        'Frozen CLI inputs describe this exact author argv, with explicit tokens or unique static parser defaults. '
+        'Never replace these inputs with values from an unexecuted launcher or README command. '
+        'An omitted option uses the recorded parser default, not a documented reproduction command value. '
+        'These are static inputs, not verified runtime-effective settings: later assignments or config overrides '
+        'are not tracked; keep unavailable or partial inputs unknown unless original evidence resolves them. '
         'Compare split proportions arithmetically: 80% train, 10% validation, remaining test equals '
         '10% validation and 10% test; equivalent descriptions are not a protocol difference. '
         'Do not call np.std a sample standard deviation unless the source explicitly uses ddof=1. '
@@ -791,6 +855,8 @@ settings:{status:'matched|different|unknown',reason,citations:[PDF and repositor
         'Report the paper aggregation and repetition count honestly. Single run versus paper mean must '
         'remain distinct, even if numbers agree. Return comparisons:[] when no corresponding claim exists. '
         'Explain settings and limitations in Chinese. Return JSON only. Schema:\n' + schema + '\nFrozen original command:\n' + _canonical(comparison_plan(plan))
+        + '\nFrozen CLI inputs (static, not runtime-effective verification):\n'
+        + _canonical(_redact_evidence(result['frozen_cli_inputs'], credential))
         + '\nObserved metrics:\n' + _canonical(records) + '\nOriginal sources:\n')
     request_view = source_view
     accepted, citations = {}, {}
@@ -804,8 +870,9 @@ settings:{status:'matched|different|unknown',reason,citations:[PDF and repositor
               'preserve the specific method variant in both method fields and explain experimental differences in settings.')
     try:
         feedback = ''
+        final_correction_ids = None
         result['extraction_attempts'] = []
-        for attempt in range(2):
+        for attempt in range(3):
             payload = None
             current = {'attempt': attempt + 1, 'status': 'requesting', 'citation_repairs': []}
             result['extraction_attempts'].append(current)
@@ -825,8 +892,14 @@ settings:{status:'matched|different|unknown',reason,citations:[PDF and repositor
                     current.update(proposal_excerpt=_bounded_excerpt(serialized, _RESPONSE_EXCERPT_LIMIT),
                                    proposal_truncated=True)
                 invalid = _validated_rows(payload, packet, workspace, records, accepted, citations,
-                                          current['citation_repairs'])
+                                          current['citation_repairs'], allowed_actual_ids=final_correction_ids)
                 current.update(status='validation_failed' if invalid else 'validated', validation_errors=invalid)
+                if any(error.get('rejected_evidence_id') for error in invalid):
+                    current['citation_id_catalog'] = [
+                        {'evidence_id': key, 'source': ref['source'],
+                         **{name: ref[name] for name in ('page', 'path') if name in ref}}
+                        for key, ref in source_view['evidence_excerpts'].items()
+                        if ref['source'] in {'pdf', 'repository', 'dataset'}]
                 hints = _label_evidence_hints(current, source_view['evidence_excerpts'])
                 if hints:
                     current['label_evidence_hints'] = hints
@@ -848,8 +921,13 @@ settings:{status:'matched|different|unknown',reason,citations:[PDF and repositor
                         continue
                     pending[(row_key(error), error['error'])] = error
                 result['validation_errors'] = list(pending.values())
-                if not invalid or attempt:
+                exposed = _exposed_validation_retry(result['extraction_attempts'], result['validation_errors'])
+                if not invalid or (attempt and not exposed):
                     break
+                if exposed:
+                    current['additional_correction_reason'] = 'resolved_source_ids_exposed_row_validation'
+                    final_correction_ids = {error['actual_id'] for error in result['validation_errors']}
+                    current['additional_correction_actual_ids'] = sorted(final_correction_ids)
                 feedback = _correction_feedback(current, accepted, credential, records)
                 request_view = correction_source_view(current, source_view)
                 if request_view is not source_view:

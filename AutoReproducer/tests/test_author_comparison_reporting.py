@@ -10,6 +10,7 @@ from frontend.report_renderer import render_report, report_downloads
 from src.agents.report_generator import (
     ReportGeneratorAgent, _author_claim_comparison_lines, _metric_value_text,
     _reproduction_assessment_lines, _raw_author_observation_lines,
+    _outcome_recovery_lines,
 )
 
 
@@ -32,6 +33,80 @@ def comparison():
 
 def render(value):
     return '\n'.join(_author_claim_comparison_lines(value))
+
+
+def test_static_cli_inputs_are_separate_from_unchanged_model_settings():
+    value = comparison()
+    model_reason = '模型分析引用了未执行脚本的 lr=0.627；原文需保留供核对。'
+    value['comparisons'][0]['settings']['reason'] = model_reason
+    value['frozen_cli_inputs'] = {'status': 'observed', 'effective_runtime_verified': False,
+        'steps': [{'status': 'observed', 'argv': ['python', 'main.py', '--dataset', 'pubmed'],
+            'parser': {'source_path': 'main.py', 'source_sha256': 'a' * 64},
+            'values': {'dataset': {'value': 'pubmed', 'origin': 'explicit'},
+                       'lr': {'value': 0.156, 'origin': 'parser_default'},
+                       'weight_decay': {'value': 3.544e-5, 'origin': 'parser_default'}}}]}
+    before = deepcopy(value)
+    text = render(value)
+    assert '**本次静态 CLI 输入**' in text
+    assert '**显式输入**: dataset = "pubmed"' in text
+    assert r'**解析器默认输入**: lr = 0.156；weight\_decay = 3.544e-05' in text
+    assert 'SHA-256 ' + 'a' * 64 in text
+    assert model_reason in text
+    assert '不等于运行期有效值核验' in text
+    assert value == before
+
+
+def test_unavailable_static_input_keeps_frozen_argv_without_inventing_settings():
+    value = comparison()
+    value['comparisons'] = []
+    value['frozen_cli_inputs'] = {'status': 'unavailable', 'steps': [
+        {'status': 'unavailable', 'argv': ['python', 'main.py', '--unknown'], 'values': {}}]}
+    text = render(value)
+    assert '--unknown' in text
+    assert '静态解析证据不足；保留命令，未推断参数值' in text
+    assert '**解析器默认输入**' not in text
+
+
+def test_outcome_report_shows_original_command_beside_independent_correction():
+    data = {'outcome_recovery': {'status': 'corrected', 'reason': '原文完整命令已运行',
+        'original_attempt_dir': 'runs/original',
+        'original_commands': [{'argv': ['python', 'main.py', '--dataset', 'pubmed'], 'cwd': '.'}],
+        'attempts': [{'run_dir': 'runs/original/outcome_recovery/attempt_1',
+                      'corrected_spec_sha256': 'b' * 64, 'validation_status': 'ai_reproduced'}]}}
+    before = deepcopy(data)
+    text = '\n'.join(_outcome_recovery_lines(data))
+    assert '**原运行**: runs/original' in text
+    assert '**原始作者命令**: ' in text and '"--dataset", "pubmed"' in text
+    assert r'**纠正尝试**: runs/original/outcome\_recovery/attempt' in text
+    assert 'b' * 64 in text and r'ai\_reproduced' in text
+    assert '最终结论使用纠正尝试的实际状态和证据' in text
+    assert data == before
+
+
+def test_outcome_report_does_not_invent_a_correction_when_no_command_was_proposed():
+    data = {'outcome_recovery': {'status': 'unresolved', 'reason': '没有唯一的作者完整命令',
+        'original_attempt_dir': 'runs/original', 'attempts': []}}
+    before = deepcopy(data)
+    text = '\n'.join(_outcome_recovery_lines(data))
+    assert '未启动纠正运行；最终结论仍使用原运行' in text
+    assert '**原运行**: runs/original' in text
+    assert '**纠正尝试**' not in text and '分别冻结' not in text
+    assert data == before
+
+
+def test_outcome_report_preserves_original_result_when_correction_preparation_failed():
+    data = {'outcome_recovery': {'status': 'failed', 'reason': '作者源码导出失败',
+        'original_attempt_dir': 'runs/original', 'original_execution_preserved': True,
+        'attempts': [{'run_dir': 'runs/original/outcome_recovery/attempt_1', 'status': 'failed'}]}}
+    before = deepcopy(data)
+    text = '\n'.join(_outcome_recovery_lines(data))
+    assert '准备未完成，未执行纠正后的作者命令' in text
+    assert '最终结论仍使用保留的原运行' in text
+    assert r'**纠正尝试**: runs/original/outcome\_recovery/attempt' in text
+    assert '**纠正后状态**: failed' in text
+    assert '分别冻结' not in text
+    assert '最终结论使用纠正尝试的实际状态和证据' not in text
+    assert data == before
 
 
 def test_verified_column_path_is_shown_from_structured_evidence():

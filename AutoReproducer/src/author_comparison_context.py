@@ -2,6 +2,7 @@
 import ast
 from collections import deque
 from copy import deepcopy
+import math
 from pathlib import PurePosixPath
 import re
 
@@ -20,6 +21,131 @@ def comparison_plan(plan):
     result = deepcopy(plan)
     for key in ('import_evidence', 'deferred_runtime_imports', 'repository_namespaces'):
         result.get('requirements', {}).pop(key, None)
+    return result
+
+
+def _frozen_step_cli_inputs(packet, step, workspace):
+    from src.author_entrypoints import resolve_entrypoint
+    from src.author_experiment_selection import _entrypoint_cli
+
+    entrypoint = step['entrypoint']
+    if entrypoint['kind'] not in {'script', 'module'}:
+        raise ValueError('No supported original argparse entrypoint')
+    bare = {**step, 'entrypoint': {key: entrypoint[key] for key in ('kind', 'target')}}
+    resolved, _, arguments = resolve_entrypoint(bare, packet, workspace)
+    if resolved != entrypoint:
+        raise ValueError('The frozen entrypoint differs from its original argv')
+    cli, provenance = _entrypoint_cli(packet, workspace, step)
+    if cli is None or cli.get('missing') or not cli.get('options'):
+        raise ValueError('No unique complete static argparse contract')
+    parser_tree = ast.parse(packet['repository']['files'][provenance['source_path']]['text'])
+    rebound = set()
+    for node in ast.walk(parser_tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == 'set_defaults':
+            raise ValueError('Parser default mutation order has no static input contract')
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            rebound.add(node.id)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            rebound.add(node.name)
+        elif isinstance(node, ast.arg):
+            rebound.add(node.arg)
+        elif isinstance(node, ast.alias):
+            rebound.add(node.asname or node.name.split('.')[0])
+            if node.name == '*':
+                rebound.update({'str', 'int', 'float', 'bool'})
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            rebound.add(node.name)
+    options, flags, defaults = {}, {}, {}
+    for item in cli['options']:
+        dest = item['dest']
+        if (dest in options or item['nargs'] is not None
+                or item['action'] not in {'store', 'store_true', 'store_false'}
+                or not item['flags'] or any(not flag.startswith('-') or flag in flags for flag in item['flags'])
+                or len(set(item['flags'])) != len(item['flags'])):
+            raise ValueError('Ambiguous or unsupported argparse declaration')
+        # Custom converters are never executed or interpreted as literal values.
+        declaration = ast.parse(item['quote'], mode='eval').body
+        for keyword in declaration.keywords:
+            if keyword.arg == 'default':
+                try:
+                    ast.literal_eval(keyword.value)
+                except (ValueError, TypeError, SyntaxError):
+                    raise ValueError('A nonliteral argparse default has unknown binding time') from None
+        converter = next((keyword.value for keyword in declaration.keywords if keyword.arg == 'type'), None)
+        if converter is not None and not (isinstance(converter, ast.Name)
+                and converter.id in {'str', 'int', 'float', 'bool'} and converter.id not in rebound):
+            raise ValueError('Custom argparse conversion has unknown input semantics')
+        options[dest] = item
+        flags.update({flag: item for flag in item['flags']})
+    for item in cli['defaults']:
+        if item['dest'] in defaults:
+            raise ValueError('No unique static argparse default')
+        defaults[item['dest']] = item
+    explicit, index = {}, 0
+    while index < len(arguments):
+        token = arguments[index]
+        flag, equals, value = token.partition('=')
+        item = flags.get(flag)
+        if item is None or token == '--' or item['dest'] in explicit:
+            raise ValueError('Unknown or repeated original argparse input')
+        tokens = [token]
+        if item['action'] == 'store':
+            if not equals:
+                index += 1
+                if index >= len(arguments) or arguments[index] in flags or arguments[index].startswith('--'):
+                    raise ValueError('The original option lacks an unambiguous scalar value')
+                value = arguments[index]
+                tokens.append(value)
+        elif equals:
+            raise ValueError('Boolean argparse input cannot use an assigned value')
+        else:
+            value = item['action'] == 'store_true'
+        explicit[item['dest']] = (value, tokens)
+        index += 1
+    values, unknown = {}, []
+    for dest, item in options.items():
+        default = defaults.get(dest)
+        if dest in explicit:
+            value, tokens = explicit[dest]
+            origin = 'explicit'
+        elif default is not None and not (type(default['value']) is float and not math.isfinite(default['value'])):
+            value, tokens, origin = deepcopy(default['value']), [], 'parser_default'
+        else:
+            unknown.append(dest)
+            continue
+        values[dest] = {'value': value, 'origin': origin, 'flags': list(item['flags']),
+            'explicit_tokens': tokens, 'value_encoding': ('raw_argv_string' if origin == 'explicit'
+                and item['action'] == 'store' else 'static_argparse_value'),
+            'declaration': {key: item[key] for key in ('line', 'quote')},
+            'default_evidence': deepcopy(default)}
+    return {'status': 'partial' if unknown else 'observed', 'parser': provenance,
+            'values': values, 'unknown_values': unknown}
+
+
+def frozen_cli_inputs(packet, plan, workspace):
+    """Describe frozen argv and unique static parser inputs, never runtime values.
+
+    Source reads use an isolated packet and verify the actual workspace bytes.
+    Defaults belong to this invocation; launchers are documentation, not input.
+    """
+    result = {'version': 1, 'status': 'unavailable', 'effective_runtime_verified': False,
+        'scope': 'static_argparse_input', 'steps': [],
+        'limitations': ['Static argparse input only; assignments or configuration overrides after parsing are not tracked.']}
+    working = deepcopy(packet)
+    for step in plan.get('steps') or []:
+        record = {key: deepcopy(step.get(key)) for key in ('argv', 'cwd', 'entrypoint')}
+        record.update(step_id=step.get('id'), status='unavailable', values={})
+        try:
+            record.update(_frozen_step_cli_inputs(working, step, workspace))
+        except (ValueError, TypeError, KeyError, OSError, SyntaxError, UnicodeError, AttributeError) as error:
+            record.update(reason='The frozen original argv has no verified unique static argparse input contract.',
+                          error_type=type(error).__name__)
+        result['steps'].append(record)
+    statuses = [step['status'] for step in result['steps']]
+    if statuses and all(status == 'observed' for status in statuses):
+        result['status'] = 'observed'
+    elif any(status in {'observed', 'partial'} for status in statuses):
+        result['status'] = 'partial'
     return result
 
 

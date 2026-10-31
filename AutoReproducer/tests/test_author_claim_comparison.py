@@ -165,6 +165,32 @@ def test_api_failure_keeps_actual_measurements_and_successful_execution(sources)
     assert execution['success'] is True
 
 
+def test_comparison_persists_and_sends_actual_static_defaults_without_using_launcher(sources, tmp_path):
+    from test_frozen_cli_inputs import case
+    _, original_packet, _, _ = sources
+    workspace = tmp_path / 'cli'
+    packet, plan = case(workspace)
+    packet['pdf'] = deepcopy(original_packet['pdf'])
+    before = deepcopy((packet, plan))
+    execution = actual_execution()
+    llm = Mock(mock_mode=False, api_key='')
+    llm.chat.return_value = json.dumps({'comparisons': [], 'reason': 'No corresponding paper claim'})
+
+    comparison = compare_author_claims(llm, packet, plan, workspace, execution)
+
+    context = comparison['frozen_cli_inputs']
+    assert context['status'] == 'observed'
+    assert context['steps'][0]['values']['lr']['value'] == 0.156
+    assert context['steps'][0]['values']['weight_decay']['value'] == 3.544e-5
+    prompt = llm.chat.call_args.args[0]
+    sent = prompt.split('Frozen CLI inputs (static, not runtime-effective verification):\n', 1)[1].split('\nObserved metrics:', 1)[0]
+    assert json.loads(sent) == context
+    assert 'Never replace these inputs with values from an unexecuted launcher' in prompt
+    assert '0.627' in prompt  # The original documented command remains evidence, with its own role.
+    assert (packet, plan) == before
+    assert execution['success'] is True
+
+
 def test_reference_absence_preserves_real_metrics(sources):
     fixture, packet, _, _ = sources
     llm = Mock(mock_mode=False)
