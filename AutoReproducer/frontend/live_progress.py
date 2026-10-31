@@ -1,10 +1,74 @@
 """Read-only monitoring helpers; reconnecting never starts a pipeline."""
+import json
 import re
 import time
 from datetime import datetime
 from pathlib import Path
 
 from frontend.display_text import display_text
+from src.safety.paths import is_link, workspace_path
+
+
+_PROGRESS_NAME = re.compile(r"progress_\d+\.jsonl")
+_SCOPED_PROGRESS_NAME = re.compile(r"([0-9a-f]{32})__(progress_\d+\.jsonl)")
+
+
+def _monitor_root(data_root):
+    root = Path(data_root).absolute()
+    if any(is_link(parent) for parent in (root, *root.parents)):
+        raise ValueError("monitor data root contains a symlink or junction")
+    return root
+
+
+def _recovery_root(data_root, identifier):
+    if not re.fullmatch(r"[0-9a-f]{32}", identifier):
+        raise ValueError("invalid recovery scope")
+    root = workspace_path(_monitor_root(data_root), "recovery/" + identifier,
+                          "monitor recovery root", must_exist=True)
+    marker = workspace_path(root, ".restart.json", "monitor recovery marker", must_exist=True)
+    if not root.is_dir() or not marker.is_file() or marker.stat().st_size > 16384:
+        raise ValueError("invalid recovery marker")
+    record = json.loads(marker.read_text(encoding="utf-8"))
+    if (not isinstance(record, dict) or type(record.get("version")) is not int
+            or record["version"] != 1 or record.get("original_cleanup") != "unconfirmed"):
+        raise ValueError("invalid recovery marker")
+    return root
+
+
+def isolated_progress_root(data_root, path):
+    """Return a marked recovery root only for one of its own progress files."""
+    try:
+        base = _monitor_root(data_root)
+        candidate = Path(path).absolute()
+        relative = candidate.relative_to(base)
+        if (len(relative.parts) != 4 or relative.parts[0] != "recovery"
+                or relative.parts[2] != "runtime"
+                or not _PROGRESS_NAME.fullmatch(relative.parts[3])):
+            return None
+        root = _recovery_root(base, relative.parts[1])
+        checked = workspace_path(root, "runtime/" + relative.parts[3],
+                                 "monitor recovery progress", must_exist=True)
+        return root if checked.is_file() else None
+    except (OSError, ValueError, TypeError, RuntimeError):
+        return None
+
+
+def progress_run_id(data_root, path):
+    """Encode an existing, unlinked progress file as a bounded monitor token."""
+    try:
+        base = _monitor_root(data_root)
+        candidate = Path(path).absolute()
+        relative = candidate.relative_to(base)
+        if (len(relative.parts) == 2 and relative.parts[0] == "runtime"
+                and _PROGRESS_NAME.fullmatch(relative.parts[1])):
+            checked = workspace_path(base, relative, "monitor progress", must_exist=True)
+            return checked.name if checked.is_file() else None
+        root = isolated_progress_root(base, candidate)
+        if root is not None:
+            return root.name + "__" + candidate.name
+    except (OSError, ValueError, TypeError, RuntimeError):
+        pass
+    return None
 
 
 def progress_signature(path):
@@ -16,21 +80,51 @@ def progress_signature(path):
 
 
 def resolve_progress_run(data_root, name):
-    if not isinstance(name, str) or not re.fullmatch(r"progress_\d+\.jsonl", name):
+    if not isinstance(name, str):
         return None
-    directory = (Path(data_root) / "runtime").resolve()
-    candidate = (directory / name).resolve()
-    return str(candidate) if candidate.parent == directory and candidate.is_file() else None
+    try:
+        if _PROGRESS_NAME.fullmatch(name):
+            candidate = workspace_path(_monitor_root(data_root), "runtime/" + name,
+                                       "monitor progress", must_exist=True)
+        else:
+            scoped = _SCOPED_PROGRESS_NAME.fullmatch(name)
+            if scoped is None:
+                return None
+            root = _recovery_root(data_root, scoped[1])
+            candidate = workspace_path(root, "runtime/" + scoped[2],
+                                       "monitor recovery progress", must_exist=True)
+        return str(candidate) if candidate.is_file() else None
+    except (OSError, ValueError, TypeError, RuntimeError):
+        return None
 
 
 def recent_progress_runs(data_root):
-    directory = Path(data_root) / "runtime"
     try:
-        files = sorted(directory.glob("progress_*.jsonl"),
-                       key=lambda path: path.stat().st_mtime_ns, reverse=True)
-        return [path.name for path in files[:10]
-                if resolve_progress_run(data_root, path.name)]
-    except OSError:
+        base = _monitor_root(data_root)
+        files = []
+        try:
+            directory = workspace_path(base, "runtime", "monitor runtime directory")
+            files.extend(directory.glob("progress_*.jsonl"))
+        except (OSError, ValueError, TypeError, RuntimeError):
+            pass
+        try:
+            recovery = workspace_path(base, "recovery", "monitor recovery directory")
+            scopes = list(recovery.iterdir()) if recovery.is_dir() else []
+        except (OSError, ValueError, TypeError, RuntimeError):
+            scopes = []
+        if scopes:
+            for scope in scopes:
+                if re.fullmatch(r"[0-9a-f]{32}", scope.name):
+                    try:
+                        root = _recovery_root(base, scope.name)
+                        directory = workspace_path(root, "runtime", "monitor recovery runtime")
+                        files.extend(directory.glob("progress_*.jsonl"))
+                    except (OSError, ValueError, TypeError, RuntimeError):
+                        continue
+        rows = [(path.stat().st_mtime_ns, identifier) for path in files
+                if (identifier := progress_run_id(base, path)) is not None]
+        return [identifier for _, identifier in sorted(rows, reverse=True)[:10]]
+    except (OSError, ValueError, TypeError, RuntimeError):
         return []
 
 

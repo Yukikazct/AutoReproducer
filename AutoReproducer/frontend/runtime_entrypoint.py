@@ -12,7 +12,7 @@ from pathlib import Path
 from types import ModuleType
 
 
-OWNED_PROCESS_API_VERSION = 1
+OWNED_PROCESS_API_VERSION = 2
 _UPGRADED_MODULE = f"src._runtime_preparation_owned_v{OWNED_PROCESS_API_VERSION}"
 _load_lock = threading.RLock()
 

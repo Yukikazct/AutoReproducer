@@ -29,6 +29,7 @@ from src.orchestrator import Orchestrator
 from src.llm.llm_client import LLMClient
 from src.audit.audit_logger import AuditLogger
 from src.project_paths import get_data_root
+import src.project_paths as project_paths
 from src.corpus import list_papers
 from src.repository_profiles import PAPER_TITLE
 from src.title_routing import resolve_title_request
@@ -36,6 +37,11 @@ from frontend.display_text import display_text
 from frontend.live_progress import (elapsed_seconds, progress_signature,
                                     recent_progress_runs, render_activity, render_dependency_progress,
                                     resolve_progress_run)
+import frontend.live_progress as live_monitor
+
+progress_run_id = getattr(live_monitor, "progress_run_id", lambda root, path:
+                          Path(path).name if resolve_progress_run(root, Path(path).name) == str(Path(path).resolve()) else None)
+isolated_progress_root = getattr(live_monitor, "isolated_progress_root", lambda root, path: None)
 from frontend import progress_state
 if getattr(progress_state, "PROGRESS_VIEW_VERSION", 0) != 4:
     progress_state = importlib.reload(progress_state)
@@ -82,6 +88,7 @@ from frontend.history_manager import (
     get_project_data_dir,
 )
 from frontend.task_control import request_cancel, task_status as pipeline_task_status, recover_orphaned_task
+import frontend.task_control as task_controls
 
 # 页面配置
 st.set_page_config(
@@ -128,18 +135,26 @@ if "progress_file" not in st.session_state:
         st.session_state.progress_file = linked_run
 if "pipeline_note" not in st.session_state:
     st.session_state.pipeline_note = None
+if "isolated_data_root" not in st.session_state:
+    st.session_state.isolated_data_root = None
+_isolated_restart_supported = (callable(getattr(task_controls, "create_isolated_restart", None))
+                               and callable(getattr(project_paths, "task_data_scope", None)))
+if not _isolated_restart_supported:
+    st.warning("恢复功能已更新，请重启网页服务以加载新版任务控制；现有任务和记录已保留。")
 
 # 先读取后台状态，再渲染侧边栏和主区域。终态时停止轮询后也能立即
 # 更新「开始复现」按钮、系统状态和顶部提示，避免留在上一阶段。
 pf = st.session_state.progress_file
 if pf:
+    restart_root = isolated_progress_root(get_project_data_dir(), pf)
+    st.session_state.isolated_data_root = str(restart_root) if restart_root else None
     recover_orphaned_task(pf, ProgressStore)
 _task_control_status = pipeline_task_status(pf)
 _progress_signature = progress_signature(pf)
 snap = ProgressStore.read_snapshot(pf) if pf else None
-if pf and resolve_progress_run(get_project_data_dir(), Path(pf).name) == str(Path(pf).resolve()):
-    if st.query_params.get("run") != Path(pf).name:
-        st.query_params["run"] = Path(pf).name
+monitor_id = progress_run_id(get_project_data_dir(), pf) if pf else None
+if monitor_id and st.query_params.get("run") != monitor_id:
+    st.query_params["run"] = monitor_id
 if snap:
     # 每次使用当前任务的完整快照，避免切换进度文件时残留上次的完成状态。
     st.session_state.result = snap["result"]
@@ -530,6 +545,7 @@ with st.sidebar:
             st.caption("源码修复与严格核验互斥：修复会改变源码，严格核验要求冻结源码。修复不能改变模型、数据划分、训练轮数或评价方法。")
 
     # 启动 / 重置按钮
+    isolated_restart_btn = False
     col1, col2 = st.columns(2)
     with col1:
         start_btn = st.button("开始复现", type="primary",
@@ -545,6 +561,13 @@ with st.sidebar:
                               disabled=st.session_state.running)
         if st.session_state.running:
             st.caption("停止会中断本任务的下载、安装和执行；清理完成后可重置，日志与报告保留。")
+        if _task_control_status.get("record_invalid"):
+            st.warning("旧任务控制记录损坏，无法确认进程清理；原环境和日志已保留。")
+            isolated_restart_btn = st.button(
+                "重置并使用新环境", key="isolated_restart", use_container_width=True,
+                disabled=not (_task_control_status.get("isolated_restart_available")
+                              and _isolated_restart_supported),
+                help="新任务使用独立目录。原任务的清理状态保持未确认，旧环境不会被删除或复用。")
 
     # 系统状态
     _sidebar_state_label = ("运行中" if st.session_state.running else
@@ -576,7 +599,7 @@ def _save_uploaded_pdf(uploaded_file) -> str:
 
 def _new_progress_file() -> str:
     """创建本次复现的进度文件路径（data/runtime/progress_<毫秒>.jsonl）。"""
-    runtime_dir = get_data_root() / "runtime"
+    runtime_dir = Path(st.session_state.isolated_data_root or get_data_root()) / "runtime"
     os.makedirs(runtime_dir, exist_ok=True)
     return os.path.join(runtime_dir,
                         f"progress_{int(time.time() * 1000)}.jsonl")
@@ -649,7 +672,9 @@ if start_btn and not st.session_state.running:
                 mock_mode=st.session_state.mock_mode,
                 enable_optimization=False,
                 use_docker=False,
-                cleanup_pdf=True)   # 临时 PDF 由后台线程负责删除
+                cleanup_pdf=True,
+                **({"isolated_data_root": st.session_state.isolated_data_root}
+                   if st.session_state.isolated_data_root else {}))
         except Exception as exc:
             from src.runtime_preparation import safe_runtime_diagnostic
             message = safe_runtime_diagnostic(exc)
@@ -673,7 +698,14 @@ if start_btn and not st.session_state.running:
             st.rerun()
 
 # 重置按钮处理
-if reset_btn and not st.session_state.running:
+if isolated_restart_btn:
+    try:
+        st.session_state.isolated_data_root = task_controls.create_isolated_restart(
+            st.session_state.progress_file)
+    except (OSError, ValueError, RuntimeError) as exc:
+        st.sidebar.error(str(exc))
+        isolated_restart_btn = False
+if (reset_btn and not st.session_state.running) or isolated_restart_btn:
     st.session_state.orchestrator = None
     st.session_state.result = None
     st.session_state.running = False
@@ -684,7 +716,9 @@ if reset_btn and not st.session_state.running:
     st.session_state.connection_result = None
     st.session_state.progress_file = None
     st.query_params.pop("run", None)
-    st.session_state.pipeline_note = None
+    st.session_state.pipeline_note = (
+        "已切换到独立新环境，可重新开始。旧任务的进程清理仍未确认，原环境和日志已保留。"
+        if isolated_restart_btn else None)
     st.rerun()
 
 # ========== 主界面 ==========

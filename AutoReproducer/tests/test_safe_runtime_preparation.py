@@ -199,6 +199,36 @@ def test_missing_host_environment_is_created_and_reused(fake_runtime):
     assert state["installs"] == 1 and len(state["venv_calls"]) == 1
 
 
+def test_task_scope_prepares_runtime_inside_its_own_data_root(fake_runtime):
+    from src.project_paths import task_data_scope
+
+    project, state = fake_runtime
+    task_root = project / 'isolated-task'
+    with task_data_scope(task_root):
+        prepared = runtime.prepare_runtime(project)
+    assert Path(prepared.executable).is_relative_to(task_root / 'runtime' / 'test-machine')
+    assert (task_root / 'runtime' / 'test-machine' / 'ready.json').is_file()
+    assert not (project / 'data' / 'runtime').exists()
+    assert state['installs'] == 1
+
+
+def test_scoped_runtime_download_release_never_touches_the_default_cache(tmp_path, monkeypatch):
+    from src.project_paths import task_data_scope
+
+    monkeypatch.setattr(runtime, '_machine_key', lambda root: 'test-machine')
+    shared = tmp_path / 'data' / 'runtime' / 'test-machine'
+    task_root = tmp_path / 'isolated-task'
+    isolated = task_root / 'runtime' / 'test-machine'
+    for root in (shared, isolated):
+        (root / 'wheels').mkdir(parents=True)
+        (root / 'wheels' / 'cached.whl').write_bytes(b'owned')
+    with task_data_scope(task_root):
+        receipt = runtime.release_runtime_downloads(tmp_path)
+    assert receipt['status'] == 'released'
+    assert not (isolated / 'wheels').exists()
+    assert (shared / 'wheels' / 'cached.whl').read_bytes() == b'owned'
+
+
 def test_damaged_cached_dependencies_are_repaired_without_recreating_venv(fake_runtime):
     project, state = fake_runtime
     runtime.prepare_runtime(project)
