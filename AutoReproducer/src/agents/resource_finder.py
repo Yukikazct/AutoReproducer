@@ -122,12 +122,14 @@ class ResourceFinderAgent(BaseAgent):
         # repository is maintained by the paper's authors.
         prompt = f"""根据论文信息补全代码仓库候选和使用的数据集。
 论文标题: {paper_info.get('title', '未知')}
+论文作者: {json.dumps(paper_info.get('authors') or [], ensure_ascii=False)}
 方法: {paper_info.get('method', '未知')}
 已知代码仓库: {selected or '未找到'}
 论文原文仓库证据: {json.dumps(repository_links, ensure_ascii=False)}
 搜索候选: {json.dumps(discovery.get('candidates', []), ensure_ascii=False)}
 只有明确的作者代码声明或用户指定仓库需要保留。普通链接可能是框架依赖或基线，
 应根据论文标题与方法选择实现候选；不能因为出现在 PDF 中就认为是作者代码。
+搜索结果中的真实仓库优先于记忆中的地址猜测；若选择其他候选，不得把猜测描述为已验证。
 
 返回JSON格式:
 {{

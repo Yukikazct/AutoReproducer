@@ -24,6 +24,9 @@ class ComparisonLLM(PlannedLLM):
         self.outcome = outcome
 
     def chat(self, prompt, **kwargs):
+        if kwargs['task'] == 'reproduction_assessment':
+            self.calls.append((prompt, kwargs))
+            raise RuntimeError('This comparison fixture does not supply an AI assessment')
         if kwargs['task'] == 'result_diagnosis':
             self.calls.append((prompt, kwargs))
             evidence = json.loads(prompt)['evidence']
@@ -137,8 +140,8 @@ def test_completed_pipeline_compares_real_records_and_persists_report_evidence(t
     assert stage['status'] == 'success' and stage['completion_confirmed'] is True
     assert progress['done'] is True and progress['running'] is False
     assert [options['task'] for _, options in runner.llm.calls] == [
-        'author_execution_plan', 'author_claim_comparison', 'result_diagnosis']
-    assert result['data']['total_llm_calls'] == len(runner.llm.calls) == 3
+        'author_execution_plan', 'author_claim_comparison', 'reproduction_assessment', 'result_diagnosis']
+    assert result['data']['total_llm_calls'] == len(runner.llm.calls) == 4
     diagnosis = result['data']['outcome_diagnosis']
     assert diagnosis['model_analysis']['status'] == 'completed'
     assert diagnosis['actions'] == {'mutated': False, 'retrained': False}

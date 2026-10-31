@@ -29,6 +29,13 @@ from src.agents.resource_finder import ResourceFinderAgent
 from src.resource_manager import ResourceManager
 
 
+@pytest.fixture(autouse=True)
+def isolate_web_fallback(monkeypatch):
+    # These legacy chain tests inject JSON networking only. The public-page
+    # fallback has separate network-isolated parser and integration coverage.
+    monkeypatch.setattr(rd, '_search_github_web', lambda *a, **k: ([], 'web search unavailable'))
+
+
 # ---------------- 纯函数 ----------------
 
 class TestNormalizeUrl:

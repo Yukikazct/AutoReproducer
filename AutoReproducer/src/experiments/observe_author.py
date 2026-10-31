@@ -14,6 +14,7 @@ from observe_datasets import DatasetObserver
 from author_numeric_compatibility import diagnose_numpy_alias_error, diagnose_reciprocal_error, diagnose_ragged_summary, run_entrypoint
 from author_path_compatibility import diagnose_temporary_root_error
 from author_pyg_compatibility import LegacyPyGCompatibility
+from author_output_capture import AppendOutputCapture
 
 
 runtime = Path(__file__).resolve().parent
@@ -45,7 +46,7 @@ script = (workspace / entrypoint['source_path']).resolve(strict=True)
 if not directory.is_relative_to(workspace) or not script.is_relative_to(workspace):
     raise ValueError('Author command escaped its workspace')
 for item in step.get('output_directories', []):
-    if config['source_files'].get(item['source_path']) != item['source_sha256']:
+    if config.get('original_source_files', config['source_files']).get(item['source_path']) != item['source_sha256']:
         raise ValueError('Author output parent lacks pinned source evidence')
     relative = Path(item['path'])
     if relative.is_absolute() or '..' in relative.parts or '.git' in relative.parts:
@@ -93,6 +94,8 @@ for namespace in config.get('repository_namespaces', []):
     package.__spec__ = ModuleSpec(name, loader=None, is_package=True)
     package.__spec__.submodule_search_locations = package.__path__
     sys.modules[name] = package
+outputs = AppendOutputCapture(workspace, runtime, config['source_files'], identifier, config.get('data_files', {}))
+outputs.install()
 try:
     try:
         if entrypoint['kind'] == 'notebook':
@@ -127,7 +130,9 @@ try:
                 'step': identifier, 'optimizer_steps': updates, 'repair': candidate}), encoding='utf-8')
         raise
     native_data = datasets.finish()
+    output_files = outputs.finish()
 finally:
+    outputs.close()
     handle.remove()
     datasets.close()
     legacy_pyg.close()
@@ -135,6 +140,7 @@ finally:
 receipt = {'spec_sha256': config['spec_sha256'], 'step': step,
            'natural_return': True, 'optimizer_steps': updates,
            'torch_version': torch.__version__, 'native_datasets': native_data,
+           'output_files': output_files,
            'numeric_compatibility': config.get('numeric_compatibility', []),
            'path_compatibility': config.get('path_compatibility', []),
            'pyg_compatibility': config.get('pyg_compatibility', []),

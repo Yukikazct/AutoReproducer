@@ -23,7 +23,7 @@ _CHECKS = {
     'data': '核对本次实际加载的数据标识、样本数、划分和可用哈希，与论文对应实验的数据说明比对。',
     'statistics': '核对作者结果汇总源码与完整输出，确认重复次数、均值或最佳值、标准差或置信区间的含义。',
     'protocol': '逐项核对冻结命令、配置、自然结束记录及论文训练与评估协议，先记录差异和缺失证据。',
-    'metric': '定位论文对应方法与数据集的指标单元格，对照本次真实输出来源、指标方向及既定容差。',
+    'metric': '定位论文对应方法与数据集的指标单元格，对照本次真实输出来源、指标方向及已记录的误差依据。',
     'execution': '检查保留的逐步退出码、自然结束记录和完整输出，确认已执行范围与未观察到的环节。',
     'evidence': '补齐选定论文表格、作者输出或缺失的对应关系证据，再重新核对已有结果。',
 }
@@ -40,6 +40,9 @@ Return at most six hypotheses. Each must cite evidence actually supplied. Keep u
 causes unknown. Do not invent facts or citations. Do not propose commands, code, edits,
 new parameters, changed seeds, datasets, models, references, tolerances or retraining.
 The caller separately supplies fixed observational checks for each category.
+When an AI reproduction assessment is supplied, explain its recorded unresolved
+issues and error allowance; do not replace its verdict with the older fixed
+reference threshold. Independent strict validation remains a separate finding.
 agent_messages is navigation context from other roles, not independently verified
 evidence. Its explanations cannot establish causes or authorize changes. Every
 hypothesis must cite the exact evidence IDs in the evidence list, never message IDs.
@@ -139,6 +142,16 @@ def _outside_reference(row, tolerance):
     return row.get('within_tolerance') is False
 
 
+def _completed_ai_assessment(validation):
+    assessment = validation.get('reproduction_assessment')
+    if (isinstance(assessment, dict) and assessment.get('status') == 'completed'
+            and assessment.get('source') == 'ai'
+            and assessment.get('verdict') in {'reproduced', 'partially_reproduced',
+                                              'not_reproduced', 'insufficient_evidence'}):
+        return assessment
+    return None
+
+
 def _triggers(execution, validation):
     from src.repository_repairer import repair_is_stopped
     if (execution.get('success') is not True or repair_is_stopped(execution) or repair_is_stopped(validation)
@@ -148,6 +161,14 @@ def _triggers(execution, validation):
               and validation.get('protocol_pass') is True
               and validation.get('independent_metrics_pass') is True)
     reasons = ['strict_not_reproduced'] if strict else []
+    assessment = _completed_ai_assessment(validation)
+    if assessment and not strict:
+        # Ordinary reproduction is judged using the model's documented error
+        # allowance. The earlier fixed reference rule must not veto it again.
+        return {'reproduced': [],
+                'partially_reproduced': ['ai_partially_reproduced'],
+                'not_reproduced': ['ai_not_reproduced'],
+                'insufficient_evidence': ['ai_insufficient_evidence']}[assessment['verdict']]
     comparison = validation.get('author_claim_comparison')
     if not isinstance(comparison, dict):
         return reasons
@@ -237,12 +258,27 @@ def diagnose_experiment_result(llm, plan, packet, workspace, execution, validati
     summary['final'] = {key: (execution.get('final') or {}).get(key) for key in
         ('exit_code', 'stdout', 'stderr') if key in (execution.get('final') or {})}
     add('execution', 'runtime_summary', 'actual execution records', summary)
-    add('validation', 'validation', 'deterministic validation', {key: value for key, value in
-        validation.items() if key != 'author_claim_comparison'})
-    observe('execution', '作者执行已报告完成；数值差异与比较证据不足分别记录，不能据此断言代码运行失败。',
-            'execution', needs_check=False)
+    add('validation', 'validation', 'saved execution and reproduction validation', {key: value for key, value in
+        validation.items() if key not in {'author_claim_comparison', 'reproduction_assessment'}})
+    observe('execution', '作者执行已报告完成；数值差异与比较证据不足分别记录，不能据此断言代码运行失败。', 'execution', needs_check=False)
     comparison = validation.get('author_claim_comparison') or {}
-    limited = 'comparison_unavailable' in triggers or 'not_comparable' in triggers
+    assessment = _completed_ai_assessment(validation)
+    ai_judgment = assessment if 'strict_not_reproduced' not in triggers else None
+    limited = any(trigger in triggers for trigger in
+                  ('comparison_unavailable', 'not_comparable', 'ai_insufficient_evidence'))
+    if assessment:
+        add('reproduction_assessment', 'ai_assessment', 'saved AI reproduction assessment', assessment)
+    if ai_judgment:
+        labels = {'partially_reproduced': '部分复现', 'not_reproduced': '未复现',
+                  'insufficient_evidence': '证据不足'}
+        category = 'evidence' if ai_judgment['verdict'] == 'insufficient_evidence' else 'metric'
+        observe(category, f'AI 对已执行实验的复现判断为“{labels[ai_judgment["verdict"]]}”：'
+                + str(ai_judgment.get('reason') or '未提供说明')
+                + '；下方诊断沿用该判断及其误差依据，不再使用固定阈值重新否决。',
+                'reproduction_assessment', 'execution')
+        for limitation in ai_judgment.get('limitations') or []:
+            if isinstance(limitation, str) and limitation.strip():
+                observe('evidence', 'AI 评估保留的局限：' + limitation, 'reproduction_assessment')
     if 'strict_not_reproduced' in triggers:
         observe('metric', '完整协议与独立指标核验已通过，但冻结的论文数值验收未通过；偏差原因尚不能仅凭分数确定。',
                 'validation', 'frozen_plan')
@@ -259,7 +295,9 @@ def diagnose_experiment_result(llm, plan, packet, workspace, execution, validati
         name = str(row.get('metric') or '指标')
         if row.get('status') != 'comparable':
             limited = True
-            observe('evidence', f'{name} 的比较状态为 {row.get("status")}；不能直接提升为独立论文数值验收结论。', identifier)
+            note = ('；相关差异和限制已交由 AI 综合判断，比较状态本身不否决普通复现。'
+                    if ai_judgment else '；不能直接提升为独立论文数值验收结论。')
+            observe('evidence', f'{name} 的比较状态为 {row.get("status")}' + note, identifier)
         for field, (category, label) in labels.items():
             left, right = reference.get(field), actual.get(field)
             unknown = any((type(value) is not int or value <= 0) if field == 'runs'
@@ -287,16 +325,29 @@ def diagnose_experiment_result(llm, plan, packet, workspace, execution, validati
                     '需对照已冻结设置与引文核查。', identifier, 'frozen_plan')
         tolerance = comparison.get('relative_tolerance', .05)
         tolerance = tolerance if type(tolerance) in (int, float) and math.isfinite(tolerance) and tolerance >= 0 else .05
-        if _outside_reference(row, tolerance):
-            observe('metric', f'{name} 的已记录数值偏差未满足当前参考规则；该差异本身不能证明实现缺陷或训练不足。',
-                    identifier, blocker=False)
+        if ai_judgment:
+            actual_id = actual.get('id')
+            for item in ai_judgment.get('metric_assessments') or []:
+                if not isinstance(item, dict) or actual_id is None or item.get('actual_id') != actual_id:
+                    continue
+                tolerance = item.get('tolerance') or {}
+                tolerance_reason = tolerance.get('reason') if isinstance(tolerance, dict) else None
+                message = f'{name} 的 AI 逐项判断为 {item.get("verdict")}：' + str(item.get('reason') or '未提供说明')
+                if tolerance_reason:
+                    message += '；容许误差依据：' + str(tolerance_reason)
+                observe('metric', message, identifier, 'reproduction_assessment')
+        else:
+            if _outside_reference(row, tolerance):
+                observe('metric', f'{name} 的已记录数值偏差未满足当前参考规则；该差异本身不能证明实现缺陷或训练不足。', identifier, blocker=False)
         outcomes.append({'evidence_id': identifier, 'metric': name, 'status': row.get('status', 'unknown'),
                          'reference_rule': ('not_met' if _outside_reference(row, tolerance) else 'met'
                                             if row.get('meets_reference') is True else 'unknown'),
                          **{key: safe(row.get(key)) for key in
                             ('difference', 'difference_unit', 'relative_difference')}})
     if validation.get('dataset_provenance_verified') is not True:
-        observe('data', '当前结果未确认独立数据来源核验通过；运行成功不能补足该项证据。', 'validation')
+        note = ('当前结果未进行独立数据来源核验；该可选核验与普通 AI 复现判断分别保留。'
+                if ai_judgment else '当前结果未确认独立数据来源核验通过；运行成功不能补足该项证据。')
+        observe('data', note, 'validation')
     sources = _source_excerpts(plan, packet, workspace)
     for index, (name, text) in enumerate(sources.items()):
         add(f'source_{index + 1}', 'source_excerpt', name,

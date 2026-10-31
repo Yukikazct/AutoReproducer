@@ -1038,12 +1038,13 @@ class RecoveryAdapterCleanup:
                 pending.extend((item, receipt) for item in record)
                 continue
             if (record.get("cleanup_confirmed") is False or record.get("process_cleanup_confirmed") is False
-                    or any(record.get(key) for key in ("cleanup_failed", "cleanup_unconfirmed", "cleanup_error", "cleanup_errors"))
+                    or any(record.get(key) for key in ("cleanup_failed", "cleanup_unconfirmed", "cleanup_error", "cleanup_errors", "processes_alive"))
+                    or record.get("state") == "cleanup_unconfirmed"
                     or record.get("status") in {"cleanup_failed", "cleanup_unconfirmed"}
                     or receipt and (record.get("confirmed") is False or record.get("status") in {"failed", "unconfirmed"})):
                 return True
             diagnostics.extend(str(record.get(key) or "") for key in ("reason", "stderr", "stdout"))
-            pending.extend((record.get(key), True) for key in ("cleanup", "process_cleanup", "cleanup_receipt"))
+            pending.extend((record.get(key), True) for key in ("cleanup", "process_cleanup", "cleanup_receipt", "environment_cleanup"))
             pending.extend((record.get(key), False) for key in
                            ('execution', 'final', 'effective_env_config', 'environment', 'steps', 'attempts', 'stages'))
         return bool(re.search(r"process[- ](?:tree|group) cleanup (?:failed|was denied)|\bcleanup_unconfirmed\b",

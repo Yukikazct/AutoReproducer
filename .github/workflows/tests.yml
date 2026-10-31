@@ -11,9 +11,10 @@ permissions:
 jobs:
   tests:
     runs-on: ${{ matrix.os }}
-    # Windows runs both complete encoding selections sequentially. The 3.11
-    # runner exceeded 30 minutes with dependency setup and both full suites.
-    timeout-minutes: ${{ matrix.os == 'windows-latest' && 45 || 30 }}
+    # Windows runs both complete encoding selections sequentially. The main
+    # branch already needed 43 minutes before adding the recovery regressions;
+    # keep room for dependency setup and uploading both result files.
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 60 || 30 }}
     strategy:
       fail-fast: false
       matrix:

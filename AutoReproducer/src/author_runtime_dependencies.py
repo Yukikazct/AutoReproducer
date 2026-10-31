@@ -16,6 +16,33 @@ from src.intelligent_recovery import serialized_recovery
 MAX_DEPENDENCY_REPAIRS = 8
 
 
+def _terminal_repair_state(result, environment):
+    """Explicit lifecycle evidence takes precedence over an execution verdict."""
+    records = [result, result.get('final') or {}, *(result.get('steps') or []),
+               *(result.get('stages') or [])]
+    records = [record for record in records if isinstance(record, dict)]
+    cleanup_records = list(records)
+    for record in records:
+        for field in ('cleanup_receipt', 'environment_cleanup'):
+            receipt = record.get(field)
+            if isinstance(receipt, dict):
+                cleanup_records.append(receipt)
+    if any(record.get('cleanup_unconfirmed') or record.get('processes_alive')
+           or record.get('process_cleanup_confirmed') is False
+           or record.get('cleanup_confirmed') is False
+           or record.get('cleanup_errors')
+           or record.get('status') == 'cleanup_unconfirmed'
+           for record in cleanup_records):
+        return 'cleanup_unconfirmed', '进程清理尚未确认，停止自修复；保留原环境与执行证据。'
+    if any(record.get('cancelled') or record.get('interrupted') for record in records):
+        return 'interrupted', '运行已取消，自修复停止。'
+    if environment.get('dependency_failure_kind') == 'installation_timeout':
+        return 'timed_out', '依赖安装已超时；保留安装日志，未重新启动相同下载。'
+    if any(record.get('timed_out') for record in records):
+        return 'timed_out', '原命令已超时，自修复停止；保留已产生的结果。'
+    return None
+
+
 def repair_requirement(stderr, plan, packet):
     # Missing symbols in an installed package indicate an API/version problem,
     # not an absent dependency. Do not download a different package blindly.
@@ -55,7 +82,7 @@ def repair_requirement(stderr, plan, packet):
 @serialized_recovery
 def run_with_dependency_repair(runner, workspace, steps, environment, plan, packet,
                                run_dir, data, on_event, verify_inputs, repair_numeric=None, repair_path=None,
-                               analyze_failure=None, repair_pyg=None, prepare_environment=None):
+                               analyze_failure=None, repair_pyg=None, prepare_environment=None, repair_data=None):
     """Retry after cleanup, retaining every failed run and the unchanged argv."""
     effective = deepcopy(environment)
     # Retry allowance counts actual failures, never time spent running code.
@@ -67,6 +94,7 @@ def run_with_dependency_repair(runner, workspace, steps, environment, plan, pack
     model_repairs = data.setdefault('model_dependency_repairs', [])
     pyg_repairs = data.setdefault('pyg_repair_attempts', [])
     import_repairs = data.setdefault('import_repair_attempts', [])
+    data_repairs = data.setdefault('data_repair_attempts', [])
     seen = {repair['package'] for repair in repairs}
     for attempt in range(MAX_DEPENDENCY_REPAIRS + 1):
         verify_inputs()
@@ -80,26 +108,25 @@ def run_with_dependency_repair(runner, workspace, steps, environment, plan, pack
             raise
         effective = deepcopy(result.get('effective_env_config') or effective)
         result.setdefault('effective_env_config', effective)
-        verify_repair_result(run_dir, data, on_event, result)
-        if result.get('success'):
-            return result
         def stop(status, reason):
             save_repair_state(run_dir, data, on_event, status=status, reason=reason, current=result)
             return result
-        if result.get('cancelled') or result.get('interrupted'):
-            return stop('interrupted', '运行已取消，自修复停止。')
-        if effective.get('dependency_failure_kind') == 'installation_timeout':
-            # A killed installer is not evidence of a missing module or a bad
-            # version pin. Retrying a model suggestion would restart downloads.
-            return stop('timed_out', '依赖安装已超时；保留安装日志，未重新启动相同下载。')
-        final = result.get('final') or {}
-        if final.get('cancelled'):
-            return stop('interrupted', '原命令已取消，自修复停止。')
-        if final.get('timed_out'):
-            return stop('timed_out', '原命令已超时，自修复停止；保留已产生的结果。')
+        terminal = _terminal_repair_state(result, effective)
+        if terminal:
+            # A zero exit or stale success flag never confirms that descendants
+            # exited. Nor may it resolve a repair cancelled during its rerun.
+            result['success'] = False
+            attempts = (data.get('self_repair') or {}).get('attempts') or []
+            if attempts and attempts[-1].get('status') == 'retrying':
+                attempts[-1].update(status=terminal[0],
+                                   verification_execution_dir=result.get('run_dir'))
+            return stop(*terminal)
+        verify_repair_result(run_dir, data, on_event, result)
+        if result.get('success'):
+            return result
         stderr = failure_diagnostic(result)
         used = sum(len(items) for items in (repairs, numeric_repairs, path_repairs,
-                                            model_repairs, pyg_repairs, import_repairs))
+                                            model_repairs, pyg_repairs, import_repairs, data_repairs))
         attempts = (data.get('self_repair') or {}).get('attempts') or []
         if attempts and attempts[-1].get('status') == 'no_progress':
             return stop('no_progress', '修复后原命令仍出现相同错误；停止重复尝试，保留诊断与失败日志。')
@@ -147,6 +174,14 @@ def run_with_dependency_repair(runner, workspace, steps, environment, plan, pack
                 # Deterministic evidence-backed repairs take priority. Unknown
                 # failures receive bounded source/log analysis only afterwards.
                 suggestion = analyze_failure(result, effective) if analyze_failure else None
+                recovered = repair_data(result) if repair_data and not suggestion else None
+                if recovered is not None:
+                    data_repairs.append({**recovered, 'attempt': used + 1,
+                                         'failed_execution_dir': result.get('run_dir')})
+                    write_json(run_dir / 'data_repairs.json', data_repairs)
+                    record_repair(run_dir, data, on_event, result, recovered['action'],
+                                  'AI 已根据作者资料下载缺失数据 ' + recovered['target'] + '；重跑原命令验证。')
+                    continue
                 if suggestion and suggestion.get('action') == 'replace_compatibility_pin':
                     current = effective.get('requirements_txt', '').splitlines()
                     old, replacement = suggestion['previous'], suggestion['requirement']
@@ -163,6 +198,9 @@ def run_with_dependency_repair(runner, workspace, steps, environment, plan, pack
                         continue
                 analyses = data.get('failure_analyses') or []
                 reason = ((analyses[-1].get('reason') or analyses[-1].get('analysis_error')) if analyses else '')
+                recoveries = data.get('data_recovery_analyses') or []
+                if recoveries and recoveries[-1].get('status') == 'blocked':
+                    reason = recoveries[-1].get('reason') or reason
                 return stop('blocked', reason or '当前错误没有通过校验的自动修复方案；保留实际错误和源码依据。')
             numeric_repairs.append({**numeric, 'failed_execution_dir': result.get('run_dir'),
                                     'attempt': used + 1})

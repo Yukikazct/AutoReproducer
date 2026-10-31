@@ -12,6 +12,7 @@ from packaging.version import InvalidVersion, Version
 
 from src.runtime_platform import runtime_fingerprint
 from src.runtime_preparation import run_owned_process
+from src.safety.paths import filesystem_path
 
 
 SUPPORTED = ((3, 12), (3, 11), (3, 10), (3, 9))
@@ -109,6 +110,9 @@ def _uv_command(root, *, offline):
 def _ensure_pip(executable, root):
     from src.training_environment import training_process_environment
     environment = training_process_environment(root)
+    # Bootstrap through an extended Windows executable path so pip's target
+    # prefix can contain bundled setuptools resources beyond MAX_PATH.
+    executable = filesystem_path(executable)
     check = run_owned_process([str(executable), '-m', 'pip', '--version'], timeout_s=15, env=environment)
     if check.returncode == 0:
         return
@@ -128,7 +132,10 @@ def _managed_venv(root, base, version):
         if _probe(executable) != version:
             if directory.exists():
                 raise TrainingPythonUnavailable('已有隔离训练 Python 缓存不完整：' + str(directory))
-            result = run_owned_process([str(base), '-m', 'venv', str(directory)], timeout_s=180,
+            # venv's internal ensurepip can lose Windows extended path syntax.
+            # Use the explicit, owned bootstrap below after creating the venv.
+            options = ['--without-pip'] if os.name == 'nt' else []
+            result = run_owned_process([str(base), '-m', 'venv', *options, str(directory)], timeout_s=180,
                                        env=training_process_environment(root))
             if result.returncode or _probe(executable) != version:
                 raise TrainingPythonUnavailable('创建隔离训练 Python 失败：' + (result.stderr or result.stdout)[-800:])

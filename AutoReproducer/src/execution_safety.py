@@ -4,7 +4,7 @@ import re
 
 _WRAPPERS = ('execution', 'final', 'effective_env_config', 'environment',
              'steps', 'attempts', 'stages')
-_RECEIPTS = ('cleanup', 'process_cleanup', 'cleanup_receipt')
+_RECEIPTS = ('cleanup', 'process_cleanup', 'cleanup_receipt', 'environment_cleanup')
 
 
 def iter_execution_records(execution):
@@ -32,7 +32,8 @@ def cleanup_is_unconfirmed(execution):
     for record, receipt in iter_execution_records(execution):
         if (record.get('cleanup_confirmed') is False or record.get('process_cleanup_confirmed') is False
                 or any(record.get(key) for key in ('cleanup_failed', 'cleanup_unconfirmed',
-                                                  'cleanup_error', 'cleanup_errors'))
+                                                  'cleanup_error', 'cleanup_errors', 'processes_alive'))
+                or record.get('state') == 'cleanup_unconfirmed'
                 or record.get('status') in ('cleanup_failed', 'cleanup_unconfirmed')
                 or receipt and (record.get('confirmed') is False
                                 or record.get('status') in ('failed', 'unconfirmed'))):

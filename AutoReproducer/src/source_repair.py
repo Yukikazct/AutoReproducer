@@ -35,6 +35,41 @@ _HYPERPARAMETER_TOKENS = {
     'bagging', 'fraction', 'bootstrap',
 }
 
+# These legacy collections exports were aliases of the same ABC objects in
+# collections.abc. Moving their import preserves types and computations; this
+# is not permission for the model to substitute arbitrary dependencies/APIs.
+_COLLECTIONS_ABCS = frozenset({
+    'Awaitable', 'Coroutine', 'AsyncIterable', 'AsyncIterator', 'AsyncGenerator',
+    'Hashable', 'Iterable', 'Iterator', 'Generator', 'Reversible', 'Sized',
+    'Container', 'Callable', 'Collection', 'Set', 'MutableSet', 'Mapping',
+    'MutableMapping', 'MappingView', 'KeysView', 'ItemsView', 'ValuesView',
+    'Sequence', 'MutableSequence', 'ByteString',
+})
+
+
+def _moved_collections_import(node):
+    return (isinstance(node, ast.ImportFrom) and node.level == 0
+            and node.module == 'collections' and node.names
+            and all(alias.name in _COLLECTIONS_ABCS for alias in node.names))
+
+
+def _missing_collections_abc(terminal, workspace=None):
+    match = re.fullmatch(
+        r"ImportError: cannot import name ['\"]([A-Za-z_]\w*)['\"] from ['\"]collections['\"] \(([^\n]+)\)",
+        terminal)
+    if not match or match[1] not in _COLLECTIONS_ABCS:
+        return ''
+    # A repository-local module named collections is not the stdlib alias.
+    # Require the actual import failure to identify the standard-library path.
+    origin = Path(match[2])
+    normalized = origin.as_posix().replace('\\', '/').casefold()
+    if (not origin.is_absolute() or not origin.is_file()
+            or not re.search(r'/lib/(?:python\d+\.\d+/)?collections/__init__\.py$', normalized)):
+        return ''
+    if workspace is not None and origin.resolve().is_relative_to(Path(workspace).resolve()):
+        return ''
+    return match[1]
+
 
 def _sensitive(name):
     # Keyword renaming can silently turn a seed or learning rate into an
@@ -44,6 +79,10 @@ def _sensitive(name):
     words = re.sub(r'([a-z0-9])([A-Z])', r'\1_\2', name).casefold().split('_')
     return (_SENSITIVE.search(name) or name.casefold() in _PROTOCOL_NAMES
             or bool(set(words) & _HYPERPARAMETER_TOKENS))
+
+
+def _compatibility_policy(names):
+    return PatchPolicy(editable=names, compatibility_source_files=names)
 
 
 def normalize_source_repair_request(request):
@@ -68,7 +107,7 @@ def normalize_source_repair_request(request):
         if not isinstance(value, str) or value != value.strip() or any(c in value for c in '*?[]'):
             raise ValueError('修复白名单必须是精确的相对源码路径，不支持通配符或目录。')
         name = relative_path(value, 'repair source', forbid_git=True).as_posix()
-        if Path(name).suffix.lower() != '.py' or not PatchPolicy(editable=[name]).decide(name).allowed:
+        if Path(name).suffix.lower() != '.py' or not _compatibility_policy([name]).decide(name).allowed:
             raise ValueError('修复白名单不能包含数据、评测、权重或其他受保护文件：' + name)
         if name.casefold() in seen:
             raise ValueError('修复白名单包含重复文件：' + name)
@@ -101,13 +140,15 @@ def _automatic_repair_sources(execution, workspace, snapshot, allowed=()):
         return result
     attribute = re.fullmatch(r"AttributeError: .+ has no attribute ['\"]([A-Za-z_]\w*)['\"](?:[. ].*)?", terminal)
     keyword = re.fullmatch(r"TypeError: .+ got an unexpected keyword argument ['\"]([A-Za-z_]\w*)['\"](?:[. ].*)?", terminal)
+    moved_import = _missing_collections_abc(terminal, workspace)
     matched = attribute or keyword
-    if matched is None or _sensitive(matched[1]):
-        result['reason'] = '最终报错不是可自动修复的非协议敏感属性或关键字兼容错误。'
+    if not moved_import and (matched is None or _sensitive(matched[1])):
+        result['reason'] = '最终报错不是可自动修复的非协议敏感属性、关键字或已知标准库导入迁移错误。'
         return result
-    symbol = matched[1]
+    symbol = moved_import or matched[1]
     result.update(missing_names=[symbol], exception=terminal,
-                  compatibility_kind='attribute' if attribute else 'keyword')
+                  compatibility_kind='import_location' if moved_import else
+                                     'attribute' if attribute else 'keyword')
     inventory = snapshot.get('files') or {}
     frames = traceback_sources(trace, workspace, inventory)
     result['traceback_frames'] = [{'path': name, 'line': line} for name, line in frames]
@@ -122,7 +163,7 @@ def _automatic_repair_sources(execution, workspace, snapshot, allowed=()):
             reason = 'not_python_source'
         elif allowed and name not in allowed:
             reason = 'outside_explicit_scope'
-        elif not PatchPolicy(editable=[name]).decide(name, workspace=str(workspace)).allowed:
+        elif not _compatibility_policy([name]).decide(name, workspace=str(workspace)).allowed:
             reason = 'protected_or_oversized_source'
         else:
             try:
@@ -133,9 +174,15 @@ def _automatic_repair_sources(execution, workspace, snapshot, allowed=()):
                     reason = 'source_hash_changed'
                 else:
                     tree = ast.parse(raw)
-                    present = any((isinstance(node, ast.Attribute) and node.attr == symbol)
-                                  if attribute else (isinstance(node, ast.keyword) and node.arg == symbol)
-                                  for node in ast.walk(tree))
+                    if moved_import:
+                        present = any(_moved_collections_import(node)
+                                      and any(alias.name == symbol for alias in node.names)
+                                      and node.lineno <= line <= getattr(node, 'end_lineno', node.lineno)
+                                      for node in ast.walk(tree))
+                    else:
+                        present = any((isinstance(node, ast.Attribute) and node.attr == symbol)
+                                      if attribute else (isinstance(node, ast.keyword) and node.arg == symbol)
+                                      for node in ast.walk(tree))
                     if not present:
                         reason = 'missing_api_not_in_source'
             except (OSError, ValueError, SyntaxError):
@@ -171,7 +218,9 @@ def _compatibility_shape(source):
     """
     tree = ast.parse(source)
     for node in ast.walk(tree):
-        if isinstance(node, ast.Attribute) and not _sensitive(node.attr):
+        if _moved_collections_import(node):
+            node.module = 'collections.abc'
+        elif isinstance(node, ast.Attribute) and not _sensitive(node.attr):
             node.attr = '_compatibility_api'
         elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and not _sensitive(node.name):
             node.name = '_compatibility_api'
@@ -193,6 +242,8 @@ def validate_compatibility_proposal(original, files, diagnostic):
     """Check the entire set before application, against actual missing API names."""
     missing = set(re.findall(r"(?:has no attribute|unexpected keyword argument) ['\"]([A-Za-z_]\w*)['\"]",
                              diagnostic))
+    moved_imports = {_missing_collections_abc(line, original) for line in diagnostic.splitlines()}
+    moved_imports.discard('')
     for change in files:
         name = change['path']
         before = workspace_path(original, name, 'original compatibility source', must_exist=True).read_bytes()
@@ -200,6 +251,10 @@ def validate_compatibility_proposal(original, files, diagnostic):
         if _compatibility_shape(before) != _compatibility_shape(after):
             raise ValueError('兼容补丁改变了变量、字面量、运算、控制流、依赖或训练/划分/评测结构：' + name)
         for old, new in zip(ast.walk(ast.parse(before)), ast.walk(ast.parse(after))):
+            if isinstance(old, ast.ImportFrom) and old.module != new.module:
+                if (not _moved_collections_import(old) or new.module != 'collections.abc'
+                        or not any(alias.name in moved_imports for alias in old.names)):
+                    raise ValueError('补丁迁移了实际报错未指向的标准库导入：' + name)
             field = ('attr' if isinstance(old, ast.Attribute) else 'name'
                      if isinstance(old, (ast.FunctionDef, ast.AsyncFunctionDef)) else 'arg'
                      if isinstance(old, ast.keyword) else None)
@@ -216,6 +271,11 @@ def _frozen_data(provenance):
             files[source['target']] = {key: source[key] for key in ('sha256', 'bytes')}
         elif source.get('kind') == 'author_loader' and source.get('verified'):
             files.update(source.get('files', {}))
+    for recovered in provenance.get('recovered_files', []):
+        record = {key: recovered[key] for key in ('sha256', 'bytes')}
+        if recovered['target'] in files and files[recovered['target']] != record:
+            raise ValueError('自动恢复的数据与已冻结输入冲突')
+        files[recovered['target']] = record
     return files
 
 
@@ -257,12 +317,15 @@ def repair_author_failure(runner, llm, request, plan, snapshot, workspace, run_d
         return _repair_author_failure(runner, llm, request, plan, snapshot, workspace, run_dir,
                                       data, execution, verify_inputs, on_event)
     except BaseException as exc:
-        if state.get('status') != 'rollback_failed':
+        if state.get('status') not in {'rollback_failed', 'cleanup_unconfirmed'}:
             state.update(status='failed' if isinstance(exc, Exception) else 'interrupted',
                          reason=str(exc) or type(exc).__name__)
         raise
     finally:
         try:
+            if state.get('status') == 'cleanup_unconfirmed':
+                state.update(workspace_retained=True, process_cleanup_confirmed=False,
+                             effective_source_files={})
             collaboration = current_collaboration()
             if collaboration is not None:
                 collaboration.attach(data)
@@ -305,6 +368,9 @@ def _repair_author_failure(runner, llm, request, plan, snapshot, workspace, run_
     from src.repository_repairer import (RepositoryRepairer, MAX_REPAIR_WORKSPACE_BYTES,
                                          MAX_REPAIR_WORKSPACE_FILES)
     state = data['source_repair']
+    if RepositoryRepairer._interrupted(execution):
+        state.update(status='not_applicable', reason='运行已取消、超时或进程清理未确认，不能继续源码修复。')
+        return {**execution, 'success': False} if execution.get('success') else execution
     if execution.get('success'):
         state['status'] = 'not_needed'
         write_json(run_dir / 'source_repair.json', state)
@@ -342,6 +408,14 @@ def _repair_author_failure(runner, llm, request, plan, snapshot, workspace, run_
     target = run_dir / 'repair_workspace'
     initial_files = dict(snapshot['files'])
     frozen_data = _frozen_data(data['dataset_provenance'])
+    from src.source_repair_runtime import original_observation, observed_input_files
+    observation_config = original_observation(workspace, plan, snapshot, data['spec_sha256'])
+    if observation_config is not None:
+        for name, record in observed_input_files(workspace, observation_config).items():
+            if name in frozen_data and any(frozen_data[name].get(key) != record.get(key)
+                                          for key in ('sha256', 'bytes')):
+                raise ValueError('已观测兼容输入与冻结数据冲突：' + name)
+            frozen_data[name] = record
     for name, record in frozen_data.items():
         if name in initial_files and initial_files[name] != record['sha256']:
             raise ValueError('冻结源码与数据的路径冲突：' + name)
@@ -435,8 +509,33 @@ def _repair_author_failure(runner, llm, request, plan, snapshot, workspace, run_
         validate_compatibility_changes(workspace, root, files)
         expected = {**initial_files, **{change['path']: change['sha256'] for change in files}}
         _verify_files(root, expected)
+        if observation_config is not None:
+            from src.author_execution_plan import verify_author_execution
+            from src.discovered_repository_runtime import CAPTURE_DIR
+            observation = state['observation']
+            _verify_files(root, observation['generated_files'])
+            observation['validation'] = verify_author_execution(plan, root, _execution, data['spec_sha256'])
+            observation['receipt_files'] = {
+                f"{CAPTURE_DIR}/author_{step['id']}.json": digest(root / CAPTURE_DIR / f"author_{step['id']}.json")
+                for step in plan['steps']}
         current_files.clear()
         current_files.update(expected)
+
+    def execute_observed_candidate(root, files, effective_environment, notify):
+        from src.source_repair_runtime import COMPATIBILITY_FIELDS, materialize_candidate_observation
+        verify_inputs()
+        effective_sources = {**snapshot['files'], **{file['path']: file['sha256'] for file in files}}
+        _verify_files(root, {**initial_files, **effective_sources})
+        materialized = materialize_candidate_observation(workspace, root, plan, snapshot,
+            data['spec_sha256'], observation_config, effective_sources, frozen_data)
+        for step in materialized['steps']:
+            step['env'] = _relocate_environment(original_steps[step['id']].get('env', {}), workspace, root)[0]
+        observed_plan = build_plan(profile='source_repair_observed_author_experiment', spec_sha256=data['spec_sha256'],
+            workspace=root, repository=plan['repository'], dataset=data['dataset_provenance'], steps=materialized['steps'])
+        state['observation'] = {'generated_files': materialized['files'], 'execution_plan': observed_plan,
+            'original_compatibility': {field: deepcopy(observation_config.get(field, [])) for field in COMPATIBILITY_FIELDS}}
+        write_json(run_dir / 'source_repair_observation.json', state['observation'])
+        return runner.run(root, observed_plan, effective_environment, on_event=notify)
 
     result = None
     collaboration = current_collaboration()
@@ -457,11 +556,13 @@ def _repair_author_failure(runner, llm, request, plan, snapshot, workspace, run_
         editable = request['source_repair_editable']
         if automatic:
             editable = explicit_scope or [name for name in snapshot['files']
-                if Path(name).suffix.lower() == '.py' and PatchPolicy(editable=[name]).decide(
+                if Path(name).suffix.lower() == '.py' and _compatibility_policy([name]).decide(
                     name, workspace=str(target)).allowed]
         options = {'select_sources': select_sources} if automatic else {}
+        if observation_config is not None:
+            options['execute_candidate'] = execute_observed_candidate
         result = runner.run_with_repairs(target, repaired_plan, environment, llm=llm,
-            editable=editable, max_rounds=2, **options,
+            editable=editable, compatibility_source_files=editable, max_rounds=2, **options,
             initial_execution=execution, verify_candidate=verify_candidate,
             validate_patches=validate_patches, on_event=on_event)
         state.update(status=result.get('repair_status', 'not_applicable'),
@@ -469,27 +570,42 @@ def _repair_author_failure(runner, llm, request, plan, snapshot, workspace, run_
                      records_path=result.get('repair_records', ''), report_path=result.get('repair_report', ''))
         state['changed_files'] = [change for attempt in state['attempts'] if attempt['status'] == 'succeeded'
                                   for change in attempt.get('changed_files', [])]
+        if state['status'] == 'cleanup_unconfirmed':
+            state.update(workspace_retained=True, process_cleanup_confirmed=False,
+                         effective_source_files={},
+                         reason='修复进程清理未确认，保留隔离副本与日志，暂不回滚或继续运行。')
         if any(attempt.get('execution', {}).get('executed') for attempt in state['attempts']):
             data['execution_source'] = 'patched_author_repository'
             data['reproduction_scope'] = 'patched_author_code_execution'
             result['source_modified'] = True
-        state['effective_source_files'] = {name: current_files[name] for name in snapshot['files']}
+        if state['status'] != 'cleanup_unconfirmed':
+            state['effective_source_files'] = {name: current_files[name] for name in snapshot['files']}
         if result.get('success'):
             verify_inputs()
             _verify_files(target, current_files)
+            from src.author_self_repair import record_repair, verify_repair_result
+            record_repair(run_dir, data, on_event, execution, 'repair_compatibility_source',
+                          'AI 已在隔离副本中修复实际报错的兼容接口，并重跑完整原作者命令。')
+            verify_repair_result(run_dir, data, on_event, result)
             state['manifest_path'] = str(run_dir / 'source_repair_manifest.json')
+            if observation_config is not None:
+                repaired_plan = state['observation']['execution_plan']
+                write_json(run_dir / 'source_repair_execution_plan.json', repaired_plan)
+                write_json(run_dir / 'source_repair_observation.json', state['observation'])
             write_json(run_dir / 'source_repair_manifest.json', {
                 'scope': 'patched_author_code_execution', 'repository': plan['repository'],
                 'original_source_files': snapshot['files'], 'effective_source_files': state['effective_source_files'],
                 'changed_files': state['changed_files'], 'spec_sha256': data['spec_sha256'],
                 'prepared_runtime': prepared_runtime,
-                'execution_plan': repaired_plan, 'frozen_input_files': frozen_data})
+                'execution_plan': repaired_plan, 'frozen_input_files': frozen_data,
+                **({'observation': state['observation'], 'original_author_steps': plan['steps']}
+                   if observation_config is not None else {})})
             state['manifest_sha256'] = digest(run_dir / 'source_repair_manifest.json')
             data['original_execution_plan'] = data['execution_plan']
             data['execution_plan'] = repaired_plan
             data['execution_source'] = 'patched_author_repository'
             data['reproduction_scope'] = 'patched_author_code_execution'
-        elif state['status'] != 'rollback_failed':
+        elif state['status'] not in {'rollback_failed', 'cleanup_unconfirmed'}:
             _verify_files(target, initial_files)
         return result
     except (KeyboardInterrupt, SystemExit):
@@ -544,7 +660,7 @@ def verify_repaired_execution(plan, data, execution):
                 or Path(actual.get('cwd', '')).resolve() != expected_cwd.resolve()
                 or actual.get('kind') != original['kind'] or actual.get('required') != original['required']):
             raise ValueError('修复后的运行记录改变了冻结命令、目录或步骤要求')
-    return {'status': 'author_code_completed', 'result_level': 'author_code_completed',
+    validation = {'status': 'author_code_completed', 'result_level': 'author_code_completed',
         'execution_status': 'author_code_completed', 'is_reproduced': None,
         'paper_metrics_verified': False, 'protocol_pass': None, 'independent_metrics_pass': None,
         'training_observed': False, 'source_modified': True,
@@ -554,3 +670,18 @@ def verify_repaired_execution(plan, data, execution):
                               'owned_processes_finished': True, 'observed_training_updates': False},
         'warnings': ['执行使用明确授权的兼容性源码补丁；未独立核验算法语义、训练更新或论文数值。'],
         'reason': '兼容性源码修改后的完整原命令已正常结束；原始来源保留，尚未判定论文数值复现。'}
+    observation = frozen.get('observation')
+    if observation is not None:
+        from src.author_execution_plan import verify_author_execution
+        if frozen.get('original_author_steps') != plan['steps']:
+            raise ValueError('源码修复观测改变了冻结的原始作者命令。')
+        _verify_files(state['workspace'], observation['generated_files'])
+        _verify_files(state['workspace'], observation['receipt_files'])
+        observed = verify_author_execution(plan, state['workspace'], execution, data['spec_sha256'])
+        if observed != observation['validation']:
+            raise ValueError('源码修复的训练观测与完成凭据不一致。')
+        validation.update(observed, source_modified=True,
+            source_repair_manifest_sha256=state['manifest_sha256'],
+            warnings=['执行使用经过校验的兼容性源码补丁；训练与输出已观测，尚未独立核验算法语义或论文数值。'],
+            reason='兼容性源码修改后的完整原命令已自然结束，并保留实际训练与输出观测；尚未判定论文数值复现。')
+    return validation

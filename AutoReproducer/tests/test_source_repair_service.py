@@ -95,6 +95,21 @@ def repair_case(tmp_path):
             "plan": plan, "data": data, "runner": runner, "initial": initial, "run": run, "verify": verify}
 
 
+def test_source_repair_copy_retains_automatically_recovered_inputs(repair_case):
+    case = repair_case
+    original = case['data']['dataset_provenance']['sources'].pop()
+    case['data']['dataset_provenance']['recovered_files'] = [original]
+    case['data']['self_repair'] = {'status': 'blocked', 'attempts': []}
+    result = case['run']()
+    assert result['success']
+    assert case['data']['self_repair']['status'] == 'resolved'
+    assert case['data']['self_repair']['attempts'][-1]['action'] == 'repair_compatibility_source'
+    target = Path(case['data']['source_repair']['workspace']) / original['target']
+    assert digest(target) == original['sha256']
+    assert target.stat().st_size == original['bytes']
+    case['verify']()
+
+
 def test_real_two_file_repair_preserves_original_sources_commands_and_evidence(repair_case):
     case = repair_case
     original_plan = deepcopy(case["data"]["execution_plan"])
@@ -290,8 +305,34 @@ def test_two_failed_rounds_leave_clean_copy_and_original_failure_evidence(repair
     for name, sha in case["snapshot"]["files"].items():
         assert digest(Path(state["workspace"]) / name) == sha
     assert "Status: failed" in Path(state["report_path"]).read_text(encoding="utf-8")
-    assert all(attempt["status"] == "failed" for attempt in state["attempts"])
+    assert [attempt["status"] for attempt in state["attempts"]] == ["failed", "repeated_candidate"]
+    assert sum('execution' in attempt for attempt in state['attempts']) == 1
     case["verify"]()
+
+
+def test_unconfirmed_candidate_cleanup_preserves_copy_without_claiming_restoration(repair_case, monkeypatch):
+    case = repair_case
+    run = case['runner'].run
+
+    def unconfirmed(*args, **kwargs):
+        result = run(*args, **kwargs)
+        # The child actually exited in this regression; simulate an uncertain
+        # cleanup receipt without leaving a process behind in the test suite.
+        result.update(success=False, cleanup_unconfirmed=True, process_cleanup_confirmed=False)
+        return result
+
+    monkeypatch.setattr(case['runner'], 'run', unconfirmed)
+    llm = CompatibilityLLM()
+    result = case['run'](llm)
+    assert result['success'] is False and len(llm.calls) == 1
+    state = case['data']['source_repair']
+    assert state['status'] == 'cleanup_unconfirmed'
+    assert state['workspace_retained'] and state['process_cleanup_confirmed'] is False
+    assert state['effective_source_files'] == {} and not state.get('manifest_path')
+    assert '.items()' in (Path(state['workspace']) / 'model.py').read_text(encoding='utf-8')
+    assert state['attempts'][0]['rollback_deferred']
+    assert read_json(case['run_dir'] / 'source_repair.json')['status'] == 'cleanup_unconfirmed'
+    case['verify']()
 
 
 @pytest.mark.parametrize("replacement", [
@@ -502,7 +543,8 @@ def test_real_service_two_file_repair_keeps_pinned_export_and_labels_report(
     assert data["validation"]["source_modified"] is True
     assert data["validation"]["is_reproduced"] is None
     assert data["validation"]["paper_metrics_verified"] is False
-    assert data["validation"]["training_observed"] is False
+    assert data["validation"]["training_observed"] is True
+    assert data['validation']['author_execution'][0]['optimizer_steps'] == 40
     assert data["validation"]["author_claim_comparison"]["basis"] == "patched_author_output"
     assert data["validation"]["author_claim_comparison"]["source_modified"] is True
     assert data["execution_source"] == "patched_author_repository"
@@ -514,8 +556,9 @@ def test_real_service_two_file_repair_keeps_pinned_export_and_labels_report(
     state = data["source_repair"]
     assert {change["path"] for change in state["changed_files"]} == {"train.py", "author_model.py"}
     assert Path(state["manifest_path"]).is_file()
-    assert data["execution_plan"]["steps"][0]["argv"] == fixture["proposal"]["steps"][0]["argv"]
-    assert data["execution_plan"]["steps"][0]["cwd"] == fixture["proposal"]["steps"][0]["cwd"]
+    assert data['validation']['author_execution'][0]['step']['argv'] == fixture['proposal']['steps'][0]['argv']
+    assert data['validation']['author_execution'][0]['step']['cwd'] == fixture['proposal']['steps'][0]['cwd']
+    assert data['execution_plan'] == state['observation']['execution_plan']
     report = (Path(data["run_dir"]) / "report.md").read_text(encoding="utf-8")
     assert report == data["report"]
     assert "source_repair" in report or "源码修复" in report

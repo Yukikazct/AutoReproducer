@@ -47,10 +47,23 @@ def archive_repair_evidence(run_dir, data):
         members[name] = (private, private != raw, hashlib.sha256(raw).hexdigest())
 
     for name in ('source_repair.json', 'source_repair_execution_plan.json', 'source_repair_manifest.json',
+                 'source_repair_observation.json',
                  'original_execution.json', 'repository.json', 'experiment_spec.json', 'execution_plan.json'):
         path = workspace_path(root, name, 'repair evidence')
         if path.is_file():
             add(name, path)
+    observation = state.get('observation')
+    if state.get('status') == 'succeeded' and observation:
+        candidate = Path(filesystem_path(Path(state['workspace']).absolute()))
+        evidence_files = {**observation['generated_files'], **observation['receipt_files']}
+        for receipt in observation['validation'].get('author_execution', []):
+            for output in receipt.get('output_files', []):
+                evidence_files[output['captured_path']] = output['captured_sha256']
+        for relative, expected in evidence_files.items():
+            path = workspace_path(candidate, relative, 'repair observation evidence', must_exist=True)
+            if hashlib.sha256(path.read_bytes()).hexdigest() != expected:
+                raise ValueError('源码修复观测证据哈希发生变化：' + relative)
+            add('observation/' + relative, path)
     records_path = state.get('records_path')
     if records_path:
         relative = Path(filesystem_path(Path(records_path).absolute())).relative_to(

@@ -1158,7 +1158,11 @@ def _steps(items, citations, packet, workspace, *, device=None):
                        "depends_on": list(dependencies), "citations": [key for key in item.get('citations', []) if key in citations],
                        "required": True, **({'output_directories': prepared} if prepared else {})})
         seen.add(identifier)
-    if (not packet.get('author_execution_only') and total > 7200) or sum(step["kind"] == "train" for step in result) != 1:
+    training_count = sum(step["kind"] == "train" for step in result)
+    if packet.get('author_execution_only'):
+        if not 1 <= training_count <= 4:
+            raise PlanEvidenceError('Author execution supports one to four ordered original training stages')
+    elif total > 7200 or training_count != 1:
         raise PlanEvidenceError("Initial discovery supports one complete training run within 7200 seconds")
     return result
 

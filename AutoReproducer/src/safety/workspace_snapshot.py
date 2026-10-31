@@ -20,7 +20,7 @@ import tempfile
 from pathlib import Path
 from typing import Dict, Iterable, List, Mapping, Optional, Tuple
 
-from src.safety.paths import is_link, workspace_path
+from src.safety.paths import filesystem_path, is_link, workspace_path
 
 # 快照条目的类型别名：{rel_path: {"sha256": str, "content": bytes}}
 Snapshot = Dict[str, Dict[str, object]]
@@ -44,7 +44,7 @@ def iter_workspace_files(root: Path, skip_dirs: Optional[Iterable[str]] = None,
     """遍历工作区内的普通文件（跳过 .git、缓存目录与临时文件）。"""
     skip_dirs = set(_DEFAULT_SKIP_DIRS if skip_dirs is None else skip_dirs)
     skip_files = set(_DEFAULT_SKIP_FILES if skip_files is None else skip_files)
-    root = workspace_path(root, ".", "snapshot root", must_exist=True)
+    root = Path(filesystem_path(workspace_path(root, ".", "snapshot root", must_exist=True)))
     if not root.is_dir():
         raise ValueError("snapshot root must be a directory")
 
@@ -66,7 +66,7 @@ def iter_workspace_files(root: Path, skip_dirs: Optional[Iterable[str]] = None,
 def snapshot_workspace(root: Path, skip_dirs: Optional[Iterable[str]] = None,
                        skip_files: Optional[Iterable[str]] = None) -> Snapshot:
     """对工作区生成 {相对路径: {"sha256": 指纹, "content": 内容}} 快照。"""
-    root = workspace_path(root, ".", "snapshot root", must_exist=True)
+    root = Path(filesystem_path(workspace_path(root, ".", "snapshot root", must_exist=True)))
     snap: Snapshot = {}
     for f in iter_workspace_files(root, skip_dirs=skip_dirs, skip_files=skip_files):
         rel = f.relative_to(root).as_posix()
@@ -195,7 +195,7 @@ def restore_snapshot(root: Path, snapshot: Snapshot,
     - 快照中存在、但当前缺失或内容不符 -> 重建为快照版本（记入 restored）；
     - 快照后新增的文件 -> 删除（记入 removed）。
     """
-    root = workspace_path(root, ".", "snapshot root", must_exist=True)
+    root = Path(filesystem_path(workspace_path(root, ".", "snapshot root", must_exist=True)))
     restored: List[str] = []
     removed: List[str] = []
 

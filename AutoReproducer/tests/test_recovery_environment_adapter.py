@@ -199,7 +199,15 @@ def test_successive_missing_modules_do_not_reset_shared_repair_budget(tmp_path, 
 
 def test_cancelled_dependency_recovery_preserves_meter_and_confirms_cleanup(tmp_path, frozen_products):
     adapter, case, workspace, environment, config = setup_environment(tmp_path, frozen_products)
-    adapter.cancel_check = lambda: (environment / 'recovery/runtime_repair_environment.json').exists()
+    def cancel_after_charged_repair():
+        # The proposed environment is written before the repair is charged.
+        # Cancel at the durable accounting boundary this test asserts.
+        try:
+            checkpoint = json.loads((environment / 'recovery_meter.json').read_text('utf-8'))
+            return checkpoint['usage']['repair_actions'] >= 1
+        except (OSError, ValueError, KeyError):
+            return False
+    adapter.cancel_check = cancel_after_charged_repair
     result = run(adapter, case, workspace, environment, config)
     assert result['claimed_success'] is False
     assert result['cancelled'] is True

@@ -86,6 +86,7 @@ class RepoCandidate:
     score_hint: int = 0
     stars: int = 0
     paper_id: str = ""
+    evidence_url: str = ""
 
     def to_dict(self) -> Dict:
         payload = {
@@ -93,7 +94,7 @@ class RepoCandidate:
             "source": self.source,
             "score_hint": self.score_hint,
         }
-        for key in ("title", "repo_name", "description", "stars", "paper_id"):
+        for key in ("title", "repo_name", "description", "stars", "paper_id", "evidence_url"):
             value = getattr(self, key)
             if value:
                 payload[key] = value
@@ -324,8 +325,9 @@ def _search_github(query: str, limit: int = 5,
         f"?q={urllib.parse.quote(query)}&sort=stars&order=desc"
         f"&per_page={limit}",
         timeout, headers)
-    if err or data is None:
-        return [], err or "search failed"
+    if err or data is None or not (isinstance(data, dict) and data.get('items')):
+        candidates, web_error = _search_github_web(query, limit=limit, timeout=timeout)
+        return candidates, ' | '.join(filter(None, [err, web_error]))
     repos = data.get("items", []) if isinstance(data, dict) else []
     candidates: List[RepoCandidate] = []
     for repo in repos[:limit]:
@@ -346,6 +348,35 @@ def _search_github(query: str, limit: int = 5,
                 int(repo.get("stargazers_count") or 0)),
         ))
     return candidates, ""
+
+
+def _search_github_web(query, limit=5, timeout=8.0):
+    """Recover from API limits using observed public results, never guessed URLs."""
+    from src.agents.github_web_search import search_repository_page
+    prefix = re.split(r'[:：]', clean_paper_title(query), maxsplit=1)[0].strip()
+    queries = [query]
+    if prefix != query and 2 <= len(prefix) <= 80:
+        queries.append(prefix)
+    errors = []
+    for current in queries:
+        repos, evidence_url, error = search_repository_page(current, limit=limit, timeout=timeout)
+        if error:
+            errors.append(error)
+        candidates = []
+        for repo in repos:
+            full_name = repo['full_name']
+            score = github_repo_search_score(query, full_name, repo['description'], repo['stargazers_count'])
+            if re.sub(r'\W+', '', repo['name']).casefold() == re.sub(r'\W+', '', prefix).casefold():
+                score += 30
+            candidate = RepoCandidate(title=repo['name'], repo_name=full_name,
+                description=repo['description'], repo_urls=['https://github.com/' + full_name],
+                source='github_search_web', stars=repo['stargazers_count'], score_hint=score,
+                evidence_url=evidence_url)
+            if is_trusted_repo_candidate(query, candidate):
+                candidates.append(candidate)
+        if candidates:
+            return candidates, ' | '.join(errors)
+    return [], ' | '.join(errors)
 
 
 # ---------------- 主发现函数 ----------------
@@ -407,6 +438,8 @@ def discover_repositories(query: str,
                 build_github_fallback_queries(query)[0] or query,
                 timeout=timeout)
             if gh_candidates:
+                if any(candidate.source == 'github_search_web' for candidate in gh_candidates):
+                    chain.append('github_search_web')
                 fallback_used = True
                 candidates.extend(gh_candidates)
 

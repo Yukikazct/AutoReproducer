@@ -10,7 +10,7 @@ import stat
 import tempfile
 
 from src.safety.patch_policy import MAX_PATCH_FILES_PER_CANDIDATE, PatchPolicy
-from src.safety.paths import workspace_path
+from src.safety.paths import filesystem_path, workspace_path
 from src.safety.workspace_snapshot import restore_snapshot, snapshot_workspace
 
 
@@ -18,7 +18,9 @@ class PatchTransaction:
     """All-or-nothing candidate with rollback unless the caller explicitly commits.
 
     The caller owns the isolated workspace and must stop its processes before
-    entering or leaving the transaction. Shared repository caches are unsuitable.
+    entering or leaving the transaction. If cleanup cannot be confirmed after
+    execution, defer_rollback retains the uncommitted candidate for later cleanup.
+    Shared repository caches are unsuitable.
     Only existing regular source files can be replaced; additions/deletions and
     executable commands are deliberately outside the proposal format.
     """
@@ -32,6 +34,8 @@ class PatchTransaction:
         self.restored = []
         self.removed = []
         self.rollback_error = None
+        self.rollback_deferred = False
+        self.rollback_deferred_reason = None
         if not isinstance(patches, list) or not 1 <= len(patches) <= MAX_PATCH_FILES_PER_CANDIDATE:
             raise ValueError(f"a candidate requires 1-{MAX_PATCH_FILES_PER_CANDIDATE} patches")
         seen = set()
@@ -50,6 +54,28 @@ class PatchTransaction:
                 raise ValueError(f"patch target is not a regular file: {decision.path}")
             content = patch.get("content")
             base = patch.get("base_sha256")
+            if 'edits' in patch:
+                if 'content' in patch or not isinstance(patch['edits'], list) or not 1 <= len(patch['edits']) <= 16:
+                    raise ValueError('patch needs either complete content or one to sixteen exact edits')
+                content = path.read_bytes().decode('utf-8')
+                for index, edit in enumerate(patch['edits'], 1):
+                    if not isinstance(edit, dict) or set(edit) - {'before', 'after', 'count'}:
+                        raise ValueError('each exact edit needs before, after and optional occurrence count')
+                    before, after, count = edit.get('before'), edit.get('after'), edit.get('count', 1)
+                    if (not isinstance(before, str) or not before or not isinstance(after, str)
+                            or type(count) is not int or not 1 <= count <= 32
+                            or content.count(before) != count):
+                        found = content.count(before) if isinstance(before, str) and before else 0
+                        remaining = [f"edit {number}: requested {item.get('count', 1)}, actual {content.count(item['before'])}"
+                                     for number, item in enumerate(patch['edits'], 1)
+                                     if number >= index and isinstance(item, dict)
+                                     and isinstance(item.get('before'), str) and item['before']]
+                        raise ValueError(f'exact edit occurrence count mismatch in {decision.path}, edit {index}: '
+                            f'requested {count}, actual {found}; before={str(before)[:160]!r}. '
+                            'Each edit replaces ALL matches; do not duplicate or overlap a replaced fragment. '
+                            'Remaining counts at this failure state (later edits may change after earlier replacements): '
+                            + '; '.join(remaining))
+                    content = content.replace(before, after)
             if not isinstance(content, str) or not isinstance(base, str) or not re.fullmatch(r"[0-9a-f]{64}", base):
                 raise ValueError("patch requires text content and an exact base_sha256")
             raw = content.encode("utf-8")
@@ -107,13 +133,27 @@ class PatchTransaction:
     def commit(self):
         if self.snapshot is None:
             raise RuntimeError("the patch transaction has not started")
+        if self.rollback_deferred:
+            raise RuntimeError("a candidate awaiting process cleanup cannot be committed")
         self.committed = True
+
+    def defer_rollback(self, reason):
+        """Retain an uncommitted tree while its process cleanup is unconfirmed."""
+        if self.snapshot is None or self.committed:
+            raise RuntimeError("only an active uncommitted candidate can defer rollback")
+        if not isinstance(reason, str) or not reason.strip():
+            raise ValueError("deferred rollback requires a reason")
+        self.rollback_deferred = True
+        self.rollback_deferred_reason = reason
 
     def _rollback(self, original_error=None):
         try:
             self.restored, self.removed = restore_snapshot(self.root, self.snapshot)
-            for file in self.files:
-                self._invalidate_bytecode(file["path"])
+            # Snapshots intentionally omit caches. Generated observer/helpers
+            # removed by rollback must lose their bytecode as well; otherwise
+            # a later candidate inherits files from the failed execution.
+            for relative in {file['path'] for file in self.files} | set(self.removed):
+                self._invalidate_bytecode(relative)
         except BaseException as exc:
             self.rollback_error = f"{type(exc).__name__}: {exc}"
             if original_error is not None:
@@ -125,17 +165,18 @@ class PatchTransaction:
         source = Path(relative)
         if source.suffix.lower() != ".py":
             return
-        directory = workspace_path(self.root, source.parent / "__pycache__", "bytecode cache", forbid_git=True)
+        root = Path(filesystem_path(self.root))
+        directory = workspace_path(root, source.parent / "__pycache__", "bytecode cache", forbid_git=True)
         candidates = list(directory.iterdir()) if directory.is_dir() else []
         candidates = [file for file in candidates if file.name.startswith(source.stem + ".")
                       and file.suffix == ".pyc"]
-        candidates.extend(self.root / source.with_suffix(extension) for extension in (".pyc", ".pyo"))
+        candidates.extend(root / source.with_suffix(extension) for extension in (".pyc", ".pyo"))
         for candidate in candidates:
-            checked = workspace_path(self.root, candidate.relative_to(self.root), "bytecode cache", forbid_git=True)
+            checked = workspace_path(root, candidate.relative_to(root), "bytecode cache", forbid_git=True)
             if checked.is_file():
                 checked.unlink()
 
     def __exit__(self, error_type, error, traceback):
-        if error is not None or not self.committed:
+        if not self.rollback_deferred and (error is not None or not self.committed):
             self._rollback(error)
         return False

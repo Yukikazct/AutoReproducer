@@ -208,6 +208,54 @@ def test_fragmented_numeric_columns_retry_real_geometry_extraction(monkeypatch, 
     assert document.sha256 == hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def test_real_two_column_fallback_keeps_sentences_and_table_rows(monkeypatch, tmp_path):
+    path = write_pdf(tmp_path / 'two-columns.pdf', ['Two column paper'])
+    from PyPDF2 import PdfReader
+    writer = PdfWriter()
+    writer.add_page(PdfReader(path).pages[0])
+    stream = DecodedStreamObject()
+    stream.set_data(b'\n'.join([
+        b'BT /F1 10 Tf 45 720 Td (Independent left column.) Tj',
+        b'0 -14 Td (This is unrelated training prose.) Tj',
+        b'0 -14 Td (It must remain in its own paragraph.) Tj ET',
+        b'BT /F1 10 Tf 320 720 Td (We report mean test accuracy) Tj',
+        b'0 -14 Td (with standard deviation over 7 runs.) Tj',
+        b'0 -28 Td (Method Dataset-A Dataset-B) Tj',
+        b'0 -14 Td (Ours 85.5 73.4) Tj ET',
+    ]))
+    writer.pages[0][NameObject('/Contents')] = writer._add_object(stream)
+    with path.open('wb') as output:
+        writer.write(output)
+    monkeypatch.setattr(pdf_input, '_extract_pypdf', Mock(return_value=(
+        ['Unreadable primary font\x06'], '')))
+    document = pdf_input.extract_pdf_input(path)
+    assert 'We report mean test accuracy\nwith standard deviation over 7 runs.' in document.text
+    assert 'Method Dataset-A Dataset-B\nOurs 85.5 73.4' in document.text
+    assert 'Independent left column.\nThis is unrelated training prose.' in document.text
+    assert document.sha256 == hashlib.sha256(path.read_bytes()).hexdigest()
+    assert len(document.page_texts) == 1
+
+
+def test_rotated_table_fallback_retains_geometric_character_order(tmp_path):
+    import pdfplumber
+    from PyPDF2 import PdfReader
+    path = write_pdf(tmp_path / 'rotated-table.pdf', ['Rotated table'])
+    writer = PdfWriter()
+    writer.add_page(PdfReader(path).pages[0])
+    stream = DecodedStreamObject()
+    stream.set_data(b'BT /F1 10 Tf 0 1 -1 0 400 100 Tm '
+                    b'(Method A 85.5 73.4) Tj 0 -14 Td (Method B 79.0 81.3) Tj ET')
+    writer.pages[0][NameObject('/Contents')] = writer._add_object(stream)
+    with path.open('wb') as output:
+        writer.write(output)
+    with pdfplumber.open(path) as document:
+        page = document.pages[0]
+        expected = page.extract_text(x_tolerance=1)
+        assert expected != page.extract_text(x_tolerance=1, use_text_flow=True)
+    pages, _, _ = pdf_input._extract_pdfplumber(path.read_bytes())
+    assert pages == [expected]
+
+
 def test_numeric_spacing_recovery_cannot_introduce_undecoded_glyphs(monkeypatch, tmp_path):
     path = write_pdf(tmp_path / 'table.pdf', ['Unrelated table study'])
     primary = ['Method 61.27+/-0.1472.31+/-0.36']

@@ -11,6 +11,7 @@ from pathlib import Path
 import sys
 import tempfile
 import threading
+import uuid
 
 
 _local = threading.local()
@@ -20,6 +21,9 @@ class EnvironmentCleanupError(RuntimeError):
     def __init__(self, message, receipt):
         super().__init__(message + ": " + str(receipt["errors"]))
         self.receipt = receipt
+        if receipt.get('process_cleanup_confirmed') is False:
+            self.process_cleanup_confirmed = False
+            self.cleanup_receipt = receipt
 
 
 def _key(root):
@@ -50,12 +54,64 @@ def active_environment(root=None):
     return runs.get(_key(root))
 
 
+def retain_unconfirmed_processes(root, receipt):
+    """Keep the current lease until an owner can prove its processes stopped."""
+    receipt = {**receipt, 'status': 'error', 'process_cleanup_confirmed': False,
+               'removed': [], 'freed_bytes': 0, 'remaining': [str(Path(root))]}
+    receipt['errors'] = receipt.get('errors') or ['process cleanup remains unconfirmed']
+    lease = active_environment(root)
+    if lease is not None:
+        lease.cleanup_receipt = receipt
+    return receipt
+
+
+def _preserve_task_gate(root, receipt):
+    """Reuse the web owner gate for direct/CLI runs as well as background work."""
+    from frontend.task_control import current_task, _root_paths, _paths, _write_record
+    control = current_task()
+    if control is not None and _key(control.deps_root) == _key(root):
+        control.cleanup_receipt = receipt
+        return
+    directory = _root_paths(root)[0]
+    directory.mkdir(parents=True, exist_ok=True)
+    # A separate supervising process can hold the task owner lock. The current
+    # dependency lease already serializes this publication; retain a unique
+    # record in the same recovery protocol without acquiring that owner's lock.
+    token = uuid.uuid4().hex
+    progress = directory / ('environment-cleanup-' + token + '.progress')
+    record = {'version': 1, 'pid': os.getpid(), 'token': token,
+              'state': 'cleanup_unconfirmed', 'deps_root': str(Path(root).resolve()),
+              'platform': os.name, 'progress_path': _key(progress)}
+    _write_record(_paths(progress)[0], record)
+    _write_record(_root_paths(root, progress)[2], record)
+
+
+def _check_unconfirmed_task_gate(root):
+    from frontend.task_control import _root_paths, _read_record
+    directory = _root_paths(root)[0]
+    if not directory.exists():
+        return
+    for path in directory.glob('*.json'):
+        try:
+            record = _read_record(path)
+        except (OSError, ValueError) as exc:
+            receipt = retain_unconfirmed_processes(root, {'errors': [str(exc)]})
+            raise EnvironmentCleanupError('任务清理凭据无法确认，保留原环境', receipt) from exc
+        if _key(record['deps_root']) == _key(root) and record['state'] == 'cleanup_unconfirmed':
+            receipt = retain_unconfirmed_processes(root, {'errors': [
+                'process cleanup remains unconfirmed: ' + str(path)]})
+            raise EnvironmentCleanupError('任务进程尚未确认结束，保留原环境', receipt)
+
+
 def release_dependencies(root, *, keep=()):
     """Caller holds the dependency lock; never follow links or remove the root."""
     from src.safety.files import directory_bytes, remove_tree
     from src.safety.paths import workspace_path
 
     root = Path(root).absolute()
+    lease = active_environment(root)
+    if lease is not None and lease.cleanup_receipt is not None:
+        raise EnvironmentCleanupError('任务进程尚未确认结束，禁止释放或替换依赖', lease.cleanup_receipt)
     workspace_path(root, ".autorepro-cache.lock", "dependency cleanup root")
     resolved = root.resolve()
     # A misconfigured cache must not turn completion into deletion of the app.
@@ -167,6 +223,7 @@ class _EnvironmentRun:
         self.run_dir = None
         self.replacements = []
         self.training_locks = {}
+        self.cleanup_receipt = None
 
     @staticmethod
     def _synchronize_recovery_cleanup(data, receipt, run_dir):
@@ -281,6 +338,9 @@ class _EnvironmentRun:
                     saved["error"] = result.get("error")
                     if result.get("state") is not None:
                         saved["state"] = result["state"]
+                    for key in ("session_id", "audit_logs", "audit_stats", "report_path"):
+                        if key in result:
+                            saved[key] = result[key]
                 elif receipt["status"] == "error":
                     saved["state"] = "ERROR"
                 _write_json(path, sanitize_report_result(saved))
@@ -326,6 +386,7 @@ def managed_environment(root=None):
     # The same reentrant root lock encloses install, execution, report and release.
     # Waiting has no training deadline; Ctrl-C still unwinds filelock acquisition.
     with cache_guard(root, timeout=-1):
+        _check_unconfirmed_task_gate(root)
         lease = _EnvironmentRun(root)
         initial = _release_environment(root)
         if initial["errors"]:
@@ -342,7 +403,18 @@ def managed_environment(root=None):
             raise
         finally:
             try:
-                receipt = _release_environment(root)
+                if getattr(failure, 'process_cleanup_confirmed', True) is False:
+                    retain_unconfirmed_processes(root, getattr(failure, 'cleanup_receipt', {}) or {
+                        'errors': [str(failure)]})
+                result_data = (lease.result or {}).get('data', {}) if isinstance(lease.result, dict) else {}
+                result_receipt = result_data.get('environment_cleanup') or {}
+                if result_receipt.get('process_cleanup_confirmed') is False:
+                    retain_unconfirmed_processes(root, result_receipt)
+                if lease.cleanup_receipt is not None:
+                    receipt = lease.cleanup_receipt
+                    _preserve_task_gate(root, receipt)
+                else:
+                    receipt = _release_environment(root)
                 receipt["before_run"] = initial
                 receipt["replacements"] = lease.replacements
                 lease.record(receipt)

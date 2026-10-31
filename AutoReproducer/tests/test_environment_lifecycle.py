@@ -603,3 +603,36 @@ print('released without app dependencies')
                                 str(Path(__file__).resolve().parents[1]), str(tmp_path)], timeout_s=30)
     assert result.returncode == 0, result.stderr
     assert "released without app dependencies" in result.stdout
+
+
+def test_unconfirmed_cleanup_keeps_dependencies_and_publishes_durable_gate(root, monkeypatch):
+    from frontend import task_control
+    monkeypatch.setattr(task_control, 'current_task', lambda: None)
+    with managed_environment() as lease:
+        environment = payload(root / 'retain-until-process-exit')
+        receipt = lifecycle.retain_unconfirmed_processes(root, {'errors': []})
+        assert receipt['errors'] and receipt['process_cleanup_confirmed'] is False
+        lease.result = {'state': 'ERROR', 'data': {}}
+    assert environment.exists()
+    assert lease.result['data']['environment_cleanup']['status'] == 'error'
+    records = [task_control._read_record(path)
+               for path in task_control._root_paths(root)[0].glob('*.json')]
+    assert any(record['state'] == 'cleanup_unconfirmed' for record in records)
+    with pytest.raises(lifecycle.EnvironmentCleanupError, match='任务进程'):
+        with managed_environment():
+            pytest.fail('unconfirmed process must block dependency-root reuse')
+    assert environment.exists()
+
+
+def test_retained_gate_is_published_even_when_supervisor_holds_owner_lock(root, monkeypatch):
+    from frontend import task_control
+    monkeypatch.setattr(task_control, 'current_task', lambda: None)
+    directory, owner_path, _ = task_control._root_paths(root)
+    directory.mkdir(parents=True)
+    with task_control._OwnerLock(owner_path):
+        with managed_environment():
+            environment = payload(root / 'retained')
+            lifecycle.retain_unconfirmed_processes(root, {'errors': ['child still alive']})
+    assert environment.exists()
+    assert any(task_control._read_record(path)['state'] == 'cleanup_unconfirmed'
+               for path in directory.glob('*.json'))

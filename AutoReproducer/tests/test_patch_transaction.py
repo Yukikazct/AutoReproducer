@@ -43,6 +43,67 @@ def test_valid_candidate_changes_both_files_and_commits(workspace):
     assert (workspace / "data" / "split.csv").read_bytes() == b"frozen data\n"
 
 
+def test_exact_edits_preserve_other_bytes_and_rollback(workspace):
+    proposal = patch(workspace, 'model.py', '')
+    proposal.pop('content')
+    proposal['edits'] = [{'before': 'VALUE = 1', 'after': 'VALUE = 2', 'count': 1}]
+    with PatchTransaction(workspace, [proposal], PatchPolicy()):
+        assert (workspace / 'model.py').read_bytes() == b'VALUE = 2\n'
+    assert (workspace / 'model.py').read_bytes() == b'VALUE = 1\n'
+
+
+@pytest.mark.parametrize('long_path', [False, True])
+def test_failed_generated_module_does_not_leave_importable_bytecode(workspace, long_path):
+    from pathlib import Path
+    from src.safety.paths import filesystem_path
+    directory = 'observer' if not long_path else 'observer_' + 'x' * max(20, 232 - len(str(workspace)))
+    relative = directory + '/helper.py'
+    transaction = PatchTransaction(workspace, [patch(workspace, 'model.py', 'VALUE = 2\n')], PatchPolicy())
+    with transaction:
+        generated = Path(filesystem_path(workspace / relative))
+        generated.parent.mkdir()
+        generated.write_text('VALUE = 7\n', encoding='utf-8')
+        cached = py_compile.compile(str(generated), doraise=True)
+        assert os.path.isfile(cached)
+    assert not generated.exists()
+    assert not os.path.exists(cached)
+    assert relative in transaction.removed
+
+
+@pytest.mark.parametrize('edits', [
+    [{'before': '', 'after': 'anything'}],
+    [{'before': 'VALUE = 1', 'after': 'VALUE = 2', 'count': 2}],
+    [{'before': 'invented', 'after': 'replacement'}],
+])
+def test_invalid_exact_edits_never_mutate_source(workspace, edits):
+    proposal = patch(workspace, 'model.py', '')
+    proposal.pop('content')
+    proposal['edits'] = edits
+    with pytest.raises(ValueError):
+        PatchTransaction(workspace, [proposal], PatchPolicy())
+    assert (workspace / 'model.py').read_bytes() == b'VALUE = 1\n'
+
+
+def test_rejected_edit_feedback_identifies_actual_fragment_and_remaining_counts(workspace):
+    content = 'a = old_api()\nb = old_api()\nc = old_api()\n'
+    (workspace / 'model.py').write_text(content, encoding='utf-8')
+    proposal = patch(workspace, 'model.py', '')
+    proposal.pop('content')
+    proposal['edits'] = [
+        {'before': 'a = old_api()', 'after': 'a = new_api()'},
+        {'before': 'old_api()', 'after': 'new_api()'},
+        {'before': 'old_api()', 'after': 'new_api()'},
+    ]
+    with pytest.raises(ValueError) as error:
+        PatchTransaction(workspace, [proposal], PatchPolicy())
+    feedback = str(error.value)
+    assert "model.py, edit 2: requested 1, actual 2" in feedback
+    assert "before='old_api()'" in feedback
+    assert 'edit 3: requested 1, actual 2' in feedback
+    assert 'do not duplicate or overlap' in feedback
+    assert (workspace / 'model.py').read_text('utf-8') == content
+
+
 @pytest.mark.parametrize("invalid", ["hash", "protected", "syntax", "duplicate", "too_many", "size"])
 def test_one_invalid_patch_leaves_entire_workspace_untouched(workspace, invalid):
     proposals = [patch(workspace, "model.py", "VALUE = 2\n"),
@@ -166,3 +227,35 @@ def test_failed_rollback_preserves_original_exception(workspace, monkeypatch, er
             raise error("original failure")
     assert "snapshot restoration denied" in transaction.rollback_error
     assert any("rollback" in note for note in caught.value.__notes__)
+
+
+@pytest.mark.parametrize('error_type', [None, RuntimeError, KeyboardInterrupt])
+def test_deferred_rollback_preserves_uncommitted_tree_and_original_exception(workspace, monkeypatch, error_type):
+    transaction = PatchTransaction(workspace, [patch(workspace, 'model.py', 'VALUE = 2\n')], PatchPolicy())
+
+    def cannot_restore(*args, **kwargs):
+        pytest.fail('unconfirmed process cleanup must not restore or delete files')
+
+    monkeypatch.setattr(transaction_module, 'restore_snapshot', cannot_restore)
+    error = error_type('original interruption') if error_type else None
+
+    def run():
+        with transaction:
+            (workspace / 'candidate_output.txt').write_bytes(b'potentially live output')
+            transaction.defer_rollback('process cleanup unconfirmed')
+            if error is not None:
+                raise error
+
+    if error is not None:
+        with pytest.raises(error_type) as caught:
+            run()
+        assert caught.value is error
+    else:
+        run()
+    assert transaction.rollback_deferred and not transaction.committed
+    assert transaction.rollback_deferred_reason == 'process cleanup unconfirmed'
+    assert transaction.rollback_error is None
+    assert (workspace / 'model.py').read_bytes() == b'VALUE = 2\n'
+    assert (workspace / 'candidate_output.txt').read_bytes() == b'potentially live output'
+    with pytest.raises(RuntimeError, match='cannot be committed'):
+        transaction.commit()

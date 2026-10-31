@@ -1,4 +1,6 @@
 """A crashed Windows owner cannot publish an unobserved tree cleanup."""
+import ctypes
+from ctypes import wintypes
 import json
 import os
 from pathlib import Path
@@ -14,14 +16,15 @@ from frontend import task_control
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows asynchronous kill-on-job-close")
-def test_crashed_owner_keeps_environment_without_tree_cleanup_proof(tmp_path, monkeypatch):
+@pytest.mark.parametrize("launcher_wrapper", [False, True])
+def test_crashed_owner_keeps_environment_without_tree_cleanup_proof(tmp_path, monkeypatch, launcher_wrapper):
     """Even a dead real Job owner cannot authorize deleting its dependencies.
 
     The OS may finish descendants before this assertion on a fast machine. The
     ownership receipt still contains no observation of their exit, so recovery
     must refuse in both schedules rather than infer completion from owner PID.
     """
-    from src.process_lifecycle import _windows_api
+    from src.process_lifecycle import CREATE_SUSPENDED, ProcessJob, _windows_api
     import src.environment_lifecycle as lifecycle
 
     progress = tmp_path / "orphan.jsonl"
@@ -52,12 +55,24 @@ job.assign(process)
 job.resume(process)
 time.sleep(60)
 """
-    owner = subprocess.Popen([sys.executable, "-c", owner_program,
-                              str(Path(__file__).resolve().parents[1]), str(progress), worker],
-                             creationflags=subprocess.CREATE_NO_WINDOW)
+    command = [sys.executable, "-c", owner_program,
+               str(Path(__file__).resolve().parents[1]), str(progress), worker]
+    if launcher_wrapper:
+        command = [sys.executable, "-c",
+                   "import subprocess,sys;sys.exit(subprocess.call(sys.argv[1:]))", *command]
+    # An outer job is only a fixture cleanup guard. The inner job still has to
+    # terminate its own descendants when its actual Python owner crashes.
+    fixture_job = ProcessJob()
+    owner = subprocess.Popen(command,
+                             creationflags=CREATE_SUSPENDED | subprocess.CREATE_NO_WINDOW)
     api = _windows_api()
+    api.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+    api.TerminateProcess.restype = wintypes.BOOL
     handles = []
+    owner_handle = None
     try:
+        fixture_job.assign(owner)
+        fixture_job.resume(owner)
         deadline = time.monotonic() + 15
         while time.monotonic() < deadline:
             if ready.exists():
@@ -75,7 +90,18 @@ time.sleep(60)
             assert handle, f"could not capture owned process {pid}"
             handles.append(handle)
 
-        owner.kill()
+        status = task_control.task_status(progress)
+        assert status['active'], status
+        actual_pid = status['record']['pid']
+        if launcher_wrapper:
+            assert actual_pid != owner.pid
+        # A Windows venv python.exe may be a redirector. Killing Popen.pid
+        # then leaves the interpreter (and its owner lock) alive. Capture a
+        # handle to the registered owner before crashing it, avoiding PID reuse.
+        owner_handle = api.OpenProcess(0x00100001, False, actual_pid)
+        assert owner_handle, 'could not capture registered task owner'
+        assert api.TerminateProcess(owner_handle, 1), ctypes.get_last_error()
+        assert api.WaitForSingleObject(owner_handle, 10000) == 0
         owner.wait(timeout=10)
         # A signalled Windows process handle can precede release of its file
         # locks. Wait for the owner lock to become available; this is still
@@ -83,7 +109,7 @@ time.sleep(60)
         deadline = time.monotonic() + 5
         while task_control.task_status(progress).get("active") and time.monotonic() < deadline:
             time.sleep(.01)
-        assert task_control.task_status(progress).get("orphaned")
+        assert task_control.task_status(progress)["orphaned"]
         cleanup = Mock(return_value={"status": "released", "errors": []})
         monkeypatch.setattr(lifecycle, "release_abandoned_environment", cleanup)
 
@@ -93,12 +119,16 @@ time.sleep(60)
         assert backend.ProgressStore.read_snapshot(str(progress))["running"]
         assert task_control.task_status(progress)["orphaned"]
     finally:
-        if owner.poll() is None:
-            owner.kill()
-            owner.wait(timeout=10)
         try:
-            for handle in handles:
-                assert api.WaitForSingleObject(handle, 10000) == 0, "owned descendant survived owner death"
+            if owner_handle is not None:
+                api.TerminateProcess(owner_handle, 1)
+                assert api.WaitForSingleObject(owner_handle, 10000) == 0
+                for handle in handles:
+                    assert api.WaitForSingleObject(handle, 10000) == 0, "owned descendant survived owner death"
         finally:
             for handle in handles:
                 api.CloseHandle(handle)
+            if owner_handle is not None:
+                api.CloseHandle(owner_handle)
+            fixture_job.close()
+            owner.wait(timeout=10)

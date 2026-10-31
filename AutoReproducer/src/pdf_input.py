@@ -106,7 +106,14 @@ def _extract_pdfplumber(payload):
     import pdfplumber
     with pdfplumber.open(BytesIO(payload)) as document:
         # Small-font captions and tables use word gaps below the default 3pt.
-        pages = [page.extract_text(x_tolerance=1) or "" for page in document.pages]
+        # Follow the PDF text stream, as the primary parser does. Sorting every
+        # word by vertical position splices independent prose columns together,
+        # making a visible sentence impossible to cite as an original span.
+        # Rotated tables need geometric character ordering; stream flow can
+        # fragment each rotated number into individual vertical characters.
+        pages = [page.extract_text(x_tolerance=1, use_text_flow=all(
+                     char.get('upright', True) for char in page.chars)) or ""
+                 for page in document.pages]
         annotations = []
         for number, page in enumerate(document.pages, 1):
             try:

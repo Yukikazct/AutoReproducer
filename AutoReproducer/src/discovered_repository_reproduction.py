@@ -389,6 +389,7 @@ class DiscoveredRepositoryReproduction:
                   ("execute_repository", "EXECUTE_CODE", "CodeExecutor", "运行作者命令"),
                   ("finish_execution", "EXECUTE_CODE", "CodeExecutor", "记录命令退出与进程结束"),
                   ("compare_author_claims", "VALIDATE", "ResultValidator", "对比作者输出与论文指标"),
+                  ("assess_reproduction", "VALIDATE", "ResultValidator", "AI 结合合理误差判断复现情况"),
                   ("generate_report", "GENERATE_REPORT", "ReportGenerator", "生成运行报告")]
         emit({"type": "pipeline_plan", "pipeline": "repository", "stages": [
             {"id": identifier, "agent": agent, "title": title, "status": "waiting"}
@@ -689,6 +690,10 @@ class DiscoveredRepositoryReproduction:
                     event('plan_repository', 'skipped', str(exc)[:500])
                     phase = 'prepare_repository'; event(phase, 'running')
                 except Exception as exc:
+                    if getattr(exc, 'process_cleanup_confirmed', True) is False:
+                        attempt.update(error=str(exc), planning_status='execution_failed',
+                                       failure_kind='cleanup_unconfirmed')
+                        raise
                     if isinstance(exc, InvestigationStopped):
                         raise
                     if getattr(exc, 'reproduction_phase', None) == 'prepare_environment':
@@ -736,16 +741,32 @@ class DiscoveredRepositoryReproduction:
             if investigation:
                 investigation.stop('cancelled', requires_human=False)
             data["interrupted"] = True
+            if getattr(exc, 'process_cleanup_confirmed', True) is False:
+                data['environment_cleanup'] = deepcopy(exc.cleanup_receipt)
             if getattr(exc, "execution", None) is not None:
                 data["environment_preparation" if phase == "prepare_environment" else "execution"] = exc.execution
-            if phase == 'compare_author_claims' and data.get('validation', {}).get('status') == 'author_code_completed':
+            validation = data.get('validation') or {}
+            if phase in {'compare_author_claims', 'assess_reproduction'} and (
+                    validation.get('execution_status') == 'author_code_completed'
+                    or validation.get('status') == 'author_code_completed'):
                 # Cancellation stops optional analysis without undoing the
                 # already persisted command/process completion evidence.
-                comparison = data['validation'].setdefault('author_claim_comparison', {
-                    'basis': 'author_output', 'metric_records': data['validation'].get('metric_records', []),
-                    'comparisons': [], 'citations': []})
-                comparison.update(status='interrupted', reason='作者代码已完成；论文指标对比已中断。')
-                reason = comparison['reason']
+                if phase == 'compare_author_claims':
+                    comparison = validation.setdefault('author_claim_comparison', {
+                        'basis': 'author_output', 'metric_records': validation.get('metric_records', []),
+                        'comparisons': [], 'citations': []})
+                    comparison.update(status='interrupted', reason='作者代码已完成；论文指标对比已中断。')
+                    reason = comparison['reason']
+                else:
+                    assessment = validation.get('reproduction_assessment') or {}
+                    reason = ('作者代码及 AI 判断已完成；后续分析已中断。'
+                              if assessment.get('status') == 'completed'
+                              else '作者代码已完成；AI 复现判断已中断。')
+                    if assessment.get('status') != 'completed':
+                        validation['reproduction_assessment'] = {
+                            'status': 'unavailable', 'source': 'ai', 'scope': 'executed_experiment',
+                            'verdict': 'insufficient_evidence', 'reason': reason, 'interrupted': True,
+                            'metric_assessments': [], 'limitations': []}
             else:
                 data["validation"] = {"status": "interrupted", "is_reproduced": None, "result_level": "failed",
                                       "reason": "实验已中断，未完成的训练和指标不能当作成功"}
@@ -754,11 +775,25 @@ class DiscoveredRepositoryReproduction:
             if collaboration:
                 collaboration.attach(data)
                 collaboration.persist(run_dir)
-            write_json(run_dir / "result.json", {"state": "ERROR", "data": data, "error": "interrupted"})
+            data['total_llm_calls'] = (self.llm.get_call_count() if self.llm else 0) - before_calls
+            self.logger.add_llm_calls(data['total_llm_calls'])
+            data['audit_stats'] = self.logger.get_stats()
+            data['run_elapsed_s'] = time.monotonic() - started
+            interrupted_result = {"state": "ERROR", "data": data, "error": "interrupted",
+                                  "audit_stats": data['audit_stats']}
+            write_json(run_dir / "result.json", interrupted_result)
+            # The owner may have to stop this worker while its environment is
+            # still being released. Retain evidence without publishing done.
+            emit({"type": "result_checkpoint", "result": deepcopy(interrupted_result)})
             raise
         except Exception as exc:
             phase = getattr(exc, "reproduction_phase", phase)
             error = str(exc) or type(exc).__name__
+            if getattr(exc, 'execution', None) is not None:
+                data['environment_preparation' if phase == 'prepare_environment' else 'execution'] = exc.execution
+            if getattr(exc, 'process_cleanup_confirmed', True) is False:
+                data['environment_cleanup'] = deepcopy(exc.cleanup_receipt)
+                exc.category = 'cleanup_unconfirmed'
             if investigation:
                 # Retain concrete preparation blockers even when no controlled
                 # repair is possible (missing hardware/data is not a new plan).
@@ -814,7 +849,10 @@ class DiscoveredRepositoryReproduction:
             data["report_error"] = {"phase": "generate_report", "reason": str(exc) or "报告生成已中断"}
             event("generate_report", "error", "报告生成已中断")
             try:
-                write_json(run_dir / "result.json", {"state": "ERROR", "data": data, "error": "interrupted"})
+                interrupted_result = {"state": "ERROR", "data": data, "error": "interrupted",
+                                      "audit_stats": data['audit_stats']}
+                write_json(run_dir / "result.json", interrupted_result)
+                emit({"type": "result_checkpoint", "result": deepcopy(interrupted_result)})
             except Exception:
                 # Preserve the cancellation even when diagnostic persistence
                 # is unavailable; completed training evidence stays in memory.
@@ -942,6 +980,11 @@ class DiscoveredRepositoryReproduction:
                     if hashlib.sha256(encoded).hexdigest() != plan["evidence_sha256"]:
                         raise ValueError("落盘来源包在执行期间发生变化")
                     verify_snapshot(workspace, snapshot, generated)
+                    for recovered in data.get('data_repair_attempts', []):
+                        path = workspace_path(workspace, recovered['target'], 'recovered author input',
+                                              must_exist=True, forbid_git=True)
+                        if digest(path) != recovered['sha256'] or path.stat().st_size != recovered['bytes']:
+                            raise ValueError('自动恢复的作者输入在执行期间发生变化')
                     if not execution_only:
                         assert_strict_plan(plan, stored_packet, workspace)
                     for dataset in data["dataset_provenance"]["sources"]:
@@ -972,7 +1015,7 @@ class DiscoveredRepositoryReproduction:
                 event(phase, "success", "执行计划已准备，未安装或训练")
                 if loaders or runtime_loaders:
                     event('prepare_dataset', 'skipped', '仅准备计划；作者加载器尚未下载真实数据')
-                for identifier in ("execute_repository", "finish_execution", "compare_author_claims"):
+                for identifier in ("execute_repository", "finish_execution", "compare_author_claims", "assess_reproduction"):
                     event(identifier, "skipped", "仅准备模式")
                 return
 
@@ -1161,6 +1204,23 @@ class DiscoveredRepositoryReproduction:
                             'data': {'failure_kind': analysis['failure_kind'],
                                      'action': analysis['action'], 'llm_calls': analysis['llm_calls']}}})
                     return suggestion
+                def repair_missing_data(result):
+                    if not execution_only or not request.get('source_repair_auto') or request.get('offline'):
+                        return None
+                    from src.author_data_repair import recover_author_data
+                    recovered = recover_author_data(self.llm, result, plan, packet, workspace,
+                                                    run_dir, data, verify_frozen_inputs)
+                    if recovered is not None:
+                        data['dataset_provenance'].setdefault('recovered_files', []).append(deepcopy(recovered))
+                        write_json(run_dir / 'dataset.json', data['dataset_provenance'])
+                        config = read_json(runtime_dir / 'config.json')
+                        config.setdefault('data_files', {})[recovered['target']] = {
+                            key: recovered[key] for key in ('sha256', 'bytes')}
+                        write_json(runtime_dir / 'config.json', config)
+                        generated[f'{CAPTURE_DIR}/config.json'] = digest(runtime_dir / 'config.json')
+                        write_json(run_dir / 'adapter_manifest.json', {'files': generated,
+                            'note': '作者源码和命令保持不变；记录有作者来源引用的缺失输入自动恢复。'})
+                    return recovered
                 investigation = current_investigation()
                 identifiers = {step.get('id') for step in selected} if isinstance(selected, list) else set()
                 recovery_phase = ('environment_preparation' if 'native_preflight' in identifiers else
@@ -1169,9 +1229,19 @@ class DiscoveredRepositoryReproduction:
                 with investigation.phase(recovery_phase) if investigation else nullcontext():
                     result = run_with_dependency_repair(self.runner, workspace, selected, runtime_environment,
                         plan, packet, run_dir, data, progress, verify_frozen_inputs, repair_numeric, repair_path,
-                        analyze_failure, repair_pyg=repair_pyg, prepare_environment=prepare_runtime_environment)
+                        analyze_failure, repair_pyg=repair_pyg, prepare_environment=prepare_runtime_environment,
+                        repair_data=repair_missing_data)
                     if investigation:
                         investigation.record_execution(result)
+                    if result.get('cleanup_unconfirmed') or result.get('process_cleanup_confirmed') is False:
+                        failure = RuntimeError('作者进程清理未确认；保留环境和失败证据，停止后续运行。')
+                        failure.process_cleanup_confirmed = False
+                        failure.cleanup_receipt = result.get('cleanup_receipt') or {
+                            'status': 'error', 'process_cleanup_confirmed': False,
+                            'errors': result.get('cleanup_errors') or [failure.args[0]]}
+                        failure.execution = result
+                        raise failure
+                    if investigation:
                         investigation.ensure_running()
                     return result
 
@@ -1267,7 +1337,7 @@ class DiscoveredRepositoryReproduction:
                                       if native_pending or execution_only else '真实数据、协议和原生环境已准备，尚未执行训练')}
                 if runtime_loaders:
                     event('prepare_dataset', 'skipped', '仅准备环境；实际数据构造和训练尚未执行')
-                for identifier in ("execute_repository", "finish_execution", "compare_author_claims"):
+                for identifier in ("execute_repository", "finish_execution", "compare_author_claims", "assess_reproduction"):
                     event(identifier, "skipped", "仅准备实验环境")
                 return
             phase = "execute_repository"; event(phase, "running")
@@ -1287,8 +1357,8 @@ class DiscoveredRepositoryReproduction:
             if current_investigation():
                 current_investigation().record_execution(execution)
             data["execution"] = execution
-            training_id = next(step["id"] for step in plan["steps"] if step["kind"] == "train")
-            data["repository_executed"] = any(step.get("id") == training_id and step.get("executed")
+            training_ids = {step["id"] for step in plan["steps"] if step["kind"] == "train"}
+            data["repository_executed"] = any(step.get("id") in training_ids and step.get("executed")
                                                for step in execution.get("steps", []))
             execution["repository_executed"] = data["repository_executed"]
             execution["artifacts"] = [item for item in execution.get("artifacts", [])
@@ -1313,6 +1383,7 @@ class DiscoveredRepositoryReproduction:
                 write_json(run_dir / 'execution.json', execution)
                 event(phase, 'success', validation['reason'])
                 event('compare_author_claims', 'success', '已使用独立复算结果对比冻结的论文参考值')
+                event('assess_reproduction', 'skipped', '本次选择严格核验，使用独立复算结论')
                 _diagnose_outcome(self.llm, plan, packet, workspace, execution,
                                   validation, run_dir, data, emit)
                 return
@@ -1366,6 +1437,12 @@ class DiscoveredRepositoryReproduction:
             from src.author_claim_comparison import collect_author_metrics
             metric_workspace = Path(data['source_repair']['workspace']) if repaired else workspace
             metric_sources = data['source_repair']['effective_source_files'] if repaired else snapshot['files']
+            execution['author_output_receipts'] = [
+                {key: receipt[key] for key in ('step', 'natural_return', 'output_files')}
+                for receipt in validation.get('author_execution', []) if receipt.get('output_files')]
+            if execution['author_output_receipts']:
+                validation.setdefault('warnings', []).append(
+                    '已采集本次新追加的作者日志；仓库内既有日志通过任务副本保留，历史示例数值未用作本次结果。')
             try:
                 validation['metric_records'], data['metric_parse_errors'] = collect_author_metrics(
                     execution, workspace=metric_workspace, plan=plan, sources=metric_sources)
@@ -1392,6 +1469,7 @@ class DiscoveredRepositoryReproduction:
             try:
                 comparison.update(compare_author_claims(self.llm, packet, plan, workspace, execution,
                                                         sources=metric_sources, metric_workspace=metric_workspace))
+                validation['metric_records'] = comparison['metric_records']
             except Exception as exc:
                 comparison['diagnostic'] = str(exc) or type(exc).__name__
             if repaired:
@@ -1406,6 +1484,26 @@ class DiscoveredRepositoryReproduction:
                     comparison['persistence_error'] = str(exc)
                     validation.setdefault('warnings', []).append(f'论文指标对比记录保存失败（{name}）：{exc}')
             event(phase, 'success' if comparison['comparisons'] else 'skipped', comparison['reason'])
+            phase = 'assess_reproduction'
+            event(phase, 'running')
+            from src.reproduction_assessment import assess_reproduction, apply_reproduction_assessment
+            try:
+                assessment = assess_reproduction(self.llm, comparison, execution, validation=validation)
+            except Exception as exc:
+                # Optional judgement cannot erase completed execution or leak
+                # provider exception text, which may contain credentials.
+                assessment = {'status': 'unavailable', 'source': 'ai', 'scope': 'executed_experiment',
+                    'verdict': 'insufficient_evidence', 'confidence': None,
+                    'reason': 'AI 复现判断暂未完成，已保留实际结果与论文对比。',
+                    'metric_assessments': [], 'limitations': [], 'error_type': type(exc).__name__}
+            apply_reproduction_assessment(validation, assessment)
+            for name, value in (('reproduction_assessment.json', assessment),
+                                ('author_execution_verification.json', validation), ('execution.json', execution)):
+                try:
+                    write_json(run_dir / name, value)
+                except OSError:
+                    validation.setdefault('warnings', []).append(f'AI 复现判断记录保存失败：{name}')
+            event(phase, 'success' if assessment['status'] == 'completed' else 'skipped', assessment['reason'])
             _diagnose_outcome(self.llm, plan, packet, workspace, execution,
                               validation, run_dir, data, emit)
         except BaseException as exc:

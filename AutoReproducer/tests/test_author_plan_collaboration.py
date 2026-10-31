@@ -107,6 +107,9 @@ def test_requested_source_reply_is_consumed_by_planner_with_verified_ids_and_has
 def test_invalid_plan_feedback_routes_back_to_corrected_existing_model_attempt(tmp_path, monkeypatch):
     fixture, packet, proposal = setup_plan(tmp_path, monkeypatch)
     original_packet = deepcopy(packet)
+    from src.author_command_inference import discover_author_commands
+    original_packet['program_detected_author_commands'] = discover_author_commands(
+        original_packet, fixture['workspace'])
     invalid = deepcopy(proposal)
     invalid['repository']['revision'] = 'b' * 40
 

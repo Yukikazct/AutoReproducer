@@ -16,9 +16,10 @@ def nested_record(wrapper, value):
     return {wrapper: [record] if wrapper in {'steps', 'attempts', 'stages'} else record}
 
 
-@pytest.mark.parametrize('wrapper', ['environment', 'effective_env_config', 'final',
+@pytest.mark.parametrize('wrapper', ['environment', 'environment_cleanup', 'effective_env_config', 'final',
                                     'steps', 'attempts', 'stages'])
-@pytest.mark.parametrize('receipt', [{'confirmed': False}, {'status': 'unconfirmed'}])
+@pytest.mark.parametrize('receipt', [{'confirmed': False}, {'status': 'unconfirmed'},
+                                   {'state': 'cleanup_unconfirmed'}, {'processes_alive': True}])
 def test_nested_cleanup_evidence_blocks_every_recovery_and_the_report(wrapper, receipt, tmp_path, experiment):
     data = accepted()
     data['execution'].update(nested_record(wrapper, receipt))

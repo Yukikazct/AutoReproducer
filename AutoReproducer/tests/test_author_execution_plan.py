@@ -56,6 +56,40 @@ def fixture_packet(tmp_path):
     return fixture, packet
 
 
+@pytest.mark.parametrize('relative', ['config.json', '__pycache__/payload.pyc', '.pytest_cache/payload'])
+def test_retained_observer_accepts_no_files_outside_verified_author_data(tmp_path, relative):
+    fixture, packet = fixture_packet(tmp_path)
+    plan = author.validate_author_execution_plan(execution_proposal(fixture), packet, fixture['workspace'])
+    path = fixture['workspace'] / '_autorepro_capture' / relative
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b'not verified author data')
+    with pytest.raises(ValueError, match='unverified file'):
+        author.materialize_author_execution(fixture['workspace'], plan, 'f' * 64,
+                                            fixture['snapshot'], retained_files={})
+
+
+def test_teacher_student_plan_keeps_both_commands_and_student_dependencies(tmp_path):
+    fixture, _ = fixture_packet(tmp_path)
+    student = fixture['workspace'] / 'student.py'
+    student.write_text('import yaml\n' + (fixture['workspace'] / 'train.py').read_text('utf-8'), encoding='utf-8')
+    fixture['snapshot']['files']['student.py'] = hashlib.sha256(student.read_bytes()).hexdigest()
+    packet = build_evidence_packet(fixture['pdf'], fixture['workspace'], fixture['snapshot'])
+    packet['author_execution_only'] = True
+    proposal = execution_proposal(fixture)
+    second = deepcopy(proposal['steps'][0])
+    second.update(id='student', depends_on=[proposal['steps'][0]['id']])
+    second['argv'] = [arg if arg != 'train.py' else 'student.py' for arg in second['argv']]
+    second.pop('entrypoint', None)
+    proposal['steps'].append(second)
+    plan = author.validate_author_execution_plan(proposal, packet, fixture['workspace'])
+    assert [step['argv'] for step in plan['steps']] == [step['argv'] for step in proposal['steps']]
+    assert plan['steps'][1]['depends_on'] == [plan['steps'][0]['id']]
+    assert any('yaml' in str(item).lower() for item in plan['requirements']['import_evidence'])
+    materialized = author.materialize_author_execution(fixture['workspace'], plan, 'f' * 64, fixture['snapshot'])
+    assert len(materialized['steps']) == 2
+    assert materialized['steps'][1]['depends_on'] == [plan['steps'][0]['id']]
+
+
 @pytest.mark.parametrize('manual', [False, True])
 def test_execution_mode_fetches_repository_without_identity_review(tmp_path, monkeypatch, manual):
     from src.agents.repository_verifier import RepositoryVerifierAgent

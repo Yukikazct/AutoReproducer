@@ -21,6 +21,15 @@ from src.author_self_repair import failure_diagnostic, traceback_sources
 
 MAX_FAILURE_ANALYSES = 4
 MAX_SOURCE_READS = 2
+MAX_ANALYSIS_FEEDBACK_CHARS = 500
+
+
+def _analysis_feedback(value):
+    text = _safe_install_diagnostic(value)
+    text = re.sub(r'''(?i)(["'](?:authorization|(?:access[_-]?)?token|password|secret|api[_-]?key)["']\s*:\s*)(["']).*?\2''',
+                  lambda match: match[1] + match[2] + '[REDACTED]' + match[2], text)
+    text = re.sub(r'\bsk-[A-Za-z0-9_-]{12,}', '[REDACTED]', text)
+    return text[:MAX_ANALYSIS_FEEDBACK_CHARS]
 
 
 def _failure_text(result):
@@ -128,7 +137,7 @@ def analyze_author_failure(llm, result, plan, packet, workspace, environment, ru
               'python_version': effective.get('python_version'),
               'dependency_install_attempts': effective.get('dependency_install_attempts', []),
               'diagnostic': diagnostic, 'source_reads': [], 'llm_calls': 0,
-              'action': 'blocked'}
+              'action': 'blocked', 'response_errors': []}
     records.append(record)
     collaboration = current_collaboration()
     analysis_request = None
@@ -147,7 +156,9 @@ def analyze_author_failure(llm, result, plan, packet, workspace, environment, ru
               '"reason":"...","action":"replace_compatibility_pin",'
               '"requirement":"package==version"}. A replacement is allowed only for a project-derived '
               'compatibility pin, never an author declaration, and its candidate version must appear '
-              'in the actual pip error. State the missing external condition if blocked.')
+              'in the actual pip error. State the missing external condition if blocked. '
+              'If analysis_feedback is present, correct the response format or source request '
+              'using that validation feedback. It never authorizes a broader repair.')
     try:
         for reading_round in range(MAX_SOURCE_READS + 1):
             evidence = {'diagnostic': diagnostic, 'failure_kind': failure_kind,
@@ -161,6 +172,7 @@ def analyze_author_failure(llm, result, plan, packet, workspace, environment, ru
                 'source_excerpts': _source_excerpts(plan, packet, workspace, requested, diagnostic),
                 'previous_repairs': [{key: item.get(key) for key in ('action', 'status', 'reason')}
                     for item in (data.get('self_repair') or {}).get('attempts', [])[-8:]],
+                'analysis_feedback': list(record['response_errors']),
                 'available_source_paths': list(packet.get('file_inventory') or [])[:200]}
             if collaboration is not None:
                 evidence['agent_messages'] = collaboration.context('FailureAnalyst')
@@ -172,39 +184,61 @@ def analyze_author_failure(llm, result, plan, packet, workspace, environment, ru
             record['llm_calls'] += 1
             response = llm.chat(json.dumps(evidence, ensure_ascii=False), system_prompt=system,
                                 temperature=0, task='author_failure_analysis')
-            from src.discovered_repository_plan import _json_response
-            proposal = _json_response(response)
-            if not isinstance(proposal, dict):
-                raise ValueError('模型失败分析不是 JSON 对象')
-            files = proposal.get('request_files')
-            if files is not None:
-                if (reading_round >= MAX_SOURCE_READS or not isinstance(files, list)
-                        or not 1 <= len(files) <= 3 or any(not isinstance(name, str)
-                            or not (packet.get('file_inventory') or {}).get(name, {}).get('text_available')
-                            or name in requested or name in evidence['source_excerpts'] for name in files)):
-                    raise ValueError('模型请求的源码不在固定仓库中或补读轮次已满')
-                requested.extend(files)
-                record['source_reads'].extend(files)
-                if collaboration is not None:
-                    source_request = collaboration.send('FailureAnalyst', 'SourceReader', 'read_sources',
-                        {'paths': files, 'repository_url': repository_url,
-                         'reason': 'Inspect fixed source evidence for the observed failure.'})
-                    read = _source_excerpts(plan, packet, workspace, requested, diagnostic)
-                    collaboration.reply(source_request, 'SourceReader',
-                        {'verified_sources': [{'path': name,
-                            'sha256': packet['file_inventory'][name]['sha256']}
-                            for name in files if name in read],
-                         'unavailable_paths': [name for name in files if name not in read],
-                         'reason': 'Only hash-matching frozen sources enter the next analysis prompt.'},
-                        kind='source_evidence')
+            # API/configuration failures are not malformed proposals. Retrying
+            # those with another prompt cannot fix authentication or connectivity.
+            if isinstance(response, str) and response.lstrip().startswith('[LLM API Error:'):
+                raise RuntimeError(_analysis_feedback(response))
+            try:
+                from src.discovered_repository_plan import _json_response
+                proposal = _json_response(response)
+                if not isinstance(proposal, dict):
+                    raise ValueError('模型失败分析不是 JSON 对象')
+                if 'request_files' in proposal:
+                    files = proposal['request_files']
+                    if (set(proposal) != {'request_files'} or reading_round >= MAX_SOURCE_READS
+                            or not isinstance(files, list) or not 1 <= len(files) <= 3
+                            or any(not isinstance(name, str)
+                                or not (packet.get('file_inventory') or {}).get(name, {}).get('text_available')
+                                or name in requested or name in evidence['source_excerpts'] for name in files)
+                            or len(set(files)) != len(files)):
+                        raise ValueError('模型请求的源码不在固定仓库中、已提供、重复或补读轮次已满')
+                    requested.extend(files)
+                    record['source_reads'].extend(files)
+                    if collaboration is not None:
+                        source_request = collaboration.send('FailureAnalyst', 'SourceReader', 'read_sources',
+                            {'paths': files, 'repository_url': repository_url,
+                             'reason': 'Inspect fixed source evidence for the observed failure.'})
+                        read = _source_excerpts(plan, packet, workspace, requested, diagnostic)
+                        collaboration.reply(source_request, 'SourceReader',
+                            {'verified_sources': [{'path': name,
+                                'sha256': packet['file_inventory'][name]['sha256']}
+                                for name in files if name in read],
+                             'unavailable_paths': [name for name in files if name not in read],
+                             'reason': 'Only hash-matching frozen sources enter the next analysis prompt.'},
+                            kind='source_evidence')
+                    continue
+                if (set(proposal) - {'failure_kind', 'reason', 'action', 'requirement'}
+                        or proposal.get('action') not in {'blocked', 'replace_compatibility_pin'}
+                        or any(key in proposal and not isinstance(proposal[key], str)
+                               for key in ('failure_kind', 'reason', 'requirement'))):
+                    raise ValueError('模型失败分析字段无效；需要合法 action 和文本字段，不能提供其他指令')
+                if proposal['action'] == 'blocked' and not str(proposal.get('reason') or '').strip():
+                    raise ValueError('blocked 分析需要说明尚缺的外部条件')
+                if proposal['action'] == 'replace_compatibility_pin' and not proposal.get('requirement'):
+                    raise ValueError('兼容依赖修复需要 requirement 文本字段')
+            except (ValueError, TypeError) as exc:
+                error = _analysis_feedback(exc)
+                record['response_errors'].append({'call': reading_round + 1, 'error': error})
+                record['analysis_error'] = error
                 continue
+            record.pop('analysis_error', None)
             record['proposal'] = {'action': str(proposal.get('action') or '')[:100],
-                                  'requirement': _safe_install_diagnostic(
-                                      str(proposal.get('requirement') or ''))[:200]}
-            record['reason'] = _safe_install_diagnostic(str(proposal.get('reason') or ''))[:1000]
+                                  'requirement': _analysis_feedback(proposal.get('requirement') or '')[:200]}
+            record['reason'] = _analysis_feedback(proposal.get('reason') or '')
             validated = (_validated_compatibility_pin(proposal, plan, effective, diagnostic, failure_kind)
                          if proposal.get('action') == 'replace_compatibility_pin' else None)
             if validated:
+                validated['reason'] = _analysis_feedback(validated.get('reason'))
                 record['action'] = validated['action']
                 record['validated_repair'] = validated
                 return validated
@@ -212,7 +246,7 @@ def analyze_author_failure(llm, result, plan, packet, workspace, environment, ru
                 record['rejected_action'] = str(proposal.get('action'))[:100]
             return None
     except Exception as exc:
-        record['analysis_error'] = _safe_install_diagnostic(str(exc))[:500]
+        record['analysis_error'] = _analysis_feedback(exc)
         return None
     except BaseException:
         # A cancelled model call did not produce findings. Persist the stop

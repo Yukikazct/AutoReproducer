@@ -55,6 +55,26 @@ def test_fingerprint_changes_on_add_and_delete(tmp_path: Path):
     assert fingerprint_workspace(ws) != base
 
 
+def test_snapshot_restores_and_removes_files_beyond_windows_max_path(tmp_path):
+    from src.safety.paths import filesystem_path
+    root = _make_workspace(tmp_path)
+    relative = Path('nested') / ('a' * 100) / ('b' * 100) / 'kept.txt'
+    original = Path(filesystem_path(root / relative))
+    original.parent.mkdir(parents=True)
+    original.write_bytes(b'original input')
+    baseline = snapshot_workspace(root)
+    assert baseline[relative.as_posix()]['content'] == b'original input'
+    original.write_bytes(b'changed candidate')
+    extra = original.with_name('candidate-output.txt')
+    extra.write_bytes(b'failed output')
+    restored, removed = restore_snapshot(root, baseline)
+    assert relative.as_posix() in restored
+    assert relative.with_name('candidate-output.txt').as_posix() in removed
+    assert original.read_bytes() == b'original input'
+    assert not extra.exists()
+    assert snapshot_workspace(root) == baseline
+
+
 def test_fingerprint_order_independent():
     """指纹仅依赖 路径+内容哈希 集合，与存储顺序无关。"""
     snap1 = {"a.py": {"sha256": "h1"}, "b.py": {"sha256": "h2"}}

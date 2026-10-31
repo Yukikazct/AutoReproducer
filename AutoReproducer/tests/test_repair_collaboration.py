@@ -235,7 +235,18 @@ def test_success_flag_cannot_commit_stopped_candidate(repository, markers):
             repository, steps(), {})
     assert result['success'] is False and len(llm.calls) == 1
     assert fake_runner.run.call_count == 2
-    assert snapshot_workspace(repository) == before
+    from src.execution_safety import cleanup_is_unconfirmed
+    if cleanup_is_unconfirmed(stopped):
+        # A still-live candidate may be writing its workspace. Preserve the
+        # evidence and block reuse; rollback itself must wait for cleanup.
+        assert result['repair_status'] == 'cleanup_unconfirmed'
+        assert result['process_cleanup_confirmed'] is False
+        assert result['repair_workspace_retained'] is True
+        attempt = result['repair_attempts'][0]
+        assert attempt['rollback_deferred'] and not attempt.get('changed_files')
+        assert snapshot_workspace(repository) != before
+    else:
+        assert snapshot_workspace(repository) == before
 
 
 def test_environment_timeout_guard_does_not_require_duplicate_result_flag(repository, tmp_path):

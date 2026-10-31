@@ -7,7 +7,7 @@ import sys
 import threading
 
 from src.safety.files import remove_tree
-from src.safety.paths import is_link, workspace_path
+from src.safety.paths import filesystem_path, is_link, workspace_path
 
 
 JOURNAL = ".autorepro-training.json"
@@ -65,7 +65,7 @@ def _roots(dependency_root):
 
 def _owned_bytes(root):
     """Venv executable symlinks are references, never deletion/measurement targets."""
-    total, pending = 0, [root]
+    total, pending = 0, [Path(filesystem_path(root))]
     while pending:
         with os.scandir(pending.pop()) as entries:
             for entry in entries:

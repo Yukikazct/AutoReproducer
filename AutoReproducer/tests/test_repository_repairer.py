@@ -112,6 +112,28 @@ def test_failed_candidate_is_fully_restored_before_second_proposal(runner, works
     assert not (workspace / "failed-output").exists()
 
 
+def test_candidate_instrumentation_and_long_outputs_roll_back_before_retry(runner, workspace):
+    before = snapshot_workspace(workspace)
+    generated = 'observer/' + 'a' * 100 + '/' + 'b' * 100 + '/output.txt'
+    attempts = []
+    def propose(context, call):
+        assert snapshot_workspace(workspace) == before
+        if call == 1:
+            return proposal(context, {'train.py': "raise RuntimeError('candidate still fails')\n"})
+        return valid_proposal(context, call)
+    def execute(root, files, environment, on_event):
+        target = Path(filesystem_path(root / generated))
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b'current candidate output')
+        attempts.append([item['path'] for item in files])
+        return runner.run(root, plan(), environment, on_event=on_event)
+    result = runner.run_with_repairs(workspace, plan(), {}, llm=RepairLLM(propose),
+        editable=['model.py', 'train.py'], execute_candidate=execute)
+    assert result['success'] and len(attempts) == 2
+    assert generated in result['repair_attempts'][0]['removed']
+    assert Path(filesystem_path(workspace / generated)).read_bytes() == b'current candidate output'
+
+
 def test_second_repair_context_bounds_large_logs_without_truncating_audit_evidence(runner, workspace):
     def propose(context, call):
         if call == 1:
@@ -143,11 +165,18 @@ def test_context_bounds_reason_fallback_when_execution_streams_are_empty(runner,
     assert len(execution['reason']) > 250000  # Only the model view is abbreviated.
 
 
-def test_budget_exhaustion_restores_both_files_and_writes_failure_report(runner, workspace):
+def test_repeated_failed_candidate_stops_before_another_execution(runner, workspace, monkeypatch):
     before = snapshot_workspace(workspace)
-    llm = RepairLLM(lambda context, _: proposal(context, {
-        "model.py": "class Model:\n    def wrong(self):\n        return 8\n",
-        "train.py": "from pathlib import Path\nPath('failed-output').write_text('candidate')\nraise RuntimeError('still broken')\n"}))
+    run = Mock(wraps=runner.run)
+    monkeypatch.setattr(runner, 'run', run)
+    def propose(context, call):
+        candidate = proposal(context, {
+            "model.py": "class Model:\n    def wrong(self):\n        return 8\n",
+            "train.py": "from pathlib import Path\nPath('failed-output').write_text('candidate')\nraise RuntimeError('still broken')\n"})
+        if call == 2:
+            candidate['patches'].reverse()  # Reordering is still the identical candidate.
+        return candidate
+    llm = RepairLLM(propose)
     result = runner.run_with_repairs(workspace, plan(), {}, llm=llm,
                                     editable=["model.py", "train.py"])
     assert result["success"] is False
@@ -155,7 +184,189 @@ def test_budget_exhaustion_restores_both_files_and_writes_failure_report(runner,
     assert result["repair_llm_calls"] == 2
     assert snapshot_workspace(workspace) == before
     assert "Status: failed" in Path(result["repair_report"]).read_text(encoding="utf-8")
-    assert all(attempt["status"] == "failed" for attempt in result["repair_attempts"])
+    assert [attempt['status'] for attempt in result['repair_attempts']] == ['failed', 'repeated_candidate']
+    assert run.call_count == 2  # Original failure plus one candidate; no duplicate training run.
+    assert 'execution' not in result['repair_attempts'][1]
+    assert result['repair_attempts'][0]['candidate_sha256'] == result['repair_attempts'][1]['candidate_sha256']
+
+
+def test_malformed_model_response_is_fed_back_before_second_attempt(runner, workspace):
+    llm = RepairLLM(valid_proposal)
+    original_chat = llm.chat
+
+    def chat(prompt, **kwargs):
+        result = original_chat(prompt, **kwargs)
+        return '```json\n{"reason":' if len(llm.calls) == 1 else result
+
+    llm.chat = chat
+    result = runner.run_with_repairs(workspace, plan(), {}, llm=llm,
+                                    editable=['model.py', 'train.py'])
+    assert result['success']
+    assert [attempt['status'] for attempt in result['repair_attempts']] == ['rejected', 'succeeded']
+    history = llm.calls[1][0]['previous_attempts']
+    assert history[0]['status'] == 'rejected' and history[0]['error']
+    assert llm.calls[1][0]['diagnostic'] == llm.calls[0][0]['diagnostic']
+
+
+def test_failed_patch_difference_guides_cumulative_second_repair(runner, workspace):
+    def propose(context, call):
+        if call == 1:
+            return proposal(context, {'train.py': 'from model import Model\nprint(Model().output())\n'})
+        prior = context['previous_attempts'][0]
+        assert '+print(Model().output())' in prior['candidate_diff']
+        assert '-print(Model().get_value())' in prior['candidate_diff']
+        assert not prior['candidate_diff_truncated']
+        assert "'output'" in prior['diagnostic']
+        assert "'get_value'" in context['initial_diagnostic']
+        assert 'get_value()' in context['sources']['train.py']['content']
+        return valid_proposal(context, call)
+
+    result = runner.run_with_repairs(workspace, plan(), {}, llm=RepairLLM(propose),
+                                    editable=['model.py', 'train.py'])
+    assert result['success']
+    assert result['final']['stdout'].strip() == '7'
+    assert [attempt['status'] for attempt in result['repair_attempts']] == ['failed', 'succeeded']
+
+
+def test_feedback_difference_is_bounded_but_disk_evidence_is_complete(runner, workspace):
+    def propose(context, call):
+        if call == 1:
+            return proposal(context, {'train.py': "# large compatibility proposal\n" * 1000 +
+                                     'from model import Model\nprint(Model().output())\n'})
+        prior = context['previous_attempts'][0]
+        assert len(prior['candidate_diff']) <= repair_module.MAX_FEEDBACK_DIFF_CHARS
+        assert prior['candidate_diff_truncated']
+        return valid_proposal(context, call)
+
+    result = runner.run_with_repairs(workspace, plan(), {}, llm=RepairLLM(propose),
+                                    editable=['model.py', 'train.py'])
+    assert result['success']
+    diff = Path(result['repair_records']).parent / 'round_1' / 'candidate.diff'
+    assert len(diff.read_text(encoding='utf-8')) > repair_module.MAX_FEEDBACK_DIFF_CHARS
+
+
+@pytest.mark.parametrize('marker', [
+    {'cancelled': True}, {'timed_out': True}, {'interrupted': True},
+    {'cleanup_unconfirmed': True}, {'process_cleanup_confirmed': False},
+    {'state': 'cleanup_unconfirmed'},
+])
+@pytest.mark.parametrize('placement', ['execution', 'final', 'cleanup_receipt'])
+def test_unfinished_execution_does_not_start_source_repair(runner, workspace, marker, placement, monkeypatch):
+    execution = {'executed': True, 'success': False, 'final': {'exit_code': 1}}
+    (execution if placement == 'execution' else execution.setdefault(placement, {})).update(marker)
+    monkeypatch.setattr(runner, 'run', Mock(return_value=execution))
+    llm = RepairLLM(valid_proposal)
+    result = runner.run_with_repairs(workspace, plan(), {}, llm=llm,
+                                    editable=['model.py', 'train.py'])
+    assert not result['success']
+    assert result['repair_attempts'] == []
+    assert not llm.calls
+
+
+@pytest.mark.parametrize('details', [
+    {'steps': [{'cleanup_receipt': {'processes_alive': [1234]}}]},
+    {'stages': [{'cleanup_errors': ['failed to terminate child']}]},
+    {'environment_cleanup': {'cleanup_confirmed': False}},
+    {'cleanup_receipt': {'status': 'cleanup_unconfirmed'}},
+])
+def test_nested_cleanup_failure_overrides_success_without_requesting_repairs(runner, workspace, details, monkeypatch):
+    execution = {'executed': True, 'success': True, 'final': {'exit_code': 0}, **details}
+    monkeypatch.setattr(runner, 'run', Mock(return_value=execution))
+    llm = RepairLLM(valid_proposal)
+    result = runner.run_with_repairs(workspace, plan(), {}, llm=llm,
+                                    editable=['model.py', 'train.py'])
+    assert not result['success']
+    assert not llm.calls
+    assert all(result[key] == value for key, value in details.items())
+
+
+@pytest.mark.parametrize('marker', [{'cancelled': True, 'process_cleanup_confirmed': True},
+                                  {'timed_out': True, 'process_cleanup_confirmed': True}])
+def test_successful_candidate_with_unfinished_final_state_is_not_committed(runner, workspace, marker, monkeypatch):
+    initial = runner.run(workspace, plan(), {})
+    before = snapshot_workspace(workspace)
+    candidate = {'executed': True, 'success': True, 'final': {'exit_code': 0, **marker}}
+    monkeypatch.setattr(runner, 'run', Mock(return_value=candidate))
+    result = runner.run_with_repairs(workspace, plan(), {}, llm=RepairLLM(valid_proposal),
+        editable=['model.py', 'train.py'], initial_execution=initial)
+    assert not result['success']
+    assert result['repair_llm_calls'] == 1
+    assert snapshot_workspace(workspace) == before
+
+
+@pytest.mark.parametrize('details', [
+    {'final': {'exit_code': 0, 'process_cleanup_confirmed': False}},
+    {'cleanup_receipt': {'processes_alive': [1234]}},
+    {'steps': [{'cleanup_errors': ['child termination failed']}]},
+])
+def test_candidate_with_unconfirmed_cleanup_retains_tree_without_rollback(runner, workspace, monkeypatch, details):
+    initial = runner.run(workspace, plan(), {})
+    rollback = Mock(side_effect=AssertionError('must not touch a potentially live workspace'))
+    monkeypatch.setattr(repair_module.PatchTransaction, '_rollback', rollback)
+
+    def candidate(*args, **kwargs):
+        (workspace / 'live-output').write_bytes(b'process may still own this output')
+        return {'executed': True, 'success': True, 'final': {'exit_code': 0}, **details}
+
+    monkeypatch.setattr(runner, 'run', Mock(side_effect=candidate))
+    llm = RepairLLM(valid_proposal)
+    result = runner.run_with_repairs(workspace, plan(), {}, llm=llm,
+        editable=['model.py', 'train.py'], initial_execution=initial)
+    assert not result['success'] and result['repair_status'] == 'cleanup_unconfirmed'
+    assert result['process_cleanup_confirmed'] is False and result['repair_workspace_retained']
+    assert len(llm.calls) == runner.run.call_count == 1
+    rollback.assert_not_called()
+    assert b'def output(' in (workspace / 'model.py').read_bytes()
+    assert (workspace / 'live-output').read_bytes() == b'process may still own this output'
+    attempt = result['repair_attempts'][0]
+    assert attempt['rollback_deferred'] and attempt['workspace_retained']
+    assert not attempt['restored'] and not attempt['removed']
+    assert 'changed_files' not in attempt
+    evidence = json.loads(Path(result['repair_records']).read_text(encoding='utf-8'))
+    assert evidence['status'] == 'cleanup_unconfirmed'
+    assert evidence['attempts'][0]['rollback_deferred_reason']
+
+
+@pytest.mark.parametrize('error_type', [RuntimeError, KeyboardInterrupt, SystemExit])
+def test_cleanup_exception_defers_rollback_and_preserves_exception_identity(runner, workspace, monkeypatch, error_type):
+    initial = runner.run(workspace, plan(), {})
+    failure = error_type('candidate process cleanup incomplete')
+    failure.process_cleanup_confirmed = False
+    failure.cleanup_receipt = {'process_cleanup_confirmed': False, 'processes_alive': [1234]}
+    failure.execution = {'executed': True, 'success': False,
+                         'run_dir': str(workspace.parent / 'candidate-execution'),
+                         'final': {'exit_code': 1, 'stderr': 'candidate failure output'}}
+    rollback = Mock(side_effect=AssertionError('must not roll back before cleanup'))
+    monkeypatch.setattr(repair_module.PatchTransaction, '_rollback', rollback)
+
+    def candidate(*args, **kwargs):
+        (workspace / 'live-output').write_bytes(b'keep until cleanup confirmed')
+        raise failure
+
+    monkeypatch.setattr(runner, 'run', Mock(side_effect=candidate))
+    llm = RepairLLM(valid_proposal)
+    kwargs = {'llm': llm, 'editable': ['model.py', 'train.py'], 'initial_execution': initial}
+    if error_type is RuntimeError:
+        result = runner.run_with_repairs(workspace, plan(), {}, **kwargs)
+        assert not result['success'] and result['repair_status'] == 'cleanup_unconfirmed'
+        assert result['process_cleanup_confirmed'] is False
+    else:
+        with pytest.raises(error_type) as caught:
+            runner.run_with_repairs(workspace, plan(), {}, **kwargs)
+        assert caught.value is failure
+    rollback.assert_not_called()
+    assert len(llm.calls) == runner.run.call_count == 1
+    assert b'def output(' in (workspace / 'model.py').read_bytes()
+    assert (workspace / 'live-output').read_bytes() == b'keep until cleanup confirmed'
+    record, = (workspace.parent / '.autorepro_repository_repairs').glob('*/repairs.json')
+    evidence = json.loads(record.read_text(encoding='utf-8'))
+    assert evidence['status'] == 'cleanup_unconfirmed'
+    assert evidence['attempts'][0]['rollback_deferred']
+    assert evidence['attempts'][0]['cleanup_receipt'] == failure.cleanup_receipt
+    assert evidence['attempts'][0]['execution'] == failure.execution
+    if error_type is RuntimeError:
+        assert result['run_dir'] == failure.execution['run_dir']
+        assert result['final']['stderr'] == 'candidate failure output'
 
 
 def test_invalid_second_patch_never_applies_first_valid_patch(runner, workspace):

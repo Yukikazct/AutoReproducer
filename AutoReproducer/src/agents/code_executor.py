@@ -332,6 +332,14 @@ def _pinned_cpu_requirements(requirements: str) -> bool:
             and bool(re.search(r"(?m)^\s*--extra-index-url(?:\s+|=)https://download\.pytorch\.org/whl/cpu/?\s*$",
                                requirements)))
 
+
+def _default_cpu_torch_requirements(requirements: str) -> bool:
+    """Allow a cold fixed CPU wheel the full budget on the default routing."""
+    return (PIP_FIND_LINKS == _DEFAULT_PUBLIC_FIND_LINKS
+            and _allow_official_pip_fallback(requirements)
+            and not re.search(r'(?m)^\s*--extra-index-url', requirements)
+            and bool(re.search(r'(?m)^\s*torch\s*==\s*\d+(?:\.\d+)*\s*(?:#.*)?$', requirements)))
+
 # ---- P1-⑪ Docker 沙箱加固参数（镜像白名单 + cap-drop + 只读 + 非 root + 限额） ----
 # 镜像白名单前缀（逗号分隔，可用 AUTOREPRO_DOCKER_IMAGE_ALLOWLIST 覆盖）：
 # 只允许官方/自建镜像前缀，拒绝任意第三方镜像拉取执行。
@@ -719,7 +727,8 @@ class CodeExecutorAgent(BaseAgent):
                     if (Path(path) / _DEPS_READY_MARK).is_file():
                         touch_deps_meta(Path(path))
                 try:
-                    if outermost and not self.mock_mode:
+                    if (outermost and not self.mock_mode
+                            and (self.env_config or {}).get('process_cleanup_confirmed') is not False):
                         self._discard_failed_dependency_installs()
                         self._dependency_housekeeping(self._protected_dependency_paths(), phase='scope_finished')
                 finally:
@@ -1992,14 +2001,39 @@ class CodeExecutorAgent(BaseAgent):
                        'PIP_CACHE_DIR': filesystem_path(work / 'download-cache')}
                 if len(command) > 3 and command[3] in {'install', 'download'}:
                     from src.dependency_install_progress import DependencyInstallProgress
+                    from src.dependency_sources import scope_pytorch_sources
                     from urllib.parse import urlsplit
+                    routed = list(command)
+                    if (self.env_config.get('auto_prepare') and '-r' in routed):
+                        position = routed.index('-r') + 1
+                        requirements = Path(routed[position]).read_text(encoding='utf-8')
+                        if _allow_official_pip_fallback(requirements):
+                            env.setdefault('PIP_RETRIES', '1')
+                            env.setdefault('PIP_DEFAULT_TIMEOUT', '15')
+                            # Inspect wheel metadata before downloading rejected
+                            # resolver candidates on mirrors without PEP 658.
+                            if '--use-feature=fast-deps' not in routed:
+                                routed.append('--use-feature=fast-deps')
+                            default_links = any(
+                                routed[index:index + 2] == ['--find-links', _DEFAULT_PUBLIC_FIND_LINKS]
+                                for index in range(len(routed) - 1))
+                            scoped = scope_pytorch_sources(requirements, default_cpu_links=default_links)
+                            if scoped != requirements:
+                                installer_file = work / 'requirements-sources.txt'
+                                installer_file.write_text(scoped, encoding='utf-8')
+                                routed[position] = str(installer_file)
+                                if default_links:
+                                    link_position = routed.index(_DEFAULT_PUBLIC_FIND_LINKS) - 1
+                                    del routed[link_position:link_position + 2]
+                                self.log('install_deps', 'RUNNING',
+                                         '已将 PyTorch 补充源限定到对应软件包；其余依赖使用当前镜像，固定版本保持不变')
                     monitor = DependencyInstallProgress(work, self._emit_execution_event, timeout)
                     if '-i' in command:
                         try:
                             monitor.source_domain = urlsplit(command[command.index('-i') + 1]).hostname
                         except (ValueError, IndexError):
                             pass
-                    observed = [*command, '--log', str(monitor.log_path), '--progress-bar', 'off']
+                    observed = [*routed, '--log', str(monitor.log_path), '--progress-bar', 'off']
                     previous = getattr(self, '_dependency_install_monitor', None)
                     self._dependency_install_monitor = monitor
                     status = 'error'
@@ -2458,7 +2492,8 @@ class CodeExecutorAgent(BaseAgent):
         index, links = sources[0]
         reviewed_public = bool(env_config.get("auto_prepare")) and _allow_official_pip_fallback(reqs)
         pinned_cuda = reviewed_public and _pinned_cuda_requirements(reqs)
-        pinned_cpu = reviewed_public and _pinned_cpu_requirements(reqs)
+        pinned_cpu = reviewed_public and (
+            _pinned_cpu_requirements(reqs) or _default_cpu_torch_requirements(reqs))
         try:
             self._dependency_install_targets.add(str(deps_dir))
             deps_dir.mkdir(parents=True, exist_ok=True)

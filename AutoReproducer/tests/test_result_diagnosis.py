@@ -152,6 +152,97 @@ def test_strict_failed_numerical_acceptance_has_distinct_diagnosis(case):
     assert case['validation']['is_reproduced'] is False
 
 
+def ai_assessment(verdict):
+    return {'status': 'completed', 'source': 'ai', 'scope': 'executed_experiment',
+            'verdict': verdict, 'reason': '已结合论文结果和本次实际设置综合判断。',
+            'confidence': .8, 'limitations': ['本次单次运行，论文报告多次均值。'],
+            'metric_assessments': [{'actual_id': 'train:stdout:0', 'verdict': verdict,
+                'reason': '按实际误差及论文统计口径判断。',
+                'tolerance': {'absolute': .03, 'relative': None,
+                              'reason': '容许随机种子变化导致的绝对误差。'}}]}
+
+
+@pytest.mark.parametrize('row_status', ['comparable', 'reference_only'])
+def test_ai_reproduced_is_not_overruled_by_old_reference_threshold(case, row_status):
+    case['row'].update(status=row_status)
+    case['row']['actual'].update(aggregation='single', runs=1)
+    case['validation'].update(status='ai_reproduced', is_reproduced=True,
+                              reproduction_assessment=ai_assessment('reproduced'))
+    before = deepcopy(case['validation'])
+    llm = Model()
+    assert run(case, llm) is None
+    assert not llm.calls and not case['run_dir'].exists()
+    assert case['validation'] == before
+
+
+@pytest.mark.parametrize('verdict', ['partially_reproduced', 'not_reproduced', 'insufficient_evidence'])
+def test_ai_unresolved_verdict_drives_diagnosis_and_preserves_error_basis(case, verdict):
+    # The AI decision can need diagnosis even when the old 5% comparison passes.
+    case['row'].update(meets_reference=True, within_tolerance=True, relative_difference=.01)
+    case['row']['actual']['id'] = 'train:stdout:0'
+    assessment = ai_assessment(verdict)
+    case['validation'].update(status='ai_' + verdict,
+                              reproduction_assessment=assessment,
+                              is_reproduced=False if verdict == 'not_reproduced' else None)
+    before = deepcopy(case['validation'])
+    llm = Model({'hypotheses': [{'category': 'statistics', 'message': '重复统计差异可能影响误差解释。',
+                               'evidence_ids': ['reproduction_assessment', 'comparison_1']}]})
+    result = run(case, llm)
+    assert result['trigger'] == ['ai_' + verdict]
+    evidence = {item['id']: item for item in result['evidence']}
+    assert evidence['reproduction_assessment']['value'] == assessment
+    messages = ' '.join(item['message'] for item in result['facts'])
+    assert '不再使用固定阈值重新否决' in messages
+    assert '容许随机种子变化导致的绝对误差' in messages
+    assert '已记录数值偏差未满足当前参考规则' not in messages
+    assert '可选核验与普通 AI 复现判断分别保留' in messages
+    assert case['validation'] == before
+    assert result['model_analysis']['status'] == 'completed'
+    assert json.loads((case['run_dir'] / 'outcome_diagnosis.json').read_text('utf-8')) == result
+    if verdict == 'insufficient_evidence':
+        assert result['status'] == 'evidence_limited'
+
+
+def test_ai_insufficient_evidence_without_comparison_still_records_assessment(case):
+    case['validation']['reproduction_assessment'] = ai_assessment('insufficient_evidence')
+    case['validation']['author_claim_comparison']['comparisons'] = []
+    result = run(case)
+    assert result['trigger'] == ['ai_insufficient_evidence']
+    assert any(item['id'] == 'reproduction_assessment' for item in result['evidence'])
+    assert result['status'] == 'evidence_limited'
+
+
+@pytest.mark.parametrize('patch', [{'status': 'unavailable'}, {'status': 'blocked'},
+                                  {'source': 'unknown'}, {'verdict': 'unknown'}])
+def test_incomplete_or_invalid_ai_assessment_keeps_prior_reference_diagnosis(case, patch):
+    case['validation']['reproduction_assessment'] = {**ai_assessment('reproduced'), **patch}
+    result = run(case)
+    assert result['trigger'] == ['reference_not_met']
+
+
+def test_ai_assessment_cannot_erase_independent_strict_validation_failure(case):
+    case['validation'].pop('author_claim_comparison')
+    case['validation'].update(status='reference_not_met', is_reproduced=False, protocol_pass=True,
+                              independent_metrics_pass=True, paper_metrics_verified=True,
+                              reproduction_assessment=ai_assessment('reproduced'))
+    result = run(case)
+    assert result['trigger'] == ['strict_not_reproduced']
+    assert any('独立指标核验已通过' in item['message'] for item in result['facts'])
+    assert not any('固定阈值重新否决' in item['message'] for item in result['facts'])
+
+
+def test_ai_assessment_diagnostic_evidence_redacts_model_credential(case):
+    assessment = ai_assessment('not_reproduced')
+    assessment['reason'] += ' fixture-private-diagnosis-key'
+    case['validation']['reproduction_assessment'] = assessment
+    llm = Model({'hypotheses': []})
+    result = run(case, llm)
+    combined = json.dumps(result) + json.dumps(llm.calls[0][0])
+    assert 'fixture-private-diagnosis-key' not in combined
+    assert '[REDACTED]' in combined
+    assert 'fixture-private-diagnosis-key' in case['validation']['reproduction_assessment']['reason']
+
+
 @pytest.mark.parametrize('response', [
     'not json', RuntimeError('model unavailable'),
     {'hypotheses': [{'category': 'data', 'message': 'unknown', 'evidence_ids': ['invented_evidence']}]},
