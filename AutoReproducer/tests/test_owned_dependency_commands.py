@@ -1,5 +1,6 @@
 """Real timeout ownership at the preset dependency boundary; no pip/network."""
 import subprocess
+import os
 from pathlib import Path
 import sys
 import time
@@ -117,6 +118,50 @@ def test_pip_owns_processes_and_temporaries_without_auto_prepare(monkeypatch, tm
     assert env['PIP_USER'] == '0' and env['TMPDIR'] == env['TEMP'] == env['TMP']
     assert not Path(env['TMPDIR']).exists()
     run.assert_called_once_with(command, timeout_s=300, env=env)
+
+
+@pytest.mark.skipif(os.name != 'nt', reason='Windows pip target compatibility bootstrap')
+@pytest.mark.parametrize('outcome', ['success', 'timeout', 'cancel'])
+def test_target_bootstrap_retains_owned_runner_env_cleanup_and_original_argv(monkeypatch, tmp_path, outcome):
+    instance = executor(tmp_path)
+    instance.env_config['auto_prepare'] = False
+    monkeypatch.setenv('AUTOREPRO_INSTALLER_INHERITED_TEST', 'inherited value')
+    monkeypatch.setenv('LLM_API_KEY', 'must be excluded')
+    monkeypatch.setattr(lifecycle, 'validate_windows_venv', lambda: None)
+    command = [sys.executable, '-m', 'pip', 'install', '--no-index', '--target', str(tmp_path / 'target'), 'fixture.whl']
+    calls = []
+
+    def owned(actual, **kwargs):
+        calls.append((actual, kwargs))
+        assert actual[:4] == [sys.executable, '-I', '-X', 'utf8']
+        assert Path(actual[4]).name == 'pip_windows_target.py'
+        assert actual[5:] == command[3:] + ['--log', str(instance._dependency_install_monitor.log_path), '--progress-bar', 'off']
+        environment = kwargs['env']
+        assert environment['AUTOREPRO_INSTALLER_INHERITED_TEST'] == 'inherited value'
+        assert environment['SYSTEMROOT'] == os.environ['SYSTEMROOT']
+        assert environment['PATH'] == os.environ['PATH'] and 'LLM_API_KEY' not in environment
+        assert environment['TEMP'].startswith('\\\\?\\')
+        assert environment['TEMP'] == environment['TMP'] == environment['TMPDIR']
+        if outcome == 'timeout':
+            raise runtime.RuntimePreparationTimeout('owned deadline', stdout='partial output', stderr='partial error')
+        if outcome == 'cancel':
+            raise KeyboardInterrupt('owned cancellation')
+        return subprocess.CompletedProcess(actual, 0, 'done', '')
+
+    monkeypatch.setattr(runtime, 'run_owned_process', owned)
+    if outcome == 'timeout':
+        with pytest.raises(subprocess.TimeoutExpired) as captured:
+            instance._run_dependency_command(command, timeout=3, env=instance._pip_env())
+        assert captured.value.cmd[:len(command)] == command and captured.value.stdout == 'partial output'
+    elif outcome == 'cancel':
+        with pytest.raises(KeyboardInterrupt, match='owned cancellation'):
+            instance._run_dependency_command(command, timeout=3, env=instance._pip_env())
+    else:
+        result = instance._run_dependency_command(command, timeout=3, env=instance._pip_env())
+        assert result.args[:len(command)] == command and result.stdout == 'done'
+    assert len(calls) == 1
+    receipt, = instance.env_config['dependency_temporary_files']
+    assert receipt['status'] == 'removed' and not Path(receipt['path']).exists()
 
 
 def test_real_pip_timeout_reaps_descendants_before_scratch_cleanup(monkeypatch, tmp_path):
