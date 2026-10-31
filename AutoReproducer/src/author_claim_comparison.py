@@ -11,6 +11,7 @@ import re
 
 from src.author_comparison_context import comparison_plan, comparison_view, prepare_comparison_packet
 from src.author_comparison_feedback import context_quote_hints, correction_source_view
+from src.author_literal_observations import collect_author_observations
 from src.author_comparison_semantics import _scopes, context_evidence, reference_uncertainty, repetition_count_supported, settings_evidence
 from src.author_table_evidence import dataset_row_header, locate_table_value
 from src.discovered_repository_plan import (
@@ -703,10 +704,14 @@ def _validated_rows(payload, packet, workspace, records, accepted, known_citatio
 
 
 def compare_author_claims(llm, packet, plan, workspace, execution, *, sources=None, metric_workspace=None):
+    credential = getattr(llm, 'api_key', '')
+    credential = credential if isinstance(credential, str) else ''
     records, errors = collect_author_metrics(execution,
         workspace=metric_workspace if metric_workspace is not None else workspace, plan=plan, sources=sources)
+    observations, observation_errors = collect_author_observations(execution)
     result = {'status': 'unavailable', 'basis': 'author_output', 'relative_tolerance': TOLERANCE,
               'metric_records': records, 'parse_errors': errors, 'comparisons': [], 'citations': [],
+              'raw_observations': observations, 'raw_observation_errors': observation_errors,
               'validation_errors': [],
               'reason': '未找到可与论文宣称配对的作者输出；代码运行结果不受影响。'}
     prepared_packet = None
@@ -716,11 +721,12 @@ def compare_author_claims(llm, packet, plan, workspace, execution, *, sources=No
         records, interpretation = interpret_numeric_summaries(llm, prepared_packet, plan, workspace, execution)
         result.update(metric_records=records, numeric_summary_interpretation=interpretation)
     if not records:
-        result['reason'] = '作者输出中未识别到可比较的数值指标；代码运行结果不受影响。'
-        return result
+        result['reason'] = ('已保留作者打印的原始数值与标签；指标含义、单位和实验协议尚未核验，未用于论文指标配对。'
+                            if observations else '作者输出中未识别到可比较的数值指标；代码运行结果不受影响。')
+        return _redact_evidence(result, credential)
     if llm is None or getattr(llm, 'mock_mode', False):
         result['reason'] = '未配置可用于论文指标对比的真实模型；保留实际指标，代码运行结果不受影响。'
-        return result
+        return _redact_evidence(result, credential)
     packet = prepared_packet or prepare_comparison_packet(packet, plan, workspace)
     result['comparison_source_discovery'] = deepcopy(packet['comparison_source_discovery'])
     schema = """{citations:[{id,evidence_id}],comparisons:[{actual_id,
@@ -796,8 +802,6 @@ settings:{status:'matched|different|unknown',reason,citations:[PDF and repositor
               'span, and include the original citation for every provided span. '
               'Use only provided evidence IDs and original literal labels; '
               'preserve the specific method variant in both method fields and explain experimental differences in settings.')
-    credential = getattr(llm, 'api_key', '')
-    credential = credential if isinstance(credential, str) else ''
     try:
         feedback = ''
         result['extraction_attempts'] = []

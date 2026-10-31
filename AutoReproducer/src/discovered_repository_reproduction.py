@@ -1434,7 +1434,12 @@ class DiscoveredRepositoryReproduction:
                 validation.setdefault('warnings', []).append('作者缺失的临时数据目录已在实际报错后映射到本任务内；原仓库文件未改写。')
             if validation.get('pyg_compatibility'):
                 validation.setdefault('warnings', []).append('执行包含实际报错后的旧 PyG 容器兼容；原数据文件、张量值与划分未改写。')
-            from src.author_claim_comparison import collect_author_metrics
+            from src.author_claim_comparison import collect_author_metrics, _redact_evidence
+            from src.author_literal_observations import collect_author_observations
+            observations, observation_errors = collect_author_observations(execution)
+            credential = getattr(self.llm, 'api_key', '')
+            validation.update(_redact_evidence({'raw_observations': observations,
+                'raw_observation_errors': observation_errors}, credential if isinstance(credential, str) else ''))
             metric_workspace = Path(data['source_repair']['workspace']) if repaired else workspace
             metric_sources = data['source_repair']['effective_source_files'] if repaired else snapshot['files']
             execution['author_output_receipts'] = [
