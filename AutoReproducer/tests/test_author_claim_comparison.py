@@ -497,12 +497,14 @@ def test_truncated_table_row_can_expand_only_to_its_exact_original_physical_line
 def test_authoritative_context_does_not_use_an_unverified_optional_model_quote(sources):
     fixture, packet, records, payload = sources
     record = next(row for row in records if row['split'] == 'test')
-    record.update(runs=1, aggregation='single')
-    proposed = {'runs': 'parser.add_argument("--runs", default=999)'}
+    record.update(runs=1, aggregation='single', unit='fraction')
+    proposed = {'runs': 'parser.add_argument("--runs", default=999)',
+                'aggregation': 'This invented statistic is not in the source.',
+                'split': 'An invented evaluation split.', 'unit': 'An invented unit statement.'}
     payload['comparisons'][0]['actual_context']['context_quotes'] = proposed.copy()
     rows, _ = validate_comparisons(payload, packet, fixture['workspace'], records)
     actual = rows[0]['actual']
-    assert 'runs' not in actual['context_quotes']
+    assert not actual['context_quotes']
     assert actual['field_evidence']['runs']['value'] == 1
     assert actual['field_evidence']['runs']['reason'] == 'Authoritative observed metric field'
     assert payload['comparisons'][0]['actual_context']['context_quotes'] == proposed
@@ -888,6 +890,165 @@ def test_label_feedback_never_synthesizes_an_unsupported_name_or_unprovided_sour
     result = compare_author_claims(llm, packet, fixture['proposal'], fixture['workspace'], actual_execution())
     assert result['status'] == 'unavailable' and not result['comparisons']
     assert not result['extraction_attempts'][0].get('label_evidence_hints')
+
+
+@pytest.mark.parametrize('correct_second', [True, False])
+def test_cross_page_context_feedback_preserves_rejection_and_requires_model_correction(sources, correct_second):
+    fixture, packet, records, payload = sources
+    rejected = deepcopy(payload)
+    quote = 'Signal Linear SignGrid test 100.0 Full methods on the next page.'
+    rejected['comparisons'][0]['reference']['context_quotes'] = {'split': quote}
+    assert not any(quote in page['text'] for page in packet['pdf']['pages'])
+    with pytest.raises(ValueError, match=r'reference\.context_quotes\.split must occur'):
+        validate_comparisons(rejected, packet, fixture['workspace'], records)
+    corrected = deepcopy(payload)
+    corrected['comparisons'][0]['reference']['context_quotes'] = {'split': 'Signal Linear SignGrid test 100.0'}
+    llm = Mock(mock_mode=False)
+    llm.chat.side_effect = [json.dumps(rejected), json.dumps(corrected if correct_second else rejected)]
+    result = compare_author_claims(llm, packet, fixture['proposal'], fixture['workspace'], actual_execution())
+    attempt = result['extraction_attempts'][0]
+    assert attempt['proposal'] == rejected and attempt['status'] == 'validation_failed'
+    hints = attempt['context_quote_hints']
+    assert hints and all(item['field'] == 'reference.context_quotes.split' for item in hints)
+    from src.author_comparison_context import comparison_view, prepare_comparison_packet
+    view = comparison_view(prepare_comparison_packet(packet, fixture['proposal'], fixture['workspace']),
+                           fixture['proposal'], result['metric_records'])
+    for hint in hints:
+        excerpt = view['evidence_excerpts'][hint['evidence_id']]
+        assert hint['source'] == excerpt['source'] == 'pdf'
+        assert hint['quote'] in excerpt['quote'] and len(hint['quote']) <= 600
+    feedback = llm.chat.call_args_list[1].args[0].split('\n\nCorrection feedback', 1)[1]
+    assert 'navigation only' in feedback and 'Do not join pages' in feedback
+    assert hints[0]['evidence_id'] in feedback
+    assert llm.chat.call_count == 2
+    assert result['status'] == ('compared' if correct_second else 'unavailable')
+    if not correct_second:
+        assert not result['comparisons'] and result['validation_errors']
+
+
+def test_repository_context_feedback_names_actual_side_and_allows_optional_omission(sources):
+    fixture, packet, _, payload = sources
+    rejected = deepcopy(payload)
+    rejected['comparisons'][0]['actual_context']['context_quotes'] = {
+        'unit': 'Signal Linear accuracy uses an invented unit statement'}
+    llm = Mock(mock_mode=False)
+    llm.chat.side_effect = [json.dumps(rejected), json.dumps(payload)]
+    result = compare_author_claims(llm, packet, fixture['proposal'], fixture['workspace'], actual_execution())
+    attempt = result['extraction_attempts'][0]
+    assert attempt['validation_errors'][0]['error'].startswith('actual_context.context_quotes.unit ')
+    assert attempt['context_quote_hints']
+    assert all(hint['source'] == 'repository' for hint in attempt['context_quote_hints'])
+    assert result['status'] == 'compared' and llm.chat.call_count == 2
+
+
+@pytest.mark.parametrize('correction', ['both', 'split_only', 'unchanged'])
+def test_all_context_quote_faults_are_visible_in_one_correction_and_stale_faults_clear(sources, correction):
+    from discovered_fixtures import write_pdf
+    fixture, packet, _, payload = sources
+    runs_quote = 'We conduct a single run for each experiment.'
+    pages = [page['text'].splitlines() for page in packet['pdf']['pages']]
+    write_pdf(fixture['pdf'], [*pages, ['Unrelated fourth page.'], ['Unrelated fifth page.'], [runs_quote]])
+    packet = build_evidence_packet(fixture['pdf'], fixture['workspace'], fixture['snapshot'])
+    rejected = deepcopy(payload)
+    rejected['comparisons'][0]['reference']['context_quotes'] = {
+        'split': 'Signal Linear SignGrid test 100.0 Full methods on the next page.',
+        'runs': runs_quote,
+    }
+    corrected = deepcopy(rejected)
+    if correction != 'unchanged':
+        corrected['comparisons'][0]['reference']['context_quotes']['split'] = 'Signal Linear SignGrid test 100.0'
+    if correction == 'both':
+        corrected['citations'].append({'id': 'run_protocol', 'evidence_id': 'pdf_p6_0'})
+        corrected['comparisons'][0]['reference']['citations'].append('run_protocol')
+    before = deepcopy((packet, rejected, corrected))
+    llm = Mock(mock_mode=False)
+    llm.chat.side_effect = [json.dumps(rejected), json.dumps(corrected)]
+    result = compare_author_claims(llm, packet, fixture['proposal'], fixture['workspace'], actual_execution())
+    first, second = result['extraction_attempts']
+    assert llm.chat.call_count == 2 and first['status'] == 'validation_failed'
+    assert {error['field'] for error in first['validation_errors']} == {
+        'reference.context_quotes.split', 'reference.context_quotes.runs'}
+    hints = first['context_quote_hints']
+    assert any(hint['field'] == 'reference.context_quotes.runs' and hint['evidence_id'] == 'pdf_p6_0'
+               and not hint['already_selected'] and runs_quote in hint['quote'] for hint in hints)
+    retry = llm.chat.call_args_list[1].args[0]
+    view, _ = json.JSONDecoder().raw_decode(retry.split('\nOriginal sources:\n', 1)[1])
+    assert view['evidence_excerpts']['pdf_p6_0']['quote'] == packet['pdf']['pages'][5]['text']
+    feedback = retry.split('\n\nCorrection feedback', 1)[1]
+    summary = feedback.split('by proposal row index ', 1)[1].split('\nCorrect only', 1)[0]
+    assert '"split"' in summary and '"runs"' in summary
+    assert 'pdf_p6_0' in feedback and len(feedback) <= 12000
+    if correction == 'both':
+        assert second['status'] == 'validated' and result['status'] == 'compared'
+        assert not result['validation_errors']
+    else:
+        outstanding = {error['field'] for error in result['validation_errors']}
+        assert outstanding == ({'reference.context_quotes.runs'} if correction == 'split_only' else {
+            'reference.context_quotes.split', 'reference.context_quotes.runs'})
+        assert result['status'] == 'unavailable' and not result['comparisons']
+    assert (packet, rejected, corrected) == before
+
+
+def test_multiple_quote_faults_in_another_row_preserve_an_already_accepted_row(sources):
+    fixture, packet, _, payload = sources
+    execution, second = _two_step_proposal(payload)
+    broken = deepcopy(second)
+    broken['reference']['context_quotes'] = {
+        'split': 'Signal Linear test split stitched to an invented passage.',
+        'runs': 'We conduct a single run in an invented passage.',
+    }
+    first = deepcopy(payload)
+    first['comparisons'].append(broken)
+    attempted_replacement = deepcopy(payload['comparisons'][0])
+    attempted_replacement['reference']['value'] = 22.0
+    corrected = {**deepcopy(payload), 'comparisons': [attempted_replacement, second]}
+    llm = Mock(mock_mode=False)
+    llm.chat.side_effect = [json.dumps(first), json.dumps(corrected)]
+    result = compare_author_claims(llm, packet, fixture['proposal'], fixture['workspace'], execution)
+    assert len(result['extraction_attempts'][0]['validation_errors']) == 2
+    assert llm.chat.call_count == 2 and result['status'] == 'compared'
+    assert not result['validation_errors'] and len(result['comparisons']) == 2
+    assert result['comparisons'][0]['reference']['value'] == 100.0
+    assert [row['actual']['value'] for row in result['comparisons']] == [1.0, 0.9]
+
+
+def test_malformed_citations_do_not_interrupt_correction_feedback(sources):
+    fixture, packet, _, payload = sources
+    rejected = {**deepcopy(payload), 'citations': None}
+    llm = Mock(mock_mode=False)
+    llm.chat.side_effect = [json.dumps(rejected), json.dumps(payload)]
+    result = compare_author_claims(llm, packet, fixture['proposal'], fixture['workspace'], actual_execution())
+    assert result['extraction_attempts'][0]['status'] == 'validation_failed'
+    assert result['status'] == 'compared' and llm.chat.call_count == 2
+
+
+def test_context_retry_projects_complete_sources_but_preserves_request_and_measurements(sources):
+    from src.discovered_repository_plan import _planning_excerpts
+    fixture, packet, _, payload = sources
+    excerpts = _planning_excerpts(packet)
+    for ref in payload['citations']:
+        key = next(key for key, item in excerpts.items() if item['source'] == ref['source']
+                   and all(item.get(loc) == ref.get(loc) for loc in ('page', 'path')))
+        identifier = ref['id']
+        ref.clear()
+        ref.update(id=identifier, evidence_id=key)
+    rejected = deepcopy(payload)
+    rejected['comparisons'][0]['reference']['context_quotes'] = {
+        'split': 'Signal Linear SignGrid test accuracy combines unrelated pages'}
+    llm = Mock(mock_mode=False)
+    llm.chat.side_effect = [json.dumps(rejected), json.dumps(payload)]
+    result = compare_author_claims(llm, packet, fixture['proposal'], fixture['workspace'], actual_execution())
+    first, second = [call.args[0] for call in llm.chat.call_args_list]
+    prefix, original_json = first.split('\nOriginal sources:\n', 1)
+    retry_prefix, retry_json = second.split('\nOriginal sources:\n', 1)
+    original = json.loads(original_json)
+    retry = json.loads(retry_json.split('\n\nCorrection feedback', 1)[0])
+    assert prefix == retry_prefix
+    assert result['extraction_attempts'][0]['correction_source_selection'] == retry['source_selection']
+    assert retry['source_selection']['scope'] == 'context_quote_correction'
+    assert all(value == original['evidence_excerpts'][key] for key, value in retry['evidence_excerpts'].items())
+    assert result['status'] == 'compared' and llm.chat.call_count == 2
+    assert result['extraction_attempts'][0]['proposal'] == rejected
 
 
 _CITATION_CONTEXT_CASES = [

@@ -10,7 +10,8 @@ import math
 import re
 
 from src.author_comparison_context import comparison_plan, comparison_view, prepare_comparison_packet
-from src.author_comparison_semantics import context_evidence, reference_uncertainty, repetition_count_supported, settings_evidence
+from src.author_comparison_feedback import context_quote_hints, correction_source_view
+from src.author_comparison_semantics import _scopes, context_evidence, reference_uncertainty, repetition_count_supported, settings_evidence
 from src.author_table_evidence import dataset_row_header, locate_table_value
 from src.discovered_repository_plan import (
     _canonical, _citations, _has_value, _json_response, _planning_excerpts, _read_source, _references,
@@ -124,36 +125,124 @@ def _correction_feedback(attempt, accepted, credential, records=()):
                 'with double-quoted keys, correct commas, and escaped quotes/newlines in strings; no prose or code fences. '
                 'Preserve measured values, all source checks and already accepted rows. '
                 'Use only provided evidence IDs. Return corrected rows and their supporting citations.'
-                '\nAccepted actual_ids: ' + _canonical(list(accepted)))
+                '\nAccepted actual_ids: ' + _bounded_excerpt(_redact_text(_canonical(list(accepted)), credential), 500))
+    def section(label, value, limit):
+        return label + _bounded_excerpt(_redact_text(value, credential), limit)
+
+    def navigation(label, hints, limit):
+        selected = []
+        first, rest, seen = [], [], set()
+        for hint in hints:
+            location = (hint.get('actual_id'), hint.get('field'))
+            (rest if location in seen else first).append(hint)
+            seen.add(location)
+        # Give every represented rejected field a candidate before adding
+        # alternatives for one field, while retaining complete source slices.
+        for hint in [*first, *rest]:
+            candidate = _redact_evidence(hint, credential)
+            if len(_canonical([*selected, candidate])) <= limit:
+                selected.append(candidate)
+        # Drop whole candidates rather than joining opposite ends of a quote.
+        return label + _canonical(selected)
+
     if attempt.get('validation_errors'):
-        feedback += '\nCorrect only these invalid rows: ' + _canonical(attempt['validation_errors'])
+        grouped = {}
+        for error in attempt['validation_errors']:
+            match = re.fullmatch(r'(reference|actual_context)\.context_quotes(?:\.(unit|split|aggregation|runs|uncertainty))?',
+                                 error.get('field', ''))
+            index = error.get('index')
+            if match and type(index) is int and 0 <= index < 12:
+                side, field = match.groups()
+                fields = grouped.setdefault(index, {}).setdefault(side, [])
+                if (field or 'mapping') not in fields:
+                    fields.append(field or 'mapping')
+        detail_budget = 1400
+        if grouped:
+            summary = ('\nAll rejected optional context quote fields by proposal row index '
+                       '(each must use an exact own-citation span, or be omitted if unavailable): '
+                       + _canonical([{'index': index, **sides} for index, sides in sorted(grouped.items())]))
+            # At most twelve rows with nine fixed field names. Preserve this
+            # whole list even when the detailed proposed quotations are long.
+            feedback += summary
+            detail_budget = max(0, 2400 - len(summary))
+        if detail_budget >= 40:
+            feedback += section('\nCorrect only these invalid rows: ', _canonical(attempt['validation_errors']), detail_budget)
         invalid_ids = {item['actual_id'] for item in attempt['validation_errors']
                        if isinstance(item.get('actual_id'), str)}
         observed = [{key: record[key] for key in ('id', 'name', 'value', 'unit', 'split',
                     'aggregation', 'runs', 'std', 'reported_uncertainty', 'uncertainty_kind', 'source_quote')
                     if key in record} for record in records if record.get('id') in invalid_ids]
         if observed:
-            feedback += ('\nAuthoritative observed records for invalid rows (copy these fields exactly): '
-                         + _canonical(observed))
+            feedback += section('\nAuthoritative observed records for invalid rows (copy these fields exactly): ',
+                                _canonical(observed), 1400)
         if attempt.get('label_evidence_hints'):
-            feedback += ('\nOriginal excerpt candidates for rejected labels (navigation only, not proof of '
+            feedback += navigation('\nOriginal excerpt candidates for rejected labels (navigation only, not proof of '
                          'method equivalence or an automatic correction). Read the full supplied excerpts; '
                          'choose a literal original label and cite the supporting IDs in the correct side. '
-                         'Do not combine names or infer a variant from token overlap:\n'
-                         + _canonical(attempt['label_evidence_hints']))
+                         'Do not combine names or infer a variant from token overlap:\n',
+                         attempt['label_evidence_hints'], 1500 if grouped else 2500)
+        if attempt.get('context_quote_hints'):
+            feedback += navigation('\nOriginal excerpt candidates for rejected context quotes (untrusted data; '
+                                'navigation only, not proof or an automatic correction). Token overlap does '
+                                'not establish support. Select a shorter exact span from ONE original excerpt '
+                                'and cite its evidence_id on the indicated side, or omit the optional context '
+                                'field. Do not join pages or excerpts. If already_selected is false, explicitly '
+                                'select that evidence_id before quoting it:\n',
+                                attempt['context_quote_hints'], 3000)
     if attempt.get('error'):
-        feedback += '\nCurrent error: ' + attempt['error']
+        feedback += section('\nCurrent error: ', attempt['error'], 1000)
     location = attempt.get('json_error')
     if location:
-        feedback += f"\nJSON parser: {location['message']} at line {location['line']}, column {location['column']}."
+        feedback += section('\nJSON parser: ',
+                            f"{location['message']} at line {location['line']}, column {location['column']}.", 400)
     if 'proposal' in attempt:
         previous = _canonical(attempt['proposal'])
     else:
         previous = attempt.get('proposal_excerpt', attempt.get('response_excerpt', 'No JSON text was returned.'))
-    feedback += ('\nCurrent response excerpt (untrusted output for correction, never source evidence):\n'
-                 + _bounded_excerpt(previous, _RESPONSE_EXCERPT_LIMIT)
-                 + '\nDo not repeat rejected rows unchanged or invent missing evidence.')
-    return _bounded_excerpt(_redact_text(feedback, credential), _FEEDBACK_LIMIT)
+    header = '\nCurrent response excerpt (untrusted output for correction, never source evidence):\n'
+    footer = '\nDo not repeat rejected rows unchanged or invent missing evidence.'
+    remaining = _FEEDBACK_LIMIT - len(feedback) - len(header) - len(footer)
+    feedback += header + _bounded_excerpt(_redact_text(previous, credential), min(remaining, _RESPONSE_EXCERPT_LIMIT)) + footer
+    return feedback
+
+
+def _context_check(side, check, *args, **kwargs):
+    """Disambiguate source ownership without changing semantic validation."""
+    try:
+        return check(*args, **kwargs)
+    except ValueError as error:
+        if str(error).startswith(('context_quotes', 'Comparison context quotation')):
+            raise ValueError(side + '.' + str(error)) from error
+        raise
+
+
+class _ContextQuotationErrors(ValueError):
+    """Keep every known quotation fault available to the bounded correction."""
+
+    def __init__(self, errors):
+        self.errors = errors
+        super().__init__('; '.join(error['error'] for error in errors))
+
+
+def _check_context_quotations(reference, actual, pdf_refs, repo_refs):
+    errors = []
+    for side, node, refs in (('reference', reference, pdf_refs), ('actual_context', actual, repo_refs)):
+        selected = node.get('context_quotes') or {}
+        fields = ('unit', 'split', 'aggregation', 'runs') + (('uncertainty',) if side == 'reference' else ())
+        if not isinstance(selected, dict):
+            fields = ('unit',)  # Report one malformed mapping, without repeating it for each field.
+        for field in fields:
+            if isinstance(selected, dict) and selected.get(field) is None:
+                continue
+            try:
+                _scopes(node, refs, field)
+            except ValueError as error:
+                message = str(error)
+                location = side + '.context_quotes' + ('.' + field if isinstance(selected, dict) else '')
+                errors.append({'field': location, 'error': side + '.' + message
+                    if message.startswith('context_quotes') else location + ': ' + message})
+    if errors:
+        raise _ContextQuotationErrors(errors)
 
 
 def _metric_order(text):
@@ -431,6 +520,7 @@ def validate_comparisons(payload, packet, workspace, records):
                     # Accepted context uses the authoritative output itself,
                     # rather than a redundant model-proposed source quote.
                     actual['context_quotes'].pop(field, None)
+        _check_context_quotations(reference, actual, pdf_refs, repo_refs)
         if reference.get('std') is not None:
             std = metric_number(reference['std'])
             if std is None or std < 0 or not _has_value(std, [{'source': 'pdf', 'quote': quote}]):
@@ -444,7 +534,7 @@ def validate_comparisons(payload, packet, workspace, records):
             if reference.get('std') not in (None, uncertainty):
                 raise ValueError('Reference cannot report two different uncertainties for one result')
             reference['reported_uncertainty'] = uncertainty
-        uncertainty = reference_uncertainty(reference, pdf_refs)
+        uncertainty = _context_check('reference', reference_uncertainty, reference, pdf_refs)
         if uncertainty and reference.get('std') is not None:
             reference['reported_uncertainty'] = reference.pop('std')
         if reference.get('reported_uncertainty') is not None:
@@ -460,7 +550,9 @@ def validate_comparisons(payload, packet, workspace, records):
             runs = node.get('runs')
             if runs is not None and (type(runs) is not int or runs < 1
                     or (runs > 1 and not (node is actual and record.get('runs') == runs)
-                        and not _has_value(runs, refs) and not repetition_count_supported(node, refs, source_texts=source_texts))):
+                        and not _has_value(runs, refs) and not _context_check(
+                            'reference' if node is reference else 'actual_context', repetition_count_supported,
+                            node, refs, source_texts=source_texts))):
                 raise ValueError('Repetition count needs original evidence')
         p_unit, a_unit = metric_unit(reference), metric_unit(explicit=actual.get('unit'))
         if p_unit not in {'percent', 'fraction', 'scalar'} or a_unit not in {'percent', 'fraction', 'scalar', ''}:
@@ -475,8 +567,9 @@ def validate_comparisons(payload, packet, workspace, records):
             _references(settings.get('citations'), citations, 'pdf')
             _references(settings.get('citations'), citations, 'repository')
         settings.update(settings_evidence(settings, citations))
-        reference['field_evidence'] = context_evidence(reference, pdf_refs, source_texts=source_texts)
-        actual['field_evidence'] = context_evidence({**actual, 'name': record['name']}, repo_refs, observed=record, source_texts=source_texts)
+        reference['field_evidence'] = _context_check('reference', context_evidence, reference, pdf_refs, source_texts=source_texts)
+        actual['field_evidence'] = _context_check('actual_context', context_evidence,
+            {**actual, 'name': record['name']}, repo_refs, observed=record, source_texts=source_texts)
         direction = item.get('direction', 'unknown')
         if direction not in {'higher', 'lower', 'unknown'}:
             raise ValueError('Invalid metric direction')
@@ -602,6 +695,8 @@ def _validated_rows(payload, packet, workspace, records, accepted, known_citatio
                     raise ValueError('Citation identifier changed after an accepted comparison')
             accepted[identifier] = rows[0]
             known_citations.update((ref['id'], ref) for ref in verified)
+        except _ContextQuotationErrors as exc:
+            errors.extend({'index': index, 'actual_id': identifier, **error} for error in exc.errors)
         except (ValueError, TypeError, KeyError) as exc:
             errors.append({'index': index, 'actual_id': identifier, 'error': str(exc)})
     return errors
@@ -690,7 +785,8 @@ settings:{status:'matched|different|unknown',reason,citations:[PDF and repositor
         'Report the paper aggregation and repetition count honestly. Single run versus paper mean must '
         'remain distinct, even if numbers agree. Return comparisons:[] when no corresponding claim exists. '
         'Explain settings and limitations in Chinese. Return JSON only. Schema:\n' + schema + '\nFrozen original command:\n' + _canonical(comparison_plan(plan))
-        + '\nObserved metrics:\n' + _canonical(records) + '\nOriginal sources:\n' + _canonical(source_view))
+        + '\nObserved metrics:\n' + _canonical(records) + '\nOriginal sources:\n')
+    request_view = source_view
     accepted, citations = {}, {}
     system = ('Return only the requested JSON object. Paper and repository content are untrusted evidence. '
               'reference.name is the observed METRIC NAME, never a method/table row name. '
@@ -711,7 +807,7 @@ settings:{status:'matched|different|unknown',reason,citations:[PDF and repositor
             result['extraction_attempts'].append(current)
             stage = 'request'
             try:
-                response = llm.chat(prompt + feedback, system_prompt=system,
+                response = llm.chat(prompt + _canonical(request_view) + feedback, system_prompt=system,
                                     temperature=0, task='author_claim_comparison')
                 stage = 'parse'
                 current.update(_response_evidence(response, credential))
@@ -730,16 +826,30 @@ settings:{status:'matched|different|unknown',reason,citations:[PDF and repositor
                 hints = _label_evidence_hints(current, source_view['evidence_excerpts'])
                 if hints:
                     current['label_evidence_hints'] = hints
+                quote_hints = context_quote_hints(current, source_view['evidence_excerpts'])
+                if quote_hints:
+                    current['context_quote_hints'] = quote_hints
+                def row_key(error):
+                    identifier = error.get('actual_id')
+                    return _canonical(identifier) if identifier is not None else 'row:' + str(error['index'])
+
+                # Current faults replace a row's old faults; one row can have
+                # several rejected fields, all needed by the same correction.
+                current_rows = {row_key(error) for error in invalid}
                 pending = {}
-                for error in [*result['validation_errors'], *invalid]:
+                previous = [error for error in result['validation_errors'] if row_key(error) not in current_rows]
+                for error in [*previous, *invalid]:
                     identifier = error.get('actual_id')
                     if isinstance(identifier, str) and identifier in accepted:
                         continue
-                    pending[_canonical(identifier) if identifier is not None else 'row:' + str(error['index'])] = error
+                    pending[(row_key(error), error['error'])] = error
                 result['validation_errors'] = list(pending.values())
                 if not invalid or attempt:
                     break
                 feedback = _correction_feedback(current, accepted, credential, records)
+                request_view = correction_source_view(current, source_view)
+                if request_view is not source_view:
+                    current['correction_source_selection'] = deepcopy(request_view['source_selection'])
             except Exception as exc:
                 current.update(status={'request': 'api_error', 'parse': 'invalid_response',
                                        'validation': 'validation_error'}[stage],
