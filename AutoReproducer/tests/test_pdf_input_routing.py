@@ -74,6 +74,33 @@ def test_visible_canonical_pdf_title_selects_fixed_profile_with_actual_byte_prov
     assert "experiment_profile" not in request and "pdf_resolution" not in request
 
 
+@pytest.mark.parametrize('title', [TITLE,
+    'Are Transformers Effective for Time Series Forecasting?',
+    'Implicit Neural Representations with Periodic Activation Functions'])
+def test_explicit_strict_pdf_uses_generic_workflow_without_auto_selected_preset(tmp_path, title):
+    from src.strict_validation import normalize_strict_validation_request
+
+    path = write_pdf(tmp_path / 'paper.pdf', [title, 'Abstract'])
+    request = {'pdf_path': str(path), 'strict_validation': True,
+               'pdf_resolution': {'profile': 'stale-preview'}}
+    result = pdf_input.resolve_pdf_request(request)
+    assert not result.get('experiment_profile')
+    assert 'pdf_resolution' not in result
+    assert normalize_strict_validation_request(result)['strict_validation'] is True
+    assert request['pdf_resolution'] == {'profile': 'stale-preview'}
+
+
+def test_strict_pdf_does_not_discard_an_explicit_unsupported_preset(tmp_path):
+    from src.strict_validation import normalize_strict_validation_request
+
+    path = write_pdf(tmp_path / 'paper.pdf', [TITLE, 'Abstract'])
+    result = pdf_input.resolve_pdf_request({'pdf_path': str(path), 'strict_validation': True,
+                                          'experiment_profile': 'neural_ode_spiral'})
+    assert result['experiment_profile'] == 'neural_ode_spiral'
+    with pytest.raises(ValueError, match='generic repository'):
+        normalize_strict_validation_request(result)
+
+
 @pytest.mark.parametrize("lines,metadata,later", [
     (["An unrelated research paper", "Authors", "Abstract", TITLE], TITLE, ()),
     (["An unrelated research paper", "Authors", "References", TITLE], None, ()),
@@ -358,6 +385,28 @@ def test_direct_orchestrator_routes_visible_pdf_to_author_profile_without_generi
     llm.chat.assert_not_called()
     for agent in orchestrator.agents.values():
         agent.run.assert_not_called()
+
+
+def test_direct_orchestrator_strict_known_pdf_reaches_generic_reader(monkeypatch, tmp_path):
+    path = write_pdf(tmp_path / 'paper.pdf', [TITLE, 'Abstract', 'Readable method content.'])
+    llm = LLMClient(mock_mode=False)
+    llm.chat = Mock(side_effect=AssertionError('No model calls in routing fixture'))
+    logger = Mock()
+    logger.get_summary.return_value = []
+    logger.get_stats.return_value = {}
+    orchestrator = Orchestrator(llm_client=llm, mock_mode=False, logger=logger,
+                                resource_manager=Mock(data_root=tmp_path))
+    reader = Mock(side_effect=ValueError('generic reader reached'))
+    orchestrator.agents['reader'].run = reader
+    preset = Mock(side_effect=AssertionError('Explicit strict PDF must not use preset'))
+    monkeypatch.setattr(repository, 'RepositoryReproduction', preset)
+    result = orchestrator.run({'pdf_path': str(path), 'strict_validation': True})
+    assert result['state'] == 'ERROR'
+    assert 'generic reader reached' in result['error']
+    assert reader.called
+    assert reader.call_args.args[0]['strict_validation'] is True
+    preset.assert_not_called()
+    llm.chat.assert_not_called()
 
 
 @pytest.mark.parametrize("mock_mode", [False, True])

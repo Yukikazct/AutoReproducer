@@ -89,6 +89,145 @@ def test_unpaired_metric_does_not_gain_difference_or_comparability_and_frozen_re
     assert loss['reference'] == 0.5 and loss['actual'] is None
 
 
+def author_coverage_data(records, *, actual=None, other_records=None):
+    actual = deepcopy(records[0] if actual is None else actual)
+    return {'validation': {'metric_records': deepcopy(records if other_records is None else other_records),
+        'author_claim_comparison': {'metric_records': deepcopy(records), 'comparisons': [{
+            'metric': actual['name'], 'status': 'reference_only', 'actual': actual,
+            'reference': {'name': actual['name'], 'value': .9, 'unit': 'fraction'},
+            'difference': None, 'limitations': ['Reference comparison only.']}]}}}
+
+
+def test_paired_metric_does_not_hide_other_actual_outputs_or_guess_paper_values(tmp_path):
+    accuracy = {'id': 'train:stdout:1', 'name': 'accuracy', 'value': .81,
+                'unit': 'fraction', 'split': 'test', 'runs': 3, 'aggregation': 'mean'}
+    loss = {'id': 'train:stdout:2', 'name': 'loss', 'value': 0., 'unit': 'scalar', 'split': 'test'}
+    data = author_coverage_data([accuracy, loss])
+    data['paper_info'] = {'metrics': {'loss': 99.}}
+    original = deepcopy(data)
+    rows = build_report_view_model(data)['metrics']
+    assert [row['metric'] for row in rows] == ['accuracy', 'loss']
+    assert rows[0]['actual'] == .81
+    assert rows[1]['actual'] == 0. and rows[1]['reference'] is None
+    assert rows[1]['actual_unit'] == 'scalar' and rows[1]['actual_split'] == 'test'
+    assert rows[1]['difference'] is None and rows[1]['comparability'] == 'unrecorded'
+    assert '尚未找到对应论文参考' in rows[1]['reason']
+    report = ReportGeneratorAgent.build_report(data, report_path=tmp_path / 'report.md')
+    assert '| loss | 未取得 | 0.0 |' in report
+    assert data['validation'] == original['validation']
+
+
+def test_same_metric_name_with_a_different_split_or_id_is_retained():
+    test = {'id': 'train:stdout:1', 'name': 'accuracy', 'value': .81, 'unit': 'fraction', 'split': 'test'}
+    train = {**test, 'id': 'train:stdout:2', 'split': 'train'}
+    second_test = {**test, 'id': 'train:stdout:3'}
+    data = author_coverage_data([test, train, second_test], other_records=[test, train, second_test, train])
+    rows = build_report_view_model(data)['metrics']
+    assert len(rows) == 3
+    assert [(row['actual'], row['actual_split']) for row in rows] == [(.81, 'test'), (.81, 'train'), (.81, 'test')]
+    assert all(row['reference'] is None and row['difference'] is None for row in rows[1:])
+
+
+def test_legacy_without_ids_only_deduplicates_a_unique_exact_context():
+    accuracy = {'name': 'accuracy', 'value': .81, 'unit': 'fraction', 'split': 'test',
+                'run_count': 3, 'std': .01, 'aggregation': 'mean'}
+    loss = {'name': 'loss', 'value': .2, 'unit': 'scalar', 'split': 'test'}
+    data = author_coverage_data([accuracy, loss], other_records=[{**accuracy, 'runs': 3}, loss])
+    rows = build_report_view_model(data)['metrics']
+    assert [(row['metric'], row['actual']) for row in rows] == [('accuracy', .81), ('loss', .2)]
+    assert rows[1]['reference'] is None
+    # A missing split is insufficient to consume an otherwise unpaired output.
+    data['validation']['author_claim_comparison']['comparisons'][0]['actual'].pop('split')
+    assert [row['metric'] for row in build_report_view_model(data)['metrics']] == ['accuracy', 'accuracy', 'loss']
+
+
+def test_ambiguous_legacy_records_are_retained_instead_of_consumed_by_one_pair():
+    actual = {'name': 'accuracy', 'value': .81, 'unit': 'fraction', 'split': 'test'}
+    data = author_coverage_data([actual, deepcopy(actual)], actual=actual, other_records=[])
+    rows = build_report_view_model(data)['metrics']
+    assert len(rows) == 3 and all(row['actual'] == .81 for row in rows)
+    assert all(row['reference'] is None for row in rows[1:])
+
+
+def test_id_matched_pair_cannot_also_consume_an_ambiguous_record_without_id():
+    actual = {'id': 'train:stdout:1', 'name': 'accuracy', 'value': .81, 'unit': 'fraction', 'split': 'test'}
+    legacy = {key: value for key, value in actual.items() if key != 'id'}
+    rows = build_report_view_model(author_coverage_data([actual, legacy], other_records=[]))['metrics']
+    assert len(rows) == 2 and rows[1]['actual'] == .81 and rows[1]['reference'] is None
+
+
+def test_cross_collection_legacy_duplicate_retains_the_available_record_id():
+    legacy = {'name': 'accuracy', 'value': .81, 'unit': 'fraction', 'split': 'test'}
+    identified = {**legacy, 'id': 'train:stdout:1'}
+    data = author_coverage_data([legacy], actual=identified, other_records=[identified])
+    assert len(build_report_view_model(data)['metrics']) == 1
+    data = author_coverage_data([identified], actual=identified, other_records=[legacy])
+    assert len(build_report_view_model(data)['metrics']) == 1
+
+
+def test_legacy_records_with_different_datasets_or_methods_are_not_merged():
+    actual = {'name': 'accuracy', 'value': .81, 'unit': 'fraction', 'split': 'test',
+              'dataset': 'Cora', 'method': 'GCN'}
+    other_dataset = {**actual, 'dataset': 'Citeseer'}
+    other_method = {**actual, 'method': 'GAT'}
+    data = author_coverage_data([actual], other_records=[other_dataset, other_method])
+    rows = build_report_view_model(data)['metrics']
+    assert len(rows) == 3
+    assert all(row['reference'] is None for row in rows[1:])
+
+
+def test_unpaired_records_can_come_from_either_authoritative_collection():
+    actual = {'id': 'test:1', 'name': 'accuracy', 'value': .81}
+    loss = {'id': 'test:2', 'name': 'loss', 'value': .2}
+    data = author_coverage_data([actual], other_records=[actual, loss])
+    assert [row['metric'] for row in build_report_view_model(data)['metrics']] == ['accuracy', 'loss']
+    data = author_coverage_data([actual, loss], other_records=[actual])
+    assert [row['metric'] for row in build_report_view_model(data)['metrics']] == ['accuracy', 'loss']
+
+
+def test_reference_only_difference_remains_visible_without_an_acceptance_verdict(tmp_path):
+    data = example_data()
+    row = {'metric': 'accuracy', 'status': 'reference_only', 'difference': -2.35,
+           'difference_unit': 'percentage_points', 'within_tolerance': None, 'meets_reference': None,
+           'reference': {'value': 87.84, 'unit': 'percent', 'split': 'test', 'runs': 10,
+                         'method': 'Variant-Backbone'},
+           'actual': {'value': .8549, 'unit': 'fraction', 'split': 'test', 'runs': None,
+                      'method': 'Variant_Wrapper'},
+           'method_alignment': {'status': 'source_bound_static', 'independently_verified': False},
+           'limitations': ['静态方法组件对应；运行设置和统计次数尚未核对。']}
+    data['validation']['author_claim_comparison'] = {
+        'status': 'partial', 'comparisons': [row], 'basis': 'author_output'}
+    view = build_report_view_model(data)
+    assert view['metrics'][0]['difference'] == -2.35
+    assert view['metrics'][0]['comparability'] == 'reference_only'
+    assert view['conclusion']['comparison']['status'] == 'reference_only'
+    assert view['conclusion']['is_reproduced'] is None
+    report = ReportGeneratorAgent.build_report(data, report_path=tmp_path / 'report.md')
+    assert '-2.35 个百分点' in report and '仅供参考' in report
+    assert 'Variant-Backbone' in report and 'Variant\\_Wrapper' in report
+    assert '未证明运行期有效配置' in report
+    assert data['validation']['paper_metrics_verified'] is False
+    row['status'] = 'not_comparable'
+    assert build_report_view_model(data)['metrics'][0]['difference'] is None
+
+
+def test_different_metric_names_stay_visible_without_subtracting_values(tmp_path):
+    data = example_data()
+    data['validation']['author_claim_comparison'] = {'comparisons': [{
+        'metric': 'accuracy', 'status': 'not_comparable', 'difference': None,
+        'reference': {'name': 'f1_macro', 'value': 82.5, 'unit': 'percent'},
+        'actual': {'name': 'accuracy', 'value': .84, 'unit': 'fraction'},
+        'limitations': ['论文与实际指标不同，未计算差值']} ]}
+    view = build_report_view_model(data)
+    row = view['metrics'][0]
+    assert row['metric'] == '论文 f1_macro / 实际 accuracy'
+    assert row['reference'] == 82.5 and row['actual'] == .84 and row['difference'] is None
+    report = ReportGeneratorAgent.build_report(data, report_path=tmp_path / 'report.md')
+    assert '论文 f1\\_macro / 实际 accuracy' in report
+    assert '指标不同，未计算差值' in report
+    assert view['conclusion']['is_reproduced'] is None
+
+
 def test_scalar_author_comparisons_and_strict_only_rows_remain_visible():
     author = build_report_view_model({'validation': {'author_claim_comparison': {'comparisons': [
         {'metric': 'accuracy', 'reference': 80.0, 'actual': 0.82, 'status': 'comparable',

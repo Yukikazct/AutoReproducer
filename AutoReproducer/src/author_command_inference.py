@@ -280,9 +280,20 @@ def discover_author_commands(packet, workspace, *, max_files=24, max_bytes=1024 
             'bytes_examined': consumed, 'failures': failures[:8]}
 
 
-def select_author_command(discovery, *, required_entrypoint=None):
+def select_author_command(discovery, *, required_entrypoint=None, dataset=None):
     candidates = [item for item in discovery['candidates'] if item['complete']
                   and (not required_entrypoint or item['source_path'] == required_entrypoint)]
+    if dataset:
+        from src.author_experiment_selection import dataset_cli_from_metadata, _name
+        def selection(item):
+            argv = item['argv']
+            position = 2 if argv[1] == '-u' else 1
+            position += argv[position] == '-m'
+            return dataset_cli_from_metadata(item.get('cli'), argv[position + 1:])
+        selections = [(item, selection(item)) for item in candidates]
+        matches = [item for item, selection in selections
+                   if selection['status'] == 'observed_cli_selection' and _name(selection['value']) == _name(dataset)]
+        candidates = matches or [item for item, selection in selections if selection['status'] == 'unverified']
     if not candidates:
         return None
     if len(candidates) > 1 and candidates[0]['selection_score'] == candidates[1]['selection_score']:

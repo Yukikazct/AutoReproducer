@@ -512,6 +512,31 @@ def _citations(payload, packet, workspace):
     return result
 
 
+def _author_search_root(cwd, value):
+    """Normalize one literal search hint without relaxing source path safety."""
+    from src.safety.paths import relative_path
+    parts = PureWindowsPath(value).parts
+    if '..' in parts:
+        # Validate anchors and every original component before folding. In
+        # particular, .git/.., reserved names and drive/UNC paths stay invalid.
+        checked = PureWindowsPath(*('_author_parent_' if part == '..' else part for part in parts))
+        relative_path(checked.as_posix(), 'author sys.path', forbid_git=True)
+    else:
+        relative_path(value, 'author sys.path', forbid_git=True)
+    result = list(relative_path(cwd, 'author cwd', forbid_git=True).parts)
+    outside = False
+    for part in parts:
+        if part == '..':
+            if result and result[-1] != '..':
+                result.pop()
+            else:
+                outside = True
+                result.append(part)
+        else:
+            result.append(part)
+    return Path(*result), outside
+
+
 def _author_imports(packet, step, *, include_sources=False, device=None, workspace=None):
     """Follow imports in pinned author files; no model-generated dependency list."""
     entrypoint = step.get('entrypoint') or {}
@@ -527,7 +552,7 @@ def _author_imports(packet, step, *, include_sources=False, device=None, workspa
     if len(argv) <= position and not entrypoint.get('source_path'):
         raise PlanEvidenceError('Cannot determine imports without an author entrypoint')
     entry = entrypoint.get('source_path') or (Path(step.get('cwd', '.')) / argv[position]).as_posix()
-    queue, visited, imports, excluded, namespaces = [entry], set(), [], [], {}
+    queue, visited, imports, excluded, namespaces, ignored_paths = [entry], set(), [], [], {}, []
     absolute_roots = list(dict.fromkeys([Path(entry).parent, Path('.')]))
     inventory = packet['file_inventory']
     repository_name = urlsplit(packet['repository'].get('url', '')).path.rstrip('/').split('/')[-1].removesuffix('.git')
@@ -588,8 +613,17 @@ def _author_imports(packet, step, *, include_sources=False, device=None, workspa
                 arguments = arguments[1:]
             if len(arguments) != 1 or not isinstance(arguments[0], ast.Constant) or not isinstance(arguments[0].value, str):
                 continue
-            from src.safety.paths import relative_path
-            root = Path(step.get('cwd', '.')) / relative_path(arguments[0].value, 'author sys.path', forbid_git=True)
+            literal = arguments[0].value
+            root, outside = _author_search_root(step.get('cwd', '.'), literal)
+            if outside:
+                if packet.get('author_execution_only') is not True:
+                    raise PlanEvidenceError('Author sys.path escapes the repository: ' + literal)
+                ignored_paths.append({'path': path, 'line': statement.lineno, 'sha256': source['sha256'],
+                    'statement': ast.get_source_segment(source['text'], statement),
+                    'cwd': step.get('cwd', '.'), 'literal_path': literal, 'normalized_path': root.as_posix(),
+                    'reason': 'outside_workspace_not_a_frozen_local_import_root',
+                    'evidence_scope': 'ignored_static_hint_only', 'external_source_read': False})
+                continue
             author_path_additions[statement] = (root, call.func.attr)
         # Only a frozen CPU device with hidden CUDA can make this exact guard
         # false. Unknown conditions and shadowed/mutated torch remain conservative.
@@ -700,7 +734,8 @@ def _author_imports(packet, step, *, include_sources=False, device=None, workspa
                         imports.append({**imports[-1], 'module': 'tensorboard',
                                         'dependency_of': 'torch.utils.tensorboard'})
     return {'imports':imports, 'sources':sorted(visited), 'excluded_device_branches':excluded,
-            'repository_namespaces': list(namespaces.values())} if include_sources else imports
+            'repository_namespaces': list(namespaces.values()),
+            'ignored_import_paths': ignored_paths} if include_sources else imports
 
 
 def _effective_author_parameters(packet, step):
@@ -887,7 +922,7 @@ def _requirements(value, citations, packet, device="cpu", step=None, *, datasets
     if not {"torch", "numpy"} <= names:
         if step is None:
             raise PlanEvidenceError("Independent evaluation needs the reviewed torch and numpy dependencies")
-    import_evidence, omitted, excluded, namespaces, deferred = [], [], [], [], []
+    import_evidence, omitted, excluded, namespaces, deferred, ignored_paths = [], [], [], [], [], []
     declared_pins = []
     if step is not None:
         try:
@@ -899,6 +934,7 @@ def _requirements(value, citations, packet, device="cpu", step=None, *, datasets
             discovery = {'imports': [], 'excluded_device_branches': [], 'repository_namespaces': []}
         actual, excluded = discovery['imports'], discovery['excluded_device_branches']
         namespaces = discovery['repository_namespaces']
+        ignored_paths = discovery.get('ignored_import_paths', [])
         required = {'torch', 'numpy'}
         unsupported = []
         for item in actual:
@@ -947,6 +983,7 @@ def _requirements(value, citations, packet, device="cpu", step=None, *, datasets
             "index_url": CUDA_INDEX_URL if device == "cuda" else CPU_INDEX_URL,
             "import_evidence": import_evidence, "omitted_unused_proposals": omitted,
             "excluded_device_branches": excluded, "repository_namespaces": namespaces,
+            "ignored_import_paths": ignored_paths,
             "declared_runtime_pins": sorted(set(declared_pins)), "deferred_runtime_imports": deferred}
 
 

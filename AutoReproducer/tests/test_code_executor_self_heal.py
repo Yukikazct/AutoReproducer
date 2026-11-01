@@ -40,6 +40,11 @@ def _isolate_cache(tmp_path, monkeypatch):
     import src.runtime_preparation as runtime
     monkeypatch.setattr(runtime, 'run_owned_process',
                         lambda cmd, **kw: ce_mod.subprocess.run(cmd, **kw))
+    # Match the logical pip boundary. Windows may execute target installs via
+    # a wrapper, whose source is intentionally not the pip argv this unit
+    # fixture simulates; real wrapper execution has its own integration tests.
+    monkeypatch.setattr(CodeExecutorAgent, '_invoke_dependency_command',
+                        lambda self, cmd, **kw: ce_mod.subprocess.run(cmd, **kw))
     # 引擎探测不依赖本机 Docker Desktop 状态（详见 test_sandbox_hardening）
     monkeypatch.setattr(BaseAgent, "docker_engine_available",
                         staticmethod(lambda *a, **k: (True, None)))

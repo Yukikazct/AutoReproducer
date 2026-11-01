@@ -63,7 +63,7 @@ def test_full_method_prepares_online_then_runs_without_deadline_or_optimization(
     assert setup.adapter.prepare_dataset.call_args.kwargs["offline"] is False
     assert [step["id"] for step in setup.calls[0]["steps"]] == ["prepare_dependencies"]
     assert "deadline_monotonic" not in setup.calls[0]["env"]
-    assert setup.calls[0]["env"]["auto_prepare"] and setup.calls[0]["env"]["dependency_health_check"] is False
+    assert setup.calls[0]["env"]["auto_prepare"] and setup.calls[0]["env"]["dependency_health_check"] is True
     assert setup.calls[0]["env"]["cache_lock_timeout_s"] > 0
     assert [step["id"] for step in setup.calls[1]["steps"]] == ["train"]
     assert setup.calls[1]["env"]["deadline_monotonic"] is None
@@ -120,6 +120,7 @@ def test_environment_only_preparation_does_not_start_training_or_device_review(s
     setup.adapter.verify_environment.assert_not_called()
     setup.adapter.verify.assert_not_called()
     assert result["data"]["validation"]["status"] == "environment_prepared"
+    assert '所选设备能力未单独核验' in result['data']['validation']['reason']
 
 
 def test_interrupted_preparation_is_saved_without_starting_training(setup):

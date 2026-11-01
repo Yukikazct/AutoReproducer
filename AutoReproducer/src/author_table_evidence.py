@@ -299,35 +299,97 @@ def _select(reference, paths, row_prefix):
     return selected_paths[0], None
 
 
-def _between_rows(text, expected):
+def _extraction_table_scope(text, header_span, row_span):
+    """Locate one original numbered caption without inventing a quotation.
+
+    This is used only to bound uninterpreted extraction noise between an
+    otherwise complete header and result row. It does not supply a metric,
+    uncertainty meaning, or any missing selected cell.
+    """
+    boundaries = list(re.finditer(
+        r'(?im)^[ \t]*(?:Table|Figure|Fig\.|Section)[ \t]+\d+(?=[\s.:A-Za-z])', text))
+    previous = [match for match in boundaries if match.start() < header_span[0]]
+    if not previous:
+        return None
+    caption = previous[-1]
+    if not re.match(r'Table[ \t]+\d+[A-Za-z]?[ \t]*[:.][ \t]+\S',
+                    text[caption.start():].lstrip(), re.I):
+        return None
+    start = caption.start()
+    quote = text[start:header_span[0]].rstrip()
+    if not quote or len(quote) > 1600 or len(quote.splitlines()) > 6:
+        return None
+    first_line = quote.splitlines()[0]
+    _, error = _span(text, first_line)
+    if error:
+        return None
+    following = next((match for match in boundaries if match.start() > start), None)
+    end = following.start() if following else len(text)
+    if header_span[0] <= start + len(quote) - 1 or row_span[1] > end:
+        return None
+    return {'caption_quote': quote, 'caption_span': [start, start + len(quote)],
+            'scope_span': [start, end], 'basis': 'unique_original_table_caption'}
+
+
+def _body_layout(text, expected, *, extraction_noise=False):
+    """Check intervening rows; return only unparsed, non-selected noise proof."""
     if len(text) > 80000 or len(text.splitlines()) > 100:
-        return False
-    for line in text.splitlines():
+        return None
+    noise, offset = [], 0
+    for original in text.splitlines(keepends=True):
+        line = original.rstrip('\r\n')
+        line_start, offset = offset, offset + len(original)
         if not line.strip():
             continue
         if re.match(r'^\s*(?:table|figure|section)\b', line, re.I):
-            return False
+            return None
         width = _markdown_separator_width(line)
         if width is not None:
             if width != expected + 1:
-                return False
+                return None
             continue
         if '|' in line:
             columns = [column.strip() for column in line.strip().strip('|').split('|')]
             if len(columns) != expected + 1 or not re.search(r'[^\W\d]', columns[0]):
-                return False
+                return None
             if (columns[0].endswith(':') and not re.search(r'\d', columns[0])
                     and not any(columns[1:])
                     and not re.match(r'^(?:table|figure|section)\b', columns[0], re.I)):
                 continue  # An explicit section row preserves the same columns.
             cells, _ = _cells('|'.join(columns[1:]), allow_prefix=False)
             if cells is None or len(cells) != expected:
-                return False
+                return None
             continue
         cells, prefix = _cells(line)
-        if cells is None or len(cells) != expected or prefix == 0:
-            return False
-    return True
+        if cells is not None and len(cells) == expected and prefix:
+            continue
+        if not extraction_noise:
+            return None
+        # These rows are never converted into measurements or used to select
+        # columns. A complete selected mean/std row and a numbered caption are
+        # separately required by the caller before enabling this path.
+        kind = None
+        numbers = r'(?:\d{1,3}(?:,\d{3})+|\d+)'
+        if re.fullmatch(r'\s*#[A-Za-z][\w-]*\s+' + numbers
+                        + (r'(?:\s+' + numbers + r')') * (expected - 1) + r'\s*', line):
+            kind = 'count_metadata_row'
+        elif (len(line.split()) == expected
+              and all(part in {'±', '+/-', '\x06'} for part in line.split())):
+            kind = 'detached_uncertainty_separators'
+        elif (cells is not None and len(cells) == expected * 2 and prefix
+              and re.fullmatch(r'\s*[^\W\d][\w./+-]*\s+', line[:prefix])
+              and all(not cell.get('missing') and cell.get('std') is None
+                      and not cell.get('footnote') and 'parts' not in cell for cell in cells)):
+            kind = 'uninterpreted_doubled_numeric_row'
+        if kind is None:
+            return None
+        noise.append({'kind': kind, 'quote': line, 'span': [line_start, line_start + len(line)],
+                      'interpreted_as_values': False})
+    return noise
+
+
+def _between_rows(text, expected):
+    return _body_layout(text, expected) is not None
 
 
 def _tuple_metric(reference, cells, page_text, header_start):
@@ -416,7 +478,18 @@ def locate_table_value(reference, quote, header, *, page_text=None):
     paths, rules = _paths(levels) if levels else (None, None)
     if paths is None or len(cells) != len(paths):
         return _result('unknown', 'Complete header/row widths do not establish a unique table layout')
-    if not _between_rows(page_text[header_span[1]:row_span[0]], len(paths)):
+    between = page_text[header_span[1]:row_span[0]]
+    intervening = _body_layout(between, len(paths))
+    if intervening is None and all(cell.get('std') is not None and 'parts' not in cell for cell in cells):
+        # Lost separators in another row cannot repair the selected row. Only
+        # bound, non-selected table noise is tolerated; all selected cells were
+        # parsed above from their unchanged complete physical row.
+        scope = table_scope or _extraction_table_scope(page_text, header_span, row_span)
+        if scope is not None:
+            intervening = _body_layout(between, len(paths), extraction_noise=True)
+            if intervening is not None:
+                table_scope = scope
+    if intervening is None:
         return _result('unknown', 'Header is incomplete or separated from the row by another table/prose')
     index, selection_error = _select(selected_reference, paths, quote[start:start + first_cell])
     if index is None:
@@ -429,6 +502,9 @@ def locate_table_value(reference, quote, header, *, page_text=None):
     if table_scope is not None:
         evidence['table_scope'] = table_scope
         evidence['basis'].append(table_scope['basis'])
+    if intervening:
+        evidence['intervening_layout'] = [{**item,
+            'span': [offset + header_span[1] for offset in item['span']]} for item in intervening]
     if selected.get('footnote'):
         return _result('unknown', 'Selected value has a footnote requiring its original condition', **evidence)
     if selected.get('missing'):

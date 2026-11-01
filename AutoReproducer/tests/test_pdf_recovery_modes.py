@@ -106,7 +106,7 @@ def test_browser_controls_set_actual_role_and_separate_patch_authorization(mode,
     page = Page()
     audit.configure_execution_mode(page, False, recovery_mode=mode, source_repair=repair)
     assert page.fields['智能调查与排障'].checked is (mode != 'off')
-    assert page.fields['兼容性源码修复：失败后自动重试'].checked is repair
+    assert page.fields['AI 自动修复：失败后修复并重试'].checked is repair
     if mode != 'off':
         assert page.fields['调查方式'].value == mode
     if repair:

@@ -12,16 +12,18 @@ import tempfile
 from pathlib import Path
 import pytest
 
-os.environ.setdefault(
-    "AUTOREPRO_DEPS_ROOT",
-    str(Path(tempfile.mkdtemp(prefix="autorepro_deps_test_"))),
-)
+def _isolated_root(variable, prefix):
+    # xdist workers inherit the controller's environment. A shared inherited
+    # root makes unrelated background tests contend for the same owner lock.
+    # Dedicated native fixtures use AUTOREPRO_TEST_* and remain separate.
+    if os.environ.get("PYTEST_XDIST_WORKER") or variable not in os.environ:
+        os.environ[variable] = str(Path(tempfile.mkdtemp(prefix=prefix)))
+
+
+_isolated_root("AUTOREPRO_DEPS_ROOT", "autorepro_deps_test_")
 # ResourceManager 的数据根同样指向一次性临时目录，
 # 防止 e2e 流水线把 manifest/数据集写入项目 data/ 造成污染。
-os.environ.setdefault(
-    "AUTOREPRO_DATA_ROOT",
-    str(Path(tempfile.mkdtemp(prefix="autorepro_data_test_"))),
-)
+_isolated_root("AUTOREPRO_DATA_ROOT", "autorepro_data_test_")
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:

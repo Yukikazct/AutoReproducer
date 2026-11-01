@@ -136,7 +136,7 @@ def _write_report_copy(path: Path, raw: bytes) -> None:
             temporary.unlink(missing_ok=True)
 
 
-def _sync_run_report(result: dict) -> None:
+def _sync_run_report(result: dict, *, _directory=None) -> None:
     """Publish the final web report and its portable files beside the run evidence."""
     data = result["data"]
     if not data.get("run_dir"):
@@ -145,7 +145,7 @@ def _sync_run_report(result: dict) -> None:
     from src.report_revisions import sanitize_report_result
     from src.safety.paths import workspace_path
 
-    run_dir = Path(data["run_dir"])
+    run_dir = Path(_directory or data["run_dir"])
     report = Path(result["report_path"])
     from src.source_repair_evidence import report_evidence_bytes
     repair_evidence = report_evidence_bytes(report.read_text(encoding='utf-8'), report)
@@ -172,6 +172,11 @@ def _sync_run_report(result: dict) -> None:
     _write_report_copy(workspace_path(run_dir, "report.md", "run report"), report.read_bytes())
     _write_report_copy(workspace_path(run_dir, "result.json", "run result"),
                        json.dumps(sanitize_report_result(result), ensure_ascii=False, indent=2).encode("utf-8"))
+    if _directory is None:
+        from src.outcome_recovery_artifacts import outcome_attempt_directory
+        attempt = outcome_attempt_directory(data)
+        if attempt is not None:
+            _sync_run_report(result, _directory=attempt)
 
 
 def _record_pipeline_finish(result, *, logger=None):

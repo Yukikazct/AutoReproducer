@@ -17,17 +17,184 @@ from scripts import verify_browser_pdf_holdout as audit
 
 
 def compared_result():
-    observed = {'id': 'train:stdout:1', 'value': 0.8328, 'aggregation': 'mean', 'runs': 10,
+    observed = {'id': 'train:stdout:1', 'value': 0.8328, 'unit': 'fraction', 'split': 'test',
+                'aggregation': 'mean', 'runs': 10,
                 'std': 0.0004, 'source': 'train:stdout:22', 'source_quote': 'mean 0.83280, std 0.00040'}
-    row = {'status': 'reference_only', 'difference': -0.02,
+    row = {'metric': 'accuracy', 'status': 'reference_only', 'difference': -0.02,
+           'difference_unit': 'percentage_points',
            'settings': {'status': 'different', 'reason': 'CPU execution; paper reports GPU.'},
            'limitations': ['CPU execution; paper reports GPU.'],
-           'reference': {'value_quote': 'DGC 83.3', 'citations': ['paper']},
+           'reference': {'value': 83.3, 'unit': 'percent', 'split': 'test', 'runs': 10,
+                         'value_quote': 'DGC 83.3', 'citations': ['paper']},
            'actual': {**observed, 'citations': ['author']}}
-    return {'data': {'validation': {'is_reproduced': None, 'paper_metrics_verified': False,
+    return {'data': {'validation': {'status': 'author_code_completed',
+        'is_reproduced': None, 'paper_metrics_verified': False,
         'author_claim_comparison': {'status': 'partial', 'metric_records': [observed], 'comparisons': [row],
-                                  'citations': [{'id': 'paper', 'source': 'pdf'},
+                                  'citations': [{'id': 'paper', 'source': 'pdf', 'page': 1},
                                                 {'id': 'author', 'source': 'repository'}]}}}}
+
+
+V6_HEADER = ['指标', '论文参考', '实际值', '单位（参考 / 实际）',
+             '划分（参考 / 实际）', '次数（参考 / 实际）', '差值', '可比较性']
+
+
+def v6_report(rows, matched=None):
+    reference = ('仅供参考，尚不可验收' if matched is None else
+                 '已有核验指标达到参考规则' if matched else '已有核验指标未全部达到参考规则')
+    independent = '独立核验尚未完成' if matched is None else '协议与独立指标复算已核验'
+    conclusion = ('# Report\n- **是否达到参考**: ' + reference + '\n- **论文参考比较**: ' + reference +
+                  '\n- **独立核验状态**: ' + independent + '\n- **独立核验**: ' + independent + '\n')
+    escaped = [[re.sub(r'([\\`*_{}\[\]()<>!|])', r'\\\1', cell) for cell in row] for row in rows]
+    return conclusion + '## 指标与参考比较\n' + '\n'.join(
+        '| ' + ' | '.join(row) + ' |' for row in [V6_HEADER, ['---'] * 8, *escaped]) + '\n'
+
+
+def save_report(result, report):
+    result['data']['report'] = report
+    report_path = Path(result['report_path'])
+    run_dir = Path(result['data']['run_dir'])
+    for path in (report_path, run_dir / 'report.md'):
+        path.write_text(report, 'utf-8')
+    for path in (report_path.with_suffix('.result.json'), run_dir / 'result.json'):
+        path.write_text(json.dumps(result), 'utf-8')
+
+
+@pytest.mark.parametrize('kind', [
+    'different_metrics', 'missing_paper_unit', 'missing_actual_unit', 'missing_both_units',
+])
+@pytest.mark.parametrize('invented_difference', [False, True])
+def test_comparison_acceptance_retains_sourced_values_without_an_inapplicable_delta(
+        kind, invented_difference):
+    result = compared_result()
+    comparison = result['data']['validation']['author_claim_comparison']
+    row = comparison['comparisons'][0]
+    row['difference'] = None
+    row['actual']['name'] = 'accuracy'
+    row['reference']['name'] = 'f1_macro' if kind == 'different_metrics' else 'accuracy'
+    if kind in {'missing_paper_unit', 'missing_both_units'}:
+        row['reference']['unit'] = ''
+    if kind in {'missing_actual_unit', 'missing_both_units'}:
+        row['actual']['unit'] = ''
+        comparison['metric_records'][0]['unit'] = ''
+    if invented_difference:
+        row['difference'] = -1.0
+        with pytest.raises(AssertionError, match='without a difference'):
+            audit.verify_claim_comparison(result)
+    else:
+        assert audit.verify_claim_comparison(result) is comparison
+        assert row['actual']['value'] == .8328 and row['reference']['value'] == 83.3
+        assert row['difference'] is None and row['status'] == 'reference_only'
+
+
+@pytest.mark.parametrize('status', ['reference_only', 'comparable'])
+def test_comparison_acceptance_requires_applicable_delta_and_its_actual_arithmetic(status):
+    result = compared_result()
+    row = result['data']['validation']['author_claim_comparison']['comparisons'][0]
+    row['status'] = status
+    for difference in (None, 0.5):
+        row['difference'] = difference
+        with pytest.raises(AssertionError):
+            audit.verify_claim_comparison(result)
+
+
+@pytest.mark.parametrize('side', ['actual', 'reference'])
+@pytest.mark.parametrize('number', [None, True, '0.8328', float('nan'), float('inf'), -float('inf')])
+def test_comparison_acceptance_requires_both_original_finite_values(side, number):
+    result = compared_result()
+    comparison = result['data']['validation']['author_claim_comparison']
+    comparison['comparisons'][0][side]['value'] = number
+    if side == 'actual':
+        comparison['metric_records'][0]['value'] = number
+    with pytest.raises(AssertionError, match='finite numerical observations'):
+        audit.verify_claim_comparison(result)
+
+
+@pytest.mark.parametrize('number', [True, '0.02', float('nan'), float('inf'), -float('inf')])
+def test_comparison_acceptance_rejects_invalid_delta_types_and_nonfinite_values(number):
+    result = compared_result()
+    result['data']['validation']['author_claim_comparison']['comparisons'][0]['difference'] = number
+    with pytest.raises(AssertionError, match='difference must be finite'):
+        audit.verify_claim_comparison(result)
+
+
+def test_comparison_acceptance_cannot_upgrade_unknown_units_to_comparable():
+    result = compared_result()
+    row = result['data']['validation']['author_claim_comparison']['comparisons'][0]
+    row.update(status='comparable', difference=None)
+    row['reference']['unit'] = ''
+    with pytest.raises(AssertionError, match='difference must be finite'):
+        audit.verify_claim_comparison(result)
+
+
+def f1_result(name='f1_macro', metric_quote=True):
+    result = compared_result()
+    comparison = result['data']['validation']['author_claim_comparison']
+    row = comparison['comparisons'][0]
+    row.update(metric=name, difference=None)
+    comparison['metric_records'][0]['name'] = name
+    row['actual']['name'] = name
+    row['reference']['name'] = name
+    header = 'Classification results in percent'
+    if metric_quote:
+        row['reference']['metric_quote'] = header
+    comparison['citations'][0]['quote'] = header + '\n' + row['reference']['value_quote']
+    return result
+
+
+@pytest.mark.parametrize('name', ['f1_score', 'f1_macro', 'f1_micro', 'f1_weighted'])
+@pytest.mark.parametrize('metric_quote', [False, True])
+def test_unconfirmed_f1_averaging_keeps_sourced_values_without_delta(name, metric_quote):
+    result = f1_result(name, metric_quote)
+    comparison = audit.verify_claim_comparison(result)
+    row = comparison['comparisons'][0]
+    assert row['reference']['value'] == 83.3 and row['actual']['value'] == .8328
+    assert row['status'] == 'reference_only' and row['difference'] is None
+
+
+@pytest.mark.parametrize('name,label', [
+    ('f1_score', 'F1 score'), ('f1_macro', 'Macro-F1'),
+    ('f1_micro', 'F1 micro'), ('f1_weighted', 'weighted_F1_score'),
+])
+@pytest.mark.parametrize('metric_quote', [False, True])
+def test_explicit_matching_f1_label_still_requires_correct_delta(name, label, metric_quote):
+    result = f1_result(name, metric_quote)
+    comparison = result['data']['validation']['author_claim_comparison']
+    row = comparison['comparisons'][0]
+    header = label + ' results in percent'
+    comparison['citations'][0]['quote'] = header + '\n' + row['reference']['value_quote']
+    if metric_quote:
+        row['reference']['metric_quote'] = header
+    with pytest.raises(AssertionError, match='retain their numerical difference'):
+        audit.verify_claim_comparison(result)
+    row['difference'] = -.02
+    assert audit.verify_claim_comparison(result) is comparison
+
+
+@pytest.mark.parametrize('tamper', [
+    'missing_citation_quote', 'missing_citation_id', 'invented_metric_quote',
+    'row_in_another_citation', 'invented_delta', 'comparable',
+])
+def test_unconfirmed_f1_cannot_use_missing_evidence_or_claim_a_delta(tamper):
+    result = f1_result()
+    comparison = result['data']['validation']['author_claim_comparison']
+    row = comparison['comparisons'][0]
+    if tamper == 'missing_citation_quote':
+        comparison['citations'][0].pop('quote')
+    elif tamper == 'missing_citation_id':
+        row['reference']['citations'] = []
+    elif tamper == 'invented_metric_quote':
+        row['reference']['metric_quote'] = 'Invented header without averaging'
+    elif tamper == 'row_in_another_citation':
+        comparison['citations'][0]['quote'] = row['reference']['metric_quote']
+        comparison['citations'].append({'id': 'other', 'source': 'pdf',
+                                        'quote': row['reference']['value_quote']})
+        row['reference']['citations'].append('other')
+    elif tamper == 'invented_delta':
+        row['difference'] = -.02
+    elif tamper == 'comparable':
+        row.update(status='comparable', difference=-.02)
+    with pytest.raises(AssertionError):
+        audit.verify_claim_comparison(result)
 
 
 def test_comparison_acceptance_requires_nonempty_verified_results():
@@ -105,6 +272,16 @@ def test_default_credential_uses_hidden_prompt_and_refuses_echo_fallback(monkeyp
 class Field:
     def __init__(self, value="", checked=False):
         self.value, self.checked, self.presses = value, checked, []
+        self.visible = lambda: True
+        self.on_press = lambda value: None
+
+    def is_visible(self):
+        return self.visible()
+
+    def wait_for(self, *, state, timeout):
+        assert state == 'visible' and timeout == 10000
+        if not self.is_visible():
+            raise TimeoutError('Panel control remained hidden')
 
     def fill(self, value):
         self.value = value
@@ -113,6 +290,7 @@ class Field:
         self.presses.append(value)
         if value == 'Space':
             self.checked = not self.checked
+        self.on_press(value)
 
     def input_value(self):
         return self.value
@@ -128,7 +306,9 @@ class Field:
 
 
 class Page:
-    def __init__(self):
+    def __init__(self, *, environment_open=False, llm_open=False):
+        self.panel_open = {"运行环境": environment_open, "LLM API 配置": llm_open}
+        self.close_after_panel_clicks = {"运行环境": 0, "LLM API 配置": 0}
         self.fields = {
             "API 地址（OpenAI 兼容）": Field("https://provider.example/v1/"),
             "模型名称": Field("custom.model+version"),
@@ -136,13 +316,17 @@ class Page:
             "Mock 演示模式（无需 API）": Field(checked=True),
             "Docker 沙箱执行（暂未开放）": Field(checked=False),
             "严格核验：重载模型并独立复算指标": Field(),
-            "兼容性源码修复：失败后自动重试": Field(checked=True),
+            "AI 自动修复：失败后修复并重试": Field(checked=True),
             "智能调查与排障": Field(checked=True),
             "调查方式": Field('collaborative'),
             "限定修复文件（可选，每行一个仓库相对路径）": Field('stale.py'),
             "实验方法 / 模型（可选）": Field(),
             "实验数据集（可选）": Field(),
         }
+        for label in ("Mock 演示模式（无需 API）", "Docker 沙箱执行（暂未开放）"):
+            self.fields[label].visible = lambda: self.panel_open["运行环境"]
+        for label in ("API 地址（OpenAI 兼容）", "模型名称", "API Key"):
+            self.fields[label].visible = lambda: self.panel_open["LLM API 配置"]
         self.expanded, self.tested, self.waited = [], False, False
 
     def get_by_label(self, name, *, exact):
@@ -161,11 +345,18 @@ class Page:
     def get_by_text(self, text, **kwargs):
         if isinstance(text, str):
             assert text in {"运行环境", "LLM API 配置"}
-            return SimpleNamespace(click=lambda: self.expanded.append(text))
+            return SimpleNamespace(click=lambda **kwargs: self.toggle_panel(text))
         expected = ("连接成功 (" + self.fields["模型名称"].value + " @ "
                     + self.fields["API 地址（OpenAI 兼容）"].value + "): OK")
         assert text.search(expected), "Success must use escaped page provider and model"
         return SimpleNamespace(wait_for=self.wait_for_connection)
+
+    def toggle_panel(self, panel):
+        self.expanded.append(panel)
+        self.panel_open[panel] = not self.panel_open[panel]
+        if self.close_after_panel_clicks[panel]:
+            self.panel_open[panel] = False
+            self.close_after_panel_clicks[panel] -= 1
 
     def wait_for_connection(self, *, timeout):
         assert self.tested
@@ -191,6 +382,46 @@ def test_configuration_uses_current_labels_and_page_provider(overrides):
     assert not page.fields["Docker 沙箱执行（暂未开放）"].checked
 
 
+@pytest.mark.parametrize('environment_open', [False, True])
+@pytest.mark.parametrize('llm_open', [False, True])
+def test_configuration_opens_only_panels_with_hidden_controls(environment_open, llm_open):
+    page = Page(environment_open=environment_open, llm_open=llm_open)
+    audit.configure_page(page, SimpleNamespace(base_url=None, model=None), 'fixture-key-only')
+    assert page.expanded == (["运行环境"] if not environment_open else []) + (
+        ["LLM API 配置"] if not llm_open else [])
+    assert all(page.panel_open.values()) and page.waited
+
+
+@pytest.mark.parametrize('panel', ["运行环境", "LLM API 配置"])
+def test_configuration_recovers_panel_closed_by_one_rerender(panel):
+    page = Page()
+    page.close_after_panel_clicks[panel] = 1
+    audit.configure_page(page, SimpleNamespace(base_url=None, model=None), 'fixture-key-only')
+    assert page.expanded.count(panel) == 2
+    assert all(page.panel_open.values()) and page.waited
+
+
+@pytest.mark.parametrize('panel', ["运行环境", "LLM API 配置"])
+def test_configuration_panel_recovery_is_bounded_and_never_tests_hidden_fields(panel):
+    page = Page()
+    page.close_after_panel_clicks[panel] = 100
+    with pytest.raises(TimeoutError, match='Panel control remained hidden'):
+        audit.configure_page(page, SimpleNamespace(base_url=None, model=None), 'fixture-key-only')
+    assert page.expanded.count(panel) == 3
+    assert page.fields['API Key'].value == '' and not page.tested
+
+
+def test_configuration_reopens_llm_panel_after_provider_and_password_rerenders():
+    page = Page(environment_open=True, llm_open=True)
+    for label in ('API 地址（OpenAI 兼容）', 'API Key'):
+        page.fields[label].on_press = lambda value: page.panel_open.update({'LLM API 配置': False})
+    config = audit.configure_page(page, SimpleNamespace(base_url='https://other.example/api/', model=None),
+                                  'fixture-key-only')
+    assert page.expanded == ['LLM API 配置', 'LLM API 配置']
+    assert config['base_url'] == 'https://other.example/api/'
+    assert page.panel_open['LLM API 配置'] and page.waited
+
+
 def test_browser_is_portable_and_accepts_explicit_configuration():
     args = SimpleNamespace(headed=False, browser_executable=None, browser_channel=None)
     assert audit.browser_launch_options(args) == {"headless": True}
@@ -210,7 +441,7 @@ def test_pdf_mode_controls_are_set_explicitly_and_exclude_source_repair(strict):
     page.fields['严格核验：重载模型并独立复算指标'].checked = not strict
     audit.configure_execution_mode(page, strict)
     assert page.fields['严格核验：重载模型并独立复算指标'].checked is strict
-    assert page.fields['兼容性源码修复：失败后自动重试'].checked is False
+    assert page.fields['AI 自动修复：失败后修复并重试'].checked is False
     assert page.fields['智能调查与排障'].checked is False
 
 
@@ -425,6 +656,35 @@ def test_live_terminal_view_checks_actual_numeric_or_author_conclusion(strict, m
     assert labels[-1] == '任务完成'
 
 
+@pytest.mark.parametrize('verdict,label', [
+    ('reproduced', 'AI 判断复现成功'), ('partially_reproduced', 'AI 判断部分复现'),
+    ('not_reproduced', 'AI 判断尚未复现'), ('insufficient_evidence', 'AI 判断证据不足')])
+def test_ordinary_ai_assessment_preserves_execution_and_independent_boundaries(completed_run, verdict, label):
+    from src.reproduction_assessment import apply_reproduction_assessment
+    result, _, _ = completed_run
+    validation = result['data']['validation']
+    validation['execution_status'] = 'author_code_completed'
+    apply_reproduction_assessment(validation, {'status': 'completed', 'verdict': verdict,
+                                              'reason': 'Evidence-based model assessment'})
+    audit.verify_author_completion(result, 'pdf-digest', 'https://example.org/author/repo')
+    validation['author_claim_comparison'] = compared_result()['data']['validation']['author_claim_comparison']
+    audit.verify_claim_comparison(result)
+    labels = []
+
+    class TerminalPage:
+        def get_by_text(self, name, **kwargs):
+            labels.append(name.pattern if isinstance(name, re.Pattern) else name)
+            return SimpleNamespace(wait_for=lambda **kwargs: None)
+
+    audit.verify_terminal_page(TerminalPage(), validation)
+    assert any(re.escape(label) in text for text in labels)
+    assert '严格独立复算为可选核验，本次未完成该项。' in labels
+    assert labels[-1] == '任务完成'
+    validation['paper_metrics_verified'] = True
+    with pytest.raises(AssertionError):
+        audit.verify_ordinary_conclusion(validation)
+
+
 @pytest.mark.parametrize('changed', [None, 'download', 'comparison', 'run_report', 'stored_report', 'runtime', 'strict'])
 def test_browser_download_must_match_saved_reports_and_structured_comparison(completed_run, changed):
     result, _, _ = completed_run
@@ -455,38 +715,31 @@ def test_browser_download_must_match_saved_reports_and_structured_comparison(com
 
 
 @pytest.mark.parametrize('matched', [True, False])
-@pytest.mark.parametrize('wrong', ['actual', 'reference', 'unit', 'metric', 'status', 'fenced_table', 'duplicate'])
+@pytest.mark.parametrize('wrong', ['actual', 'reference', 'unit', 'metric', 'difference', 'comparability',
+                                 'status', 'independent', 'fenced_table', 'duplicate'])
 def test_consistent_downloads_cannot_override_formal_strict_metrics(strict_completed_run, matched, wrong):
     """Every persisted/downloaded copy agrees, but disagrees with formal evidence."""
     result = strict_completed_run[0]
     validation = result['data']['validation']
     validation.update(status='reproduced' if matched else 'reference_not_met', is_reproduced=matched)
     validation['comparisons'][0].update(actual=82 if matched else 70, **{'pass': matched})
-    status = '选定论文实验数值复现通过' if matched else '选定论文实验已完成，数值参考未达到'
-    report = ('- **复现状态**: ' + status + '\n- **严格验收**: 完整独立复算证据已核验\n'
-              '### 指标对比\n| 指标 | 论文声明 | 实际运行 |\n|---|---|---|\n'
-              '| accuracy | 83% | ' + str(82 if matched else 70) + '% |\n')
-    if wrong == 'actual':
-        report = report.replace(str(82 if matched else 70) + '% |', '999% |')
-    elif wrong == 'reference':
-        report = report.replace('83%', '84%')
-    elif wrong == 'unit':
-        report = report.replace('%', ' (比例)')
-    elif wrong == 'metric':
-        report = report.replace('accuracy', 'cross_entropy')
-    elif wrong == 'status':
-        report = report.replace(status, '选定论文实验已完成，数值参考未达到' if matched else '选定论文实验数值复现通过')
+    actual = 82 if matched else 70
+    cells = ['accuracy', '83', str(actual), 'percent / percent', '未记录 / 未记录',
+             '未记录 / 未记录', str(actual - 83) + ' percent', '可比较']
+    indices = {'actual': 2, 'reference': 1, 'unit': 3, 'metric': 0, 'difference': 6, 'comparability': 7}
+    if wrong in indices:
+        cells[indices[wrong]] = 'tampered'
+    report = v6_report([cells], matched)
+    if wrong == 'status':
+        report = report.replace('已有核验指标达到参考规则' if matched else '已有核验指标未全部达到参考规则',
+                                '已有核验指标未全部达到参考规则' if matched else '已有核验指标达到参考规则')
+    elif wrong == 'independent':
+        report = report.replace('协议与独立指标复算已核验', '独立核验尚未完成')
     elif wrong == 'fenced_table':
-        report = report.replace('### 指标对比', '```markdown\n### 指标对比') + '```\n'
-    else:
-        report += '| accuracy | 83% | ' + str(82 if matched else 70) + '% |\n'
-    result['data']['report'] = report
-    report_path = Path(result['report_path'])
-    run_dir = Path(result['data']['run_dir'])
-    for path in (report_path, run_dir / 'report.md'):
-        path.write_text(report, 'utf-8')
-    for path in (report_path.with_suffix('.result.json'), run_dir / 'result.json'):
-        path.write_text(json.dumps(result), 'utf-8')
+        report = report.replace('## 指标与参考比较', '```markdown\n## 指标与参考比较') + '```\n'
+    elif wrong == 'duplicate':
+        report += '| ' + ' | '.join(cells) + ' |\n'
+    save_report(result, report)
     with pytest.raises(AssertionError):
         audit.verify_saved_report(result, report.encode())
 
@@ -497,12 +750,12 @@ def test_strict_table_and_markdown_keep_full_renderer_precision_and_explicit_uni
          'unit': 'cross_entropy', 'pass': False},
         {'name': 'accuracy', 'reference': 0.82, 'actual': 0.8123456789012345,
          'unit': 'fraction', 'pass': True}]}
-    rows = [['指标', '论文声明', '实际运行'],
-            ['accuracy', '0.82 (比例)', '0.8123456789012345 (比例)'],
-            ['cross_entropy', '2.1e-08 cross_entropy', '0.12345678901234566 cross_entropy']]
-    report = ('- **复现状态**: ⚠️ 选定论文实验已完成，数值参考未达到\n'
-              '- **严格验收**: 完整独立复算证据已核验\n### 指标对比\n' +
-              '\n'.join('| ' + ' | '.join(row) + ' |' for row in [rows[0], ['---'] * 3, *rows[1:]]))
+    rows = [V6_HEADER,
+            ['cross_entropy', '2.1e-08', '0.12345678901234566', 'cross_entropy / cross_entropy',
+             '未记录 / 未记录', '未记录 / 未记录', str(0.12345678901234567 - 2.1e-08) + ' cross_entropy', '可比较'],
+            ['accuracy', '0.82', '0.8123456789012345', 'fraction / fraction',
+             '未记录 / 未记录', '未记录 / 未记录', str(0.8123456789012345 - 0.82) + ' fraction', '可比较']]
+    report = v6_report(rows[1:], False)
     assert audit.verify_strict_report(report, validation) == rows
 
     class Row:
@@ -515,9 +768,160 @@ def test_strict_table_and_markdown_keep_full_renderer_precision_and_explicit_uni
 
     table = SimpleNamespace(locator=lambda selector: SimpleNamespace(all=lambda: [Row(row) for row in rows]))
     audit.verify_strict_table(table, validation)
-    rows[1][2] = '0.8123 (比例)'
-    with pytest.raises(AssertionError, match='Displayed strict metric'):
+    rows[2][2] = '0.8123'
+    with pytest.raises(AssertionError, match='Displayed metric'):
         audit.verify_strict_table(table, validation)
+
+
+@pytest.mark.parametrize('missing', ['reference', 'actual'])
+def test_strict_table_cannot_accept_missing_verified_values(missing):
+    validation = {'status': 'reference_not_met', 'is_reproduced': False, 'comparisons': [
+        {'name': 'accuracy', 'reference': 83, 'actual': 82, 'unit': 'percent', 'pass': False}]}
+    validation['comparisons'][0][missing] = None
+    with pytest.raises(AssertionError, match='both verified numerical observations'):
+        audit.strict_comparison_rows(validation)
+
+
+def test_v6_table_preserves_zero_missing_nested_counts_and_escaped_names():
+    validation = {'author_claim_comparison': {'comparisons': [
+        {'metric': 'error_rate | final', 'status': 'reference_only', 'difference': 0.0,
+         'difference_unit': 'fraction',
+         'reference': {'value': 0.0, 'unit': 'fraction', 'split': 'test', 'repetitions': {'count': 3}},
+         'actual': {'value': 0.0, 'unit': 'fraction', 'split': 'test', 'n_runs': 3}},
+        {'metric': 'loss', 'status': 'not_comparable', 'difference': -100,
+         'reference': {'value': 0.5, 'unit': 'scalar'}, 'actual': {'value': None}},
+    ]}}
+    rows = [['error_rate | final', '0.0', '0.0', 'fraction / fraction', 'test / test',
+             '3 / 3', '0.0 fraction', '仅供参考'],
+            ['loss', '0.5', '未取得', 'scalar / 未记录', '未记录 / 未记录',
+             '未记录 / 未记录', '未取得', '不可比较']]
+    assert audit.verify_comparison_report(v6_report(rows), validation) == [V6_HEADER, *rows]
+
+
+@pytest.mark.parametrize('kind', ['different_metrics', 'missing_paper_unit', 'missing_actual_unit', 'missing_both_units'])
+@pytest.mark.parametrize('invented_difference', [False, True])
+def test_reference_values_can_remain_visible_without_an_inapplicable_difference(
+        tmp_path, kind, invented_difference):
+    from src.agents.report_generator import ReportGeneratorAgent
+    row = {'metric': 'accuracy', 'status': 'reference_only', 'difference': None,
+           'reference': {'name': 'accuracy', 'value': 82.5, 'unit': 'percent'},
+           'actual': {'name': 'accuracy', 'value': .84, 'unit': 'fraction'}}
+    if kind == 'different_metrics':
+        row['reference']['name'] = 'f1_macro'
+    if kind in {'missing_paper_unit', 'missing_both_units'}:
+        row['reference']['unit'] = ''
+    if kind in {'missing_actual_unit', 'missing_both_units'}:
+        row['actual']['unit'] = ''
+    validation = {'author_claim_comparison': {'comparisons': [row]}}
+    report = ReportGeneratorAgent.build_report({'validation': validation}, report_path=tmp_path / 'values.md')
+    if invented_difference:
+        row['difference'] = -1.0
+        with pytest.raises(AssertionError, match='without a difference'):
+            audit.comparison_rows(validation)
+    else:
+        expected = audit.verify_comparison_report(report, validation)
+        assert expected[1][1:3] == ['82.5', '0.84']
+        assert expected[1][6:] == ['未取得', '仅供参考']
+        if kind == 'different_metrics':
+            assert expected[1][0] == '论文 f1_macro / 实际 accuracy'
+
+
+@pytest.mark.parametrize('scenario,expected_count', [
+    ('ids', 2), ('another_split', 3), ('different_id', 3),
+    ('legacy_unique', 2), ('legacy_ambiguous', 4), ('another_dataset', 3),
+])
+def test_unpaired_observations_survive_main_report_and_independent_audit(tmp_path, scenario, expected_count):
+    from src.agents.report_generator import ReportGeneratorAgent
+    actual = {'id': 'test', 'name': 'accuracy', 'value': .8, 'unit': 'fraction',
+              'split': 'test', 'aggregation': 'single', 'runs': 1}
+    loss = {'id': 'loss', 'name': 'loss', 'value': 0., 'unit': 'scalar', 'split': 'test'}
+    row = {'metric': 'accuracy', 'status': 'reference_only', 'difference': -10.,
+           'difference_unit': 'percentage_points',
+           'reference': {'name': 'accuracy', 'value': 90., 'unit': 'percent'},
+           'actual': actual}
+    primary = [deepcopy(actual), deepcopy(loss)]
+    secondary = deepcopy(primary)
+    if scenario == 'another_split':
+        primary.append({**actual, 'id': 'train', 'split': 'train'})
+    elif scenario == 'different_id':
+        primary.append({**actual, 'id': 'another-test'})
+    elif scenario in {'legacy_unique', 'legacy_ambiguous'}:
+        actual.pop('id')
+        primary[0].pop('id')
+        secondary[0].pop('id')
+        if scenario == 'legacy_ambiguous':
+            primary.append(deepcopy(primary[0]))
+            secondary = []
+    elif scenario == 'another_dataset':
+        actual.pop('id')
+        actual['dataset'] = 'Cora'
+        primary[0] = deepcopy(actual)
+        secondary = [{**actual, 'dataset': 'OtherDataset'}]
+    validation = {'author_claim_comparison': {'comparisons': [row], 'metric_records': primary},
+                  'metric_records': secondary}
+    before = deepcopy(validation)
+    report = ReportGeneratorAgent.build_report({'validation': validation}, report_path=tmp_path / 'unpaired.md')
+    expected = audit.comparison_rows(validation)
+    assert len(expected) == expected_count
+    assert ['loss', '未取得', '0.0', '未记录 / scalar', '未记录 / test',
+            '未记录 / 未记录', '未取得', '未记录'] in expected
+    assert audit.verify_comparison_report(report, validation) == [V6_HEADER, *expected]
+    assert validation == before
+    altered = deepcopy(expected)
+    unpaired_loss = next(cells for cells in altered if cells[0] == 'loss')
+    unpaired_loss[2] = '0.123'
+    with pytest.raises(AssertionError, match='differ from authoritative'):
+        audit.verify_comparison_report(v6_report(altered), validation)
+
+
+@pytest.mark.parametrize('wrong', [None, 'actual', 'reference', 'unit', 'split', 'runs', 'metric',
+                                 'difference', 'comparability', 'fenced_table', 'duplicate',
+                                 'structured_difference', 'reference_conclusion', 'independent_conclusion'])
+def test_reference_only_download_retains_delta_and_does_not_claim_acceptance(completed_run, wrong):
+    result = completed_run[0]
+    validation = result['data']['validation']
+    validation.update(compared_result()['data']['validation'])
+    cells = ['accuracy', '83.3', '0.8328', 'percent / fraction', 'test / test',
+             '10 / 10', '-0.02 个百分点', '仅供参考']
+    indices = {'actual': 2, 'reference': 1, 'unit': 3, 'split': 4, 'runs': 5,
+               'metric': 0, 'difference': 6, 'comparability': 7}
+    if wrong in indices:
+        cells[indices[wrong]] = '未取得' if wrong == 'difference' else 'tampered'
+    report = v6_report([cells])
+    if wrong == 'fenced_table':
+        report = report.replace('## 指标与参考比较', '```markdown\n## 指标与参考比较') + '```\n'
+    elif wrong == 'duplicate':
+        report += '| ' + ' | '.join(cells) + ' |\n'
+    elif wrong == 'structured_difference':
+        validation['author_claim_comparison']['comparisons'][0]['difference'] = 4
+        report = report.replace('-0.02 个百分点', '4 个百分点')
+    elif wrong == 'reference_conclusion':
+        report = report.replace('仅供参考，尚不可验收', '已配对指标达到参考规则')
+    elif wrong == 'independent_conclusion':
+        report = report.replace('独立核验尚未完成', '协议与独立指标复算已核验')
+    save_report(result, report)
+    if wrong:
+        with pytest.raises(AssertionError):
+            audit.verify_saved_report(result, report.encode())
+    else:
+        assert audit.verify_saved_report(result, report.encode())['structured_records_identical'] is True
+        assert result['data']['validation']['is_reproduced'] is None
+
+
+@pytest.mark.parametrize('strict,matched', [(False, None), (True, True), (True, False)])
+def test_current_v6_renderer_passes_independent_comparison_audit(
+        completed_run, strict_completed_run, tmp_path, strict, matched):
+    from src.agents.report_generator import ReportGeneratorAgent
+    result = strict_completed_run[0] if strict else completed_run[0]
+    validation = result['data']['validation']
+    if strict:
+        validation.update(is_reproduced=matched, status='reproduced' if matched else 'reference_not_met')
+        validation['comparisons'][0].update(actual=82 if matched else 70, **{'pass': matched})
+    else:
+        validation.update(compared_result()['data']['validation'])
+    report = ReportGeneratorAgent.build_report(result['data'], report_path=tmp_path / 'current.md')
+    save_report(result, report)
+    assert audit.verify_saved_report(result, report.encode())['structured_records_identical'] is True
 
 
 @pytest.mark.parametrize('strict,matched,failure', [
@@ -526,11 +930,13 @@ def test_strict_table_and_markdown_keep_full_renderer_precision_and_explicit_uni
     for failure in [None, 'reload', 'zip', 'attachment', 'manifest_hash', 'manifest_bytes',
                     'evidence_validation', 'evidence_conclusion']
 ] + [
-    (True, matched, failure)
-    for matched in [True, False]
+    (strict, matched, failure)
+    for strict, matched in [(False, None), (True, True), (True, False)]
     for failure in ['wrong_actual', 'wrong_reference', 'wrong_unit', 'wrong_metric',
-                    'wrong_live_actual', 'wrong_reloaded_actual', 'wrong_conclusion', 'wrong_pass']
-])
+                    'wrong_difference', 'wrong_comparability', 'wrong_live_actual', 'wrong_reloaded_actual',
+                    'wrong_live_difference', 'wrong_reloaded_difference', 'wrong_live_comparability',
+                    'wrong_reloaded_comparability', 'wrong_conclusion']
+] + [(True, matched, 'wrong_pass') for matched in [True, False]])
 def test_browser_report_download_and_reload_preserve_each_mode_conclusion(
         completed_run, strict_completed_run, tmp_path, strict, matched, failure):
     result = strict_completed_run[0] if strict else completed_run[0]
@@ -539,33 +945,26 @@ def test_browser_report_download_and_reload_preserve_each_mode_conclusion(
         validation.update(is_reproduced=matched, status='reproduced' if matched else 'reference_not_met')
         validation['comparisons'][0].update(actual=82 if matched else 70, **{'pass': matched})
         actual = 82 if matched else 70
-        cells = ['accuracy', '83%', str(actual) + '%']
-        if failure == 'wrong_actual':
-            cells[2] = str(actual + 1) + '%'
-        elif failure == 'wrong_reference':
-            cells[1] = '84%'
-        elif failure == 'wrong_unit':
-            cells[2] = str(actual) + ' (比例)'
-        elif failure == 'wrong_metric':
-            cells[0] = 'cross_entropy'
-        elif failure == 'wrong_pass':
+        cells = ['accuracy', '83', str(actual), 'percent / percent', '未记录 / 未记录',
+                 '未记录 / 未记录', str(actual - 83) + ' percent', '可比较']
+        if failure == 'wrong_pass':
             validation['comparisons'][0]['pass'] = not matched
-        state_text = ('选定论文实验数值复现通过' if matched else '选定论文实验已完成，数值参考未达到')
-        if failure == 'wrong_conclusion':
-            state_text = ('选定论文实验已完成，数值参考未达到' if matched else '选定论文实验数值复现通过')
-        report = ('# Report\n- **严格验收**: 完整独立复算证据已核验\n- **复现状态**: ' +
-                  state_text + '\n### 指标对比\n| 指标 | 论文声明 | 实际运行 |\n|---|---|---|\n| ' +
-                  ' | '.join(cells) + ' |')
     else:
-        cells = ['accuracy', '83', '82']
-        report = '# Report\n作者输出与论文宣称对比\n| 指标 | 论文宣称 | 作者运行输出 |\n|---|---|---|\n| accuracy | 83 | 82 |'
-    result['data']['report'] = report
+        validation.update(compared_result()['data']['validation'])
+        cells = ['accuracy', '83.3', '0.8328', 'percent / fraction', 'test / test',
+                 '10 / 10', '-0.02 个百分点', '仅供参考']
+    indices = {'wrong_actual': 2, 'wrong_reference': 1, 'wrong_unit': 3, 'wrong_metric': 0,
+               'wrong_difference': 6, 'wrong_comparability': 7}
+    if failure in indices:
+        cells[indices[failure]] = 'tampered'
+    report = v6_report([cells], matched)
+    if failure == 'wrong_conclusion':
+        state = ('仅供参考，尚不可验收' if not strict else
+                 '已有核验指标达到参考规则' if matched else '已有核验指标未全部达到参考规则')
+        report = report.replace(state, 'tampered conclusion')
+    save_report(result, report)
     report_path = Path(result['report_path'])
     run_dir = Path(result['data']['run_dir'])
-    report_path.write_text(report, 'utf-8')
-    (run_dir / 'report.md').write_text(report, 'utf-8')
-    for path in (report_path.with_suffix('.result.json'), run_dir / 'result.json'):
-        path.write_text(json.dumps(result), 'utf-8')
     attachment = report_path.with_name(report_path.stem + '_execution.txt')
     attachment.write_bytes(b'Full original stdout and stderr')
     (run_dir / attachment.name).write_bytes(attachment.read_bytes())
@@ -614,8 +1013,12 @@ def test_browser_report_download_and_reload_preserve_each_mode_conclusion(
             assert selector == 'tr'
             visible = cells.copy()
             if failure == 'wrong_live_actual' or (page.reloaded and failure == 'wrong_reloaded_actual'):
-                visible[2] = '999%'
-            rows = [['指标', '论文声明', '实际运行'], visible]
+                visible[2] = '999'
+            elif failure == 'wrong_live_difference' or (page.reloaded and failure == 'wrong_reloaded_difference'):
+                visible[6] = '未取得'
+            elif failure == 'wrong_live_comparability' or (page.reloaded and failure == 'wrong_reloaded_comparability'):
+                visible[7] = '未记录'
+            rows = [V6_HEADER, visible]
             return SimpleNamespace(all=lambda: [SimpleNamespace(locator=lambda selector, row=row:
                 SimpleNamespace(all_inner_texts=lambda: row)) for row in rows])
 

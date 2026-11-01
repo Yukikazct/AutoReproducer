@@ -115,6 +115,10 @@ def infer_cli(source, *, inventory, source_path, preferred_configs=(), cwd=None)
         tree = ast.parse(source)
     except (SyntaxError, ValueError, RecursionError):
         return None
+    rebound_str = any(isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store) and node.id == 'str'
+        or isinstance(node, (ast.FunctionDef, ast.ClassDef, ast.AsyncFunctionDef)) and node.name == 'str'
+        or isinstance(node, ast.arg) and node.arg == 'str'
+        or isinstance(node, ast.alias) and (node.asname or node.name) == 'str' for node in ast.walk(tree))
     cwd = PurePosixPath(cwd if cwd is not None else PurePosixPath(source_path).parent).as_posix()
     modules, constructors, constants, functions = set(), set(), {}, {}
     invocations = []
@@ -221,7 +225,7 @@ def infer_cli(source, *, inventory, source_path, preferred_configs=(), cwd=None)
     scan(tree.body)
     if not invocations:
         return None
-    result = {'arguments': [], 'missing': [], 'defaults': [], 'evidence': [],
+    result = {'arguments': [], 'missing': [], 'defaults': [], 'options': [], 'evidence': [],
               'complete': True, 'parsed': True, 'config_paths': []}
     if len(invocations) > 1:
         result['missing'].append('<multiple invoked argparse parsers>')
@@ -287,6 +291,12 @@ def infer_cli(source, *, inventory, source_path, preferred_configs=(), cwd=None)
             if default is not _UNKNOWN:
                 result['defaults'].append({'flags': tokens, 'dest': dest, 'value': default,
                                            'implicit': implicit, **quote})
+            result['options'].append({'flags': tokens, 'dest': dest,
+                'action': action if isinstance(action, str) else None,
+                'nargs': nargs if nargs is not _UNKNOWN else '<dynamic>',
+                'scalar_string': action == 'store' and nargs is None and (
+                    converter is None or isinstance(converter, ast.Name) and converter.id == 'str' and not rebound_str),
+                **quote})
             result['evidence'].append(quote)
             if action not in {'store', 'store_true', 'store_false', 'count', 'append', 'extend', 'store_const', 'append_const'}:
                 result['missing'].append(label)

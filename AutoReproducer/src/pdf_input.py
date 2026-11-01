@@ -325,6 +325,11 @@ def resolve_pdf_request(request):
     # In particular, a stale selected ReZero profile cannot authorize execution
     # after its PDF was replaced with an unrelated paper or a link-only document.
     resolved.pop("pdf_resolution", None)
+    if request.get("strict_validation") is True:
+        # Explicit strict requests use the generic evidence-bound workflow.
+        # A matching title must not inject an unsupported preset afterwards.
+        # Explicit presets are retained for the strict request validator.
+        return resolved
     for candidate in _leading_title_candidates(document):
         repository_route = match_repository_profile(candidate, document.repository_links)
         if repository_route is None:

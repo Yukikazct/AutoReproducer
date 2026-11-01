@@ -181,7 +181,7 @@ def verify_runtime_datasets(plan, receipts, workspace):
     return records
 
 
-def audit_runtime_datasets(plan, receipts, workspace):
+def audit_runtime_datasets(plan, receipts, workspace, *, compare_canonical_source=False):
     """Keep observed input checks separate from author completion and reference identity."""
     declarations = [item for item in plan.get('datasets', []) if item.get('kind') == 'author_runtime']
     sources, errors = [], []
@@ -194,6 +194,18 @@ def audit_runtime_datasets(plan, receipts, workspace):
                        if record.get('declaration') == declaration and record.get('verification_error')]
             errors.append({'loader': declaration, 'reason': str(exc), 'observation_errors': details})
     verified = bool(declarations) and not errors and len(sources) == len(declarations)
+    references = []
+    if compare_canonical_source:
+        from src.runtime_dataset_reference import audit_dgl_reference
+        for source in sources:
+            if (source.get('loader') or {}).get('framework') == 'dgl.data':
+                reference = audit_dgl_reference(source)
+                source['canonical_reference_audit'] = reference
+                references.append(reference)
+    canonical_match = bool(references) and verified and len(references) == len(sources) and all(
+        reference['current_source_match'] is True for reference in references)
     return {'status': 'verified' if verified else 'partial' if sources else 'unavailable',
             'verified': verified, 'basis': 'native_constructor_and_unchanged_input_files',
+            'canonical_source_match_verified': canonical_match,
+            'published_checksum_verified': False, 'paper_protocol_verified': False,
             'independent_reference_verified': False, 'sources': sources, 'errors': errors}

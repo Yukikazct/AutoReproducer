@@ -639,7 +639,7 @@ class RepositoryReproduction:
                 if plan_step_ids(stored.get("steps")) != plan_step_ids(plan["steps"]) or \
                         stored.get("spec_sha256") != plan["spec_sha256"]:
                     raise RuntimeError("落盘执行计划与本次执行步骤不一致")
-                environment = {**profile["environment"], "dependency_health_check": False,
+                environment = {**profile["environment"], "dependency_health_check": True,
                                "auto_prepare": True, "offline": offline, "python_version": platform.python_version(),
                                "platform": platform.platform(), "interpreter": sys.executable}
                 data["env_config"] = environment

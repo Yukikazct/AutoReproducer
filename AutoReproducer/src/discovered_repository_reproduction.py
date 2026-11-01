@@ -533,6 +533,9 @@ class DiscoveredRepositoryReproduction:
                     event('prepare_dataset', 'skipped', '输入数据由原作者程序加载；完整数据来源尚未核验，先验证代码可运行')
                 self._execute_frozen(request, data, candidate_plan, candidate_snapshot, workspace,
                                      run_dir, candidate_environment, emit, event)
+                from src.outcome_recovery_runtime import recover_outcome
+                recover_outcome(self, request, data, candidate_plan, candidate_packet, candidate_snapshot,
+                                workspace, run_dir, emit, event)
 
             index = 0
             while index < len(unique) and index < 3:
@@ -842,6 +845,11 @@ class DiscoveredRepositoryReproduction:
             (run_dir / "report.md").write_text(data["report"], encoding="utf-8")
             result = {"state": "ERROR" if error else "COMPLETED", "data": data, "error": error}
             write_json(run_dir / "result.json", result)
+            if data.get('active_attempt_dir'):
+                active = workspace_path(run_dir, Path(data['active_attempt_dir']).relative_to(run_dir).as_posix(),
+                                        'outcome recovery artifacts', must_exist=True, forbid_git=True)
+                write_json(active / 'result.json', result)
+                (active / 'report.md').write_text(data['report'], encoding='utf-8')
             event("generate_report", "success")
             return result
         except (KeyboardInterrupt, SystemExit) as exc:
@@ -1402,12 +1410,17 @@ class DiscoveredRepositoryReproduction:
                     data['strict_validation'].get('reason', '缺少完整独立证据'))
             if runtime_loaders and not repaired:
                 from src.runtime_dataset_evidence import audit_runtime_datasets
-                dataset_audit = audit_runtime_datasets(plan, validation['author_execution'], workspace)
+                dataset_audit = audit_runtime_datasets(plan, validation['author_execution'], workspace,
+                                                      compare_canonical_source=not request.get('offline'))
                 data['runtime_dataset_evidence'] = validation['runtime_dataset_evidence'] = dataset_audit
                 validation['dataset_observation_verified'] = dataset_audit['verified']
+                validation['canonical_source_match_verified'] = dataset_audit['canonical_source_match_verified']
                 data['dataset_provenance']['runtime_observation'] = dataset_audit
                 data['dataset_provenance']['reason'] = ('实际输入已按原加载器观测并在运行结束后核对；尚未与独立官方参考摘要核对。'
                     if dataset_audit['verified'] else '原作者代码已结束，完整输入观测未通过或尚未覆盖；保留未知状态。')
+                if dataset_audit['canonical_source_match_verified']:
+                    data['dataset_provenance']['reason'] = ('实际 raw 输入与独立下载的当前 DGL 官方源逐文件一致；'
+                        '上游不可变摘要、processed 图与论文完整协议仍未独立核验。')
                 for filename, value in [('runtime_dataset_evidence.json', dataset_audit),
                                         ('dataset.json', data['dataset_provenance'])]:
                     try:

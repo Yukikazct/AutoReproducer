@@ -478,3 +478,75 @@ def test_repository_failed_health_rebuild_retains_diagnostics_and_never_runs_pla
     assert "unrepairable native DLL" in saved["dependency_health_attempts"][-1]["diagnostic"]
     execution = json.loads((Path(result["run_dir"]) / "execution.json").read_text(encoding="utf-8"))
     assert execution["environment"] == saved
+
+
+@pytest.mark.parametrize('preset', ['repository', 'method'])
+@pytest.mark.parametrize('damage', ['healthy', 'wrong_version', 'native_import'])
+def test_preset_entrypoints_probe_ready_cache_before_any_author_step(monkeypatch, tmp_path, preset, damage):
+    """Exercise the public service and real runner, including a real import probe."""
+    from copy import deepcopy
+    from src.audit.audit_logger import AuditLogger
+    from src.repository_profiles import get_profile
+    import src.repository_reproduction as fixed
+    import src.method_reproduction as method
+
+    monkeypatch.setattr(repository, 'DEPS_CACHE_ROOT', ce.DEPS_CACHE_ROOT)
+    directory = ce.DEPS_CACHE_ROOT / 'repository' / runtime_fingerprint() / ce.reqs_digest(REQUIREMENTS)
+    installs = fake_installer(monkeypatch, lambda *args: pytest.fail('offline preset must never install packages'))
+    profile_id = 'dlinear_etth1_smoke' if preset == 'repository' else 'neural_ode_spiral'
+    profile = get_profile(profile_id)
+    profile['environment'] = {'requirements_txt': REQUIREMENTS}
+    profile['steps'] = [{'id': 'train', 'kind': 'train', 'cwd': '.',
+                         'argv': ['python', 'train.py']}]
+    module = fixed if preset == 'repository' else method
+    monkeypatch.setattr(module, 'get_profile', lambda _identifier: deepcopy(profile))
+
+    def export(_root, _profile, workspace, **_kwargs):
+        workspace.mkdir()
+        # The public service clears the previous disposable environment before
+        # export; inject a ready target inside this run's preparation boundary.
+        package(directory, version='0.9' if damage == 'wrong_version' else '1.0',
+                source="raise OSError('broken preset native DLL')\n" if damage == 'native_import' else 'VALUE = 7\n',
+                ready=True)
+        (workspace / 'train.py').write_text(
+            "from pathlib import Path\nimport native_demo\n"
+            "assert native_demo.VALUE == 7\nPath('author-ran.txt').write_text('completed')\n", encoding='utf-8')
+        return {'path': str(workspace), 'url': profile['repository']['url'],
+                'resolved_sha': profile['repository']['revision'], 'files': {}}
+
+    monkeypatch.setattr(fixed, 'export_repository', export)
+    adapter = Mock()
+    adapter.prepare_dataset.return_value = {'url': 'fixture://data', 'verified': False}
+    adapter.materialize.return_value = {'files': {}}
+    adapter.public_sources.return_value = []
+    adapter.steps.return_value = deepcopy(profile['steps'])
+    adapter.metric_records.return_value = []
+    monkeypatch.setattr(module, 'get_adapter', lambda _profile: adapter)
+    runner = repository.RepositoryRunner(executor=executor())
+    if damage != 'healthy':
+        monkeypatch.setattr(runner, '_execute', Mock(side_effect=AssertionError('unhealthy cache cannot execute author code')))
+    logger = AuditLogger(log_dir=str(tmp_path / 'logs'), ledger_dir=str(tmp_path / 'ledger'))
+    service_type = fixed.RepositoryReproduction if preset == 'repository' else method.MethodReproduction
+    service = service_type(tmp_path / 'service', logger, runner=runner)
+    result = service.run({'experiment_profile': profile_id, 'offline': True,
+                          'use_llm_review': True, 'allow_result_summary_review': True})
+    data = result['data']
+    assert installs == []
+    assert data['env_config']['dependency_health_check'] is True
+    execution = data.get('environment_preparation_execution') or data['execution']
+    attempts = execution['environment']['dependency_health_attempts']
+    assert attempts and all(attempt['success'] is (damage == 'healthy') for attempt in attempts)
+    if damage == 'healthy':
+        assert result['state'] == 'COMPLETED', result['error']
+        assert data['validation']['status'] == 'author_code_completed'
+        assert data['validation']['is_reproduced'] is None
+        assert (Path(data['run_dir']) / 'repo' / 'author-ran.txt').read_text() == 'completed'
+    else:
+        assert result['state'] == 'ERROR'
+        assert not execution['executed']
+        runner._execute.assert_not_called()
+        assert not (Path(data['run_dir']) / 'repo' / 'author-ran.txt').exists()
+        assert execution['environment']['status'] == 'error'
+        assert '健康检查' in execution['final']['stderr']
+    adapter.verify_protocol.assert_not_called()
+    adapter.recompute_metrics.assert_not_called()

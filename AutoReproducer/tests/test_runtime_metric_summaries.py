@@ -13,6 +13,98 @@ Dataset: cora Test accuracy of 10 runs: mean 0.83280, std 0.00040
 """
 
 
+def test_named_averaged_summary_freezes_observation_without_guessing_unit_or_sd():
+    line = r'Averaged test accuracy for 10 runs: 82.34 \pm 1.23'
+    rows, errors = collect_author_metrics({'steps': [{'id': 'train', 'success': True, 'exit_code': 0,
+        'stdout': 'Epoch: 5\n' + line + '\nTest accuracy: 0.83'}]})
+    assert not errors and len(rows) == 1
+    row = rows[0]
+    assert (row['name'], row['value'], row['unit'], row['split'], row['aggregation'], row['runs']) == (
+        'accuracy', 82.34, '', 'test', 'mean', 10)
+    assert row['reported_uncertainty'] == 1.23 and row['uncertainty_kind'] == 'unknown' and 'std' not in row
+    assert row['source'] == 'train:stdout:2' and row['source_quote'] == line
+    assert row['runs_source'] == {'kind': 'reported_summary', 'value': 10,
+        'source': 'train:stdout:2', 'source_quote': line}
+
+
+@pytest.mark.parametrize('separator', [r'\pm', '±', '+/-'])
+@pytest.mark.parametrize('tail,kind', [('', 'unknown'), (' (95% CI)', 'confidence_interval'),
+                                     (' SEM', 'standard_error')])
+def test_named_summary_does_not_call_unlabelled_uncertainty_a_standard_deviation(separator, tail, kind):
+    rows, errors = parse_runtime_metrics(f'Mean Test F1 for 7 trials: 0.82 {separator} 0.02{tail}')
+    assert not errors and rows[0]['value'] == .82 and rows[0]['runs'] == 7
+    assert rows[0]['uncertainty_kind'] == kind and rows[0]['reported_uncertainty'] == .02
+    assert 'std' not in rows[0] and rows[0]['unit'] == ''
+    if kind == 'confidence_interval':
+        assert rows[0]['confidence_level'] == 95
+
+
+def test_named_summary_explicit_std_and_percent_are_observed():
+    rows, errors = parse_runtime_metrics('Average test accuracy across 12 trials: 82.34%, std: 1.23')
+    assert not errors and rows[0]['unit'] == 'percent' and rows[0]['std'] == 1.23
+    assert rows[0]['aggregation'] == 'mean' and rows[0]['runs'] == 12
+
+
+def test_equal_named_train_validation_and_test_values_keep_their_own_contexts():
+    text = '\n'.join(f'Averaged {split} accuracy for {runs} runs: 82.34 \\pm {spread}'
+                     for split, runs, spread in [('train', 3, .1), ('validation', 5, .2), ('test', 10, .3)])
+    rows, errors = parse_runtime_metrics(text, preserve_contexts=True)
+    assert not errors and len(rows) == 3
+    assert {(row['split'], row['runs'], row['reported_uncertainty']) for row in rows} == {
+        ('train', 3, .1), ('validation', 5, .2), ('test', 10, .3)}
+    assert all(row['value'] == 82.34 and 'std' not in row for row in rows)
+
+
+def test_adjacent_named_summaries_do_not_borrow_each_others_statistics():
+    rows, errors = parse_runtime_metrics(
+        r'Mean validation accuracy for 5 runs: 82.34 \pm 0.2; Mean test accuracy for 10 runs: 82.34 \pm 0.3',
+        preserve_contexts=True)
+    assert not errors and [(r['split'], r['runs'], r['reported_uncertainty']) for r in rows] == [
+        ('validation', 5, .2), ('test', 10, .3)]
+
+
+@pytest.mark.parametrize('count', ['at least 10 runs', 'up to 10 runs', 'about 10 trials',
+    '-10 runs', '+10 runs', '5-10 runs', '5/10 runs', '10 runs or fewer', 'seeds: 42'])
+def test_named_summary_preserves_value_but_keeps_uncertain_counts_unknown(count):
+    rows, errors = parse_runtime_metrics(f'Averaged test accuracy for {count}: 82.34')
+    if rows:
+        assert not errors and rows[0]['value'] == 82.34 and 'runs' not in rows[0]
+    else:
+        assert count == 'seeds: 42'  # Two separators do not identify one measurement.
+
+
+@pytest.mark.parametrize('line', [
+    'Paper Averaged test accuracy for 10 runs: 82.34',
+    'Planned averaged test accuracy for 10 runs: 82.34',
+    'Not averaged test accuracy for 10 runs: 82.34',
+    "print('Averaged test accuracy for 10 runs: 82.34')",
+    "Namespace(summary='Averaged test accuracy for 10 runs: 82.34')",
+    'Averaged test accuracy for 10 runs: 82.34 (from paper)',
+    'Averaged train/validation/test accuracy for 10 runs: 82.34',
+])
+def test_named_summary_needs_an_actual_labelled_output_line(line):
+    rows, errors = parse_runtime_metrics(line, preserve_contexts=True)
+    assert not errors and not rows
+
+
+def test_named_summary_without_split_does_not_inherit_a_test_label_from_another_line():
+    rows, errors = parse_runtime_metrics('Test results:\nAveraged accuracy for 10 runs: 82.34')
+    assert not errors and rows[0]['split'] == '' and rows[0]['unit'] == ''
+
+
+@pytest.mark.parametrize('text', [r'Averaged test accuracy for 10 runs: nan \pm 1.2',
+                                 r'Averaged test accuracy for 10 runs: 82.34 \pm -1.2'])
+def test_named_summary_invalid_numbers_remain_validation_errors(text):
+    _, errors = parse_runtime_metrics(text)
+    assert errors
+
+
+def test_named_summary_cannot_supply_statistics_to_a_structured_observation():
+    rows, errors = parse_runtime_metrics(r'Averaged test accuracy for 10 runs: 82.34 \pm 1.23',
+        structured=[{'name': 'accuracy', 'value': .7, 'unit': 'fraction', 'split': 'test'}])
+    assert not errors and rows[0]['value'] == .7 and 'runs' not in rows[0] and 'reported_uncertainty' not in rows[0]
+
+
 @pytest.mark.parametrize('label', ['Test acc.', 'Test accuracy.', 'Eval F1.', 'Test MSE.'])
 def test_abbreviation_period_before_separator_keeps_the_final_metric(label):
     records, errors = parse_runtime_metrics(label + ':8.53e1', preserve_contexts=True)

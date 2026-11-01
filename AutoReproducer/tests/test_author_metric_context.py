@@ -178,3 +178,132 @@ def test_same_comma_output_from_std_and_other_statistic_is_ambiguous():
               'def b(scores):\n    print(f"Test accuracy: {np.mean(scores)}, {np.var(scores)}")\n')
     parsed, _ = parse_runtime_metrics('Test accuracy: 87.34, 1.19', preserve_contexts=True)
     assert 'std' not in annotate_uncertainty(parsed, source, 'evaluate.py', 'a' * 64)[0]
+
+
+NAMED_SOURCE = '''import torch
+@torch.no_grad()
+def evaluate(model, data):
+    logits, accs = model(data.x), []
+    for _, mask in data('train_mask', 'val_mask', 'test_mask'):
+        pred = logits[mask].max(1)[1]
+        acc = pred.eq(data.y[mask]).sum().item() / mask.sum().item()
+        accs.append(acc)
+    return accs
+def main(args):
+    results = []
+    for run in range(args.runs):
+        best_val_acc = test_acc = 0
+        for epoch in range(args.epochs):
+            train_acc, val_acc, tmp_test_acc = evaluate(model, data)
+            if val_acc > best_val_acc:
+                best_val_acc = val_acc
+                test_acc = tmp_test_acc
+        results.append(test_acc)
+    results = 100 * torch.Tensor(results)
+    print(f'Averaged test accuracy for {args.runs} runs: {results.mean():.2f} \\pm {results.std():.2f}')
+'''
+NAMED_LINE = r'Averaged test accuracy for 10 runs: 82.34 \pm 1.23'
+
+
+def test_named_source_binds_final_scaled_array_and_real_standard_deviation():
+    parsed, errors = parse_runtime_metrics(NAMED_LINE, preserve_contexts=True)
+    assert not errors and parsed[0]['unit'] == '' and 'std' not in parsed[0]
+    result = annotate_uncertainty(parsed, NAMED_SOURCE, 'main.py', 'a' * 64)[0]
+    assert (result['value'], result['unit'], result['std'], result['aggregation'], result['runs']) == (
+        82.34, 'percent', 1.23, 'mean', 10)
+    assert result['source'] == 'stdout:1' and result['source_quote'] == NAMED_LINE
+    assert 'reported_uncertainty' not in result and 'uncertainty_kind' not in result
+    assert result['uncertainty_source'] == {'path': 'main.py', 'source_sha256': 'a' * 64,
+        'print_line': 21, 'mean_expression': 'results.mean()', 'std_expression': 'results.std()'}
+    assert result['unit_source']['kind'] == 'static_original_array_dataflow'
+    assert parsed[0]['unit'] == '' and parsed[0]['uncertainty_kind'] == 'unknown'
+
+
+@pytest.mark.parametrize('constructor', ['torch.Tensor(results)', 'torch.tensor(results)', 'np.array(results)', 'np.asarray(results)'])
+@pytest.mark.parametrize('scale,unit', [('', 'fraction'), ('100 * ', 'percent')])
+def test_named_array_unit_rule_applies_to_torch_numpy_and_final_scale(constructor, scale, unit):
+    source = NAMED_SOURCE.replace('import torch', 'import torch\nimport numpy as np').replace(
+        '100 * torch.Tensor(results)', scale + constructor)
+    result = annotate_uncertainty(parse_runtime_metrics(NAMED_LINE)[0], source, 'main.py', 'a' * 64)[0]
+    assert result['unit'] == unit and result['std'] == 1.23
+
+
+@pytest.mark.parametrize('change', [
+    lambda source: source.replace('results.std()', 'other.std()'),
+    lambda source: source.replace('results.std()', 'results.var()'),
+    lambda source: source.replace('results.mean():.2f} \\pm {results.std()', 'results.std():.2f} \\pm {results.mean()'),
+    lambda source: source.replace('torch.Tensor(results)', 'unknown_array(results)'),
+    lambda source: source.replace('import torch', 'import torch\ntorch.Tensor = unknown_array'),
+    lambda source: source.replace('import torch', 'import torch\ntorch = unknown_module'),
+    lambda source: source.replace('    results = 100 * torch.Tensor(results)',
+        '    results = 100 * torch.Tensor(results)\n    results = unknown_values'),
+    lambda source: source.replace('@torch.no_grad()', '@unknown_decorator()'),
+    lambda source: source.replace('def main(args):', 'evaluate = unknown_evaluate\ndef main(args):'),
+    lambda source: source.replace('results.mean():.2f', 'results.mean():.{precision}f'),
+    lambda source: source.replace('    results = 100 * torch.Tensor(results)',
+        '    alias = results\n    alias.append(unknown_metric())\n    results = 100 * torch.Tensor(results)'),
+    lambda source: source.replace('    print(f\'Averaged', '    results[:] = unknown_metric()\n    print(f\'Averaged'),
+])
+def test_unknown_rebindings_functions_or_swapped_columns_do_not_prove_named_context(change):
+    result = annotate_uncertainty(parse_runtime_metrics(NAMED_LINE)[0], change(NAMED_SOURCE), 'main.py', 'a' * 64)[0]
+    assert result['unit'] == '' and 'unit_source' not in result
+    # Unknown evaluator units can coexist with a genuine Torch array SD.
+    if 'std' in result:
+        assert result['std'] == 1.23 and 'uncertainty_source' in result
+    else:
+        assert result['reported_uncertainty'] == 1.23 and result['uncertainty_kind'] == 'unknown'
+
+
+def test_unknown_metric_function_cannot_supply_the_final_printed_unit():
+    source = NAMED_SOURCE.replace('pred.eq(data.y[mask]).sum().item() / mask.sum().item()', 'unknown_metric(pred)')
+    result = annotate_uncertainty(parse_runtime_metrics(NAMED_LINE)[0], source, 'main.py', 'a' * 64)[0]
+    assert result['unit'] == '' and 'unit_source' not in result
+
+
+@pytest.mark.parametrize('tail', [' (95% CI)', ' SEM'])
+def test_explicit_ci_or_sem_output_cannot_be_upgraded_to_std_by_source(tail):
+    source = NAMED_SOURCE.replace("runs: {results.mean():.2f} \\pm {results.std():.2f}'",
+                                  "runs: {results.mean():.2f} \\pm {results.std():.2f}" + tail + "'")
+    parsed, errors = parse_runtime_metrics(NAMED_LINE + tail)
+    result = annotate_uncertainty(parsed, source, 'main.py', 'a' * 64)[0]
+    assert not errors and 'std' not in result and result['unit'] == ''
+
+
+def test_named_source_binding_needs_one_unambiguous_matching_print():
+    alternative = NAMED_SOURCE.replace('def main(args):', 'def alternative(args):').replace('results.std()', 'results.var()')
+    result = annotate_uncertainty(parse_runtime_metrics(NAMED_LINE)[0], NAMED_SOURCE + alternative, 'main.py', 'a' * 64)[0]
+    assert 'std' not in result and result['unit'] == ''
+
+
+def test_same_valued_named_summaries_use_their_own_literal_split_and_scaled_array():
+    source = NAMED_SOURCE.replace('    results = 100 * torch.Tensor(results)',
+        '    fractions = torch.Tensor(results)\n    results = 100 * torch.Tensor(results)').replace(
+        "    print(f'Averaged test accuracy", "    print(f'Averaged train accuracy for {args.runs} runs: {fractions.mean():.2f} \\pm {fractions.std():.2f}')\n    print(f'Averaged test accuracy")
+    line = NAMED_LINE.replace('test', 'train') + '\n' + NAMED_LINE
+    parsed, errors = parse_runtime_metrics(line, preserve_contexts=True)
+    result = annotate_uncertainty(parsed, source, 'main.py', 'a' * 64)
+    assert not errors and {(item['split'], item['unit'], item['std']) for item in result} == {
+        ('train', 'fraction', 1.23), ('test', 'percent', 1.23)}
+
+
+def test_source_context_never_overrides_an_explicit_output_unit():
+    line = NAMED_LINE.replace('82.34', '82.34%')
+    source = NAMED_SOURCE.replace('100 * torch.Tensor(results)', 'torch.Tensor(results)').replace(
+        'results.mean():.2f} \\pm', 'results.mean():.2f}% \\pm')
+    parsed, _ = parse_runtime_metrics(line)
+    result = annotate_uncertainty(parsed, source, 'main.py', 'a' * 64)[0]
+    assert result['unit'] == 'percent' and 'std' not in result and 'unit_source' not in result
+
+
+def test_named_source_binding_is_hash_checked_by_the_production_collector(tmp_path):
+    path = tmp_path / 'main.py'
+    path.write_text(NAMED_SOURCE, encoding='utf-8')
+    sha = hashlib.sha256(path.read_bytes()).hexdigest()
+    plan = {'steps': [{'id': 'train', 'entrypoint': {'source_path': 'main.py'}}]}
+    execution = {'steps': [{'id': 'train', 'success': True, 'exit_code': 0, 'stdout': NAMED_LINE}]}
+    result, errors = collect_author_metrics(execution, workspace=tmp_path, plan=plan, sources={'main.py': sha})
+    assert not errors and result[0]['unit'] == 'percent' and result[0]['std'] == 1.23
+    assert result[0]['source'] == 'train:stdout:1' and result[0]['runs_source']['source'] == 'train:stdout:1'
+    path.write_text(NAMED_SOURCE + '\n# changed source\n', encoding='utf-8')
+    result, errors = collect_author_metrics(execution, workspace=tmp_path, plan=plan, sources={'main.py': sha})
+    assert errors and result[0]['unit'] == '' and 'std' not in result[0]

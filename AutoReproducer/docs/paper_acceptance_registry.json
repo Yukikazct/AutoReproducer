@@ -1,14 +1,198 @@
 {
   "version": 1,
-  "updated_on": "2026-10-22",
+  "updated_on": "2026-11-01",
   "policy": "Paper identity spans aliases and PDF versions. Trial outcomes never imply independent numerical verification.",
   "papers": [
     {
+      "id": "graph-less-neural-networks-teaching-old-mlps-new-tricks-via-distillation",
+      "title": "Graph-less Neural Networks: Teaching Old MLPs New Tricks via Distillation",
+      "aliases": [
+        "GLNN",
+        "Graphless Neural Networks"
+      ],
+      "source_ids": [
+        "arxiv:2110.08727"
+      ],
+      "pdf_sha256": [
+        "1630c955f40c5c25568d66b907d936bbec96160ca21ddfa1074a70934b33c44d"
+      ],
+      "repository_url": "https://github.com/snap-research/graphless-neural-networks",
+      "repository_revision": "80d0f8ea66ad49b27336f9c02691ca16a6dc1dd2",
+      "status": "regression",
+      "retirement_reason": "Real PDF-path development trials and full teacher/student author runs informed data recovery, multi-step execution and bounded source-repair changes. These are regression evidence and do not establish independent strict paper reproduction.",
+      "history": [
+        {
+          "outcome": "retired_after_repair",
+          "frozen_commit": null,
+          "evidence": "docs/ai_reproduction_assessment_20261028.md"
+        },
+        {
+          "outcome": "regression_author_runs_completed",
+          "frozen_commit": "702fe0e",
+          "evidence": "docs/local_repro_result_20261031.md#GLNN"
+        }
+      ]
+    },
+    {
+      "id": "graph-mlp-node-classification-without-message-passing-in-graph",
+      "title": "Graph-MLP: Node Classification without Message Passing in Graph",
+      "aliases": [
+        "Graph-MLP"
+      ],
+      "source_ids": [
+        "arxiv:2106.04051"
+      ],
+      "pdf_sha256": [
+        "b4d4b8f785cf41bb72109bcb176cb7688da8c0a29f4e6f20fef7bdfcb5b66ccd"
+      ],
+      "repository_url": "https://github.com/yanghu819/Graph-MLP",
+      "repository_revision": "5448add06b6f95a580fe984b5e6e199ab8aeff18",
+      "status": "regression",
+      "retirement_reason": "Real PDF-path discovery and author execution informed GitHub discovery and append-only author-log capture repairs. The trial is development regression evidence, not an unused independent acceptance sample.",
+      "history": [
+        {
+          "outcome": "retired_after_repair",
+          "frozen_commit": null,
+          "evidence": "docs/ai_reproduction_assessment_20261028.md"
+        }
+      ]
+    },
+    {
+      "id": "suod-accelerating-large-scale-unsupervised-heterogeneous-outlier-detection",
+      "title": "SUOD: Accelerating Large-scale Unsupervised Heterogeneous Outlier Detection",
+      "aliases": [
+        "SUOD"
+      ],
+      "source_ids": [
+        "arxiv:2003.05731"
+      ],
+      "pdf_sha256": [
+        "1e76e8d1275721c157fea9368e2a7d28dcb955657c8054db31a8d60d34c1e634"
+      ],
+      "repository_url": "https://github.com/yzhao062/SUOD",
+      "repository_revision": "306c07e2a300089de44b1dfbc474e2abeb8e0212",
+      "status": "regression",
+      "retirement_reason": "Real PDF-path trials completed the author cardio demo and informed Windows dependency-installation and literal-output evidence handling. The demo is not the full paper protocol and cannot be reused as independent acceptance.",
+      "history": [
+        {
+          "outcome": "retired_after_repair",
+          "frozen_commit": null,
+          "evidence": "docs/local_reproduction_20261031.md"
+        },
+        {
+          "outcome": "regression_author_demo_completed",
+          "frozen_commit": null,
+          "evidence": "docs/local_repro_result_20261031.md"
+        }
+      ]
+    },
+    {
+      "id": "p-laplacian-based-graph-neural-networks",
+      "title": "p-Laplacian Based Graph Neural Networks",
+      "aliases": [
+        "pGNN",
+        "pGNNs"
+      ],
+      "source_ids": [
+        "https://proceedings.mlr.press/v162/fu22e/fu22e.pdf"
+      ],
+      "pdf_sha256": [
+        "635ed8da48fb5837213c743c03f179f758cabd257ab3a05d4035890bf909a2ef"
+      ],
+      "repository_url": "https://github.com/guoji-fu/pGNNs",
+      "repository_revision": "f9a0e2bbf553a81748bb3ed42e953f71af6028a2",
+      "status": "regression",
+      "retirement_reason": "The original named mean/std formatter informed the generic summary parser and source-bound percentage/std annotation repair. Static replay used synthetic stdout and did not run author training or establish paper acceptance. Subsequent PDF/browser runs are development regressions.",
+      "history": [
+        {
+          "outcome": "preflight_verified",
+          "frozen_commit": null,
+          "evidence": ".tmp/issue27_candidates_20261101/pgnn_static.json; static public-source review only, with no author import, install or training. PDF Table 3 reports 100 runs and Appendix E.3 specifies early stopping 200; README Cora command executes 10 runs and has no early stopping. Eligible only for an unused author-path trial with reference-only comparison, not a protocol-aligned strict numerical acceptance claim."
+        },
+        {
+          "outcome": "retired_after_repair",
+          "frozen_commit": null,
+          "evidence": ".tmp/issue30_pgnn_named_static_audit_20261101.json; source main.py:108 and its unchanged hash bind named averaged test output to the same results array, mean/std and explicit multiplication by 100. This static parser regression used synthetic stdout only; no API, author import or training was performed."
+        }
+      ]
+    },
+    {
+      "id": "from-node-interaction-to-hop-interaction",
+      "title": "From Node Interaction to Hop Interaction: New Effective and Scalable Graph Learning Paradigm",
+      "aliases": [
+        "HopGNN"
+      ],
+      "source_ids": [
+        "arxiv:2211.11761"
+      ],
+      "pdf_sha256": [
+        "ab4e3dcc26677b6dc297244cd87ed09cb145870bc13d82f7fe13851b042cefb2"
+      ],
+      "repository_url": "https://github.com/JC-202/HopGNN",
+      "repository_revision": "52c7f5453d0b3cbd2e9e8aff637999c5156f979b",
+      "status": "regression",
+      "history": [
+        {
+          "outcome": "preflight_verified",
+          "frozen_commit": null,
+          "evidence": ".tmp/issue41_candidates_20261101/hopgnn_static.json; original PDF, author source and bundled Wisconsin data reviewed without author imports, installs, training, LLM calls or product changes. The original program supports --cuda_id cpu, 2500 epochs and a single hard-coded split 0. Paper Table 2 reports ten-split mean 84.96 +/- 4.11 percent; an unchanged single-run command permits reference-only comparison, not strict protocol acceptance. DGL is required; CPython 3.12 with NumPy 1.26 cannot run the original np.int loader. Official Windows CPython 3.11 DGL 1.1.2 wheel/API exists, but environment compatibility remains unverified."
+        },
+        {
+          "outcome": "retired_after_import_path_planning_failure",
+          "frozen_commit": "ad97c0bf085864d044baae06cd96e0f313d59f2c",
+          "source_sha256": "063ae155dcc886a21f82f1bcc6b36721a064f7bcfd4da3103cbfc9c3e726e4e3",
+          "evidence": "data/recovery/f6cfc8fb40be4f6f9159ecba5d25cf18/runtime/p1_hopgnn_practical_browser_20261101_failure.json",
+          "repository_executed": false,
+          "training_started": false,
+          "note": "Original terminal result and task cleanup retained. No experiment command or numerical result was injected."
+        }
+      ],
+      "retirement_reason": "The frozen real-browser PDF trial found the official repository but failed before author execution because static import discovery rejected a literal parent sys.path addition. It now informs a generic import-path repair and cannot serve as a fresh holdout."
+    },
+    {
+      "id": "gradient-gating-for-deep-multi-rate-learning-on-graphs",
+      "title": "Gradient Gating for Deep Multi-Rate Learning on Graphs",
+      "aliases": [
+        "Gradient Gating",
+        "G2-GNN",
+        "G2-GraphSAGE"
+      ],
+      "source_ids": [
+        "arxiv:2210.00513",
+        "https://openreview.net/forum?id=JpRExTbl1-"
+      ],
+      "pdf_sha256": [
+        "16cc425a1d03a1df866635c8476368c98ed925dd17101dc2df4733946d64014c"
+      ],
+      "repository_url": "https://github.com/tk-rusch/gradientgating",
+      "repository_revision": "334bd1536f6d55190a394cd74e9df6600389f153",
+      "status": "regression",
+      "retirement_reason": "A real frozen production PDF/backend trial completed the unchanged ten-split author command (2000 optimizer updates), but strict protocol extraction and numerical comparison remained unavailable. Its labelled final mean/std output exposed a generic extraction gap and informed the subsequent source-bound summary repair; this paper is now a development regression and cannot be reused as a fresh independent acceptance sample.",
+      "history": [
+        {
+          "outcome": "preflight_verified",
+          "frozen_commit": null,
+          "evidence": ".tmp/issue41_candidates_20261101/gradientgating_static.json; static source and public raw-file acquisition only, with no author imports, installs, training, API calls, product adaptations or manual plan injection. Wisconsin G2-GraphSAGE has native ten splits, max epochs 500 and a fixed epoch-200 stop; Table 8 supports rounded p=1.14 while source defaults to 2.5, and other exact best-paper parameters are unpublished. Actual masks are 120/80/51 of 251 nodes despite split_0.6_0.2 filenames; raw edges 515 differ from paper Table 2's 466. WebKB runtime observation is available only for explicit author execution, while strict preparation reviews Planetoid loaders. A production trial must determine unsupported/protocol evidence boundaries; static registration does not establish author completion or independent paper acceptance."
+        },
+        {
+          "outcome": "retired_after_repair",
+          "frozen_commit": "ad97c0bf085864d044baae06cd96e0f313d59f2c",
+          "evidence": ".tmp/p1_gradient_strict_20261101.json and data/runtime/p1_gradient_strict_20261101_source_freeze.json; the candidate-bound trial retained its original freeze, PDF hash, repository revision and argv. It completed ten native splits and 2000 updates, with task inactive, environment released and unchanged original source/raw-data hashes. strict_validation.status=unavailable (the model supplied no quoted source for the argv filename), paper_metrics_verified=false, author_claim_comparison.status=unavailable despite the original final mean/std line. That extraction gap triggered the generic author_unlabelled_metrics repair. The historical result is retained unchanged; later source-bound reanalysis is a separate result and does not upgrade this trial to strict or browser acceptance."
+        }
+      ]
+    },
+    {
       "id": "classic-gnns-are-strong-baselines-reassessing-gnns-for-node-classification",
       "title": "Classic GNNs are Strong Baselines: Reassessing GNNs for Node Classification",
-      "aliases": ["tunedGNN"],
-      "source_ids": ["https://proceedings.neurips.cc/paper_files/paper/2024/file/b10ed15ff1aa864f1be3a75f1ffc021b-Paper-Datasets_and_Benchmarks_Track.pdf"],
-      "pdf_sha256": ["1756d6d6c976e34fe668340551145f135de2c32a7cd16e5e046e4686ee9a4fb6"],
+      "aliases": [
+        "tunedGNN"
+      ],
+      "source_ids": [
+        "https://proceedings.neurips.cc/paper_files/paper/2024/file/b10ed15ff1aa864f1be3a75f1ffc021b-Paper-Datasets_and_Benchmarks_Track.pdf"
+      ],
+      "pdf_sha256": [
+        "1756d6d6c976e34fe668340551145f135de2c32a7cd16e5e046e4686ee9a4fb6"
+      ],
       "repository_url": "https://github.com/LUOyk1999/tunedGNN",
       "repository_revision": "23f9604e8b13a9a6d3faa2f691cd844006979153",
       "status": "regression",
@@ -1668,6 +1852,108 @@
         }
       ],
       "retirement_reason": "Agent diagnosed a missing required --dataset option in the frozen README shorthand command and interrupted dependency downloads before training. This was a diagnostic intervention, not a user stop or successful author execution. No product edits occurred during the trial."
+    },
+    {
+      "id": "large-scale-learning-on-non-homophilous-graphs",
+      "title": "Large Scale Learning on Non-Homophilous Graphs: New Benchmarks and Strong Simple Methods",
+      "aliases": [
+        "LINKX"
+      ],
+      "source_ids": [
+        "arxiv:2110.14446"
+      ],
+      "pdf_sha256": [
+        "ca04f0fbfc46fda357d902b2d4e29528f5ae8ef339e5d49aca4d3e49a7874d25"
+      ],
+      "repository_url": "https://github.com/CUAI/Non-Homophily-Large-Scale",
+      "repository_revision": "82f8f05c5c3ec16bd5b505cc7ad62ab5e09051e6",
+      "status": "regression",
+      "history": [
+        {
+          "outcome": "registered_unused_candidate",
+          "registered_at": "2026-11-01T05:41:07.560529+00:00",
+          "evidence": ".tmp/p1_fresh_candidates_20261101/linkx_static.json",
+          "note": "Static PDF and official source review only. No author imports, installs, training, API calls or product-specific repairs. Original bundled Wisconsin data and split files retained."
+        },
+        {
+          "outcome": "retired_after_ai_plan_empty_argument_rejection",
+          "frozen_commit": "ad97c0bf085864d044baae06cd96e0f313d59f2c",
+          "source_sha256": "d1452c026c23fdf199509c919aa9e359e4bbfadbbd225a39b7a6524535f277a3",
+          "evidence": "data/recovery/b7a34591df0e4840a7a64e23a235e146/runtime/p1_linkx_practical_browser_20261101_full_result.json",
+          "repository_executed": false,
+          "training_started": false,
+          "note": "Both original AI proposals, their complete argv and source evidence remain in plan_rejection. No plan, command or numerical value was injected or overwritten."
+        }
+      ],
+      "retirement_reason": "The real PDF browser trial produced an AI command including a legitimate empty --sub_dataset value. The structured argument validator rejected it before execution. The trial now informs a generic argv compatibility repair and is retained as regression evidence."
+    },
+    {
+      "id": "gbk-gnn-gated-bi-kernel-graph-neural-networks",
+      "title": "GBK-GNN: Gated Bi-Kernel Graph Neural Networks for Modeling Both Homophily and Heterophily",
+      "aliases": [
+        "GBK-GNN"
+      ],
+      "source_ids": [
+        "arxiv:2110.15777",
+        "doi:10.1145/3485447.3512201"
+      ],
+      "pdf_sha256": [
+        "bc275aa2b377484f23915a6d10d2ea71166e16af21694d892aeebc2ab340ef3d"
+      ],
+      "repository_url": "https://github.com/Xzh0u/GBK-GNN",
+      "repository_revision": "f218e911394c303af242c97d87849a57d2732493",
+      "status": "regression",
+      "retirement_reason": "The frozen real PDF browser trial automatically discovered the repository and retained the AI-selected original command. Author execution failed before training because the original source imports a removed PyG private helper. Reinstalling the same dependency did not make progress. This executed failure remains regression evidence and is not an unused acceptance candidate.",
+      "history": [
+        {
+          "outcome": "registered_unused_candidate",
+          "registered_at": "2026-11-01T06:43:48.775009+00:00",
+          "evidence": ".tmp/p1_static_fresh_network_20261101/GBK-GNN_static_handoff.json",
+          "note": "Static PDF/source/network review only; no author imports, dependency installs, training, model API calls or product-specific repairs. Repository is a title/author match; PDF has no code hyperlink. Runtime CUDA/PyG compatibility remains unverified. Ordinary author-command comparison retains single-seed/public-split differences from the paper protocol."
+        },
+        {
+          "outcome": "regression_author_import_failed",
+          "frozen_commit": "ad97c0bf085864d044baae06cd96e0f313d59f2c",
+          "source_freeze_sha256": "9ef5fe8d27f4cb4f65c7ca172810022a254fca19b03501c2d97ae00f7fe4829c",
+          "evidence": ".tmp/p1_gbk_final_browser_env_20261101_monitor_audit.json",
+          "note": "Both physical attempts retained identical original argv/cwd and failed on torch_geometric.nn.conv.utils.helpers before training or data loading. No metrics or comparison were produced; independent/browser acceptance did not pass. Failure-integrity audit 34/34 and cleanup 18/18 passed, original 23 author source files and 212 frozen product files remained unchanged, and the dedicated local service was closed. CPU dependency native operations passed; CUDA computation was not verified."
+        }
+      ]
+    },
+    {
+      "id": "dropgnn-random-dropouts-increase-the-expressiveness-of-graph-neural-networks",
+      "title": "DropGNN: Random Dropouts Increase the Expressiveness of Graph Neural Networks",
+      "aliases": [
+        "DropGNN"
+      ],
+      "source_ids": [
+        "arxiv:2111.06283"
+      ],
+      "pdf_sha256": [
+        "8487185739d98ea4b1a5c4f0b5f76fef27ef3032956c10d3bb05169e2763c63f"
+      ],
+      "repository_url": "https://github.com/KarolisMart/DropGNN",
+      "repository_revision": "e3ca55c80cd0574622e319fae8373a1247de0a36",
+      "status": "regression",
+      "retirement_reason": "The frozen real PDF browser trial completed the unchanged original LCC author command with ten seeds, 1000 epochs per seed and 10000 observed optimizer updates. The final bare Test Mean/Std was not extracted as an aggregate metric, and paper pairing failed source validation. This executed trial is regression evidence and is no longer an unused acceptance candidate.",
+      "history": [
+        {
+          "outcome": "registered_unused_candidate",
+          "registered_at": "2026-11-01T07:21:06.139109+00:00",
+          "evidence": ".tmp/p1_dropgnn_static_20261101/static_screening_receipt.json",
+          "note": "Static original PDF/source/history review only; no author imports, dependency installs, training, model API calls or candidate-specific product repair. The earlier 20261017 screening explicitly excluded it before training. README LCC dropout command retains ten native seeds and 1000 epochs per seed. Each seed reports Test Acc; final bare Test Mean/Std interpretation is not guaranteed by the frozen summary parser. Synthetic data is generated by the original paper experiment. Trial comparison may be reference-only and does not imply strict independent metric verification."
+        },
+        {
+          "outcome": "regression_author_completed_comparison_unavailable",
+          "retired_at": "2026-11-01T07:32:47.510813+00:00",
+          "frozen_commit": "ad97c0bf085864d044baae06cd96e0f313d59f2c",
+          "source_freeze_sha256": "ca75155098cd2fbd77129dd3931392ccf4be7afdeb5d54cc991bd4918f031bde",
+          "evidence": ".tmp/p1_dropgnn_static_20261101/runtime_audit_receipt.json",
+          "source_audit_evidence": ".tmp/p1_dropgnn_runtime_source_audit_20261101/receipt.json",
+          "run_evidence": "data/recovery/684f2d79e4204f32a95b95196ce278c0/runs/repository_11a0d08dcf2942c09a69a81917ec961c/result.json",
+          "note": "Real PDF discovery and AI planning retained the original README LCC argv/cwd and default ten seeds x 1000 epochs. CPU author training naturally returned exit 0 after 145 seconds with 10000 observed optimizer updates; all nine original author files and 212 frozen product files remained unchanged. Original stdout retained Test Mean 0.9100000262260437 and Test Std 0.1147192046046257, but these bare aggregate labels were not extracted by the frozen metric parser; registered Train/Test Acc 1.0 came only from the final seed. Two AI pairing attempts failed with Quoted method row does not match the requested method variant; comparison remained unavailable and paper_metrics_verified=false, is_reproduced=null. Cleanup audit passed all 18 checks with released status, no errors or remaining dependency/training environments. This is author-command completion with failed automated comparison, not independent numerical reproduction."
+        }
+      ]
     }
   ]
 }

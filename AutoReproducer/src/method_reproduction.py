@@ -188,7 +188,7 @@ class MethodReproduction:
             steps = [{**step, 'depends_on': [], 'timeout_s': None} for step in adapter.steps(profile, train=True)
                      if step.get('kind') == 'train']
             env = {**profile["environment"], "cache_lock_timeout_s": AUTO_PREPARATION_LOCK_TIMEOUT,
-                   "dependency_health_check": False, "auto_prepare": True, "offline": offline}
+                   "dependency_health_check": True, "auto_prepare": True, "offline": offline}
             data["env_config"] = deepcopy(env)
             plan = build_plan(mode="repository", profile=profile["id"], spec_sha256=spec_hash,
                               workspace=snapshot["path"],
@@ -253,7 +253,8 @@ class MethodReproduction:
                     raise RuntimeError((execution.get("final") or {}).get("stderr", "实验执行失败")[-1800:])
                 if prepare_env:
                     data["validation"] = {"status": "environment_prepared", "result_level": "prepared",
-                                          "is_reproduced": None, "reason": "源码、数据、依赖和设备导入检查完成；尚未训练"}
+                                          "is_reproduced": None,
+                                          "reason": "源码、数据与依赖健康检查完成；尚未训练，所选设备能力未单独核验"}
                 else:
                     event(phase, "success")
                     phase = "finish_execution"; event(phase, "running")

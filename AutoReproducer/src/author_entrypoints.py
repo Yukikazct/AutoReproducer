@@ -75,8 +75,10 @@ def resolve_entrypoint(item, packet, workspace):
         kind, target, args = 'notebook', explicit['target'], []
     else:
         if (not isinstance(argv, list) or len(argv) < 2 or argv[0] not in {'python', 'python3'}
-                or any(not isinstance(arg, str) or not arg or any(c in arg for c in '\x00\r\n') for arg in argv)):
+                or any(not isinstance(arg, str) or any(c in arg for c in '\x00\r\n') for arg in argv)):
             raise ValueError('Only structured original Python argv is supported')
+        # Empty CLI values are meaningful to the author's parser. The Python
+        # prefix/entrypoint checks below still reject an empty executable target.
         index = 2 if argv[1] == '-u' else 1
         if len(argv) <= index:
             raise ValueError('Author Python command lacks an entrypoint')

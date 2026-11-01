@@ -309,7 +309,7 @@ class _EnvironmentRun:
                     pass
             raise
 
-    def _persist(self, receipt, result, data, run_dir, *, write_report=True):
+    def _persist(self, receipt, result, data, run_dir, *, write_report=True, include_outcome=True):
         from src.safety.paths import workspace_path
         from src.report_revisions import sanitize_report_result
 
@@ -344,6 +344,8 @@ class _EnvironmentRun:
                 elif receipt["status"] == "error":
                     saved["state"] = "ERROR"
                 _write_json(path, sanitize_report_result(saved))
+            elif not include_outcome and result is not None:
+                _write_json(path, sanitize_report_result(result))
             status_path = workspace_path(directory, "run_status.json", "run status")
             if status_path.is_file():
                 status = json.loads(status_path.read_text(encoding="utf-8"))
@@ -356,6 +358,11 @@ class _EnvironmentRun:
             archive = Path(report).with_suffix(".result.json")
             if archive.is_file():
                 _write_json(archive, sanitize_report_result(result))
+        if include_outcome:
+            from src.outcome_recovery_artifacts import outcome_attempt_directory
+            attempt = outcome_attempt_directory(data)
+            if attempt is not None:
+                self._persist(receipt, result, data, attempt, write_report=write_report, include_outcome=False)
 
 
 def bind_environment_run(directory):

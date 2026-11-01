@@ -10,6 +10,7 @@ import pytest
 
 from src import author_python, environment_lifecycle as lifecycle, training_environment as training
 from src.agents import code_executor
+from src.safety.paths import filesystem_path
 
 
 @pytest.fixture
@@ -44,10 +45,10 @@ def test_real_offline_training_venv_is_released_after_report(roots, exception):
         with lifecycle.managed_environment() as lease:
             selected = author_python.select_author_python({"repository": {"files": {}}}, root, offline=True)
             executable = Path(selected["python_executable"])
-            assert executable.is_relative_to(root)
+            assert executable.is_relative_to(Path(filesystem_path(root)))
             probe = subprocess.run([str(executable), "-I", "-c", "import sys;print(sys.prefix)"],
                                    capture_output=True, text=True, timeout=15, check=True)
-            assert Path(probe.stdout.strip()).is_relative_to(root)
+            assert Path(probe.stdout.strip()).is_relative_to(Path(filesystem_path(root)))
             report.write_text("# Saved before runtime release", encoding="utf-8")
             lease.result = {"state": "COMPLETED", "data": {}}
             if exception is not None:
@@ -68,13 +69,12 @@ def test_real_offline_training_venv_is_released_after_report(roots, exception):
 def test_long_training_root_bootstraps_pip_and_releases_all_files(roots):
     data, deps = roots
     root = data / ('nested_' * 7) / 'training_python'
-    from src.safety.paths import filesystem_path
     with lifecycle.managed_environment() as lease:
         selected = author_python.select_author_python({'repository': {'files': {}}}, root, offline=True)
         executable = Path(selected['python_executable'])
         probe = subprocess.run([str(executable), '-I', '-m', 'pip', '--version'],
                                capture_output=True, text=True, timeout=15, check=True)
-        assert 'pip ' in probe.stdout and executable.is_relative_to(root)
+        assert 'pip ' in probe.stdout and executable.is_relative_to(Path(filesystem_path(root)))
         # Python <=3.11 bundles setuptools with deep resource fixtures. A
         # long child also exercises cleanup when newer ensurepip omits it.
         nested = root / 'envs' / ('resources_' * 14) / 'payload.bin'
@@ -361,6 +361,7 @@ def test_managed_download_preserves_constraints_and_avoids_registry_changes(
         if compatible:
             selected = author_python.select_author_python(packet, root, **kwargs)
             assert selected["python_version"] == "3.11" and selected["source"] == "uv_managed"
+            assert selected["python_executable"] == filesystem_path(executable.absolute())
             ensure_pip.assert_called_once_with(executable, root)
         else:
             with pytest.raises(author_python.TrainingPythonUnavailable, match="selected CPython version"):

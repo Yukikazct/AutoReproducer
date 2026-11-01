@@ -163,6 +163,33 @@ def _metric_value_text(node, suffix=''):
     return value + deviation + suffix
 
 
+def _outcome_recovery_lines(data):
+    recovery = data.get('outcome_recovery')
+    if not isinstance(recovery, dict) or recovery.get('status') in {'not_needed', 'not_requested'}:
+        return []
+    lines = ['', '### 数值偏差后的作者命令自动纠正', '',
+        '- **状态**: ' + _markdown_text(_txt(recovery.get('status'))),
+        '- **依据与结果**: ' + _markdown_text(_txt(recovery.get('reason'))),
+        '- 本机制仅支持补齐作者原文完整命令；不按测试误差选择参数，不修改原始来源、数据或论文容差。']
+    attempts = recovery.get('attempts') or []
+    if not attempts:
+        lines.append('- 未启动纠正运行；最终结论仍使用原运行。')
+    elif recovery.get('original_execution_preserved') is True:
+        lines.append('- 纠正尝试的准备未完成，未执行纠正后的作者命令；最终结论仍使用保留的原运行。')
+    else:
+        lines.append('- 原运行与纠正尝试分别冻结、分别保留；最终结论使用纠正尝试的实际状态和证据，不挑选较好结果。')
+    if recovery.get('original_attempt_dir'):
+        lines.append('- **原运行**: ' + _markdown_text(_txt(recovery['original_attempt_dir'])))
+    for step in recovery.get('original_commands') or []:
+        lines += ['- **原始作者命令**: ' + _markdown_text(json.dumps(step.get('argv', []), ensure_ascii=False)),
+                  '- **原命令目录**: ' + _markdown_text(_txt(step.get('cwd')))]
+    for attempt in attempts:
+        lines += ['- **纠正尝试**: ' + _markdown_text(_txt(attempt.get('run_dir'))),
+            '- **冻结摘要**: ' + _markdown_text(_txt(attempt.get('corrected_spec_sha256'))),
+            '- **纠正后状态**: ' + _markdown_text(_txt(attempt.get('validation_status') or attempt.get('status')))]
+    return lines + ['- 本机制的完成不等同于严格独立数值复现；后者仍以协议核验和独立重评证据为准。']
+
+
 def _outcome_diagnosis_lines(data):
     diagnosis = data.get('outcome_diagnosis')
     if not isinstance(diagnosis, dict) or not diagnosis:
@@ -332,6 +359,29 @@ def _raw_author_observation_lines(observations, errors=()):
     return lines
 
 
+def _frozen_cli_input_lines(context):
+    if not isinstance(context, dict):
+        return []
+    lines = ['', '**本次静态 CLI 输入**', '',
+        '以下来自本次冻结作者命令和校验过的解析源码；未跟踪解析后的赋值或配置覆盖，不等于运行期有效值核验。']
+    for step in context.get('steps') or []:
+        lines.append('- **作者命令**: ' + _markdown_text(json.dumps(step.get('argv', []), ensure_ascii=False)))
+        parser = step.get('parser') or {}
+        if parser:
+            lines.append('- **解析源码**: ' + _markdown_text(_txt(parser.get('source_path'))
+                + '；SHA-256 ' + _txt(parser.get('source_sha256'))))
+        for origin, label in (('explicit', '显式输入'), ('parser_default', '解析器默认输入')):
+            selected = [name + ' = ' + json.dumps(item.get('value'), ensure_ascii=False)
+                        for name, item in (step.get('values') or {}).items() if item.get('origin') == origin]
+            if selected:
+                lines.append('- **' + label + '**: ' + _markdown_text('；'.join(selected)))
+        if step.get('unknown_values'):
+            lines.append('- **未解析输入**: ' + _markdown_text('；'.join(step['unknown_values'])))
+        if step.get('status') == 'unavailable':
+            lines.append('- 静态解析证据不足；保留命令，未推断参数值。')
+    return lines
+
+
 def _author_claim_comparison_lines(comparison, assessment=None, *, include_table=True):
     if not comparison:
         return []
@@ -342,6 +392,7 @@ def _author_claim_comparison_lines(comparison, assessment=None, *, include_table
              _markdown_text(_txt(comparison.get('reason'))), '',
              '本表使用作者程序输出，尚未独立复算。数值对比不影响代码完成状态。'
              + (' 普通复现结论见上方 AI 判断；独立复算为可选核验。' if ai_completed else '')]
+    lines += _frozen_cli_input_lines(comparison.get('frozen_cli_inputs'))
     rows = comparison.get('comparisons') or []
     if not rows:
         note = ('实际输出中的指标保留在下方证据表；未将其他数据集或基线指标作为参考。'
@@ -404,6 +455,16 @@ def _author_claim_comparison_lines(comparison, assessment=None, *, include_table
                   '- **设置分析**: ' + assessment + '；' + basis + '，不等于独立协议核验通过。',
                   '- **实验设置**: ' + _markdown_text(_txt(settings.get('reason'), '未记录')),
                   '- **实际来源**: ' + _markdown_text(_txt(actual.get('source')))]
+        if paper.get('method') != actual.get('method'):
+            lines.append('- **方法原名**: ' + _markdown_text(
+                f"论文 {paper.get('method')} / 作者实现 {actual.get('method')}"))
+        if paper.get('name') and norm_metric_key(paper['name']) != norm_metric_key(row['metric']):
+            lines.append('- **指标名称**: ' + _markdown_text(
+                f"论文 {paper['name']} / 实际 {row['metric']}；指标不同，未计算差值"))
+        alignment = row.get('method_alignment') or {}
+        if isinstance(alignment, dict) and alignment.get('status') == 'source_bound_static':
+            lines.append('- **方法组件对应**: 已绑定原文、冻结命令与源码分支；仅供参考，'
+                         '未证明运行期有效配置或完整论文协议一致。')
         lines += _comparison_column_lines(paper)
         lines += _comparison_field_lines(paper, '论文')
         lines += _comparison_field_lines(actual, '实际')
@@ -429,7 +490,7 @@ def _runtime_dataset_lines(evidence):
     if not evidence:
         return []
     lines = ['', '### 原作者数据加载观测', '',
-             '以下记录核对原加载器及其输入文件，官方参考数据与完整训练协议尚未独立核对。']
+             '以下分别记录原加载器输入观测与官方 raw 来源比较；完整训练协议仍需独立核对。']
     for source in evidence.get('sources', []):
         observations = source.get('observations') or []
         if not observations:
@@ -449,6 +510,17 @@ def _runtime_dataset_lines(evidence):
                 f'{name} {count}' for name, count in record['mask_counts'].items())))
         if record.get('source_url'):
             lines.append('- **框架下载来源**: ' + _markdown_text(str(record['source_url'])))
+        reference = source.get('canonical_reference_audit')
+        if reference:
+            current = reference.get('current_source_match')
+            state = '逐文件一致' if current is True else '存在不一致' if current is False else '未完成'
+            lines.append('- **当前官方 raw 来源比较**: ' + state)
+            origin = reference.get('canonical_reference') or {}
+            if origin.get('archive_sha256'):
+                lines.append('- **官方 ZIP 快照 SHA-256**: ' + _markdown_text(origin['archive_sha256']))
+            lines.append('- 上游发布的不可变校验值未知；processed 图、划分和论文完整协议尚未由此证明。')
+            for error in reference.get('errors', []):
+                lines.append('- **来源比较说明**: ' + _markdown_text(_txt(error.get('reason'))))
         lines += ['', '| 输入文件 | 类型 | 字节数 | SHA-256 |', '| --- | --- | --- | --- |']
         for name, info in sorted(record.get('files', {}).items()):
             cells = [str(name).replace('\\', '/').rsplit('/', 1)[-1], info.get('role'), info.get('bytes'), info.get('sha256')]
@@ -1168,6 +1240,7 @@ class ReportGeneratorAgent(BaseAgent):
         lines += _numeric_compatibility_lines(validation)
         lines += _runtime_dataset_lines(readable.get('runtime_dataset_evidence') or validation.get('runtime_dataset_evidence'))
         lines += _outcome_diagnosis_lines(readable)
+        lines += _outcome_recovery_lines(readable)
         lines += _result_analysis_lines(readable)
         lines += _legacy_repair_lines(readable)
         if data.get('optimization'):
@@ -1728,6 +1801,7 @@ class ReportGeneratorAgent(BaseAgent):
         lines += _runtime_dataset_lines(validation.get('runtime_dataset_evidence'))
         lines += _author_claim_comparison_lines(validation.get('author_claim_comparison'), assessment)
         lines += _outcome_diagnosis_lines(data)
+        lines += _outcome_recovery_lines(data)
         records = validation.get("metric_records") or []
         if records:
             lines += ["", "### 实际指标证据", "| 指标 | 实测值 | 单位 | 数据划分 | 阶段 | 来源 |",

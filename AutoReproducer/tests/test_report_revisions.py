@@ -7,6 +7,7 @@ import zipfile
 from unittest.mock import Mock
 
 import pytest
+from streamlit.testing.v1 import AppTest
 
 from src.agents.report_generator import ReportGeneratorAgent
 from src.report_revisions import (REPORT_FORMAT_VERSION, can_regenerate_report,
@@ -121,7 +122,6 @@ def test_progress_only_report_revision_survives_restart(legacy_result, tmp_path)
 
 def test_current_old_tab_upgrade_and_server_restart(legacy_result, tmp_path, monkeypatch,
                                                  forbid_execution_and_api):
-    from streamlit.testing.v1 import AppTest
     import frontend.history_manager as hm
     from frontend.backend_pipeline import ProgressStore
 
