@@ -1,6 +1,7 @@
 """Frozen preset inputs recover transport/cache faults without weaker evidence."""
 import hashlib
 import io
+import os
 from pathlib import Path
 import subprocess
 import stat
@@ -12,7 +13,8 @@ import pytest
 
 from src.method_adapters import download_dataset
 from src.method_profiles import method_profile
-from src.preset_downloads import download_bytes
+from src.preset_downloads import atomic_cache_bytes, download_bytes
+from src.safety.paths import filesystem_path
 from src.repository_profiles import get_profile
 from src import repository_reproduction as reproduction
 from tests.test_repository_reproduction import required_source_files, tar_bytes
@@ -135,6 +137,32 @@ def test_atomic_dataset_publication_failure_cleans_temporary_and_preserves_cache
     assert case.cache.read_bytes() == b"corrupt previous cache"
     assert not list(case.cache.parent.glob("*.part"))
     assert not case.target.exists()
+
+
+@pytest.mark.skipif(os.name != 'nt', reason='Windows cache path limit')
+@pytest.mark.parametrize('fail_publication', [False, True])
+def test_atomic_cache_handles_long_temporary_paths_and_preserves_previous_bytes(
+        tmp_path, monkeypatch, fail_publication):
+    path = tmp_path / ('nested_' * 20) / ('cache_' * 12) / 'verified.bin'
+    physical = Path(filesystem_path(path))
+    assert len(str(path)) > 260
+    physical.parent.mkdir(parents=True)
+    physical.write_bytes(b'previous verified bytes')
+    if fail_publication:
+        original_replace = Path.replace
+
+        def replace(temporary, target):
+            if temporary.suffix == '.part':
+                raise PermissionError('publication failed')
+            return original_replace(temporary, target)
+
+        monkeypatch.setattr(Path, 'replace', replace)
+        with pytest.raises(PermissionError, match='publication failed'):
+            atomic_cache_bytes(path, b'new verified bytes')
+    else:
+        atomic_cache_bytes(path, b'new verified bytes')
+    assert physical.read_bytes() == (b'previous verified bytes' if fail_publication else b'new verified bytes')
+    assert list(physical.parent.iterdir()) == [physical]
 
 
 @pytest.mark.parametrize("status,headers", [(403, {}), (404, {}), (429, {"Retry-After": "3600"})])

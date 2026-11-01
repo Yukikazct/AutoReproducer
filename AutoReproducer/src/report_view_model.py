@@ -97,6 +97,81 @@ def _evidence_references(value, fallback):
     return list(dict.fromkeys(references))[:6] or [fallback]
 
 
+def _metric_record_id(node):
+    value = node.get('id')
+    return value if isinstance(value, str) and value else None
+
+
+def _metric_record_signature(node):
+    """Only exact observed context can join a legacy record without an ID."""
+    return (norm_metric_key(node.get('name') or node.get('metric') or ''), _value(node),
+            node.get('unit') or None, node.get('split') or None, _count(node),
+            node.get('std'), node.get('aggregation') or None,
+            node.get('dataset') or None, node.get('method') or None)
+
+
+def _unpaired_author_records(validation, comparison):
+    """Keep every unpaired observation, joining only unambiguous duplicates."""
+    groups = []
+    for values in (comparison.get('metric_records'), validation.get('metric_records')):
+        group, identifiers = [], set()
+        for record in _rows(values):
+            if not (record.get('name') or record.get('metric')):
+                continue
+            identifier = _metric_record_id(record)
+            if identifier and identifier in identifiers:
+                continue
+            if identifier:
+                identifiers.add(identifier)
+            group.append(record)
+        groups.append(group)
+    primary, secondary = groups
+    records = list(primary)
+    identifiers = {_metric_record_id(record) for record in primary} - {None}
+    for record in secondary:
+        identifier = _metric_record_id(record)
+        if identifier and identifier in identifiers:
+            continue
+        signature = _metric_record_signature(record)
+        matches = [index for index, first in enumerate(primary)
+                   if _metric_record_signature(first) == signature]
+        unique_secondary = sum(_metric_record_signature(other) == signature for other in secondary) == 1
+        if len(matches) == 1 and unique_secondary:
+            index = matches[0]
+            first_id = _metric_record_id(primary[index])
+            if not first_id or not identifier:
+                # Prefer an existing ID when one collection predates IDs.
+                # Different explicit IDs always represent distinct outputs.
+                if identifier:
+                    records[index] = record
+                    identifiers.add(identifier)
+                continue
+        records.append(record)
+        if identifier:
+            identifiers.add(identifier)
+
+    paired = []
+    for item in _rows(comparison.get('comparisons')):
+        actual = _map(item.get('actual'))
+        paired.append({**actual, 'name': actual.get('name') or item.get('metric') or item.get('name'),
+                       'value': _value(item.get('actual')),
+                       'unit': actual.get('unit') or item.get('actual_unit') or item.get('unit'),
+                       'split': actual.get('split') or item.get('actual_split')})
+    paired_ids = {_metric_record_id(node) for node in paired} - {None}
+    unpaired = []
+    for record in records:
+        identifier = _metric_record_id(record)
+        if identifier and identifier in paired_ids:
+            continue
+        signature = _metric_record_signature(record)
+        matches = [node for node in paired if _metric_record_signature(node) == signature]
+        unique_record = sum(_metric_record_signature(other) == signature for other in records) == 1
+        if len(matches) == 1 and unique_record and (not identifier or not _metric_record_id(matches[0])):
+            continue
+        unpaired.append(record)
+    return unpaired
+
+
 def _metric_rows(data):
     validation = _map(data.get('validation'))
     comparison = _map(validation.get('author_claim_comparison'))
@@ -104,19 +179,36 @@ def _metric_rows(data):
     for item in _rows(comparison.get('comparisons')):
         reference, actual = _map(item.get('reference')), _map(item.get('actual'))
         state = item.get('status') or 'unrecorded'
-        rows.append({'metric': item.get('metric') or item.get('name') or '未记录',
+        metric = item.get('metric') or item.get('name') or '未记录'
+        if reference.get('name') and norm_metric_key(reference['name']) != norm_metric_key(metric):
+            metric = f"论文 {reference['name']} / 实际 {metric}"
+        rows.append({'metric': metric,
                      'reference': _value(item.get('reference')), 'actual': _value(item.get('actual')),
                      'reference_unit': reference.get('unit') or item.get('reference_unit') or item.get('unit'),
                      'actual_unit': actual.get('unit') or item.get('actual_unit') or item.get('unit'),
                      'reference_split': reference.get('split') or item.get('reference_split'),
                      'actual_split': actual.get('split') or item.get('actual_split'),
                      'reference_runs': _count(reference), 'actual_runs': _count(actual),
-                     'difference': _value(item.get('difference')) if state == 'comparable' else None,
+                     # A sourced reference-only delta remains useful even
+                     # when settings/statistics prevent an acceptance verdict.
+                     # Its separate comparability state is retained below.
+                     'difference': _value(item.get('difference'))
+                         if state in {'comparable', 'reference_only'} else None,
                      'difference_unit': item.get('difference_unit'),
                      'comparability': state, 'reason': item.get('reason') or
                          _map(item.get('settings')).get('reason'),
                      'evidence': ['validation.author_claim_comparison']})
     if rows:
+        for record in _unpaired_author_records(validation, comparison):
+            rows.append({'metric': record.get('name') or record.get('metric'),
+                         'reference': None, 'actual': _value(record),
+                         'reference_unit': None, 'actual_unit': record.get('unit'),
+                         'reference_split': None, 'actual_split': record.get('split'),
+                         'reference_runs': None, 'actual_runs': _count(record),
+                         'difference': None, 'difference_unit': None, 'comparability': 'unrecorded',
+                         'reason': '尚未找到对应论文参考，保留实际输出',
+                         'evidence': ['validation.author_claim_comparison.metric_records',
+                                      'validation.metric_records']})
         return rows
     # Legacy validated results use a different schema; a name match alone does
     # not establish that two numbers are scientifically comparable.

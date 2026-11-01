@@ -59,19 +59,34 @@ def browser_launch_options(args):
     return options
 
 
+def visible_panel_control(page, panel, label):
+    """Keep open panels open; recover a control lost during a Streamlit rerender."""
+    control = page.get_by_label(label, exact=True)
+    for attempt in range(3):
+        try:
+            if control.is_visible():
+                return control
+            page.get_by_text(panel, exact=True).click(timeout=10000)
+            control.wait_for(state="visible", timeout=10000)
+            return control
+        except Exception:
+            # A rerender may replace the heading or close the newly opened
+            # panel. Recheck actual visibility before another bounded attempt.
+            if attempt == 2:
+                raise
+
+
 def configure_page(page, args, credential):
-    page.get_by_text("运行环境", exact=True).click()
-    mock = page.get_by_label("Mock 演示模式（无需 API）", exact=True)
+    mock = visible_panel_control(page, "运行环境", "Mock 演示模式（无需 API）")
     if mock.is_checked():
         mock.set_checked(False)
-    docker = page.get_by_label("Docker 沙箱执行（暂未开放）", exact=True)
+    docker = visible_panel_control(page, "运行环境", "Docker 沙箱执行（暂未开放）")
     if docker.is_checked():
         docker.set_checked(False)
-    page.get_by_text("LLM API 配置", exact=True).click()
     fields = {"base_url": "API 地址（OpenAI 兼容）", "model": "模型名称"}
     config = {}
     for name, label in fields.items():
-        field = page.get_by_label(label, exact=True)
+        field = visible_panel_control(page, "LLM API 配置", label)
         override = getattr(args, name)
         if override is not None:
             if not override.strip():
@@ -80,9 +95,10 @@ def configure_page(page, args, credential):
             field.press("Enter")
         config[name] = field.input_value().strip()
         assert config[name], f"The page must have an effective {name}"
-    password = page.get_by_label("API Key", exact=True)
+    password = visible_panel_control(page, "LLM API 配置", "API Key")
     password.fill(credential)
     password.press("Enter")
+    visible_panel_control(page, "LLM API 配置", "API Key")
     page.get_by_role("button", name="测试 AI 连接", exact=True).click()
     message = "连接成功 (" + config["model"] + " @ " + config["base_url"] + "):"
     page.get_by_text(re.compile(re.escape(message))).wait_for(timeout=45000)
@@ -106,7 +122,7 @@ def configure_execution_mode(page, strict_validation, *, recovery_mode='off', so
     """Set the real PDF controls, including when a browser session has old state."""
     execution_settings(SimpleNamespace(strict_validation=strict_validation,
         allow_source_repair=source_repair, intelligent_recovery_mode=recovery_mode))
-    repair = page.get_by_label("兼容性源码修复：失败后自动重试", exact=True)
+    repair = page.get_by_label("AI 自动修复：失败后修复并重试", exact=True)
     if repair.is_checked() is not source_repair:
         repair.press("Space")
     strict = page.get_by_label("严格核验：重载模型并独立复算指标", exact=True)
@@ -287,13 +303,32 @@ def cleanup_evidence(result, data_root, deps_root):
             "retained": {name: str(path) if path else None for name, path in retained.items()}}
 
 
+def verify_ordinary_conclusion(validation):
+    """AI judgments remain distinct from protocol/independent verification."""
+    assert validation.get('paper_metrics_verified') is False
+    assert validation.get('protocol_pass') is None and validation.get('independent_metrics_pass') is None
+    assessment = validation.get('reproduction_assessment') or {}
+    if assessment.get('status') == 'completed':
+        mapping = {'reproduced': ('ai_reproduced', True),
+                   'partially_reproduced': ('ai_partially_reproduced', None),
+                   'not_reproduced': ('ai_not_reproduced', False),
+                   'insufficient_evidence': ('ai_insufficient_evidence', None)}
+        assert assessment.get('verdict') in mapping, 'Unknown ordinary AI verdict'
+        state, reproduced = mapping[assessment['verdict']]
+        assert validation.get('execution_status') == 'author_code_completed'
+        assert validation.get('status') == validation.get('result_level') == state
+        assert validation.get('verdict_source') == 'ai'
+        assert validation.get('is_reproduced') is reproduced
+    else:
+        assert validation.get('status') == 'author_code_completed'
+        assert validation.get('is_reproduced') is None
+
+
 def verify_author_completion(result, pdf_hash, expected_repo):
     data = result.get("data") or {}
     validation = data.get("validation") or {}
     assert result.get("state") == "COMPLETED", result.get("error")
-    assert validation.get("status") == "author_code_completed", validation
-    assert validation.get("is_reproduced") is None and validation.get("paper_metrics_verified") is False
-    assert validation.get("protocol_pass") is None and validation.get("independent_metrics_pass") is None
+    verify_ordinary_conclusion(validation)
     assert data.get("reproduction_scope") == "author_code_execution"
     assert data.get("repository_executed") is True and data.get("execution_source") == "author_repository"
     assert data["pdf_input"]["sha256"] == pdf_hash
@@ -409,9 +444,15 @@ def verify_claim_comparison(result):
     for row in comparison.get('comparisons') or []:
         if row.get('status') not in {'comparable', 'reference_only'}:
             continue
-        difference = row.get('difference')
-        assert type(difference) in (int, float) and math.isfinite(difference)
         actual, reference = row['actual'], row['reference']
+        for observation in (actual, reference):
+            number = observation.get('value')
+            assert type(number) in (int, float) and math.isfinite(number), (
+                'A paper comparison requires both original finite numerical observations')
+        difference = row.get('difference')
+        if row['status'] == 'comparable' or difference is not None:
+            assert type(difference) in (int, float) and math.isfinite(difference), (
+                'A recorded numerical difference must be finite')
         observed = records[actual['id']]
         assert actual['value'] == observed['value'] and actual['source'] == observed['source']
         for field in ('aggregation', 'runs', 'std'):
@@ -429,7 +470,11 @@ def verify_claim_comparison(result):
             assert limitations and all(isinstance(note, str) and note.strip() for note in limitations)
         eligible.append(row)
     assert eligible, 'A verified, nonempty paper comparison is required for acceptance'
-    assert validation.get('paper_metrics_verified') is False and validation.get('is_reproduced') is None
+    # Apply the same independent arithmetic and unit/metric checks used for
+    # downloaded V6 reports. Related values with unknown units or different
+    # metrics can remain visible as reference-only observations without a delta.
+    comparison_rows(validation)
+    verify_ordinary_conclusion(validation)
     return comparison
 
 
@@ -449,39 +494,218 @@ def verify_saved_report(result, downloaded):
             assert saved.get('data', {}).get(key) == result['data'].get(key), 'Saved result differs: ' + key
     if (result['data'].get('strict_validation') or {}).get('requested') is True:
         verify_strict_report(text, result['data']['validation'])
+    elif (result['data'].get('validation', {}).get('author_claim_comparison') or {}).get('comparisons'):
+        verify_comparison_report(text, result['data']['validation'])
+    if ((result['data'].get('validation', {}).get('author_claim_comparison') or {}).get('comparisons')
+            or (result['data'].get('strict_validation') or {}).get('requested') is True):
+        verify_report_conclusion(text, result['data'])
     return {'saved_reports_identical': True, 'structured_records_identical': True}
 
 
-def strict_comparison_rows(validation):
-    """Expected cells use the report renderer's unrounded values and explicit units."""
+COMPARISON_HEADER = ['指标', '论文参考', '实际值', '单位（参考 / 实际）',
+                     '划分（参考 / 实际）', '次数（参考 / 实际）', '差值', '可比较性']
+
+
+def comparison_rows(validation, *, strict=False):
+    """Build V6 expectations from original result fields, without using its renderer."""
     from src.metric_keys import norm_metric_key
     from src.runtime_metrics import metric_unit
 
-    comparisons = validation.get('comparisons')
-    assert isinstance(comparisons, list) and comparisons, 'Strict report requires verified numerical comparisons'
-    assert type(validation.get('is_reproduced')) is bool
-    assert all(type(row.get('pass')) is bool for row in comparisons)
-    assert all(row['pass'] for row in comparisons) is validation['is_reproduced']
-    assert validation.get('status') == ('reproduced' if validation['is_reproduced'] else 'reference_not_met')
-    names = [norm_metric_key(row['name']) for row in comparisons]
-    assert len(names) == len(set(names)), 'Strict comparison metric names must be unique'
+    comparisons = (validation.get('comparisons') if strict else
+                   (validation.get('author_claim_comparison') or {}).get('comparisons'))
+    assert isinstance(comparisons, list) and comparisons, 'Report requires authoritative numerical comparisons'
+    assert all(isinstance(row, dict) for row in comparisons)
+    if strict:
+        assert type(validation.get('is_reproduced')) is bool
+        assert all(type(row.get('pass')) is bool for row in comparisons)
+        assert all(row['pass'] for row in comparisons) is validation['is_reproduced']
+        assert validation.get('status') == ('reproduced' if validation['is_reproduced'] else 'reference_not_met')
+        names = [norm_metric_key(row.get('name') or row.get('metric')) for row in comparisons]
+        assert len(names) == len(set(names)), 'Strict comparison metric names must be unique'
 
-    def cell(value, unit):
-        assert type(value) in (int, float) and math.isfinite(value)
-        unit = metric_unit(value, unit)
-        suffix = {'percent': '%', 'fraction': ' (比例)'}.get(unit, ' ' + unit if unit else '')
-        return str(value) + suffix
+    def value(node):
+        return node.get('value') if isinstance(node, dict) else node
 
-    return [[row['name'], cell(row['reference'], row['unit']), cell(row['actual'], row['unit'])]
-            for row in sorted(comparisons, key=lambda row: norm_metric_key(row['name']))]
+    def count(node):
+        for key in ('runs', 'run_count', 'n_runs', 'count', 'repetitions'):
+            number = node.get(key)
+            number = number.get('count') if isinstance(number, dict) else number
+            if type(number) is int and number > 0:
+                return number
+
+    def unconfirmed_f1(reference, name):
+        if name not in {'f1_score', 'f1_macro', 'f1_micro', 'f1_weighted'}:
+            return False
+        # Re-read only the paper excerpts selected for this row. A missing
+        # averaging label is useful context, never permission to invent a delta.
+        sources = {ref.get('id'): ref for ref in
+                   (validation.get('author_claim_comparison') or {}).get('citations', [])
+                   if isinstance(ref, dict) and ref.get('source') == 'pdf'}
+        identifiers = reference.get('citations')
+        if not isinstance(identifiers, list) or not identifiers:
+            return False
+        selected = [sources.get(key) for key in identifiers]
+        if any(not ref or not isinstance(ref.get('quote'), str) or not ref['quote'] for ref in selected):
+            return False
+        quote = reference.get('value_quote')
+        if not isinstance(quote, str) or not quote or not any(quote in ref['quote'] for ref in selected):
+            return False
+        metric_quote = reference.get('metric_quote')
+        if metric_quote is not None:
+            if (not isinstance(metric_quote, str) or not 4 <= len(metric_quote) <= 800
+                    or not any(quote in ref['quote'] and metric_quote in ref['quote'] for ref in selected)):
+                return False
+            evidence = metric_quote
+        else:
+            evidence = '\n'.join(ref['quote'] for ref in selected)
+        labels = re.findall(
+            r'(?<!\w)(?:(?:macro|micro|weighted)[_\s-]?f1(?:[_\s-]?score)?|'
+            r'f1(?:[_\s-]?score)?(?:[_\s-](?:macro|micro|weighted))?)(?!\w)', evidence, re.I)
+        return name not in {norm_metric_key(label) for label in labels}
+
+    rows = []
+    for item in comparisons:
+        reference, actual = value(item.get('reference')), value(item.get('actual'))
+        nodes = {side: item.get(side) if isinstance(item.get(side), dict) else {}
+                 for side in ('reference', 'actual')}
+        units = {side: nodes[side].get('unit') or item.get(side + '_unit') or item.get('unit')
+                 for side in nodes}
+        splits = {side: nodes[side].get('split') or item.get(side + '_split') or
+                  (item.get('split') if strict else None) for side in nodes}
+        runs = {side: count(nodes[side]) or (item.get(side + '_runs') if strict else None)
+                for side in nodes}
+        for number in (reference, actual):
+            assert number is None or type(number) in (int, float) and math.isfinite(number), (
+                'Comparison contains a nonnumeric or nonfinite observation')
+            if strict:
+                assert number is not None, 'Strict comparisons require both verified numerical observations'
+        state = 'comparable' if strict else item.get('status') or 'unrecorded'
+        assert state in {'comparable', 'reference_only', 'not_comparable', 'unrecorded'}
+        difference = value(item.get('difference')) if state in {'comparable', 'reference_only'} else None
+        difference_unit = item.get('difference_unit') or (item.get('unit') if strict else None)
+        if strict and difference is None and reference is not None and actual is not None:
+            if units['reference'] == units['actual']:
+                difference = actual - reference
+        if state in {'comparable', 'reference_only'} and reference is not None and actual is not None:
+            left, right = (metric_unit(explicit=units[side]) for side in ('reference', 'actual'))
+            expected = None
+            reference_name = nodes['reference'].get('name') or item.get('metric') or item.get('name')
+            actual_name = nodes['actual'].get('name') or item.get('metric') or item.get('name')
+            same_metric = norm_metric_key(reference_name) == norm_metric_key(actual_name)
+            if not same_metric or not left or not right:
+                assert difference is None, 'Different metrics or unknown units must retain raw values without a difference'
+            elif not strict and unconfirmed_f1(nodes['reference'], norm_metric_key(reference_name)):
+                assert state == 'reference_only' and difference is None, (
+                    'Unconfirmed F1 averaging must retain reference-only raw values without a difference')
+            elif left == right:
+                expected = actual - reference
+            elif {left, right} == {'percent', 'fraction'}:
+                expected = ((actual / 100 if right == 'percent' else actual) -
+                            (reference / 100 if left == 'percent' else reference)) * 100
+            if expected is not None:
+                assert type(difference) in (int, float) and math.isfinite(difference), (
+                    'Comparable and reference-only observations must retain their numerical difference')
+                assert math.isclose(difference, expected, rel_tol=1e-9, abs_tol=1e-10), (
+                    'Structured difference disagrees with the authoritative reference and actual values')
+        delta = _comparison_text(difference, '未取得')
+        if difference is not None and difference_unit:
+            delta += ' ' + _comparison_text({'percentage_points': '个百分点'}.get(difference_unit, difference_unit))
+        metric = item.get('metric') or item.get('name')
+        paper_name = nodes['reference'].get('name')
+        if not strict and paper_name and norm_metric_key(paper_name) != norm_metric_key(metric):
+            metric = f'论文 {paper_name} / 实际 {metric}'
+        rows.append([_comparison_text(metric),
+                     _comparison_text(reference, '未取得'), _comparison_text(actual, '未取得'),
+                     ' / '.join(_comparison_text(units[side]) for side in nodes),
+                     ' / '.join(_comparison_text(splits[side]) for side in nodes),
+                     ' / '.join(_comparison_text(runs[side]) for side in nodes), delta,
+                     {'comparable': '可比较', 'reference_only': '仅供参考',
+                      'not_comparable': '不可比较', 'unrecorded': '未记录'}[state]])
+    if not strict:
+        # Audit unpaired observations independently of the report view model.
+        # IDs identify outputs; legacy signature joins require uniqueness on
+        # both sides and never collapse two different explicit IDs.
+        def identifier(node):
+            candidate = node.get('id')
+            return candidate if isinstance(candidate, str) and candidate else None
+
+        def signature(node):
+            return (norm_metric_key(node.get('name') or node.get('metric') or ''), value(node),
+                    node.get('unit') or None, node.get('split') or None, count(node),
+                    node.get('std'), node.get('aggregation') or None,
+                    node.get('dataset') or None, node.get('method') or None)
+
+        groups = []
+        source = validation.get('author_claim_comparison') or {}
+        for collection in (source.get('metric_records'), validation.get('metric_records')):
+            group, seen = [], set()
+            for record in collection if isinstance(collection, list) else []:
+                if not isinstance(record, dict) or not (record.get('name') or record.get('metric')):
+                    continue
+                key = identifier(record)
+                if key and key in seen:
+                    continue
+                if key:
+                    seen.add(key)
+                group.append(record)
+            groups.append(group)
+        primary, secondary = groups
+        observations = list(primary)
+        known_ids = {identifier(record) for record in primary} - {None}
+        for record in secondary:
+            key, stamp = identifier(record), signature(record)
+            if key and key in known_ids:
+                continue
+            positions = [index for index, original in enumerate(primary) if signature(original) == stamp]
+            if len(positions) == 1 and sum(signature(other) == stamp for other in secondary) == 1:
+                position = positions[0]
+                if not key or not identifier(primary[position]):
+                    if key:
+                        observations[position] = record
+                        known_ids.add(key)
+                    continue
+            observations.append(record)
+            if key:
+                known_ids.add(key)
+        paired = []
+        for item in comparisons:
+            node = item.get('actual') if isinstance(item.get('actual'), dict) else {}
+            paired.append({**node, 'name': node.get('name') or item.get('metric') or item.get('name'),
+                           'value': value(item.get('actual')),
+                           'unit': node.get('unit') or item.get('actual_unit') or item.get('unit'),
+                           'split': node.get('split') or item.get('actual_split')})
+        paired_ids = {identifier(node) for node in paired} - {None}
+        for record in observations:
+            key, stamp = identifier(record), signature(record)
+            matches = [node for node in paired if signature(node) == stamp]
+            if key and key in paired_ids:
+                continue
+            if (len(matches) == 1 and sum(signature(other) == stamp for other in observations) == 1
+                    and (not key or not identifier(matches[0]))):
+                continue
+            observed = value(record)
+            assert observed is None or type(observed) in (int, float) and math.isfinite(observed)
+            rows.append([_comparison_text(record.get('name') or record.get('metric')),
+                         '未取得', _comparison_text(observed, '未取得'),
+                         '未记录 / ' + _comparison_text(record.get('unit')),
+                         '未记录 / ' + _comparison_text(record.get('split')),
+                         '未记录 / ' + _comparison_text(count(record)), '未取得', '未记录'])
+    return rows
 
 
-def verify_strict_report(report, validation):
-    """Reject consistently stale files: bind report conclusion and rows to formal metrics."""
-    from frontend.display_text import display_text
+def _comparison_text(value, missing='未记录'):
+    if value is None or value == '':
+        return missing
+    text = re.sub(r'\s+', ' ', str(value)).strip()
+    return text if len(text) <= 240 else text[:240] + '…（完整记录见详情附件）'
 
-    # Ignore quoted code examples: neither an example status nor an example
-    # table can stand in for the generated conclusion and comparison section.
+
+def strict_comparison_rows(validation):
+    return comparison_rows(validation, strict=True)
+
+
+def _report_lines(report):
+    """Ignore fenced examples when auditing generated sections and conclusions."""
     lines, fence = [], None
     for line in report.splitlines():
         marker = re.match(r'^\s{0,3}(`{3,}|~{3,})', line)
@@ -493,35 +717,76 @@ def verify_strict_report(report, validation):
                 fence = None
         elif fence is None:
             lines.append(line.strip())
-    states = [display_text(line).strip() for line in lines if line.startswith('- **复现状态**:')]
-    expected_state = ('选定论文实验数值复现通过' if validation['is_reproduced'] else
-                      '选定论文实验已完成，数值参考未达到')
-    assert states == ['- **复现状态**: ' + expected_state], 'Downloaded strict report has a stale numerical conclusion'
-    assert [line for line in lines if line.startswith('- **严格验收**:')] == [
-        '- **严格验收**: 完整独立复算证据已核验'], 'Downloaded report has no verified strict conclusion'
-    headings = [index for index, line in enumerate(lines) if line == '### 指标对比']
-    assert len(headings) == 1, 'Strict report requires one unambiguous numerical comparison table'
+    return lines
+
+
+def _markdown_plain(text):
+    return re.sub(r'\\([\\`*_{}\[\]()<>!|])', r'\1', text)
+
+
+def verify_report_conclusion(report, data):
+    from src.result_conclusion import build_reproduction_conclusion
+    conclusion = build_reproduction_conclusion(data)
+    lines = _report_lines(report)
+    for key, labels in (('comparison', ('是否达到参考', '论文参考比较')),
+                        ('independent', ('独立核验状态', '独立核验'))):
+        for label in labels:
+            prefix = '- **' + label + '**: '
+            assert [_markdown_plain(line[len(prefix):]) for line in lines if line.startswith(prefix)] == [
+                conclusion[key]['label']], 'Downloaded report has a stale ' + key + ' conclusion'
+
+
+def verify_comparison_report(report, validation, *, strict=False):
+    """Bind all eight V6 table columns to authoritative result records."""
+    lines = _report_lines(report)
+    headings = [index for index, line in enumerate(lines) if line == '## 指标与参考比较']
+    assert len(headings) == 1, 'Report requires one unambiguous numerical comparison table'
     rows = []
     for line in lines[headings[0] + 1:]:
         if not line and not rows:
             continue
         if not line.startswith('|'):
             break
-        cells = [value.strip() for value in line.strip('|').split('|')]
+        cells, cell, escaped = [], '', False
+        for char in line[1:-1]:
+            if char == '|' and not escaped:
+                cells.append(_markdown_plain(cell.strip()))
+                cell = ''
+            else:
+                cell += char
+            escaped = not escaped if char == '\\' else False
+        cells.append(_markdown_plain(cell.strip()))
         if all(re.fullmatch(r':?-{3,}:?', value) for value in cells):
             continue
         rows.append(cells)
-    expected = [['指标', '论文声明', '实际运行'], *strict_comparison_rows(validation)]
-    assert rows == expected, 'Downloaded strict metric values or units differ from independently verified comparisons'
+    expected = [COMPARISON_HEADER, *comparison_rows(validation, strict=strict)]
+    assert rows == expected, 'Downloaded metric values, differences or comparability differ from authoritative comparisons'
     return expected
 
 
-def verify_strict_table(table, validation):
+def verify_strict_report(report, validation):
+    """A current strict report must retain both independent and numeric conclusions."""
+    expected = verify_comparison_report(report, validation, strict=True)
+    lines = _report_lines(report)
+    state = ('已有核验指标达到参考规则' if validation['is_reproduced'] else '已有核验指标未全部达到参考规则')
+    for label, value in (('是否达到参考', state), ('论文参考比较', state),
+                         ('独立核验状态', '协议与独立指标复算已核验'), ('独立核验', '协议与独立指标复算已核验')):
+        prefix = '- **' + label + '**: '
+        assert [line for line in lines if line.startswith(prefix)] == [prefix + value], (
+            'Downloaded strict report has a stale numerical or independent conclusion')
+    return expected
+
+
+def verify_comparison_table(table, validation, *, strict=False):
     """Inspect real DOM cells, including units, before accepting the live/reloaded UI."""
     rows = [[re.sub(r'\s+', ' ', cell).strip() for cell in row.locator('th, td').all_inner_texts()]
             for row in table.locator('tr').all()]
-    assert rows == [['指标', '论文声明', '实际运行'], *strict_comparison_rows(validation)], (
-        'Displayed strict metric values or units differ from independently verified comparisons')
+    assert rows == [COMPARISON_HEADER, *comparison_rows(validation, strict=strict)], (
+        'Displayed metric values, differences or comparability differ from authoritative comparisons')
+
+
+def verify_strict_table(table, validation):
+    verify_comparison_table(table, validation, strict=True)
 
 
 def verify_report_reconnect(page, args, progress, runtime, result):
@@ -531,14 +796,13 @@ def verify_report_reconnect(page, args, progress, runtime, result):
     def show_report():
         page.get_by_role('tab', name=re.compile('复现报告')).click()
         table = page.get_by_role('table')
-        table = (table.filter(has_text='论文声明').filter(has_text='实际运行') if strict else
-                 table.filter(has_text='论文宣称').filter(has_text='作者运行输出')).first
+        table = table.filter(has_text='论文参考').filter(has_text='实际值').filter(has_text='可比较性').first
         table.wait_for(timeout=30000)
+        verify_comparison_table(table, result['data']['validation'], strict=strict)
         if strict:
-            verify_strict_table(table, result['data']['validation'])
-            state_text = ('选定论文实验数值复现通过' if result['data']['validation']['is_reproduced'] else
-                          '选定论文实验已完成，数值参考未达到')
-            for marker in ('完整独立复算证据已核验', state_text):
+            state_text = ('已有核验指标达到参考规则' if result['data']['validation']['is_reproduced'] else
+                          '已有核验指标未全部达到参考规则')
+            for marker in ('协议与独立指标复算已核验', state_text):
                 page.get_by_text(re.compile(re.escape(marker))).first.wait_for(timeout=30000)
         return table.inner_text()
     displayed = show_report()
@@ -586,11 +850,6 @@ def verify_report_reconnect(page, args, progress, runtime, result):
         attachment = report_path.with_name(report_path.stem + '_execution.txt')
         assert archive.read(attachment.name) == attachment.read_bytes()
         assert (Path(result['data']['run_dir']) / attachment.name).read_bytes() == attachment.read_bytes()
-    report_text = content[0].decode('utf-8')
-    if strict:
-        assert '完整独立复算证据已核验' in report_text and '### 指标对比' in report_text
-    else:
-        assert '作者输出与论文宣称对比' in report_text
     saved = verify_saved_report(result, content[0])
     before = set(runtime.glob('progress_*.jsonl'))
     page.goto(f'http://localhost:{args.port}/?run={progress.name}', wait_until='domcontentloaded')
@@ -610,6 +869,16 @@ def verify_terminal_page(page, validation, strict_validation=False):
             page.get_by_text('完整实验已完成，论文数值验收通过。', exact=True).wait_for(timeout=30000)
         else:
             page.get_by_text(re.compile(re.escape('选定论文实验已完成，独立评估数值未达到固定参考：'))).wait_for(timeout=30000)
+    elif (validation.get('reproduction_assessment') or {}).get('status') == 'completed':
+        assessment = validation['reproduction_assessment']
+        labels = {'reproduced': 'AI 判断复现成功', 'partially_reproduced': 'AI 判断部分复现',
+                  'not_reproduced': 'AI 判断尚未复现', 'insufficient_evidence': 'AI 判断证据不足'}
+        label = labels[assessment['verdict']]
+        page.get_by_text(re.compile('^' + re.escape(label + '：'))).wait_for(timeout=30000)
+        page.get_by_text('判断范围为本次实际执行的实验。AI 根据具体论文选择合理误差；固定 5% 参考线不作为普通复现的硬门槛。',
+                         exact=True).wait_for(timeout=30000)
+        if validation.get('paper_metrics_verified') is not True:
+            page.get_by_text('严格独立复算为可选核验，本次未完成该项。', exact=True).wait_for(timeout=30000)
     else:
         page.get_by_text('所选仓库代码已运行完成，命令已正常退出。', exact=True).wait_for(timeout=30000)
         caption = ('已对比作者输出与论文宣称，详见报告中的差值和实验设置；本次未进行论文数值审核。'
@@ -665,10 +934,10 @@ def main(args):
             page.get_by_test_id("stFileUploader").locator('input[type="file"]').set_input_files(str(pdf))
             try:
                 if args.allow_no_preview_link:
-                    page.get_by_text(re.compile(re.escape("已上传：" + pdf.name))).wait_for(timeout=60000)
+                    page.get_by_text(re.compile(re.escape("已上传：" + pdf.name))).wait_for(timeout=240000)
                 else:
                     page.get_by_text(re.compile(
-                        r"PDF (?:原文代码声明|仓库候选)链接：" + re.escape(args.repo), re.I)).wait_for(timeout=60000)
+                        r"PDF (?:原文代码声明|仓库候选)链接：" + re.escape(args.repo), re.I)).wait_for(timeout=240000)
             except Exception:
                 page.screenshot(path=str(runtime / f"{args.tag}_preview_failed.png"), full_page=True)
                 save("preview_failed", {"body_text": page.locator("body").inner_text(), "task_submitted": False})

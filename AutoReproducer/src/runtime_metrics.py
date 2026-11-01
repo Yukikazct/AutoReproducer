@@ -28,6 +28,16 @@ _AGGREGATIONS = {'single', 'mean', 'median', 'best', 'unknown'}
 _STAT_NAMES = {'mean', 'average', 'avg', 'std', 'stdev', 'stddev', 'median', 'best',
                'runs', 'trials', 'seeds', 'n'}
 _RUN_COUNT = r'(?:[1-9]\d{0,2}(?:,\d{3})+|\d+)'
+_NAMED_SUMMARY_RE = re.compile(
+    r'(?<![^\n;|])[ \t]*(?:(?:final|overall)\s+)?'
+    r'(?P<aggregation>mean|average|averaged|avg|median|best)\s+'
+    r'(?:(?P<split>test|eval|evaluation|validation|valid|val|train|training)[ _-]+)?'
+    r'(?P<name>' + _METRIC_LABEL + r')\.?'
+    r'(?:\s+(?:for|of|over|across|from)\s+[^:;|=\r\n]+?)?'
+    r'\s*[:=]\s*(?P<value>' + NUMBER_PATTERN + r')(?![\w.])(?!\s*[:=])\s*(?P<percent>%)?', re.I)
+_BARE_UNCERTAINTY_RE = re.compile(
+    r'(?:±|\+/-|\\pm(?![A-Za-z]))\s*(?P<value>' + NUMBER_PATTERN + r')(?![\w.])', re.I)
+_NONOBSERVATION_RE = re.compile(r'\b(?:planned|expected|hypothetical|not|never)\b', re.I)
 _RUNS_RE = re.compile(r'(?<![\w.,+−–—-])(?:(?P<before>' + _RUN_COUNT + r')\s+'
     r'(?:(?:independent|random|repeated)\s+)?(?:runs|trials|seeds|repeats)|'
     r'(?P<label>runs|trials|seeds|repeats)\s*[:=]\s*(?P<after>' + _RUN_COUNT + r'))\b', re.I)
@@ -205,7 +215,7 @@ def _statistics(prefix, suffix, summary=None):
         match = re.search(r'\b(mean|average|avg|median|best)\b', prefix, re.I)
         aggregation = match.group(1) if match else None
     if aggregation:
-        fields['aggregation'] = {'average': 'mean', 'avg': 'mean'}.get(aggregation.lower(), aggregation.lower())
+        fields['aggregation'] = {'average': 'mean', 'averaged': 'mean', 'avg': 'mean'}.get(aggregation.lower(), aggregation.lower())
     count_context = prefix + ' ' + (summary.group() if summary is not None else '') + ' ' + suffix
     counts, rejected_counts = _reported_run_counts(count_context)
     if len(counts) == 1 and not rejected_counts:
@@ -231,6 +241,27 @@ def _statistics(prefix, suffix, summary=None):
         if (std.group().lstrip().startswith(('±', '+/-'))
                 and re.match(r'\s*%', suffix[std.end():])):
             fields['unit'] = 'percent'
+    return fields
+
+
+def _named_summary_statistics(prefix, suffix, summary, line, line_number):
+    """Freeze labelled summaries without assigning an unlabelled +/- to SD."""
+    fields = _statistics(prefix, suffix, summary)
+    spread = _BARE_UNCERTAINTY_RE.search(suffix)
+    if spread:
+        fields.pop('std', None)
+        fields.pop('unit', None)
+        fields['reported_uncertainty'] = metric_number(spread['value'])
+        context = prefix + ' ' + suffix
+        fields['uncertainty_kind'] = ('standard_error' if re.search(
+            r'\b(?:sem|stderr|standard\s+error)\b', context, re.I) else
+            'confidence_interval' if _OTHER_UNCERTAINTY.search(context) else 'unknown')
+        confidence = re.search(r'\b(\d+(?:\.\d+)?)\s*%\s*(?:ci|confidence\s+interval)\b', context, re.I)
+        if fields['uncertainty_kind'] == 'confidence_interval' and confidence and 0 < float(confidence[1]) < 100:
+            fields['confidence_level'] = float(confidence[1])
+    if fields.get('runs', 0) > 0:
+        fields['runs_source'] = {'kind': 'reported_summary', 'value': fields['runs'],
+            'source': f'stdout:{line_number}', 'source_quote': line.strip()}
     return fields
 
 
@@ -353,22 +384,28 @@ def parse_runtime_metrics(text, structured=None, expected_names=(), *, preserve_
                     'stage': 'final' if split == 'test' else split,
                     'source': f'stdout:{line_number}', 'source_quote': line.strip(), **stats})
         previous_end = 0
-        summaries = list(_SUMMARY_RE.finditer(line))
+        named_summaries = list(_NAMED_SUMMARY_RE.finditer(line))
+        summaries = [*named_summaries, *(match for match in _SUMMARY_RE.finditer(line)
+            if not any(named.start() <= match.start() < named.end() for named in named_summaries))]
         matches = [(match, True) for match in summaries]
         matches += [(match, False) for match in _METRIC_RE.finditer(line)
                     if not any(summary.start() <= match.start() < summary.end() for summary in summaries)]
         matches.sort(key=lambda item: item[0].start())
         for index, (match, summary) in enumerate(matches):
+            named_summary = match.re is _NAMED_SUMMARY_RE
             # 脚本自印的论文参考值不能覆盖真实测量。
             prefix = re.split(r"[,;，；|]", line[previous_end:match.start()])[-1]
             previous_end = match.end()
             reference_prefix = re.split(r"[,;，；|]", line[:match.start()])[-1]
-            if _REFERENCE_RE.search(reference_prefix):
+            if (_REFERENCE_RE.search(reference_prefix)
+                    or named_summary and (_REFERENCE_RE.search(line) or _NONOBSERVATION_RE.search(line))):
                 continue
             # Several metrics can share one explicit split label, e.g.
             # "train loss:... acc:... | val loss:... acc:...". Inherit it
             # only within this delimited clause, using the nearest label.
             split_prefix = reference_prefix
+            if named_summary and match['split']:
+                split_prefix += ' ' + match['split']
             name = norm_metric_key(match["name"])
             qualified = re.fullmatch(r"(test|eval|evaluation|validation|valid|val|train|training)_(.+)", name)
             if preserve_contexts and qualified:
@@ -395,7 +432,8 @@ def parse_runtime_metrics(text, structured=None, expected_names=(), *, preserve_
             end = next((other.start() for other, _ in matches[index + 1:]
                         if norm_metric_key(other['name']) not in _STAT_NAMES), len(line))
             suffix = line[match.end():end]
-            stats = _statistics(prefix, suffix, match if summary else None)
+            stats = (_named_summary_statistics(prefix, suffix, match, line, line_number) if named_summary
+                     else _statistics(prefix, suffix, match if summary else None))
             records.append({"name": name, "value": metric_number(match["value"]),
                             "unit": "percent" if match["percent"] else "",
                             "split": split, "stage": stage, "source": f"stdout:{line_number}",

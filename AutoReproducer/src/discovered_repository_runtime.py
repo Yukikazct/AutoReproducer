@@ -395,6 +395,11 @@ def verify_capture(plan, workspace, execution, spec_hash):
     """Accept only completed owned processes and their independently checked files."""
     expected_ids = [step["id"] for step in plan["steps"]] + ["independent_evaluation"]
     records = execution.get("steps", [])
+    for record in [execution, *records]:
+        receipt = record.get('cleanup_receipt')
+        if (record.get('cleanup_unconfirmed') or record.get('process_cleanup_confirmed') is False
+                or isinstance(receipt, dict) and receipt.get('process_cleanup_confirmed') is False):
+            raise ValueError('Every required process must have confirmed cleanup before independent acceptance')
     if (execution.get("success") is not True or execution.get("skipped")
             or [record.get("id") for record in records] != expected_ids
             or any(record.get("success") is not True or record.get("executed") is not True

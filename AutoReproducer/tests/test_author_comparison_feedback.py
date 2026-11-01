@@ -305,6 +305,23 @@ def test_correction_projection_keeps_unselected_label_navigation_sources_too():
     assert projected['evidence_excerpts']['unused'] == view['evidence_excerpts']['unused']
 
 
+def test_label_only_correction_retains_complete_originals_and_their_hashes():
+    attempt, view = _correction_projection_inputs()
+    attempt.pop('context_quote_hints')
+    attempt['label_evidence_hints'] = [{'evidence_id': 'repo_original', 'field': 'actual_context.method',
+                                       'quote': 'Short navigation slice only.'}]
+    view['evidence_excerpts']['repo_original']['quote'] = 'Complete unchanged source. ' * 200
+    view['evidence_excerpts']['repo_original']['sha256'] = 'original-digest'
+    before = deepcopy((attempt, view))
+    projected = correction_source_view(attempt, view)
+    assert projected['source_selection']['scope'] == 'literal_label_correction'
+    assert projected['evidence_excerpts']['repo_original'] == view['evidence_excerpts']['repo_original']
+    assert len(projected['evidence_excerpts']['repo_original']['quote']) > 4000
+    assert projected['evidence_excerpts']['paper_selected'] == view['evidence_excerpts']['paper_selected']
+    assert 'unused' not in projected['evidence_excerpts']
+    assert (attempt, view) == before
+
+
 def test_correction_projection_metadata_describes_selected_complete_sources():
     attempt, view = _correction_projection_inputs()
     view['pdf']['pages'] = [{'page': page, 'sha256': f'page-{page}-digest', 'bytes': 900}

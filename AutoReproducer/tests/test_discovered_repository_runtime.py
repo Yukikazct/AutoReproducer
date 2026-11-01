@@ -24,6 +24,24 @@ def experiment(tmp_path):
     return result
 
 
+@pytest.mark.parametrize('scope', ['execution', 'train', 'independent_evaluation'])
+@pytest.mark.parametrize('cleanup', [
+    {'cleanup_unconfirmed': True},
+    {'process_cleanup_confirmed': False},
+    {'cleanup_receipt': {'process_cleanup_confirmed': False, 'status': 'error'}},
+])
+def test_strict_acceptance_rejects_cleanup_conflicts_before_reading_artifacts(tmp_path, scope, cleanup):
+    execution = {'success': True, 'skipped': [], 'steps': [
+        {'id': identifier, 'success': True, 'executed': True, 'exit_code': 0}
+        for identifier in ('train', 'independent_evaluation')]}
+    record = execution if scope == 'execution' else next(row for row in execution['steps'] if row['id'] == scope)
+    record.update(deepcopy(cleanup))
+    # There are no capture artifacts: an old successful receipt cannot override
+    # explicit current evidence that an owned process may still be alive.
+    with pytest.raises(ValueError, match='confirmed cleanup'):
+        verify_capture({'steps': [{'id': 'train'}]}, tmp_path, execution, 'a' * 64)
+
+
 @pytest.mark.parametrize("field,value", [
     ("model", "model.eval()"), ("labels", "labels[:1]"), ("forward_args", ["__import__('os')"]),
     ("test_indices", "missing_names"), ("expected_optimizer_steps", 0),

@@ -140,8 +140,11 @@ def _managed_venv(root, base, version):
             if result.returncode or _probe(executable) != version:
                 raise TrainingPythonUnavailable('创建隔离训练 Python 失败：' + (result.stderr or result.stdout)[-800:])
         _ensure_pip(executable, root)
+    # Keep Windows' extended syntax for subsequent imports too: pip can be
+    # installed successfully with it but fail to import its deeper resources
+    # if consumers launch the same venv using a plain MAX_PATH-limited prefix.
     # Resolving a POSIX venv executable symlink would select the host Python.
-    return executable.absolute()
+    return Path(filesystem_path(executable.absolute()))
 
 
 def _family_can_match(family, bounds):
@@ -231,8 +234,9 @@ def select_author_python(packet, managed_root, *, offline=False, mirror=None,
         version = _probe(candidate)
         if matches(version):
             _ensure_pip(candidate, root)
-            return {'python_executable': str(candidate.absolute()), 'python_version': '.'.join(map(str, version[:2])),
-                    'runtime_fingerprint': runtime_fingerprint(candidate), 'source': 'uv_managed',
+            executable = Path(filesystem_path(candidate.absolute()))
+            return {'python_executable': str(executable), 'python_version': '.'.join(map(str, version[:2])),
+                    'runtime_fingerprint': runtime_fingerprint(executable), 'source': 'uv_managed',
                     'requirements': [{'path': name, 'specifier': value} for name, value, _ in bounds]}
     raise TrainingPythonUnavailable(safe_runtime_diagnostic('uv did not provide the selected CPython version'))
 

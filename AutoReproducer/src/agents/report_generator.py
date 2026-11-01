@@ -455,6 +455,16 @@ def _author_claim_comparison_lines(comparison, assessment=None, *, include_table
                   '- **设置分析**: ' + assessment + '；' + basis + '，不等于独立协议核验通过。',
                   '- **实验设置**: ' + _markdown_text(_txt(settings.get('reason'), '未记录')),
                   '- **实际来源**: ' + _markdown_text(_txt(actual.get('source')))]
+        if paper.get('method') != actual.get('method'):
+            lines.append('- **方法原名**: ' + _markdown_text(
+                f"论文 {paper.get('method')} / 作者实现 {actual.get('method')}"))
+        if paper.get('name') and norm_metric_key(paper['name']) != norm_metric_key(row['metric']):
+            lines.append('- **指标名称**: ' + _markdown_text(
+                f"论文 {paper['name']} / 实际 {row['metric']}；指标不同，未计算差值"))
+        alignment = row.get('method_alignment') or {}
+        if isinstance(alignment, dict) and alignment.get('status') == 'source_bound_static':
+            lines.append('- **方法组件对应**: 已绑定原文、冻结命令与源码分支；仅供参考，'
+                         '未证明运行期有效配置或完整论文协议一致。')
         lines += _comparison_column_lines(paper)
         lines += _comparison_field_lines(paper, '论文')
         lines += _comparison_field_lines(actual, '实际')

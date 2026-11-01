@@ -5,7 +5,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from src.author_claim_comparison import compare_author_claims, _exposed_validation_retry
+from src.author_claim_comparison import compare_author_claims, _exposed_validation_retry, _validated_rows
 from src.author_comparison_context import comparison_view, prepare_comparison_packet
 from test_author_claim_comparison import actual_execution, sources
 
@@ -78,7 +78,21 @@ def nonliteral_method(payload):
     return result
 
 
-def test_resolved_ids_get_one_correction_for_newly_exposed_original_label_validation(sources):
+def assert_warned_method_reference(result):
+    assert result['status'] == 'partial' and not result['validation_errors']
+    row, = result['comparisons']
+    assert row['status'] == 'reference_only'
+    assert row['reference']['method'] == 'Signal Linear'
+    assert row['actual']['method'] == 'Signal Linear (inferred implementation)'
+    assert row['reference']['value_quote'] == 'Signal Linear SignGrid test 100.0'
+    assert row['reference']['value'] == 100.0 and row['actual']['value'] == 1.0
+    assert row['difference'] == pytest.approx(0.)
+    assert any('actual_context.method' in note and '未确认逐字对应' in note
+               for note in row['limitations'])
+    assert row['within_tolerance'] is None and row['meets_reference'] is None
+
+
+def test_resolved_ids_keep_nonliteral_method_as_reference_without_a_third_request(sources):
     fixture, packet, _, payload = sources
     first, second = unknown_proposal(payload), nonliteral_method(payload)
     before = deepcopy((packet, first, second, payload))
@@ -87,44 +101,57 @@ def test_resolved_ids_get_one_correction_for_newly_exposed_original_label_valida
 
     result = compare_author_claims(model, packet, fixture['proposal'], fixture['workspace'], actual_execution())
 
-    assert result['status'] == 'compared' and not result['validation_errors']
-    assert model.chat.call_count == 3
+    assert_warned_method_reference(result)
+    assert model.chat.call_count == 2
     attempts = result['extraction_attempts']
-    assert [item['proposal'] for item in attempts] == [first, second, payload]
-    assert attempts[1]['additional_correction_reason'] == 'resolved_source_ids_exposed_row_validation'
-    assert attempts[1]['label_evidence_hints']
-    feedback = model.chat.call_args_list[2].args[0].split('\n\nCorrection feedback', 1)[1]
-    assert 'actual_context.method' in feedback and 'not proof of method equivalence' in feedback
-    assert 'Do not append scheme or implementation explanations' in feedback
-    assert len(feedback) <= 12000
+    assert [item['proposal'] for item in attempts] == [first, second]
+    assert all('additional_correction_reason' not in item for item in attempts)
+    assert all(not item['citation_repairs'] for item in attempts)
     assert (packet, first, second, payload) == before
 
 
-@pytest.mark.parametrize('last_fault', ['same_label', 'invented_value'])
-def test_last_correction_preserves_all_validation_and_never_adds_a_fourth_request(sources, last_fault):
+@pytest.mark.parametrize('correction', ['same_label', 'invented_value'])
+def test_resolved_ids_keep_value_validation_and_do_not_extend_the_budget(sources, correction):
     fixture, packet, _, payload = sources
-    first, second = unknown_proposal(payload), nonliteral_method(payload)
-    final = deepcopy(second if last_fault == 'same_label' else payload)
-    if last_fault == 'invented_value':
-        final['comparisons'][0]['reference']['value'] = 91.3
+    first = unknown_proposal(payload)
+    second = nonliteral_method(payload) if correction == 'same_label' else deepcopy(payload)
+    if correction == 'invented_value':
+        second['comparisons'][0]['reference']['value'] = 91.3
+    before = deepcopy((first, second, payload))
     model = Mock(mock_mode=False)
-    model.chat.side_effect = [json.dumps(first), json.dumps(second), json.dumps(final)]
+    model.chat.side_effect = [json.dumps(first), json.dumps(second), json.dumps(payload)]
 
     result = compare_author_claims(model, packet, fixture['proposal'], fixture['workspace'], actual_execution())
 
-    assert result['status'] == 'unavailable' and not result['comparisons']
-    assert model.chat.call_count == 3 and result['validation_errors']
-    assert result['extraction_attempts'][-1]['proposal'] == final
+    if correction == 'same_label':
+        assert_warned_method_reference(result)
+    else:
+        assert result['status'] == 'unavailable' and not result['comparisons']
+        assert any('Reference number' in item['error'] for item in result['validation_errors'])
+        assert next(record for record in result['metric_records'] if record['split'] == 'test')['value'] == 1.0
+    assert model.chat.call_count == 2
+    assert [item['proposal'] for item in result['extraction_attempts']] == [first, second]
+    assert all('additional_correction_reason' not in item for item in result['extraction_attempts'])
     assert all(not item['citation_repairs'] for item in result['extraction_attempts'])
+    assert (first, second, payload) == before
 
 
-def test_repeated_label_failure_without_blocked_source_ids_keeps_two_request_budget(sources):
+@pytest.mark.parametrize('proposal_kind', ['nonliteral_method', 'invented_value'])
+def test_only_real_validation_failure_uses_two_requests_without_blocked_source_ids(sources, proposal_kind):
     fixture, packet, _, payload = sources
-    rejected = nonliteral_method(payload)
+    rejected = nonliteral_method(payload) if proposal_kind == 'nonliteral_method' else deepcopy(payload)
+    if proposal_kind == 'invented_value':
+        rejected['comparisons'][0]['reference']['value'] = 91.3
     model = Mock(mock_mode=False)
     model.chat.return_value = json.dumps(rejected)
     result = compare_author_claims(model, packet, fixture['proposal'], fixture['workspace'], actual_execution())
-    assert result['status'] == 'unavailable' and model.chat.call_count == 2
+    if proposal_kind == 'nonliteral_method':
+        assert_warned_method_reference(result)
+        assert model.chat.call_count == 1
+    else:
+        assert result['status'] == 'unavailable' and not result['comparisons']
+        assert model.chat.call_count == 2
+        assert any('Reference number' in item['error'] for item in result['validation_errors'])
     assert all('additional_correction_reason' not in item for item in result['extraction_attempts'])
 
 
@@ -142,23 +169,41 @@ def test_final_correction_cannot_add_another_observed_row(sources):
 
     result = compare_author_claims(model, packet, fixture['proposal'], fixture['workspace'], actual_execution())
 
-    assert model.chat.call_count == 3 and result['status'] == 'partial'
+    assert_warned_method_reference(result)
+    assert model.chat.call_count == 2
     assert [row['actual']['id'] for row in result['comparisons']] == [payload['comparisons'][0]['actual_id']]
-    assert result['validation_errors'][0]['field'] == 'correction_scope'
-    assert result['validation_errors'][0]['actual_id'] == records[0]['id']
-    assert result['extraction_attempts'][-1]['proposal'] == before == final
-    assert result['extraction_attempts'][1]['additional_correction_actual_ids'] == [payload['comparisons'][0]['actual_id']]
-    assert 'final correction, limited to these actual_ids' in model.chat.call_args_list[2].args[0]
+    assert all(item['proposal'] != final for item in result['extraction_attempts'])
+    assert all('additional_correction_actual_ids' not in item for item in result['extraction_attempts'])
+
+    # A harmless inferred label no longer earns the final request. Check the
+    # actual correction-scope validator independently so its new-row guard
+    # remains covered when a final correction is explicitly authorized.
+    accepted, citations = {}, {}
+    errors = _validated_rows(final, packet, fixture['workspace'], records, accepted, citations,
+        allowed_actual_ids={payload['comparisons'][0]['actual_id']},
+        plan=fixture['proposal'], allow_reference_only=True)
+    assert list(accepted) == [payload['comparisons'][0]['actual_id']]
+    assert len(errors) == 1 and errors[0]['field'] == 'correction_scope'
+    assert errors[0]['actual_id'] == records[0]['id']
+    assert before == final
 
 
-def test_row_accepted_after_a_duplicate_invalid_row_does_not_get_a_third_request(sources):
+@pytest.mark.parametrize('first_row_kind', ['nonliteral_method', 'invented_value'])
+def test_duplicate_rows_preserve_accepted_reference_and_need_no_third_request(sources, first_row_kind):
     fixture, packet, _, payload = sources
-    second = nonliteral_method(payload)
+    second = nonliteral_method(payload) if first_row_kind == 'nonliteral_method' else deepcopy(payload)
+    if first_row_kind == 'invented_value':
+        second['comparisons'][0]['reference']['value'] = 91.3
     second['comparisons'].append(deepcopy(payload['comparisons'][0]))
     model = Mock(mock_mode=False)
     model.chat.side_effect = [json.dumps(unknown_proposal(payload)), json.dumps(second)]
     result = compare_author_claims(model, packet, fixture['proposal'], fixture['workspace'], actual_execution())
-    assert result['status'] == 'compared' and not result['validation_errors']
+    if first_row_kind == 'nonliteral_method':
+        assert_warned_method_reference(result)
+    else:
+        assert result['status'] == 'compared' and not result['validation_errors']
+        assert result['comparisons'][0]['actual']['method'] == 'Signal Linear'
+        assert result['comparisons'][0]['reference']['value'] == 100.0
     assert model.chat.call_count == 2
     assert 'additional_correction_reason' not in result['extraction_attempts'][-1]
 

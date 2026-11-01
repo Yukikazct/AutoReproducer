@@ -68,7 +68,7 @@ def context_quote_hints(attempt, excerpts):
 
 def correction_source_view(attempt, view):
     """Focus a quote correction on whole provided sources; fall back if unsure."""
-    if not attempt.get('context_quote_hints'):
+    if not (attempt.get('context_quote_hints') or attempt.get('label_evidence_hints')):
         return view
     proposal = attempt.get('proposal')
     if not isinstance(proposal, dict) or not isinstance(proposal.get('comparisons'), list):
@@ -99,7 +99,7 @@ def correction_source_view(attempt, view):
                     # Legacy literal citations are ambiguous to project without
                     # repeating validation; retain the full original view.
                     return view
-    for hint in [*attempt['context_quote_hints'], *attempt.get('label_evidence_hints', [])]:
+    for hint in [*(attempt.get('context_quote_hints') or []), *(attempt.get('label_evidence_hints') or [])]:
         identifier = hint.get('evidence_id') if isinstance(hint, dict) else None
         if not isinstance(identifier, str) or identifier not in excerpts:
             return view
@@ -115,7 +115,8 @@ def correction_source_view(attempt, view):
     result['repository']['files'] = {path: entry for path, entry in result['repository']['files'].items() if path in paths}
     result['file_inventory'] = {path: entry for path, entry in result['file_inventory'].items() if path in paths}
     repository = [item for item in kept if item['source'] == 'repository']
-    result['source_selection'].update(scope='context_quote_correction',
+    result['source_selection'].update(scope='context_quote_correction' if attempt.get('context_quote_hints')
+        else 'literal_label_correction',
         full_pdf_retained=all(key in selected for key, item in excerpts.items() if item['source'] == 'pdf'),
         repository_quote_characters=sum(len(item['quote']) for item in repository),
         repository_excerpt_count=len(repository), selected_repository_files=len(result['repository']['files']),

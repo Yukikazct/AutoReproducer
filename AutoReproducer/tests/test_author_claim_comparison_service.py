@@ -165,14 +165,21 @@ def test_author_runtime_data_stage_finishes_without_claiming_independent_provena
         'function': 'load_inputs', 'dataset_class': 'WikiCS', 'dataset_name': 'WikiCS',
         'citations': ['runtime_loader']}]
     runner.llm = ComparisonLLM(fixture)
-    monkeypatch.setattr(runtime_dataset_evidence, 'audit_runtime_datasets', lambda *args: {
-        'verified': observed, 'independent_reference_verified': False, 'sources': [],
-        'errors': [] if observed else [{'reason': 'Original input observation is incomplete'}]})
+
+    def audit_inputs(plan, receipts, workspace, *, compare_canonical_source=False):
+        assert compare_canonical_source is (not request.get('offline'))
+        return {
+            'verified': observed, 'canonical_source_match_verified': False,
+            'independent_reference_verified': False, 'sources': [],
+            'errors': [] if observed else [{'reason': 'Original input observation is incomplete'}]}
+
+    monkeypatch.setattr(runtime_dataset_evidence, 'audit_runtime_datasets', audit_inputs)
     events = []
     result = runner.run(request, on_event=events.append)
     assert_code_completed(result)
     validation = result['data']['validation']
     assert validation['dataset_observation_verified'] is observed
+    assert validation['canonical_source_match_verified'] is False
     assert validation['dataset_provenance_verified'] is False
     store = ProgressStore(str(tmp_path / 'runtime_data_progress.jsonl'))
     for event in events:
@@ -200,10 +207,32 @@ def test_unavailable_comparison_preserves_metrics_and_completed_execution(tmp_pa
     _, runner, request = comparison_service(tmp_path, monkeypatch, outcome=outcome)
     result = runner.run(request)
     comparison = assert_code_completed(result)
+    if outcome == 'baseline':
+        # Keep a grounded number visible without certifying the proposed
+        # method label, which does not identify this original baseline row.
+        assert comparison['status'] == 'partial'
+        row, = comparison['comparisons']
+        assert row['status'] == 'reference_only'
+        assert row['reference']['method'] == 'Signal Linear'
+        assert row['reference']['value_quote'] == 'Baseline SignGrid train 98.0'
+        assert row['reference']['value'] == 98.0 and row['actual']['value'] == .94
+        assert row['difference'] == pytest.approx(-4.)
+        assert any('论文方法名未与原始数值行逐字对应' in note for note in row['limitations'])
+        assert row['within_tolerance'] is None and row['meets_reference'] is None
+        assert comparison['metric_records'][0]['value'] == .94
+        assert result['data']['validation']['metric_records'][0]['value'] == .94
+        report = result['data']['report']
+        assert '| accuracy | 98.0 | 0.94 |' in report
+        details = (Path(result['data']['run_dir']) / 'report_details.md').read_text('utf-8')
+        assert 'Baseline SignGrid train 98.0' in details
+        assert '论文方法名未与原始数值行逐字对应' in details
+        assert len([options for _, options in runner.llm.calls
+                    if options['task'] == 'author_claim_comparison']) == 1
+        return
     assert comparison['status'] == 'unavailable' and comparison['comparisons'] == []
     assert comparison['metric_records'][0]['value'] == 0.94
     assert result['data']['validation']['metric_records'][0]['value'] == 0.94
-    expected_calls = 2 if outcome in ('invalid_json', 'baseline') else 1
+    expected_calls = 2 if outcome == 'invalid_json' else 1
     assert len([options for _, options in runner.llm.calls if options['task'] == 'author_claim_comparison']) == expected_calls
     assert comparison['reason'] in result['data']['report']
 
@@ -358,13 +387,14 @@ def test_runtime_input_observation_is_persisted_without_independent_acceptance(t
     data, validation = result['data'], result['data']['validation']
     evidence = validation['runtime_dataset_evidence']
     assert validation['dataset_observation_verified'] is (state == 'complete')
+    assert validation['canonical_source_match_verified'] is False
     assert validation['dataset_provenance_verified'] is False
     assert evidence['independent_reference_verified'] is False
     assert data['runtime_dataset_evidence'] == evidence
     run_dir = Path(data['run_dir'])
     assert read_json(run_dir / 'runtime_dataset_evidence.json') == evidence
     assert read_json(run_dir / 'dataset.json')['runtime_observation'] == evidence
-    assert '原作者数据加载观测' in data['report'] and '尚未独立核对' in data['report']
+    assert '原作者数据加载观测' in data['report'] and '完整训练协议仍需独立核对' in data['report']
     if state == 'complete':
         assert 'raw.bin' in data['report'] and next(iter(evidence['sources'][0]['observations'][0]['files'].values()))['sha256'] in data['report']
     else:

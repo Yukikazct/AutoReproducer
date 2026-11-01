@@ -192,6 +192,68 @@ def test_neighboring_complete_method_rows_do_not_block_header_binding():
     assert locate(case)['status'] == 'verified'
 
 
+def extracted_table_case(*, between='', row='Signal 81.5 ±0.6 79.4 ±1.9', caption=True):
+    prefix = 'Table 7: Test accuracy on the benchmark datasets.\n' if caption else ''
+    return table(prefix=prefix, between=between, row=row)
+
+
+@pytest.mark.parametrize('between', [
+    '#Nodes 1,234 5,678\n', '#Edges 26,752 198,493\n', '#Classes 5 7\n',
+    'Baseline 50.0 1.0 40.0 2.0\n', '± ±\n', '+/- +/-\n',
+    '#Nodes 1,234 5,678\n#Classes 5 7\nBaseline 50.0 1.0 40.0 2.0\n± ±\n',
+])
+def test_captioned_table_keeps_complete_selected_columns_across_uninterpreted_extraction_noise(between):
+    case = extracted_table_case(between=between)
+    before = deepcopy(case)
+    result = locate(case)
+    assert result['status'] == 'verified'
+    assert result['column_index'] == 0 and result['value'] == 81.5 and result['std'] == 0.6
+    assert result['table_scope']['basis'] == 'unique_original_table_caption'
+    assert result['intervening_layout']
+    assert all(item['interpreted_as_values'] is False for item in result['intervening_layout'])
+    assert all(case[3][slice(*item['span'])] == item['quote'] for item in result['intervening_layout'])
+    assert case[3][slice(*result['row_span'])] == case[1]
+    assert case[1][slice(*result['cell_span'])] == result['cell_quote']
+    assert case == before
+
+
+@pytest.mark.parametrize('between', ['#Nodes 1,234 5,678\n', 'Baseline 50 1 40 2\n', '± ±\n'])
+def test_extraction_noise_without_a_numbered_table_caption_stays_unknown(between):
+    assert locate(extracted_table_case(between=between, caption=False))['status'] == 'unknown'
+
+
+@pytest.mark.parametrize('between', [
+    'Table 8: A separate experiment.\nBaseline 50 1 40 2\n',
+    'Figure 8: Separate results.\n± ±\n',
+    'Section 8: Separate results.\n#Nodes 1,234 5,678\n',
+    'We observe 50 1 40 2\n', 'Baseline 50 1 40\n', 'Baseline 50 1 40 2 30 3\n',
+    '±\n', '± ± ±\n', '± ±\n± ± ±\n', '#Nodes 1,234 5,678 9,012\n',
+    '#Nodes 1,23 5,678\n', '#Nodes 1,234 unknown\n',
+])
+def test_caption_does_not_authorize_cross_table_prose_or_wrong_width_noise(between):
+    assert locate(extracted_table_case(between=between))['status'] == 'unknown'
+
+
+def test_extraction_noise_never_repairs_the_selected_row_or_disambiguates_its_footnote():
+    between = 'Baseline 50 1 40 2\n± ±\n'
+    assert locate(extracted_table_case(between=between, row='Signal 81.5 0.6 79.4 1.9'))['status'] == 'unknown'
+    assert locate(extracted_table_case(between=between, row='Signal 81.5 ±0.6† 79.4 ±1.9'))['status'] == 'unknown'
+
+
+def test_captioned_noise_keeps_wrong_selected_mean_and_standard_deviation_rejected():
+    ref, row, header, page = extracted_table_case(between='Baseline 50 1 40 2\n± ±\n')
+    for field, value in [('value', 79.4), ('std', 1.9)]:
+        result = locate_table_value({**ref, field: value}, row, header, page_text=page)
+        assert result['status'] == 'rejected'
+        assert result['value'] == 81.5 and result['std'] == 0.6
+
+
+def test_captioned_noise_does_not_resolve_duplicate_caption_or_truncated_header():
+    ref, row, header, page = extracted_table_case(between='Baseline 50 1 40 2\n± ±\n')
+    assert locate_table_value(ref, row, header, page_text=page+'\n'+page.splitlines()[0])['status'] == 'unknown'
+    assert locate_table_value(ref, row, 'Method Alpha', page_text=page)['status'] == 'unknown'
+
+
 def test_without_page_context_completeness_cannot_be_claimed():
     ref, row, header, _ = table()
     assert locate_table_value(ref, row, header)['status'] == 'unknown'

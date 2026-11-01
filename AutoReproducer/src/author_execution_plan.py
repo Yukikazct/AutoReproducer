@@ -167,7 +167,7 @@ def validate_author_execution_plan(payload, packet, workspace):
             'reason': requirements['reason'], 'citations': requirements['citations'],
         }, citations, packet, device, stage, datasets=datasets, workspace=workspace)
         for field in ('compatibility', 'import_evidence', 'excluded_device_branches',
-                      'repository_namespaces', 'declared_runtime_pins', 'deferred_runtime_imports'):
+                      'repository_namespaces', 'ignored_import_paths', 'declared_runtime_pins', 'deferred_runtime_imports'):
             for value in extra.get(field, []):
                 if value not in requirements[field]:
                     requirements[field].append(value)

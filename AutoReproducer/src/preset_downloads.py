@@ -8,6 +8,8 @@ import urllib.error
 import urllib.request
 import uuid
 
+from src.safety.paths import filesystem_path
+
 
 def download_bytes(url, *, max_bytes, timeout_s, attempts=3):
     """Retry transport failures only; callers still verify fixed size/hash.
@@ -49,7 +51,7 @@ def download_bytes(url, *, max_bytes, timeout_s, attempts=3):
 
 def atomic_cache_bytes(path, content):
     """Publish already verified bytes; a failure preserves the previous cache."""
-    path = Path(path)
+    path = Path(filesystem_path(path))
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}-{uuid.uuid4().hex}.part")
     try:

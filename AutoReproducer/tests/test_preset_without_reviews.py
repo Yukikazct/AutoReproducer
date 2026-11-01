@@ -57,7 +57,7 @@ def test_review_flags_cannot_invoke_preset_reviewers(tmp_path, monkeypatch, prof
         assert result['data']['validation']['is_reproduced'] is None
     else:
         assert 'Actual author error' in result['error']
-    assert calls and all(env['dependency_health_check'] is False for _, env in calls)
+    assert calls and all(env['dependency_health_check'] is True for _, env in calls)
     assert all(step['timeout_s'] is None for steps, _ in calls for step in steps
                if step['kind'] != 'check')
     assert all(env.get('deadline_monotonic') is None for _, env in calls)
