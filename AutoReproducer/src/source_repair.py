@@ -8,7 +8,7 @@ from copy import deepcopy
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 
 from src.execution_plan import build_plan
@@ -45,6 +45,9 @@ _COLLECTIONS_ABCS = frozenset({
     'MutableMapping', 'MappingView', 'KeysView', 'ItemsView', 'ValuesView',
     'Sequence', 'MutableSequence', 'ByteString',
 })
+_SCIPY_ARPACK_MODULE = 'scipy.sparse.linalg.eigen.arpack'
+_SCIPY_ARPACK_PUBLIC = 'scipy.sparse.linalg'
+_SCIPY_ARPACK_SYMBOLS = frozenset({'eigs', 'eigsh'})
 
 
 def _moved_collections_import(node):
@@ -69,6 +72,63 @@ def _missing_collections_abc(terminal, workspace=None):
     if workspace is not None and origin.resolve().is_relative_to(Path(workspace).resolve()):
         return ''
     return match[1]
+
+
+def _moved_scipy_arpack_import(node):
+    return (isinstance(node, ast.ImportFrom) and node.level == 0
+            and node.module == _SCIPY_ARPACK_MODULE and node.names
+            and all(alias.name in _SCIPY_ARPACK_SYMBOLS for alias in node.names))
+
+
+def _missing_scipy_arpack(terminal):
+    return bool(re.fullmatch(
+        r"ModuleNotFoundError: No module named ['\"]scipy\.sparse\.linalg\.eigen\.arpack['\"]"
+        r"(?:; ['\"]scipy\.sparse\.linalg\.eigen['\"] is not a package)?", terminal))
+
+
+def _scipy_import_at_line(tree, line):
+    matches = [node for node in ast.walk(tree) if isinstance(node, (ast.Import, ast.ImportFrom))
+               and node.lineno <= line <= getattr(node, 'end_lineno', node.lineno)]
+    return matches[0] if len(matches) == 1 and _moved_scipy_arpack_import(matches[0]) else None
+
+
+def _scipy_shadowed(workspace, name):
+    # A repository's own scipy module is not evidence of a removed SciPy
+    # export. Check the entrypoint/import directories without importing code.
+    for parent in PurePosixPath(name).parents:
+        for suffix in ('scipy.py', 'scipy'):
+            path = Path(workspace) / parent / suffix
+            if path.exists() or path.is_symlink():
+                return True
+    return False
+
+
+def _scipy_migration_locations(original, files, diagnostics, traceback_roots):
+    """Bind each permitted migration to an actual terminal traceback line."""
+    from src.author_self_repair import traceback_sources
+    trees = {}
+    for change in files:
+        name = change['path']
+        if not _scipy_shadowed(original, name):
+            source = workspace_path(original, name, 'original compatibility source', must_exist=True)
+            trees[name] = ast.parse(source.read_bytes())
+    locations = set()
+    for diagnostic in diagnostics:
+        diagnostic = diagnostic.replace('\r\n', '\n')
+        traces = list(re.finditer(r'(?m)^Traceback \(most recent call last\):$', diagnostic))
+        if not traces:
+            continue
+        trace = diagnostic[traces[-1].start():]
+        exceptions = list(re.finditer(r'(?m)^(?:\w+\.)*\w*(?:Error|Exception|Interrupt|Exit):[^\n]*', trace))
+        if (not exceptions or trace[exceptions[-1].end():].strip()
+                or not _missing_scipy_arpack(exceptions[-1].group())):
+            continue
+        for root in traceback_roots:
+            for name, line in traceback_sources(trace, root, trees):
+                node = _scipy_import_at_line(trees[name], line)
+                if node is not None:
+                    locations.add((name, node.lineno, node.col_offset))
+    return locations
 
 
 def _sensitive(name):
@@ -141,14 +201,17 @@ def _automatic_repair_sources(execution, workspace, snapshot, allowed=()):
     attribute = re.fullmatch(r"AttributeError: .+ has no attribute ['\"]([A-Za-z_]\w*)['\"](?:[. ].*)?", terminal)
     keyword = re.fullmatch(r"TypeError: .+ got an unexpected keyword argument ['\"]([A-Za-z_]\w*)['\"](?:[. ].*)?", terminal)
     moved_import = _missing_collections_abc(terminal, workspace)
+    moved_scipy = _missing_scipy_arpack(terminal)
     matched = attribute or keyword
-    if not moved_import and (matched is None or _sensitive(matched[1])):
+    if not moved_import and not moved_scipy and (matched is None or _sensitive(matched[1])):
         result['reason'] = '最终报错不是可自动修复的非协议敏感属性、关键字或已知标准库导入迁移错误。'
         return result
-    symbol = moved_import or matched[1]
-    result.update(missing_names=[symbol], exception=terminal,
-                  compatibility_kind='import_location' if moved_import else
+    symbol = moved_import or (_SCIPY_ARPACK_MODULE if moved_scipy else matched[1])
+    result.update(missing_names=[] if moved_scipy else [symbol], exception=terminal,
+                  compatibility_kind='import_location' if moved_import or moved_scipy else
                                      'attribute' if attribute else 'keyword')
+    if moved_scipy:
+        result['import_migration'] = {'from_module': _SCIPY_ARPACK_MODULE, 'to_module': _SCIPY_ARPACK_PUBLIC}
     inventory = snapshot.get('files') or {}
     frames = traceback_sources(trace, workspace, inventory)
     result['traceback_frames'] = [{'path': name, 'line': line} for name, line in frames]
@@ -174,7 +237,14 @@ def _automatic_repair_sources(execution, workspace, snapshot, allowed=()):
                     reason = 'source_hash_changed'
                 else:
                     tree = ast.parse(raw)
-                    if moved_import:
+                    if moved_scipy:
+                        node = _scipy_import_at_line(tree, line)
+                        present = node is not None and not _scipy_shadowed(workspace, name)
+                        if present:
+                            for alias in node.names:
+                                if alias.name not in result['missing_names']:
+                                    result['missing_names'].append(alias.name)
+                    elif moved_import:
                         present = any(_moved_collections_import(node)
                                       and any(alias.name == symbol for alias in node.names)
                                       and node.lineno <= line <= getattr(node, 'end_lineno', node.lineno)
@@ -220,6 +290,8 @@ def _compatibility_shape(source):
     for node in ast.walk(tree):
         if _moved_collections_import(node):
             node.module = 'collections.abc'
+        elif _moved_scipy_arpack_import(node):
+            node.module = _SCIPY_ARPACK_PUBLIC
         elif isinstance(node, ast.Attribute) and not _sensitive(node.attr):
             node.attr = '_compatibility_api'
         elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and not _sensitive(node.name):
@@ -238,12 +310,16 @@ def validate_compatibility_changes(original, candidate, files):
             raise ValueError('兼容补丁改变了变量、字面量、运算、控制流、依赖或训练/划分/评测结构：' + name)
 
 
-def validate_compatibility_proposal(original, files, diagnostic):
+def validate_compatibility_proposal(original, files, diagnostic, *, observed_diagnostics=None,
+                                    traceback_roots=()):
     """Check the entire set before application, against actual missing API names."""
     missing = set(re.findall(r"(?:has no attribute|unexpected keyword argument) ['\"]([A-Za-z_]\w*)['\"]",
                              diagnostic))
     moved_imports = {_missing_collections_abc(line, original) for line in diagnostic.splitlines()}
     moved_imports.discard('')
+    scipy_locations = _scipy_migration_locations(original, files,
+        [diagnostic] if observed_diagnostics is None else observed_diagnostics,
+        (original, *traceback_roots))
     for change in files:
         name = change['path']
         before = workspace_path(original, name, 'original compatibility source', must_exist=True).read_bytes()
@@ -252,8 +328,11 @@ def validate_compatibility_proposal(original, files, diagnostic):
             raise ValueError('兼容补丁改变了变量、字面量、运算、控制流、依赖或训练/划分/评测结构：' + name)
         for old, new in zip(ast.walk(ast.parse(before)), ast.walk(ast.parse(after))):
             if isinstance(old, ast.ImportFrom) and old.module != new.module:
-                if (not _moved_collections_import(old) or new.module != 'collections.abc'
-                        or not any(alias.name in moved_imports for alias in old.names)):
+                collections_move = (_moved_collections_import(old) and new.module == 'collections.abc'
+                                    and any(alias.name in moved_imports for alias in old.names))
+                scipy_move = (_moved_scipy_arpack_import(old) and new.module == _SCIPY_ARPACK_PUBLIC
+                              and (name, old.lineno, old.col_offset) in scipy_locations)
+                if not collections_move and not scipy_move:
                     raise ValueError('补丁迁移了实际报错未指向的标准库导入：' + name)
             field = ('attr' if isinstance(old, ast.Attribute) else 'name'
                      if isinstance(old, (ast.FunctionDef, ast.AsyncFunctionDef)) else 'arg'
@@ -501,7 +580,8 @@ def _repair_author_failure(runner, llm, request, plan, snapshot, workspace, run_
         observed_diagnostics.append(failure_diagnostic(failure))
         # Every failed round restores the original tree. A later candidate
         # therefore needs the earlier observed compatibility fix as well.
-        validate_compatibility_proposal(workspace, files, '\n'.join(observed_diagnostics))
+        validate_compatibility_proposal(workspace, files, '\n'.join(observed_diagnostics),
+            observed_diagnostics=observed_diagnostics, traceback_roots=(target,))
 
     def verify_candidate(root, files, _execution):
         verify_inputs()
