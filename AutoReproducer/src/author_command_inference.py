@@ -6,6 +6,7 @@ native defaults, and unresolved required values remain questions for planning.
 import ast
 import hashlib
 from pathlib import Path, PurePosixPath
+import posixpath
 import re
 
 from src.safety.paths import workspace_path
@@ -28,9 +29,66 @@ def _mentioned_paths(text, paths):
         len(basenames[PurePosixPath(name).name]) == 1 and _mentioned(text, PurePosixPath(name).name))}
 
 
-def _source(packet, workspace, name):
-    from src.discovered_repository_plan import _load_execution_source
-    return _load_execution_source(packet, workspace, name)
+class _PathMentionMatcher:
+    """Reuse one inventory index and regex for a bounded discovery operation."""
+
+    def __init__(self, paths):
+        basenames = {}
+        self.aliases = {name: {name} for name in paths}
+        for name in paths:
+            basenames.setdefault(PurePosixPath(name).name, []).append(name)
+        for basename, names in basenames.items():
+            if len(names) == 1:
+                self.aliases.setdefault(basename, set()).update(names)
+        tokens = sorted(self.aliases, key=lambda item: (-len(item), item))
+        self.pattern = re.compile(r'(?<![\w./-])(?:' + '|'.join(re.escape(token) for token in tokens)
+                                  + r')(?![\w./-])') if tokens else None
+        self.cache = {}
+
+    def __call__(self, text):
+        if text in self.cache:
+            return set(self.cache[text])
+        result, start = set(), 0
+        while self.pattern is not None and start <= len(text):
+            match = self.pattern.search(text, start)
+            if match is None:
+                break
+            token = match[0]
+            result.update(self.aliases[token])
+            # Independent searches can match a shorter name at this same
+            # offset when punctuation separates its suffix (a and a+b.py).
+            for index, character in enumerate(token):
+                if index and not re.fullmatch(r'[\w./-]', character):
+                    result.update(self.aliases.get(token[:index], ()))
+            # Keep overlapping matches, including b.py inside a+b.py, with
+            # exactly the original left and right filename boundaries.
+            start = match.start() + 1
+        self.cache[text] = frozenset(result)
+        return result
+
+
+def _local_readme_links(name, text, inventory):
+    """Resolve relative documentation links against real frozen files only."""
+    targets = []
+    links = re.findall(r'\[[^\]\r\n]*\]\(([^\s)#]+)(?:#[^\s)]*)?(?:\s+[^)]*)?\)', text)
+    for value in links:
+        if ':' in value or '\\' in value or value.startswith('/'):
+            continue
+        target = posixpath.normpath((PurePosixPath(name).parent / value).as_posix())
+        if target == '..' or target.startswith('../') or target == '.':
+            continue
+        if target in inventory or any(path.startswith(target.rstrip('/') + '/') for path in inventory):
+            if target not in targets:
+                targets.append(target)
+    return targets[:24]
+
+
+def _source(packet, workspace, name, *, publish=True):
+    from src.discovered_repository_plan import _load_execution_source, _read_source
+    if publish:
+        return _load_execution_source(packet, workspace, name)
+    return _read_source(workspace, name, packet['file_inventory'][name]['sha256'],
+                        max_bytes=2 * 1024 * 1024)
 
 
 def _reachable(tree, defaults=()):
@@ -118,6 +176,43 @@ def _input_paths(tree, text):
     return result[:16]
 
 
+def _related_sources(tree, name, inventory):
+    """Locate local imports for model review without importing author code."""
+    parent = PurePosixPath(name).parent
+    result = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            modules = [alias.name for alias in node.names]
+            roots = [parent, PurePosixPath('.')]
+        elif isinstance(node, ast.ImportFrom):
+            modules = [node.module] if node.module else []
+            modules.extend('.'.join(filter(None, (node.module, alias.name)))
+                           for alias in node.names if alias.name != '*')
+            root = parent
+            for _ in range(max(0, node.level - 1)):
+                root = root.parent
+            roots = [root] if node.level else [parent, PurePosixPath('.')]
+        else:
+            continue
+        for module in modules:
+            for root in roots:
+                path = root.joinpath(*module.split('.'))
+                for candidate in (path.with_suffix('.py').as_posix(), (path / '__init__.py').as_posix()):
+                    if candidate in inventory and candidate != name and candidate not in result:
+                        result.append(candidate)
+    return result[:8]
+
+
+def _review_entrypoint(tree, name, mentioned, cli):
+    """Keep incomplete entrypoints visible without authorizing their execution."""
+    main_guard = any(isinstance(node, ast.Compare) and any(
+        isinstance(item, ast.Name) and item.id == '__name__' for item in ast.walk(node))
+        and any(isinstance(item, ast.Constant) and item.value == '__main__' for item in ast.walk(node))
+        for node in ast.walk(tree))
+    executable_calls = any(isinstance(node, ast.Call) for node in _reachable(tree))
+    return executable_calls and (main_guard or cli is not None or name in mentioned)
+
+
 def _cwd_and_argv(name, tree, paths, inventory, *, cwd_hint=None):
     path = PurePosixPath(name)
     package = []
@@ -161,10 +256,15 @@ def _cwd_and_argv(name, tree, paths, inventory, *, cwd_hint=None):
 def discover_author_commands(packet, workspace, *, max_files=24, max_bytes=1024 * 1024):
     """Return bounded candidates plus their real README/parser/config context."""
     inventory = packet['file_inventory']
-    readmes, consumed = [], 0
-    for name in sorted(inventory):
-        if not Path(name).name.lower().startswith('readme') or len(readmes) >= 8:
+    readmes, consumed, linked_paths = [], 0, set()
+    pending = sorted((name for name in inventory if Path(name).name.lower().startswith('readme')),
+                     key=lambda name: (len(PurePosixPath(name).parts), name))
+    visited = set()
+    while pending and len(readmes) < 8:
+        name = pending.pop(0)
+        if name in visited:
             continue
+        visited.add(name)
         size = inventory[name].get('bytes', 0)
         if size > 100000 or consumed + size > max_bytes:
             continue
@@ -174,16 +274,28 @@ def discover_author_commands(packet, workspace, *, max_files=24, max_bytes=1024 
             continue
         readmes.append((name, source))
         consumed += size
+        links = _local_readme_links(name, source['text'], inventory)
+        linked_paths.update(links)
+        linked_readmes = [path for path in links if path in inventory
+                          and Path(path).name.lower().startswith('readme')]
+        # Follow root documentation before unrelated nested project READMEs.
+        pending = linked_readmes + pending
     prose = '\n'.join(source['text'] for _, source in readmes)
-    mentioned = _mentioned_paths(prose, inventory)
+    mention_paths = _PathMentionMatcher(inventory)
+    mentioned = mention_paths(prose)
     configs = [name for name in inventory if Path(name).suffix.lower() in _CONFIG_SUFFIXES
                and any(word in name.lower() for word in ('config', 'setting'))]
     preferred_configs = [name for name in configs if name in mentioned]
     names = [name for name in inventory if name.endswith('.py') and (
-        _ENTRY.fullmatch(Path(name).name) or name in mentioned)
+        _ENTRY.fullmatch(Path(name).name) or name in mentioned
+        or len(PurePosixPath(name).parts) <= 2 and not Path(name).name.startswith('_')
+        or any(name == link or name.startswith(link.rstrip('/') + '/') for link in linked_paths))
         and not any(part.lower() in {'tests', 'test', 'vendor', 'third_party'} for part in Path(name).parts)]
-    names.sort(key=lambda name: (name not in mentioned, len(Path(name).parts), name))
-    candidates, failures = [], []
+    names.sort(key=lambda name: (name not in mentioned,
+                                not any(name == link or name.startswith(link.rstrip('/') + '/') for link in linked_paths),
+                                not bool(_ENTRY.fullmatch(Path(name).name)),
+                                len(Path(name).parts), name))
+    candidates, review_candidates, failures = [], [], []
     cwd_quotes = []
     for readme_name, readme in readmes:
         for number, line in enumerate(readme['text'].splitlines(), 1):
@@ -199,13 +311,16 @@ def discover_author_commands(packet, workspace, *, max_files=24, max_bytes=1024 
             continue
         consumed += entry.get('bytes', 0)
         try:
-            source = _source(packet, workspace, name)
+            source = _source(packet, workspace, name, publish=False)
             tree = ast.parse(source['text'])
             cli = infer_cli(source['text'], inventory=inventory, source_path=name,
                             preferred_configs=preferred_configs)
             training = _training_evidence(tree, source['text'], (cli or {}).get('defaults', []))
-            if not training:
+            if not training and not _review_entrypoint(tree, name, mentioned, cli):
                 continue
+            # Bounded static scanning must not expose unrelated helper bodies
+            # before a model source request consumes its shared read allowance.
+            packet['repository']['files'][name] = source
             inputs = _input_paths(tree, source['text'])
             if cli:
                 inputs.extend({'value': item['value'], 'quote': item.get('quote', ''), 'line': item.get('line')}
@@ -214,7 +329,7 @@ def discover_author_commands(packet, workspace, *, max_files=24, max_bytes=1024 
             candidate_cwd_quotes = []
             for hint in cwd_quotes:
                 directory = PurePosixPath(hint['value'])
-                names_in_quote = _mentioned_paths(hint['quote'], inventory)
+                names_in_quote = mention_paths(hint['quote'])
                 named_scripts = {path for path in names_in_quote if path.endswith('.py')}
                 associated = name in named_scripts
                 if not named_scripts:
@@ -240,12 +355,14 @@ def discover_author_commands(packet, workspace, *, max_files=24, max_bytes=1024 
                 and re.fullmatch(r'(?:get|parse)_(?:args|arguments|config|options)', node.func.id)
                 for node in ast.walk(tree))
             missing = list(cli['missing']) if cli else ['unresolved command-line interface'] if dynamic_cli else []
+            if not training:
+                missing.append('training behavior requires source review')
             if len(cwd_values) > 1:
                 missing.append('ambiguous README working directories')
             readme_evidence = []
             for readme_name, readme in readmes:
                 for number, line in enumerate(readme['text'].splitlines(), 1):
-                    line_mentions = _mentioned_paths(line, inventory)
+                    line_mentions = mention_paths(line)
                     if name in line_mentions or any(config in line_mentions for config in preferred_configs):
                         readme_evidence.append({'path': readme_name, 'sha256': readme['sha256'], 'line': number, 'quote': line[:1800]})
             context = []
@@ -267,16 +384,27 @@ def discover_author_commands(packet, workspace, *, max_files=24, max_bytes=1024 
                     continue
             entry_hint = name in mentioned
             score = 10 * entry_hint + 2 * bool(context) + bool(inputs)
-            candidates.append({'source_path': name, 'source_sha256': source['sha256'],
+            candidate = {'source_path': name, 'source_sha256': source['sha256'],
                 'argv': argv, 'cwd': cwd, 'cwd_evidence': cwd_reason,
                 'complete': not missing and (cli is None or cli['complete']), 'missing': missing,
                 'training_evidence': training, 'readme_evidence': readme_evidence[:8],
                 'cwd_readme_evidence': candidate_cwd_quotes[:8],
-                'cli': cli, 'input_paths': inputs, 'configuration_sources': context, 'selection_score': score})
+                'cli': cli, 'input_paths': inputs, 'configuration_sources': context, 'selection_score': score,
+                'related_sources': _related_sources(tree, name, inventory)}
+            if training:
+                candidates.append(candidate)
+            else:
+                # Unknown control flow, imported helpers and custom parsers need
+                # actual source reasoning. A suggested argv is never automatic
+                # execution evidence merely because an entrypoint exists.
+                candidate['review_only'] = True
+                review_candidates.append(candidate)
         except (ValueError, OSError, UnicodeError, SyntaxError) as exc:
             failures.append({'path': name, 'reason': str(exc)[:500]})
     candidates.sort(key=lambda item: (-item['selection_score'], item['source_path']))
-    return {'candidates': candidates[:8], 'files_examined': min(len(names), max_files),
+    review_candidates.sort(key=lambda item: (-item['selection_score'], item['source_path']))
+    return {'candidates': candidates[:8], 'review_candidates': review_candidates[:8],
+            'files_examined': min(len(names), max_files),
             'bytes_examined': consumed, 'failures': failures[:8]}
 
 

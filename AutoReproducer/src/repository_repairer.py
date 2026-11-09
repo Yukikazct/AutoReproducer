@@ -60,6 +60,9 @@ wrapper functions, conditionals, try/except fallbacks or monkeypatches. A
 compatibility shim is not an alternative to a direct API spelling change.
 For a proven deprecated collections ABC ImportError, move only the matching
 import to collections.abc, preserving all imported names and aliases.
+For a terminal missing scipy.sparse.linalg.eigen.arpack module, only its original
+eigs/eigsh ImportFrom may move to scipy.sparse.linalg, preserving every name and
+alias. Do not change the solver, call arguments or any other import.
 The original complete command plan will be rerun unchanged. If this failure
 cannot be repaired under these constraints, return {"reason":"...","patches":[]}.
 Every failed candidate is fully rolled back before the next round. The supplied

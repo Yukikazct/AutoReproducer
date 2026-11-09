@@ -79,6 +79,44 @@ def _publish_author_plan(plan, packet, collaboration):
     return plan
 
 
+def _command_source_review(discovery, packet):
+    """Suggest bounded, unread local helpers behind incomplete entrypoints."""
+    inventory = packet['file_inventory']
+    files = packet['repository']['files']
+    selected = []
+    size = sum(source.get('bytes', 0) for source in files.values())
+    rows = [*discovery.get('review_candidates', []),
+            *(item for item in discovery['candidates'] if not item['complete'])]
+    for candidate in rows:
+        for name in candidate.get('related_sources', []):
+            entry = inventory.get(name) or {}
+            if (name in files or name in selected or not entry.get('text_available')
+                    or entry.get('bytes', 0) > 100000):
+                continue
+            if (len(files) + len(selected) >= packet['limits']['source_files']
+                    or size + entry['bytes'] > packet['limits']['source_bytes']):
+                continue
+            selected.append(name)
+            size += entry['bytes']
+            if len(selected) >= 8:
+                return selected
+    return selected
+
+
+def _command_review_feedback(discovery):
+    rows = [*discovery.get('review_candidates', []),
+            *(item for item in discovery['candidates'] if not item['complete'])]
+    context = [{key: item.get(key) for key in ('source_path', 'missing', 'related_sources')}
+               for item in rows[:8]]
+    return ('\nA README need not contain an executable command. Review the pinned entrypoint, '
+        'its local imports, argument declarations, loaders and original configuration before '
+        'concluding unsupported. Infer a complete invocation from that evidence, preserving '
+        'the author training/data/seed/repetition settings. review_candidates are navigation '
+        'only: their argv does not establish a training route or required argument values. '
+        'If values remain unresolved, request exact source_catalog files or explain the '
+        'specific missing evidence instead of guessing. Source review targets: ' + _canonical(context))
+
+
 
 def validate_author_execution_plan(payload, packet, workspace):
     if packet.get('author_execution_only') is not True:
@@ -254,6 +292,11 @@ steps:[{id,kind:'train|eval',argv:['python','original.py',...] OR ['python','-m'
             'README quotations, parser defaults, data paths and configuration contents. Use them as '
             'navigation evidence, resolve any missing required arguments from the original sources, '
             'and retain the original seed, training duration, repetitions and data selection. '
+            'Its review_candidates retain possible entrypoints whose training branch, imported '
+            'helper or custom parser cannot be established statically. Read their related_sources '
+            'and full original source to establish the actual invocation; never execute the suggested '
+            'argv merely because a review candidate exists. A nonstandard script filename or '
+            'an imported training function does not by itself make an experiment unsupported. '
             'If commands are ambiguous, use the paper and README context to select the matching experiment. '
             'Resolve README placeholder directories against the actual inventory; '
             'when several experiments share a script basename, read the relevant sources and explicitly '
@@ -377,7 +420,30 @@ steps:[{id,kind:'train|eval',argv:['python','original.py',...] OR ['python','-m'
             failures.append(feedback)
             failure_details.append({'error': feedback, 'category': getattr(exc, 'category', 'planning_error'),
                 **({'evidence': deepcopy(exc.planning_evidence)} if getattr(exc, 'planning_evidence', None) else {})})
-            if len(failures) >= 2 and failures[-1] == failures[-2]:
+            new_source_evidence = False
+            evidence = getattr(exc, 'planning_evidence', None) or {}
+            if (getattr(exc, 'category', None) == 'missing_information'
+                    or evidence.get('stage') == 'author_command_arguments'):
+                # An unsupported response is a hypothesis, not a source read.
+                # Give the model concrete parser/helper context within the same
+                # two reading rounds instead of repeating an imprecise refusal.
+                names = _command_source_review(discovery, packet) if reads < 2 else []
+                if names:
+                    try:
+                        _read_planning_sources(names, packet, workspace, collaboration,
+                                               trigger='incomplete_command_source_review')
+                        reads += 1
+                        review = [{'path': name, 'sha256': packet['file_inventory'][name]['sha256']}
+                                  for name in names]
+                        discovery.setdefault('source_review_reads', []).append(review)
+                        feedback += '\nAdditional pinned source files have now been read: ' + _canonical(review)
+                        new_source_evidence = any(name in packet['repository']['files'] for name in names)
+                    except (ValueError, TypeError, KeyError, OSError) as read_error:
+                        # Failed or changed evidence never becomes a command.
+                        reads += 1
+                        feedback += '\nBounded source review could not read the requested helpers: ' + str(read_error)[:1000]
+                feedback += _command_review_feedback(discovery)
+            if len(failures) >= 2 and failures[-1] == failures[-2] and not new_source_evidence:
                 break
     try:
         runtime_failure = next((item for item in reversed(failure_details)
