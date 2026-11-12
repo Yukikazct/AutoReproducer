@@ -471,3 +471,80 @@ def test_arbitrary_names_and_reordered_protocol_labels_use_positions_not_values(
     result = locate(case)
     assert result['status'] == 'verified'
     assert result['column_index'] == dataset_index * len(children) + child_index
+
+
+def test_explicit_leading_metadata_field_preserves_complete_original_positions():
+    case = table(header='Input symbols Method Alpha Beta', row='U, V Signal 81.5 ±0.6 79.4 ±1.9')
+    before = deepcopy(case)
+    result = locate(case)
+    assert result['status'] == 'verified'
+    assert result['column_labels'] == ['Alpha'] and result['column_index'] == 0
+    metadata = result['leading_metadata']
+    assert metadata['header_quote'] == 'Input symbols'
+    assert metadata['row_quote'] == 'U, V'
+    assert case[2][slice(*metadata['header_prefix_span'])] == metadata['header_quote']
+    assert case[1][slice(*metadata['row_prefix_span'])] == metadata['row_quote']
+    assert case[1][slice(*metadata['method_span'])] == 'Signal'
+    assert case[1][slice(*result['cell_span'])] == '81.5 ±0.6'
+    assert case[3][slice(*result['header_span'])] == case[2]
+    assert case[3][slice(*result['row_span'])] == case[1]
+    assert 'explicit_leading_metadata_column' in result['basis']
+    assert case == before
+
+
+@pytest.mark.parametrize('row', [
+    'U, V Signal-v2 81.5 ±0.6 79.4 ±1.9',
+    'U, V Signal (ablation) 81.5 ±0.6 79.4 ±1.9',
+    'Arbitrary row prose Signal 81.5 ±0.6 79.4 ±1.9',
+    '81.5 Signal 81.5 ±0.6 79.4 ±1.9',
+    'U V Signal 81.5 ±0.6 79.4 ±1.9',
+])
+def test_metadata_field_never_locates_a_method_by_arbitrary_substring(row):
+    assert locate(table(header='Input symbols Method Alpha Beta', row=row))['status'] != 'verified'
+
+
+@pytest.mark.parametrize('header', [
+    'Method Alpha Beta', 'Input | Flags | Method | Alpha | Beta',
+    'Input Method Model Alpha Beta', '2027 Method Alpha Beta',
+])
+def test_leading_values_require_one_explicit_named_metadata_column(header):
+    assert locate(table(header=header, row='U, V Signal 81.5 ±0.6 79.4 ±1.9'))['status'] != 'verified'
+
+
+def test_real_metadata_table_with_wrapped_uncertainties_preserves_group_path():
+    header = 'Transductive\nAvailable data Method Cora Citeseer Pubmed'
+    row = 'X, A DGI (ours) 82.3\n±\n0.6% 71.8\n±\n0.7% 76.8\n±\n0.6%'
+    between = ('X Raw features 47.9\n±\n0.4% 49.3\n±\n0.2% 69.1\n±\n0.3%\n'
+               'A, Y LP (Zhu et al., 2003) 68.0% 45.3% 63.0%\n'
+               'A DeepWalk (Perozzi et al., 2014) 67.2% 43.2% 65.3%\n'
+               'X, A DeepWalk + features 70.7\n±\n0.6% 51.4\n±\n0.5% 74.3\n±\n0.9%\n'
+               'X, A Random-Init (ours) 69.3\n±\n1.4% 61.9\n±\n1.6% 69.6\n±\n1.9%\n')
+    case = table({'dataset': 'Cora', 'method': 'DGI (ours)', 'value': 82.3, 'std': .6,
+                  'column_labels': ['Transductive', 'Cora']},
+                 header=header, row=row, between=between)
+    result = locate(case)
+    assert result['status'] == 'verified'
+    assert result['column_labels'] == ['Transductive', 'Cora']
+    assert result['value'] == 82.3 and result['std'] == .6
+    assert len(result['intervening_layout']) == 5
+    for item in result['intervening_layout']:
+        assert case[3][slice(*item['span'])] == item['quote']
+        assert item['interpreted_as_values'] is False
+    # The full original parent/leaf path remains required even after locating
+    # the metadata field; a matching number cannot substitute for that path.
+    case[0]['column_labels'] = ['Cora']
+    assert locate(case)['status'] == 'unknown'
+
+
+@pytest.mark.parametrize('between', [
+    'U, V Other 80 ±0.3\n',  # Missing a result column.
+    'U, V Other 80 ±0.3 70 ±0.4 60 ±0.1\n',  # Extra result column.
+    'U, V Other 80 70 60\n',  # A bare result cannot become part of the method.
+    'U, V Other 80 ±0.3\nUnrelated prose.\n70 ±0.4\n',
+    'Unparsed metadata row\n',
+    'Table 3: Different table.\nU, V Other 80 ±0.3 70 ±0.4\n',
+])
+def test_metadata_layout_cannot_skip_unknown_rows_or_cross_table_boundaries(between):
+    case = table(header='Input symbols Method Alpha Beta', row='U, V Signal 81.5 ±0.6 79.4 ±1.9',
+                 between=between)
+    assert locate(case)['status'] != 'verified'

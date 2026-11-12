@@ -1,9 +1,11 @@
-"""Summarize existing execution and validation evidence without new acceptance rules.
+"""Separate workflow completion from numerical and independent acceptance.
 
 This presentation layer never runs an experiment or asks a model for a verdict.
 In particular, author-output comparisons and a successful command do not supply
 the protocol and independent-prediction evidence required for paper acceptance.
 """
+import math
+
 from src.author_claim_comparison import _redact_text
 from src.execution_safety import cleanup_is_unconfirmed
 
@@ -18,6 +20,76 @@ def _text(value, limit=700):
 
 def _rows(value):
     return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
+
+
+def _finite(value):
+    try:
+        return type(value) in (int, float) and math.isfinite(value)
+    except OverflowError:
+        return False
+
+
+def _workflow_level(validation, execution_level, execution):
+    """A real numerical comparison completes the default workflow, not acceptance.
+
+    A verdict flag, an AI assessment or a saved presentation cannot substitute
+    for the actual and reference numbers. Reference-only rows still document a
+    comparison; their scientific limitations remain in the comparison layer.
+    """
+    comparison = _mapping(validation.get('author_claim_comparison'))
+    rows = _rows(comparison.get('comparisons'))
+    compared = 0
+    if comparison:
+        if comparison.get('status') in {'compared', 'partial'}:
+            for row in rows:
+                actual, reference = _mapping(row.get('actual')), _mapping(row.get('reference'))
+                if (row.get('status') in {'comparable', 'reference_only'}
+                        and _finite(actual.get('value')) and _finite(reference.get('value'))
+                        and (_text(actual.get('source')) or _text(actual.get('id')))):
+                    compared += 1
+    elif (validation.get('status') in {'reproduced', 'not_reproduced', 'reference_not_met', 'inconclusive'}
+          and not validation.get('invalid_metrics')
+          and not _mapping(validation.get('validation')).get('invalid_metrics')
+          and not _mapping(validation.get('validation')).get('missing_metrics')):
+        # Existing independent results have a different, explicitly validated
+        # schema. Do not infer completed comparisons from their pass flags.
+        rows = _rows(validation.get('comparisons'))
+        compared = sum(_finite(row.get('actual')) and _finite(row.get('reference')) for row in rows)
+        if not rows:
+            values = _mapping(validation.get('metrics_comparison'))
+            paper, actual = _mapping(values.get('paper')), _mapping(values.get('actual'))
+            rows = [{'reference': value, 'actual': actual.get(name)} for name, value in paper.items()]
+            compared = sum(_finite(row['reference']) and _finite(row['actual']) for row in rows)
+    substitute = (execution.get('best_effort') is True or execution.get('fallback_used') is True
+                  or validation.get('status') == 'best_effort')
+    execution_complete = execution_level['status'] == 'completed' and not substitute
+    comparison_complete = compared > 0
+    completed = execution_complete and comparison_complete
+    state = 'completed' if completed else 'comparison_pending' if execution_complete else 'execution_pending'
+    label = {'completed': '作者实验与论文指标比较已完成',
+             'comparison_pending': '作者实验已完成，等待论文指标比较',
+             'execution_pending': '等待完整作者实验'}[state]
+    return {'standard': 'author_execution_and_metric_comparison', 'status': state,
+            'label': label, 'completed': completed, 'execution_complete': execution_complete,
+            'comparison_complete': comparison_complete, 'compared_metrics': compared,
+            'pending_metrics': max(0, len(rows) - compared),
+            'reason': ('完整作者执行与真实数值对照已记录；比较达标和增强独立核验另行说明。' if completed
+                       else '尚无带实际输出来源的论文参考与实测数值对照。' if execution_complete
+                       else '替代执行不能确认完整作者实验，保留已有数值。' if substitute
+                       else execution_level['reason'])}
+
+
+def _assessment_level(validation):
+    assessment = _mapping(validation.get('reproduction_assessment'))
+    labels = {'reproduced': 'AI 判断复现成功', 'partially_reproduced': 'AI 判断部分复现',
+              'not_reproduced': 'AI 判断尚未复现', 'insufficient_evidence': 'AI 判断证据不足'}
+    verdict = assessment.get('verdict')
+    complete = assessment.get('status') == 'completed' and isinstance(verdict, str) and verdict in labels
+    return {'status': 'completed' if complete else 'unavailable' if assessment else 'not_recorded',
+            'verdict': verdict if complete else None,
+            'label': labels[verdict] if complete else 'AI 判断尚未完成',
+            'reason': _text(assessment.get('reason')),
+            'evidence_paths': ['validation.reproduction_assessment']}
 
 
 def _current_records(execution):
@@ -157,8 +229,11 @@ def build_reproduction_conclusion(data):
     data = _mapping(data)
     validation, execution = _mapping(data.get('validation')), _mapping(data.get('execution'))
     strict = _mapping(data.get('strict_validation'))
+    strict_requested = strict.get('requested') is True
     execution_level = _execution_level(data, validation, execution)
     comparison = _comparison_level(validation)
+    workflow = _workflow_level(validation, execution_level, execution)
+    assessment = _assessment_level(validation)
     modified = (validation.get('source_modified') is True
                 or _mapping(data.get('source_repair')).get('status') == 'succeeded'
                 or data.get('execution_source') == 'patched_author_repository')
@@ -184,7 +259,7 @@ def build_reproduction_conclusion(data):
     protocol = protocol if type(protocol) is bool else None
     metrics = metrics if type(metrics) is bool else None
     stop = execution_level['status'] in {'interrupted', 'timed_out', 'cleanup_unconfirmed'}
-    strict_blocked = strict.get('requested') is True and strict.get('status') != 'verified'
+    strict_blocked = strict_requested and strict.get('status') != 'verified'
     blocked = (stop or modified or validation.get('paper_metrics_verified') is False
                or validation.get('reviews_removed') is True or strict_blocked
                or execution.get('best_effort') is True or execution.get('fallback_used') is True)
@@ -196,9 +271,12 @@ def build_reproduction_conclusion(data):
                           'failed' if (protocol is False or metrics is False) and not blocked else 'unavailable')
     independent = {'status': independent_status,
         'label': {'verified': '协议与独立指标复算已核验', 'failed': '独立核验未通过',
-                  'unavailable': '独立核验尚未完成'}[independent_status],
+                  'unavailable': '独立核验尚未完成' if strict_requested else
+                                 '未进行增强独立核验（可选）'}[independent_status],
+        'requested': strict_requested,
         'protocol_verified': protocol, 'metrics_recomputed': metrics,
         'reason': ('该核验与论文参考是否达标分开记录。' if independent_status == 'verified' else
+                   '增强独立核验为可选步骤，不影响作者实验与指标比较的流程完成。' if not strict_requested else
                    '本次完成范围仅限修复副本，未独立核验原始论文实验。' if modified else
                    _text(strict.get('reason')) or '完整协议与独立预测/指标复算证据仍未齐备。'),
         'evidence_paths': ['validation.protocol_pass', 'validation.independent_metrics_pass',
@@ -230,7 +308,20 @@ def build_reproduction_conclusion(data):
         'interrupted': '任务已取消或中断，保留已有证据，未完成部分不作完成判定。',
         'timed_out': '任务已超时，保留已有证据，未完成部分不作完成判定。',
         'cleanup_unconfirmed': '进程清理尚未确认，完成与独立验收结论暂不发布。'}
-    blockers, next_steps = [], []
+    summary = summaries[status]
+    if not strict_requested and not method_only and reproduced is None and workflow['execution_complete']:
+        summary = ('作者实验与论文指标比较已完成；已配对指标达到记录中的参考规则。'
+                   if workflow['completed'] and comparison['status'] == 'met' else
+                   '作者实验与论文指标比较已完成；已配对指标未全部达到论文参考，差异已保留。'
+                   if workflow['completed'] and comparison['status'] == 'not_met' else
+                   '作者实验与论文指标比较已完成；数值对照及实验设置差异已记录，参考是否达标仍单独说明。'
+                   if workflow['completed'] else
+                   '作者实验已完整运行；尚未形成可核对的论文指标比较。')
+    elif strict_requested and workflow['completed'] and independent_status != 'verified' and not method_only:
+        summary = ('作者实验与论文指标比较已完成；另行请求的增强独立核验未通过。'
+                   if independent_status == 'failed' else
+                   '作者实验与论文指标比较已完成；另行请求的增强独立核验尚未完成。')
+    blockers, next_steps, limitations = [], [], []
     def add(code, reason, check, priority, paths):
         blockers.append({'code': code, 'reason': reason, 'evidence_paths': paths})
         next_steps.append({'priority': priority, 'category': code, 'check': check, 'evidence_paths': paths})
@@ -240,21 +331,42 @@ def build_reproduction_conclusion(data):
             if stop else '按冻结计划核对准备状态、必需命令及实际结束记录。', 1,
             ['execution', 'validation.execution_status'])
     if modified:
-        add('source_modified', '本次使用兼容性修复副本。',
-            '复核补丁清单及原始来源；修复副本输出继续与原始源码严格验收分开记录。', 2,
-            ['source_repair', 'validation.source_modified'])
-    if comparison['status'] not in {'met', 'not_met'} and not method_only:
+        paths = ['source_repair', 'validation.source_modified']
+        limitations.append({'code': 'source_modified', 'reason': '本次使用兼容性修复副本，补丁及原始来源单独记录。',
+                            'evidence_paths': paths})
+        if strict_requested:
+            add('source_modified', '本次使用兼容性修复副本。',
+                '复核补丁清单及原始来源；修复副本输出继续与原始源码严格验收分开记录。', 2, paths)
+    if not workflow['comparison_complete'] and not method_only:
         add('comparison', comparison['reason'],
             '核对论文方法、数据集、划分、单位、重复次数及实际输出来源，补齐尚不可比较的指标配对。', 2,
             comparison['evidence_paths'])
-    if independent_status != 'verified':
+    if workflow['comparison_complete'] and comparison['status'] in {'partial', 'reference_only'}:
+        reasons = []
+        for row in _rows(_mapping(validation.get('author_claim_comparison')).get('comparisons')):
+            if row.get('status') == 'reference_only':
+                reason = _text(_mapping(row.get('settings')).get('reason'))
+                if reason:
+                    reasons.append(reason)
+                details = row.get('limitations')
+                if isinstance(details, list):
+                    reasons.extend(_text(value) for value in details if isinstance(value, str))
+        limitations.append({'code': 'comparison_context',
+            'reason': '数值对照已完成；部分指标仅供参考，不能据此宣称论文协议或数值验收通过。',
+            'details': list(dict.fromkeys(filter(None, reasons)))[:8],
+            'evidence_paths': comparison['evidence_paths']})
+    if strict_requested and independent_status != 'verified':
         add('independent', independent['reason'],
             '补齐冻结协议、完整作者执行、独立模型重载与预测复算证据，再提交独立核验。', 3,
             independent['evidence_paths'])
     if comparison['status'] == 'not_met':
-        add('numeric_gap', '已有指标判定未全部达到记录中的参考规则。',
-            '先核对单位、统计方式与冻结实验设置；分数偏差本身不作为修改训练参数或容差的依据。', 3,
-            comparison['evidence_paths'])
+        if strict_requested:
+            add('numeric_gap', '已有指标判定未全部达到记录中的参考规则。',
+                '先核对单位、统计方式与冻结实验设置；分数偏差本身不作为修改训练参数或容差的依据。', 3,
+                comparison['evidence_paths'])
+        else:
+            limitations.append({'code': 'numeric_gap', 'reason': '已有指标未全部达到论文参考；运行与比较完成状态保留。',
+                                'evidence_paths': comparison['evidence_paths']})
     if quality_status == 'not_met':
         add('quality_target', '已记录质量门槛未达标。',
             '对照固定质量目标及实测指标核查差距；保留原始实验参数与质量判据。', 3,
@@ -273,6 +385,8 @@ def build_reproduction_conclusion(data):
             'evidence_paths': ['analysis_status', 'outcome_diagnosis.model_analysis']})
     known = {row.get('id') for row in _rows(diagnosis.get('evidence')) if isinstance(row.get('id'), str)}
     for item in _rows(diagnosis.get('next_steps'))[:5]:
+        if not strict_requested and item.get('category') in {'independent', 'independent_metrics', 'strict_validation'}:
+            continue
         ids = item.get('evidence_ids')
         refs = [ref for ref in ids if isinstance(ref, str) and ref in known] if isinstance(ids, list) else []
         if _text(item.get('check')) and refs:
@@ -283,12 +397,13 @@ def build_reproduction_conclusion(data):
                                'category': _text(item.get('category')),
                                'check': _text(item['check']), 'evidence_ids': refs,
                                'basis': 'model_hypothesis' if item.get('basis') == 'model_hypothesis' else 'observed'})
-    return {'version': 1, 'status': status, 'summary': summaries[status], 'is_reproduced': reproduced,
+    return {'version': 2, 'status': status, 'summary': summary, 'is_reproduced': reproduced,
             'scope': {'name': scope, 'label': scope_label, 'source_modified': modified},
             'execution': {**execution_level, 'evidence_paths': ['execution', 'validation.execution_status'],
                           'training_observed': validation.get('training_observed') if
                           type(validation.get('training_observed')) is bool else None},
-            'comparison': comparison, 'independent': independent, 'quality': quality,
+            'workflow': workflow, 'comparison': comparison, 'independent': independent, 'quality': quality,
+            'assessment': assessment, 'limitations': limitations,
             'analysis': {'status': 'failed' if analysis_failed else _text(analysis_status or model_status) or 'not_recorded',
                          'affects_numerical_verdict': False},
             'lifecycle': {'cleanup_status': _text(cleanup.get('status')) or 'not_recorded'},
@@ -309,6 +424,12 @@ def conclusion_markdown(conclusion):
              '- **实验执行**: ' + _markdown(conclusion['execution']['label']),
              '- **论文参考比较**: ' + _markdown(conclusion['comparison']['label']),
              '- **独立核验**: ' + _markdown(conclusion['independent']['label'])]
+    workflow = _mapping(conclusion.get('workflow'))
+    if workflow:
+        lines.insert(5, '- **流程完成**: ' + _markdown(workflow['label']))
+    assessment = _mapping(conclusion.get('assessment'))
+    if assessment.get('status') == 'completed':
+        lines.append('- **AI 判断**: ' + _markdown(assessment['label']) + '；' + _markdown(assessment['reason']))
     if conclusion['quality']['status'] != 'not_recorded':
         lines.append('- **质量目标**: ' + _markdown(conclusion['quality']['label']))
     counts = conclusion['comparison']['counts']
@@ -321,6 +442,11 @@ def conclusion_markdown(conclusion):
         lines.append('- **补充分析**: 解释分析未完成；已有执行与数值判定保留。')
     if conclusion['lifecycle']['cleanup_status'] == 'error':
         lines.append('- **任务收尾**: 环境释放失败；已有实验和数值证据保留，释放问题另行处理。')
+    if conclusion.get('limitations'):
+        lines += ['', '**实验范围与差异**', '']
+        for item in conclusion['limitations']:
+            lines.append('- ' + _markdown(item['reason']))
+            lines += ['- ' + _markdown(detail) for detail in item.get('details', [])]
     if conclusion['blockers']:
         lines += ['', '**当前限制与未完成项**', '']
         lines += ['- ' + _markdown(item['reason']) for item in conclusion['blockers']]

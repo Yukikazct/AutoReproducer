@@ -114,7 +114,7 @@ def _source_repair_lines(data, report_path):
         '- **状态**: ' + _markdown_text(_txt(state.get('status'))),
         '- **授权范围**: ' + ', '.join(_markdown_text(name) for name in state.get('editable', [])),
         f"- **补丁轮数**: {len(state.get('attempts', []))} / 2；每轮整体校验、完整原命令重跑，失败或取消整体回滚。",
-        '- 原始源码、来源包与冻结计划保留；补丁仅作用于独立修复副本。修改后执行不构成原始源码严格复现或独立论文数值核验。']
+        '- 原始源码、来源包与冻结计划保留；补丁仅作用于独立修复副本。兼容修复后的运行与论文指标比较可正常完成，结果披露补丁；增强独立核验另行记录。']
     for key, label in (('original_workspace', '原始副本'), ('workspace', '修复副本'),
                        ('reason', '说明'), ('report_path', '修复结果与失败报告'), ('records_path', '结构化审计记录')):
         if state.get(key):
@@ -1209,9 +1209,8 @@ class ReportGeneratorAgent(BaseAgent):
                          + _markdown_text(_txt(step.get('not_run') or step.get('blocked_by') or step.get('reason'), '未记录原因')))
         lines += ['', '## 指标与参考比较', '', *report_metric_lines(view.metrics)]
         if validation.get('status') == 'author_code_completed':
-            boundary = ('作者仓库代码运行完成（已对比作者输出，尚未独立核验论文数值）'
-                        if (validation.get('author_claim_comparison') or {}).get('comparisons') else
-                        '作者仓库代码运行完成（未进行论文数值审核）')
+            boundary = (view.conclusion['summary'] if (view.conclusion.get('workflow') or {}).get('completed') else
+                        '作者仓库代码运行完成（论文指标比较尚未完成）')
             lines.append('- **作者执行范围**: ' + boundary)
         readable_validation = readable.get('validation') or {}
         assessment = readable_validation.get('reproduction_assessment')
@@ -1660,7 +1659,12 @@ class ReportGeneratorAgent(BaseAgent):
         # 四态：复现成功 / 复现失败 / 无法验证（代码没跑起来，不能算复现失败）/
         # 无法核对（跑了，但论文信息不足、代码是占位实现——既不判成功也不判失败）
         assessment = validation.get('reproduction_assessment') or {}
-        if assessment.get('status') == 'completed':
+        if validation.get('status') == 'author_code_completed':
+            from src.result_conclusion import build_reproduction_conclusion
+            conclusion = build_reproduction_conclusion(data)
+            state_text = (conclusion['summary'] if (conclusion.get('workflow') or {}).get('completed') else
+                          '作者仓库代码运行完成（论文指标比较尚未完成）')
+        elif assessment.get('status') == 'completed':
             state_text = _AI_REPRODUCTION_LABELS.get(assessment.get('verdict'), 'AI 判断证据不足') + '（本次执行实验）'
         elif validation.get("status") == "needs_pdf":
             state_text = "⏳ 待补充论文 PDF（作者代码尚未执行）"
@@ -1693,10 +1697,6 @@ class ReportGeneratorAgent(BaseAgent):
             state_text = "✅ 实验环境已准备（尚未训练）"
         elif validation.get("status") == "method_experiment_completed":
             state_text = "✅ 官方方法实验完成（不判定整篇论文数值复现）"
-        elif validation.get('status') == 'author_code_completed':
-            state_text = ('作者仓库代码运行完成（已对比作者输出，尚未独立核验论文数值）'
-                          if (validation.get('author_claim_comparison') or {}).get('comparisons') else
-                          '作者仓库代码运行完成（未进行论文数值审核）')
         elif validation.get("status") == "quality_target_not_met":
             state_text = "⚠️ 方法实验已运行，工程效果门槛未达到"
         elif validation.get("status") == "reference_not_met":
@@ -1718,9 +1718,9 @@ class ReportGeneratorAgent(BaseAgent):
                       'unavailable': '未完成；保留普通作者执行结果',
                       'verified': '完整独立复算证据已核验', 'failed': '未通过'}.get(
                           strict.get('status'), '未完成')
-            lines.append('- **严格验收**: ' + status)
+            lines.append('- **增强独立核验（可选）**: ' + status)
             if strict.get('reason'):
-                lines.append('- **严格验收说明**: ' + _markdown_text(_txt(strict['reason'])))
+                lines.append('- **增强核验说明**: ' + _markdown_text(_txt(strict['reason'])))
         if execution.get("mode") != "repository":
             lines.append(f"- **置信度**: {_fmt(validation.get('confidence', 0.0))}")
         lines.append(f"- **分析**: {(validation.get('validation') or {}).get('analysis', '无')}")

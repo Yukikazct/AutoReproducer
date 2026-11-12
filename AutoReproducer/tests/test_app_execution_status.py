@@ -232,3 +232,28 @@ def test_completed_generated_work_does_not_display_paper_reproduction_success(ap
     load(app, path)
     assert any(text in notice.value for notice in app.warning)
     assert not any("论文数值验收通过" in notice.value for notice in app.success)
+
+
+@pytest.mark.parametrize('comparison_status', ['comparable', 'reference_only'])
+@pytest.mark.parametrize('patched', [False, True])
+def test_completed_author_run_and_comparison_do_not_require_optional_audit(app, comparison_status, patched):
+    data = {
+        'execution': {'mode': 'repository', 'executed': True, 'success': True,
+                      'final': {'stage': 'eval', 'success': True, 'exit_code': 0}},
+        'validation': {'status': 'author_code_completed', 'is_reproduced': None,
+                       'paper_metrics_verified': False, 'source_modified': patched,
+                       'author_claim_comparison': {
+                           'status': 'compared', 'basis': 'patched_author_output' if patched else 'author_output',
+                           'comparisons': [{'metric': 'accuracy', 'status': comparison_status,
+                               'meets_reference': False,
+                               'reference': {'value': 84.0, 'unit': 'percent'},
+                               'actual': {'value': 82.0, 'unit': 'percent', 'source': 'train:stdout:1'}}]}}}
+    app.session_state['result'] = {'state': 'COMPLETED', 'data': data}
+    app.run()
+    assert not app.exception
+    assert any('作者实验与论文指标比较已完成' in notice.value for notice in app.success)
+    assert any('数值是否达标及设置差异见报告' in row.value for row in app.caption)
+    assert not any('未进行论文数值审核' in row.value or '论文指标比较尚未完成' in row.value
+                   for row in app.caption)
+    saved = app.session_state['result']['data']['validation']
+    assert saved['paper_metrics_verified'] is False and saved['is_reproduced'] is None

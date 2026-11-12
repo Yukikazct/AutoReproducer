@@ -258,11 +258,13 @@ def ai_assessment(verdict='reproduced'):
     ('not_reproduced', 'AI 判断尚未复现'),
     ('insufficient_evidence', 'AI 判断证据不足'),
 ])
-def test_ai_decision_controls_report_summary_without_claiming_strict_verification(verdict, label):
+def test_ai_decision_supplements_completed_workflow_without_claiming_strict_verification(verdict, label):
     value = comparison()
+    value['status'] = 'partial'
     value['comparisons'][0]['actual']['id'] = 'train:stdout:0'
     assessment = ai_assessment(verdict)
-    data = {'execution': {'mode': 'repository', 'success': True},
+    data = {'execution': {'mode': 'repository', 'executed': True, 'success': True,
+                          'final': {'success': True, 'exit_code': 0}},
             'grounded_repository_plan': {'scope': 'author_code_execution'},
             'validation': {'status': 'author_code_completed', 'is_reproduced': None,
                            'paper_metrics_verified': False, 'author_claim_comparison': value,
@@ -270,7 +272,8 @@ def test_ai_decision_controls_report_summary_without_claiming_strict_verificatio
     before = deepcopy(data)
     report = ReportGeneratorAgent()._build_report(data)
     summary = report.split('## 5. 运行结果', 1)[1].split('\n', 2)[1]
-    assert label in summary
+    assert '作者实验与论文指标比较已完成' in summary
+    assert label not in summary
     assert '**指标判断**: accuracy；' + label in report
     assert '模型置信度**: 86%' in report
     assert '相对误差 1.00%' in report and '绝对误差 0.5' in report
@@ -351,3 +354,20 @@ def test_ai_explanations_are_plain_text_and_do_not_change_the_assessment():
     assert r'\| new row' in text and r'\<script\>' in text
     assert r'\[unsafe\]\(file://C:/secret\)' in text
     assert value == before
+
+
+def test_report_details_agree_with_completed_default_workflow_and_disclose_patch():
+    value = comparison()
+    value['status'] = 'compared'
+    data = {'execution': {'mode': 'repository', 'executed': True, 'success': True,
+                          'final': {'success': True, 'exit_code': 0}},
+            'validation': {'status': 'author_code_completed', 'is_reproduced': None,
+                           'paper_metrics_verified': False, 'source_modified': True,
+                           'author_claim_comparison': value},
+            'source_repair': {'requested': True, 'status': 'succeeded', 'attempts': []}}
+    before = deepcopy(data)
+    report = ReportGeneratorAgent._build_report(data)
+    assert '作者实验与论文指标比较已完成' in report
+    assert '兼容性源码修复' in report and '结果披露补丁' in report
+    assert '尚未独立核验论文数值' not in report
+    assert data == before

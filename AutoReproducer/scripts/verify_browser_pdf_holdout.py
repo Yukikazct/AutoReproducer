@@ -125,7 +125,7 @@ def configure_execution_mode(page, strict_validation, *, recovery_mode='off', so
     repair = page.get_by_label("AI 自动修复：失败后修复并重试", exact=True)
     if repair.is_checked() is not source_repair:
         repair.press("Space")
-    strict = page.get_by_label("严格核验：重载模型并独立复算指标", exact=True)
+    strict = page.get_by_label("增强独立核验（可选）：重载模型并复算指标", exact=True)
     if strict.is_checked() is not strict_validation:
         # Streamlit's accessible React-Aria checkbox is covered by its label.
         # Use its supported keyboard interaction instead of clicking the input.
@@ -862,8 +862,14 @@ def verify_report_reconnect(page, args, progress, runtime, result):
             **saved}
 
 
-def verify_terminal_page(page, validation, strict_validation=False):
+def verify_terminal_page(page, validation, strict_validation=False, *, result_data=None):
     """Wait for the actual terminal conclusion rather than a generic success."""
+    workflow = {}
+    if result_data is not None:
+        from src.result_conclusion import build_reproduction_conclusion
+        workflow = build_reproduction_conclusion(result_data).get('workflow') or {}
+        if workflow.get('completed'):
+            page.get_by_text(workflow['label'], exact=True).wait_for(timeout=30000)
     if strict_validation:
         if validation['is_reproduced']:
             page.get_by_text('完整实验已完成，论文数值验收通过。', exact=True).wait_for(timeout=30000)
@@ -878,12 +884,15 @@ def verify_terminal_page(page, validation, strict_validation=False):
         page.get_by_text('判断范围为本次实际执行的实验。AI 根据具体论文选择合理误差；固定 5% 参考线不作为普通复现的硬门槛。',
                          exact=True).wait_for(timeout=30000)
         if validation.get('paper_metrics_verified') is not True:
-            page.get_by_text('严格独立复算为可选核验，本次未完成该项。', exact=True).wait_for(timeout=30000)
+            page.get_by_text('增强独立核验为可选项，本次未完成该项。', exact=True).wait_for(timeout=30000)
     else:
-        page.get_by_text('所选仓库代码已运行完成，命令已正常退出。', exact=True).wait_for(timeout=30000)
-        caption = ('已对比作者输出与论文宣称，详见报告中的差值和实验设置；本次未进行论文数值审核。'
+        if not workflow.get('completed'):
+            page.get_by_text('所选仓库代码已运行完成，命令已正常退出。', exact=True).wait_for(timeout=30000)
+        caption = ('已将作者实际输出与论文指标比较；数值是否达标及设置差异见报告。'
+                   if workflow.get('completed') else
+                   '已保存部分论文指标配对；实际数值或来源仍待补齐，详见报告。'
                    if (validation.get('author_claim_comparison') or {}).get('comparisons') else
-                   '本次完成的是代码运行，论文数值未做验收。')
+                   '代码运行已完成，论文指标比较尚未完成。')
         page.get_by_text(caption, exact=True).wait_for(timeout=30000)
         if validation['training_observed'] is False:
             page.get_by_text('本次未记录到优化器更新；详见作者程序输出。', exact=True).wait_for(timeout=30000)
@@ -1030,7 +1039,7 @@ def main(args):
                     assert all(event["status"] in {"success", "error"} for event in ends)
                     assert ends[-1]["status"] == "success"
                     assert sorted(event["execution_id"] for event in starts) == sorted(event["execution_id"] for event in ends)
-                    verify_terminal_page(page, validation, strict_requested)
+                    verify_terminal_page(page, validation, strict_requested, result_data=result['data'])
                     report_check = verify_report_reconnect(page, args, progress, runtime, result) if comparison else None
                     page.screenshot(path=str(runtime / f"{args.tag}_final.png"), full_page=True)
                     record = {"input": "real_browser_pdf_upload", "state": result["state"], "progress_file": str(progress),

@@ -406,7 +406,7 @@ def test_source_review_still_refuses_missing_required_data_without_invented_valu
     (['src/train.py'], 'Use src/train.py-extra instead.', set()),
     (['src/train.py'], 'Use src/train.py/child instead.', set()),
     (['src/train.py'], 'Use other/src/train.py instead.', set()),
-    (['src/train.py'], 'Use train.py.', set()),
+    (['src/train.py'], 'Use train.py.', {'src/train.py'}),
     (['src/train.py'], 'prefix_train.py postfix', set()),
     (['src/train.py'], '前train.py后', set()),
     (['src/train.py'], '前：train.py，后', {'src/train.py'}),

@@ -28,6 +28,42 @@ _LOGGER_TEST = re.compile(r'\s*Final\s+test\s*:\s*(?P<mean>' + NUMBER_PATTERN + 
     r'\s*(?P<percent>%)?\s*(?:±|\+/-|\\pm(?![A-Za-z]))\s*'
     r'(?P<std>' + NUMBER_PATTERN + r')\s*(?P<std_percent>%)?\s*', re.I)
 _LOGGER_SINGLE_TEST = re.compile(r'\s*Final\s+test\s*:\s*(?P<value>' + NUMBER_PATTERN + r')\s*%?\s*', re.I)
+_SCALAR_TENSOR = re.compile(
+    r"\s*tensor\(\s*(?P<value>" + NUMBER_PATTERN + r")\s*"
+    r"(?:,\s*(?:device=(?P<device_quote>['\"])(?:cpu|mps|(?:cuda|xpu)(?::\d+)?)(?P=device_quote)"
+    r"|dtype=torch\.(?:float16|float32|float64|bfloat16|int32|int64)"
+    r"|requires_grad=(?:True|False)|grad_fn=<[A-Za-z][A-Za-z0-9_]*>))*\s*\)\s*", re.I)
+
+
+def _tensor_summaries(lines, step_id, stream):
+    """Keep original scalar lines separate; source binding must prove statistics."""
+    final = len(lines)
+    while final and not lines[final - 1].strip():
+        final -= 1
+    if final:
+        try:
+            receipt = json.loads(lines[final - 1])
+        except (ValueError, TypeError):
+            receipt = None
+        # This is the owned observer's completion receipt, never author data.
+        if (isinstance(receipt, dict) and set(receipt) == {'author_command_finished', 'optimizer_steps'}
+                and receipt['author_command_finished'] == step_id
+                and type(receipt['optimizer_steps']) is int and receipt['optimizer_steps'] >= 0):
+            final -= 1
+    if final < 2:
+        return []
+    values = []
+    for line in lines[final - 2:final]:
+        match = _SCALAR_TENSOR.fullmatch(line)
+        value = metric_number(match['value']) if match else None
+        if value is None:
+            return []
+        values.append(value)
+    return [{'id': f'{step_id}:{stream}:{final - 1}', 'step_id': step_id,
+        'stream': stream, 'source_quote': '\n'.join(lines[final - 2:final]),
+        'values': values, 'summary_format': 'tensor_pair',
+        'output_sources': [{'source': f'{step_id}:{stream}:{index + 1}', 'source_quote': lines[index]}
+                           for index in range(final - 2, final)]}]
 
 
 def _logger_summary(lines, step_id, stream):
@@ -133,8 +169,12 @@ def numeric_summaries(execution):
                 # them. A malformed or competing final line cannot be ignored.
                 if final_lines == 1 and len(labelled) == 1:
                     candidates.extend(labelled)
-            elif found:
-                candidates.append(found[-1])
+            else:
+                tensor_summary = _tensor_summaries(lines, step['id'], stream)
+                if tensor_summary:
+                    candidates.extend(tensor_summary)
+                elif found:
+                    candidates.append(found[-1])
     return candidates[:12]
 
 
@@ -220,9 +260,9 @@ def _final_source_binding(output, locations, sources, workspace, metric, unit):
             raise ValueError('Aggregation quote does not contain the original statistic definitions')
         return values, definition
 
-    def scaled_unit(operand, use):
+    def scaled_unit(operand, use, *, require_percent=True, whole_source=False):
         """An unmarked percentage requires a connected, literal author scale."""
-        location = locations.get('unit_quote')
+        location = ({**printer, 'quote': text} if whole_source else locations.get('unit_quote'))
         if (not location or location['path'] != printer['path'] or location['sha256'] != printer['sha256']):
             raise ValueError('Unmarked logger summary needs its original unit scaling source')
         quoted = location['quote']
@@ -244,6 +284,12 @@ def _final_source_binding(output, locations, sources, workspace, metric, unit):
                  and ast.get_source_segment(text, node) in location['quote']]
         libraries = {alias.asname or alias.name for node in ast.walk(tree) if isinstance(node, ast.Import)
                      for alias in node.names if alias.name in {'numpy', 'torch'}}
+        rebound = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)
+                   and isinstance(node.ctx, (ast.Store, ast.Del))}
+        rebound.update(node.arg for node in ast.walk(tree) if isinstance(node, ast.arg))
+        rebound.update(node.name for node in ast.walk(tree)
+                       if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)))
+        libraries -= rebound
 
         def branches(node):
             result = {}
@@ -283,7 +329,7 @@ def _final_source_binding(output, locations, sources, workspace, metric, unit):
                             'mean', 'std', 'max', 'min', 'sum', 'argmax', 'item', 'float', 'double', 'cpu', 'detach',
                             *({'append'} if appends else set())}:
                         return False
-                    safe = (node.func.value.id in libraries and node.func.attr in {'tensor', 'array', 'asarray'}
+                    safe = (node.func.value.id in libraries and node.func.attr in {'tensor', 'array', 'asarray', 'stack'}
                             or node.func.attr == 'append')
                 else:
                     safe = isinstance(node.func, ast.Name) and node.func.id == 'print'
@@ -329,7 +375,7 @@ def _final_source_binding(output, locations, sources, workspace, metric, unit):
                 return bool(expression.elts) and all(connected(value, at, seed, seen) for value in expression.elts)
             if isinstance(expression, ast.Call) and isinstance(expression.func, ast.Attribute):
                 if (isinstance(expression.func.value, ast.Name) and expression.func.value.id in libraries
-                        and expression.func.attr in {'tensor', 'array', 'asarray'} and len(expression.args) == 1
+                        and expression.func.attr in {'tensor', 'array', 'asarray', 'stack'} and len(expression.args) == 1
                         and not expression.keywords):
                     return connected(expression.args[0], at, seed, seen)
                 if (expression.func.attr in {'mean', 'std', 'max', 'item', 'float', 'double', 'cpu', 'detach'}
@@ -338,13 +384,61 @@ def _final_source_binding(output, locations, sources, workspace, metric, unit):
             return False
 
         supporting = [seed for seed in seeds if connected(operand, use, seed)]
-        if unit != 'percent' or len(supporting) != 1:
+        if require_percent and unit != 'percent' or len(supporting) != 1:
             raise ValueError('Logger summary unit needs one connected original 100 scaling expression')
         return {'kind': 'original_array_scaling', **location,
                 'expression': ast.get_source_segment(text, supporting[0])}
 
     matches = []
+    tensor_pair = output.get('summary_format') == 'tensor_pair'
+    if tensor_pair:
+        quoted_prints = [node for node in ast.walk(tree) if isinstance(node, ast.Expr)
+            and isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name)
+            and node.value.func.id == 'print' and len(node.value.args) == 1 and not node.value.keywords
+            and ast.get_source_segment(text, node) in printer['quote']
+            and printer['line'] <= node.lineno < printer['line'] + printer['quote'].count('\n') + 1]
+        quoted_prints.sort(key=lambda node: node.lineno)
+        if len(quoted_prints) != 2:
+            raise ValueError('Tensor summary needs exactly two original scalar print statements')
+        first, second = quoted_prints
+        parent = parents[first]
+        main_guard = (isinstance(parent, ast.If) and isinstance(parents.get(parent), ast.Module)
+            and isinstance(parent.test, ast.Compare) and len(parent.test.ops) == 1
+            and isinstance(parent.test.ops[0], ast.Eq) and len(parent.test.comparators) == 1
+            and isinstance(parent.test.left, ast.Name) and parent.test.left.id == '__name__'
+            and isinstance(parent.test.comparators[0], ast.Constant)
+            and parent.test.comparators[0].value == '__main__'
+            and first in parent.body and second in parent.body)
+        if parent is not parents[second] or not (
+                isinstance(parent, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef)) or main_guard):
+            raise ValueError('Tensor summary prints must be consecutive outside a training loop or branch')
+        if parent.body.index(second) != parent.body.index(first) + 1:
+            raise ValueError('Tensor summary prints must be consecutive original statements')
+        if not all(isinstance(statement.value.args[0], ast.Call) for statement in (first, second)):
+            raise ValueError('Tensor summary must print the original reductions directly without stale aliases')
+        mean_values, mean_node = statistic(first.value.args[0], first.value, 'mean')
+        std_values, std_node = statistic(second.value.args[0], second.value, 'std')
+        if ast.dump(mean_values, include_attributes=False) != ast.dump(std_values, include_attributes=False):
+            raise ValueError('Tensor mean and standard deviation refer to different original values')
+        binding = {'path': printer['path'], 'source_sha256': printer['sha256'],
+                   'print_line': first.lineno, 'std_print_line': second.lineno,
+                   'mean_line': mean_node.lineno, 'std_line': std_node.lineno}
+        if unit == 'percent':
+            try:
+                binding['unit_source'] = scaled_unit(mean_values, first.value)
+            except ValueError as error:
+                binding['unit_source'] = {'kind': 'unknown', 'reason': str(error)}
+        elif unit == 'fraction':
+            try:
+                scaled_unit(mean_values, first.value, require_percent=False, whole_source=True)
+            except ValueError:
+                pass
+            else:
+                raise ValueError('Tensor fraction unit conflicts with connected original percent scaling')
+        matches.append(binding)
     for node in ast.walk(tree):
+        if tensor_pair:
+            break
         if (not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name) or node.func.id != 'print'
                 or len(node.args) != 1 or node.keywords
                 or not printer['line'] <= node.lineno < printer['line'] + printer['quote'].count('\n') + 1):
@@ -415,8 +509,17 @@ def _final_source_binding(output, locations, sources, workspace, metric, unit):
             raise ValueError('Final summary source binding failed: ' + str(error)) from error
     if len(matches) != 1:
         raise ValueError('Final summary needs one matching original print and mean/std data flow')
+    metric_location = locations['metric_quote']
+    metric_source = _read_source(workspace, metric_location['path'], metric_location['sha256'])['text']
+    metric_quote = metric_location['quote']
+    metric_start = metric_source.find(metric_quote)
+    # An exact quotation may begin after the first line's indentation while
+    # retaining indentation on subsequent lines. Recover that original prefix
+    # for AST parsing only; the cited quotation and its recorded bytes stay exact.
+    prefix = metric_source[metric_source.rfind('\n', 0, metric_start) + 1:metric_start]
+    parse_quote = (prefix if not prefix.strip() else '') + metric_quote
     try:
-        expression = ast.parse(textwrap.dedent(locations['metric_quote']['quote']))
+        expression = ast.parse(textwrap.dedent(parse_quote))
     except SyntaxError as error:
         raise ValueError('Final metric quote must contain its original evaluator expression') from error
     names = [node.id for node in ast.walk(expression) if isinstance(node, ast.Name)]
@@ -445,19 +548,23 @@ def validate_summary_labels(payload, candidates, packet, workspace):
             raise ValueError('Column labels cannot supply or modify measured values')
         output = outputs.get(item.get('candidate_id'))
         statistics = output.get('labelled_statistics') if output is not None else None
+        tensor_pair = output is not None and output.get('summary_format') == 'tensor_pair'
         index = item.get('column')
         if output is None or type(index) is not int or not 0 <= index < len(output['values']):
             raise ValueError('Summary must select an actual output column')
         identity = (output['id'], index)
         if identity in seen:
             raise ValueError('Duplicate summary column')
-        units = {'fraction', 'percent', 'scalar', ''} if output.get('summary_format') == 'all_runs' else {'fraction', 'percent', 'scalar'}
+        units = {'fraction', 'percent', 'scalar', ''} if output.get('summary_format') in {'all_runs', 'tensor_pair'} else {'fraction', 'percent', 'scalar'}
         if (item.get('name') not in _TEXT_METRICS or item.get('unit') not in units
                 or item.get('split') not in {'train', 'validation', 'test'}
                 or item.get('aggregation') not in {'single', 'mean', 'median', 'best'}
-                or (item.get('runs') is not None if statistics else True)
+                or (item.get('runs') is not None if statistics or tensor_pair else True)
                 and (type(item.get('runs')) is not int or not 1 <= item['runs'] <= 100000)):
             raise ValueError('Metric meaning, unit, split and repetition statistic need explicit source support')
+        if tensor_pair and (index != 0 or item.get('std_column') != 1 or item.get('aggregation') != 'mean'
+                            or item.get('runs') is not None):
+            raise ValueError('Tensor summary requires source-bound mean/std order and unknown repetition count')
         if statistics:
             if item.get('split') != statistics['split']:
                 raise ValueError('Final output split label cannot be changed')
@@ -470,7 +577,7 @@ def validate_summary_labels(payload, candidates, packet, workspace):
         sources = [refs[key] for key in selected if refs[key]['source'] == 'repository']
         locations = {}
         quote_fields = ['print_quote', 'order_quote', 'metric_quote', 'aggregation_quote']
-        if output.get('summary_format') == 'all_runs' and item.get('unit_quote'):
+        if output.get('summary_format') in {'all_runs', 'tensor_pair'} and item.get('unit_quote'):
             quote_fields.append('unit_quote')
         for field in quote_fields:
             locations[field] = _original_quote(item.get(field), sources, workspace)
@@ -484,7 +591,7 @@ def validate_summary_labels(payload, candidates, packet, workspace):
         if std_column is not None:
             if (type(std_column) is not int or not 0 <= std_column < len(output['values'])
                     or std_column == index or item['aggregation'] != 'mean'
-                    or not statistics and item['runs'] <= 1):
+                    or not statistics and not tensor_pair and item['runs'] <= 1):
                 raise ValueError('Standard deviation must select a separate actual repeated-run output column')
             std = output['values'][std_column]
             if std < 0:
@@ -499,14 +606,16 @@ def validate_summary_labels(payload, candidates, packet, workspace):
                       interpretation_citations=sources)
         if std is not None:
             record['std'] = std
-        if statistics:
+        if statistics or tensor_pair:
             record['summary_source'] = _final_source_binding(output, locations, sources, workspace, item['name'], item['unit'])
             if record['summary_source'].get('unit_source', {}).get('kind') == 'unknown':
                 record['unit'] = ''
             record['runs_source'] = (deepcopy(output['runs_source']) if output.get('runs_source') else
                                     {'kind': 'reported_summary', 'source': output['id'],
                                       'source_quote': output['source_quote'], 'value': statistics['runs']}
-                                     if statistics['runs'] is not None else {'kind': 'unknown'})
+                                     if statistics and statistics['runs'] is not None else {'kind': 'unknown'})
+        if tensor_pair:
+            record['output_sources'] = deepcopy(output['output_sources'])
         records.append(record)
     return records
 
@@ -533,6 +642,9 @@ def interpret_numeric_summaries(llm, packet, plan, workspace, execution, *, cand
         'Prefer the final TEST result for each stage. Runs come from actual argv or original parser defaults. '
         'Do not confuse epochs with repetitions or validation with test. Quotes must be exact substrings of '
         'cited repository excerpts. Return metrics:[] if the meaning cannot be established. '
+        'Citation id may be a local alias; evidence_id must copy an exact evidence_excerpts key from sources, '
+        'never a local alias or an invented descriptive source ID. For metric_quote, prefer the narrow '
+        'complete original evaluator assignment or expression rather than surrounding training code. '
         'For labelled_statistics candidates, the printed split, mean/std column order, aggregation and reported '
         'runs are authoritative. Keep runs=null when the output reports no repetition count; never infer it '
         'from standard deviation, epochs, process count or source defaults. The final-results label does not '
@@ -547,6 +659,12 @@ def interpret_numeric_summaries(llm, packet, plan, workspace, execution, *, cand
         'the assignment when present. Its runs_source provenance is authoritative; do not invent runs. '
         'When the metric and mean/std are supported but the unmarked unit cannot be proved, use unit:"" '
         'and retain the original final values. Never guess a unit from magnitude or a different log line. '
+        'For summary_format=tensor_pair, two consecutive scalar tensor lines are ONLY candidates. '
+        'Use column=0, std_column=1, aggregation=mean, runs=null. print_quote and aggregation_quote '
+        'must contain both consecutive original print statements proving mean() followed by std() over '
+        'the same values. Trace the evaluator for metric and split; tensor device/dtype are not values. '
+        'For percent, unit_quote must contain the connected original multiplication by 100; otherwise '
+        'use an unknown unit. The output does not prove the number of independent full experiments. '
         'Use errors to correct malformed or unsupported labels.')
     for _ in range(2):
         try:

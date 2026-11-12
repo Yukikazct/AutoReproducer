@@ -24,6 +24,9 @@ _METRIC_LABEL = re.compile(r'(?:'
     r'(?:macro|micro|weighted)[_\s-]?f1(?:[_\s-]?score)?|'
     r'f1(?:[_\s-]?score)?(?:[_\s-](?:macro|micro|weighted))?|'
     r'roc[_\s-]?auc|auc|acc(?:uracy)?|precision|recall|mse|rmse|mae|loss)', re.I)
+_METHOD_HEADER = re.compile(r'(?<![\w.+-])(?:methods?|models?)(?![\w.+-])', re.I)
+_METADATA_PREFIX = re.compile(
+    r'^\s*(?P<value>[^\W\d][\w./+-]*(?:[ \t]*,[ \t]*[^\W\d][\w./+-]*)*)[ \t]+')
 
 
 def _label(value):
@@ -235,6 +238,47 @@ def _method_tail(method, row):
     return match.end() if match else None
 
 
+def _leading_metadata_column(header):
+    """Recognize one explicitly named field before a method-header anchor.
+
+    This narrow text layout supports one identifier or comma-separated symbol
+    list in that field. It does not discover a method by searching substrings
+    inside arbitrary row prose or infer multiple omitted metadata columns.
+    """
+    matches = list(_METHOD_HEADER.finditer(header))
+    if len(matches) != 1:
+        return None
+    anchor = matches[0]
+    line_start = header.rfind('\n', 0, anchor.start()) + 1
+    line_end = header.find('\n', anchor.end())
+    line_end = len(header) if line_end < 0 else line_end
+    prefix = header[line_start:anchor.start()]
+    # Delimited/multiple metadata fields need their own complete cell layout;
+    # this path only accepts the explicit single-field whitespace layout.
+    label = prefix.strip()
+    if (not label or len(label) > 100 or not header[anchor.end():line_end].strip()
+            or re.search(r'[|\t\d.!?;:]', label)
+            or not re.fullmatch(r'[^\W\d][\w /+-]*(?:[ \t]+[^\W\d][\w /+-]*)?', label)):
+        return None
+    leading = len(prefix) - len(prefix.lstrip())
+    return {'header_quote': label,
+            'header_prefix_span': [line_start + leading, anchor.start() - len(prefix) + len(prefix.rstrip())]}
+
+
+def _metadata_method_tail(method, row, metadata):
+    prefix = _METADATA_PREFIX.match(row)
+    if metadata is None or prefix is None:
+        return None, None
+    method_start = prefix.end()
+    tail = _method_tail(method, row[method_start:])
+    if tail is None:
+        return None, None
+    end = method_start + tail
+    return end, {**metadata, 'row_quote': prefix['value'],
+                 'row_prefix_span': [prefix.start('value'), prefix.end('value')],
+                 'method_quote': row[method_start:end], 'method_span': [method_start, end]}
+
+
 def dataset_row_header(reference, row, header):
     """Recognize the other common orientation from explicit original labels.
 
@@ -392,6 +436,57 @@ def _between_rows(text, expected):
     return _body_layout(text, expected) is not None
 
 
+def _metadata_body_layout(text, expected):
+    """Check complete neighboring logical rows under the same named field.
+
+    PDF extraction may wrap a mean, uncertainty separator and deviation onto
+    separate physical lines. Every logical row must retain its explicit leading
+    field, textual method and exactly the full number of result columns. These
+    nonselected rows never supply a value or change the selected row's bytes.
+    """
+    if len(text) > 80000 or len(text.splitlines()) > 100:
+        return None
+    groups, current, offset = [], None, 0
+    for original in text.splitlines(keepends=True):
+        line = original.rstrip('\r\n')
+        start, offset = offset, offset + len(original)
+        if not line.strip():
+            continue
+        if _METADATA_PREFIX.match(line):
+            if current is not None:
+                groups.append(current)
+            current = [start, offset]
+        elif current is not None and re.fullmatch(r'[\s\d.eE+%/±,|\-\x06]+', line):
+            current[1] = offset
+        else:
+            return None
+    if current is not None:
+        groups.append(current)
+    evidence = []
+    for start, end in groups:
+        quote = text[start:end].rstrip('\r\n')
+        prefix = _METADATA_PREFIX.match(quote)
+        candidates = []
+        for match in re.finditer(r'(?<![\w.])' + NUMBER_PATTERN + r'(?![\w.])', quote[prefix.end():], re.I):
+            position = prefix.end() + match.start()
+            method = quote[prefix.end():position].strip()
+            if not method or '\n' in method or not re.search(r'[^\W\d]', method):
+                continue
+            outside_citations = re.sub(r'\([^()]*\)', '', method)
+            if (re.search(r'[()%±\x06]', outside_citations)
+                    or re.search(r'(?<![\w./+-])' + NUMBER_PATTERN + r'(?![\w./+-])',
+                                 outside_citations, re.I)):
+                continue  # Never absorb an earlier result into a method label.
+            cells, first = _cells(quote[position:], allow_prefix=False)
+            if cells is not None and len(cells) == expected and first == 0:
+                candidates.append(position)
+        if len(candidates) != 1:
+            return None
+        evidence.append({'kind': 'explicit_metadata_result_row', 'quote': quote,
+                         'span': [start, start + len(quote)], 'interpreted_as_values': False})
+    return evidence
+
+
 def _tuple_metric(reference, cells, page_text, header_start):
     caption = reference.get('metric_quote')
     if not isinstance(caption, str) or not caption.strip():
@@ -464,6 +559,10 @@ def locate_table_value(reference, quote, header, *, page_text=None):
     if transposed:
         selected_reference.update(method=reference['dataset'], dataset=reference['method'])
     start = _method_tail(selected_reference.get('method'), quote)
+    metadata = None if transposed else _leading_metadata_column(header)
+    metadata_location = None
+    if start is None:
+        start, metadata_location = _metadata_method_tail(selected_reference.get('method'), quote, metadata)
     if start is None:
         return _result('rejected', 'Quoted method row does not match the requested method variant')
     cells, first_cell = _cells(quote[start:])
@@ -480,6 +579,8 @@ def locate_table_value(reference, quote, header, *, page_text=None):
         return _result('unknown', 'Complete header/row widths do not establish a unique table layout')
     between = page_text[header_span[1]:row_span[0]]
     intervening = _body_layout(between, len(paths))
+    if intervening is None and metadata_location is not None:
+        intervening = _metadata_body_layout(between, len(paths))
     if intervening is None and all(cell.get('std') is not None and 'parts' not in cell for cell in cells):
         # Lost separators in another row cannot repair the selected row. Only
         # bound, non-selected table noise is tolerated; all selected cells were
@@ -499,6 +600,9 @@ def locate_table_value(reference, quote, header, *, page_text=None):
                 'orientation': 'datasets_in_rows' if transposed else 'methods_in_rows',
                 'row_span': row_span, 'header_span': header_span, 'basis': rules,
                 'cell_span': selected['span'], 'cell_quote': quote[slice(*selected['span'])]}
+    if metadata_location is not None:
+        evidence['leading_metadata'] = metadata_location
+        evidence['basis'].append('explicit_leading_metadata_column')
     if table_scope is not None:
         evidence['table_scope'] = table_scope
         evidence['basis'].append(table_scope['basis'])

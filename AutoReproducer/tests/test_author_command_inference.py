@@ -43,7 +43,8 @@ TRAIN = ("import argparse\n"
 
 
 def test_sparse_readme_is_combined_with_real_parser_defaults_without_running_source(tmp_path):
-    source = "raise RuntimeError('Author source must never be imported for planning')\n" + TRAIN
+    marker = tmp_path / 'author_source_was_executed'
+    source = f"from pathlib import Path\nPath({str(marker)!r}).write_text('executed')\n" + TRAIN
     packet = packet_for(tmp_path, {'README.md': 'Training lives in `train.py`; it uses Cora and the defaults in its parser.',
                                   'train.py': source})
     plan = propose_author_execution_plan(None, packet, tmp_path)
@@ -55,6 +56,7 @@ def test_sparse_readme_is_combined_with_real_parser_defaults_without_running_sou
     assert {item['dest']: item['value'] for item in origin['cli']['defaults']} == {
         'epochs': 1000, 'seed': 42, 'dataset': 'Cora'}
     assert 'train(args)' in origin['quote']
+    assert not marker.exists()
     assert not list(tmp_path.glob('*.pyc'))
 
 

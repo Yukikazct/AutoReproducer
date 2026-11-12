@@ -1,6 +1,6 @@
 # 当前架构与能力边界
 
-本文描述当前代码的执行路径。普通作者执行仍为默认流程；普通真实 PDF 网页默认允许有界兼容性源码修复，可关闭或切换严格核验，两者互斥。历史实验和旧架构图中的结果不能代替当前版本的实际验收，智能优化仍未开放。
+本文描述当前代码的执行路径。默认目标是完整运行所选作者实验，并将实际指标与论文结果比较；运行完成、比较完成和数值是否达标分别报告。普通真实 PDF 网页默认允许有界兼容性源码修复，可关闭或切换为可选的增强独立核验，两者互斥。历史实验和旧架构图中的结果不能代替当前版本的实际验收，智能优化仍未开放。
 
 当前支持与验收目标是 Windows，应用使用 64 位 CPython 3.11 / 3.12。其他系统的兼容实现仍保留，不作为当前交付承诺。
 
@@ -26,8 +26,8 @@ app.py
       │   ├─ source_repair=True + 报错自动定位或精确 Python 白名单
       │   │   → 实际失败 → 独立修复副本 → 最多两轮兼容补丁
       │   │   → 原命令/环境重跑 → 补丁来源核对与参考比较
-      │   │   （与严格核验互斥；不产生严格成功结论）
-      │   └─ 可选 strict_validation=True
+      │   │   （可完成普通运行与比较，披露补丁；与增强独立核验互斥）
+      │   └─ 增强独立核验（可选） strict_validation=True
       │       → 冻结实验协议与来源核验 → 作者完整实验
       │       → 独立进程重载模型与复算指标 → 所选实验数值判定
       │       （资格证据不足或当前不支持时，记录原因并回到普通作者执行）
@@ -58,7 +58,7 @@ app.py
 | `result_diagnosis.py` | 执行完成后的数值或比较证据诊断：确定性观察、引用证据的模型假设及只读核查建议，不改实验或重新训练 |
 | `repository_profiles.py`、`method_profiles.py`、`rezero_profiles.py` | 注册固定实验；预设范围由各自源码、数据、参数与设备要求限定 |
 | `author_claim_comparison.py` 及相关证据模块 | 从作者输出提取指标，对照原 PDF 并验证引用、统计口径和比较条件 |
-| `strict_validation.py`、`agents/experiment_protocol.py`、`discovered_repository_runtime.py` | 可选严格核验：绑定论文与源码协议、在预算内自动读取确切本地 import 并重查冻结依据，核对完整运行、独立模型推理和指标复算证据 |
+| `strict_validation.py`、`agents/experiment_protocol.py`、`discovered_repository_runtime.py` | 增强独立核验（可选）：绑定论文与源码协议、在预算内自动读取确切本地 import 并重查冻结依据，核对完整运行、独立模型推理和指标复算证据 |
 | `agents/report_generator.py`、`report_revisions.py` | 生成报告，保留来源、执行诊断、指标与历史报告版本 |
 | `environment_lifecycle.py`、`resource_manager.py`、`audit/` | 实验依赖释放、资源清单、归档及审计记录 |
 
@@ -71,12 +71,13 @@ app.py
 - 网页作者仓库和固定预设使用本地受控子进程与隔离依赖目录。Docker 控件暂未开放，底层执行器的 Docker 支持不等于这些主路径已支持容器执行。
 - 原始作者命令不设训练时间上限；严格捕获保留全部原作者步骤，并将这些步骤的 `timeout_s` 设为 `None`。追加的独立模型推理与指标复算步骤单独限制为 300 秒；下载、安装和模型请求保留各自的超时，错误修复有次数上限。缺少 CUDA、依赖或可支持入口时保留具体阻塞原因。
 - `author_code_completed` 表示所需命令正常返回且所属进程完成处理。仅准备源码或环境属于准备状态；Mock 属于演示状态。
-- 普通 PDF 作者仓库执行完成后尝试比较作者输出与论文宣称。比较保留引用、差值和限制，失败不改变已经保存的命令完成事实；它不替代独立复算和整篇论文验收。
+- 普通 PDF 作者仓库执行完成后比较作者输出与论文宣称。完整运行且至少一项实际指标与论文数值形成有来源、有限数值的配对后，可标记默认的“运行与比较已完成”；其余未配对指标继续列明。单位、划分、重复次数或设置不一致时，仍可展示实际差值及限制，但不因此声称达到论文参考。比较失败不改变已保存的命令完成事实；未请求增强独立核验不会阻挡默认完成。
+- 结论使用版本 2 的 `workflow` 记录默认完成状态，与数值达标、AI 补充判断及独立核验分开。`paper_metrics_verified`、原 `is_reproduced` 保留独立核验语义；普通运行与比较完成不会改写这些字段，也不代表论文全部实验均已复现。
 - 编程接口的 `source_repair` 默认 `False`；普通真实 PDF 网页默认勾选有界兼容性修复，可关闭。文件列表留空时启用 `source_repair_auto`，根据最终真实 traceback、固定源码摘要和缺失 API 自动定位最多三个 Python 文件；也可填写 1–32 个已存在的 Python 相对路径，实际每轮修改仍最多三个。不接受目录、通配符、数据、评测或权重文件。标题、Mock、语料对照、外部代码、固定预设和 Notebook 计划不进入该修复路径。
 - 显式源码修复在原命令真实失败后只创建一次独立会话，最多两轮、每轮最多三个文件；拒绝也消耗轮数。副本只包含固定作者源码与冻结输入，原工作区、来源与观测器保持独立。候选保留原 argv、cwd、依赖顺序、步骤环境及已准备依赖；在应用前核对 AST 结构、训练/划分/评测敏感名称与会话已观测的真实报错中的缺失 API，再按原命令完整重跑。复制和快照前用元数据检查 4096 文件 / 256 MiB 上限，超限保留 `resource_limit` 诊断；失败或后验校验异常全树回滚，恢复失败立即停止并标记 `rollback_failed`。
 - 源码修复对作者环境中的工作区绝对路径做有记录的副本重定位；尚无冻结凭据的动态 `author_runtime` 数据不进入修复。2026-10-21 的 248 项合成机制验证及来源指纹见 [入口证据](evidence/issue20_web_repairs_20261021.json)。2026-10-23 新增真实模型 API 的自动定位、兼容补丁和数值诊断验证，以及下载卡住后的停止与清理机制，见 [紧急修复记录](p0_cancellation_self_repair_20261023.md)。
-- 修复成功保存原失败、独立修复计划、逐轮提案 / diff / 日志 / 回滚结果及原/实际源码摘要清单。结果明确标记 `patched_author_repository`、`patched_author_code_execution` 和 `source_modified=true`；仍为 `paper_metrics_verified=false`、`is_reproduced=null`、`training_observed=false`。参考比较使用修复后的来源摘要并标记 `patched_author_output`。此入口与严格核验互斥，细节见 [显式仓库兼容修复](repository_repairs.md)；实现接入不等于网页完整验收或真实论文严格通过。
-- `strict_validation` 默认 `False`。网页只对普通真实 PDF、未选预设和语料对照时提供勾选项；旧的审核、结果摘要共享及优化开关不会启用严格核验。显式请求严格核验时，先检查所选实验协议与冻结来源；当前不支持或资格证据不足则记录 `strict_validation.status=unavailable` 和原因，继续普通作者执行及参考比较。
+- 修复成功保存原失败、独立修复计划、逐轮提案 / diff / 日志 / 回滚结果及原/实际源码摘要清单。结果明确标记 `patched_author_repository`、`patched_author_code_execution` 和 `source_modified=true`；仍为 `paper_metrics_verified=false`、`is_reproduced=null`、`training_observed=false`。参考比较使用修复后的来源摘要并标记 `patched_author_output`。兼容修复后的完整运行与有效数值配对可以满足默认完成条件，补丁作为来源限制披露。此入口与增强独立核验互斥，细节见 [显式仓库兼容修复](repository_repairs.md)。
+- `strict_validation` 默认 `False`，网页标为“增强独立核验（可选）”。只对普通真实 PDF、未选预设和语料对照时提供勾选项；旧的审核、结果摘要共享及优化开关不会启用该核验。显式请求时，先检查所选实验协议与冻结来源；当前不支持或资格证据不足则记录 `strict_validation.status=unavailable` 和原因，继续普通作者执行及参考比较。增强核验的原有安全与证据要求保持不变。
 - 普通 PDF 可填写方法 / 模型和数据集名称，作为 `experiment_request` 经网页、后台及独立 worker 透传。名称只用于选择作者已有实验，论文引用、原命令和冻结协议仍分别核验；严格规划不能静默换成另一数据集。
 - 捕获选择器支持原变量名、旧 `attributes` / `keys`，以及最多八步的有序 `path`，例如 `{name:'dataset',path:[{attribute:'graph'},{key:'node_feat'}]}`。混合路径绑定原源码的完整 AST 链；运行时只读直接存储字段和内建字典 / 列表 / 元组，不执行表达式、getter 或自定义索引。
 - 整数标签 `[N,1]` 只在捕获与独立评估中无损展平成 `[N]`。原始字节、dtype / 字节序、形状及摘要随模型输入归档，独立进程重新核验转换依据；作者训练输入不变。浮点标签、多列标签和不匹配的测试索引仍拒绝。

@@ -517,14 +517,14 @@ with st.sidebar:
                 and st.session_state.get("pdf_strict_validation")):
             st.session_state["pdf_strict_validation"] = False
         strict_validation = st.checkbox(
-            "严格核验：重载模型并独立复算指标", key="pdf_strict_validation",
+            "增强独立核验（可选）：重载模型并复算指标", key="pdf_strict_validation",
             disabled=st.session_state.running,
             on_change=_select_pdf_execution_mode,
             args=("pdf_strict_validation", "pdf_source_repair"),
-            help="请求在作者代码运行后检查实验协议、重载模型并独立计算指标；暂不支持核验时继续普通运行并记录原因。")
+            help="额外检查实验协议、重载模型并独立计算指标；未启用或暂不支持时，仍可完成普通运行与论文指标比较。")
         if strict_validation:
-            st.caption("严格核验需要完整模型、数据划分和实验设置证据；不支持时继续普通运行并记录核验不可用，结果以实际检查为准。")
-        st.caption("默认在作者命令完整结束后，由 AI 结合论文指标、实际差异与实验设置判断复现情况，并说明容许误差和局限。")
+            st.caption("增强独立核验需要完整模型、数据划分和实验设置证据；不支持时继续普通运行与比较并记录原因，结果以实际检查为准。")
+        st.caption("默认完整运行作者实验并比较论文指标，由 AI 结合差异与实验设置说明误差和局限；运行完成、比较完成和数值达标分别报告。增强独立核验为可选项。")
         source_repair = st.checkbox(
             "AI 自动修复：失败后修复并重试", key="pdf_source_repair",
             disabled=st.session_state.running,
@@ -542,7 +542,7 @@ with st.sidebar:
             source_repair_editable = list(dict.fromkeys(
                 line.strip() for line in editable_text.splitlines() if line.strip()))
             source_repair_auto = not source_repair_editable
-            st.caption("源码修复与严格核验互斥：修复会改变源码，严格核验要求冻结源码。修复不能改变模型、数据划分、训练轮数或评价方法。")
+            st.caption("源码修复与增强独立核验互斥：增强核验沿用冻结源码要求；兼容修复后的普通运行与比较可正常完成，并披露补丁。修复不能改变模型、数据划分、训练轮数或评价方法。")
 
     # 启动 / 重置按钮
     isolated_restart_btn = False
@@ -993,8 +993,15 @@ with tab1:
 
         data = result.get("data", {}) or {}
         if result.get("state") == "COMPLETED":
+            from src.result_conclusion import build_reproduction_conclusion
             validation = data.get("validation") or {}
             assessment = validation.get('reproduction_assessment') or {}
+            conclusion = build_reproduction_conclusion(data)
+            workflow = conclusion.get('workflow') or {}
+            workflow_completed = workflow.get('completed') is True
+            if workflow_completed:
+                st.success(workflow['label'])
+                st.caption(conclusion['comparison']['label'])
             if validation.get("result_level") == "failed":
                 st.error("实验未通过：" + validation.get("reason", "查看报告和执行日志"))
             elif assessment.get('status') == 'completed':
@@ -1029,7 +1036,7 @@ with tab1:
                 for warning in validation.get('warnings', []):
                     st.warning(warning)
                 if validation.get('paper_metrics_verified') is not True:
-                    st.caption('严格独立复算为可选核验，本次未完成该项。')
+                    st.caption('增强独立核验为可选项，本次未完成该项。')
             elif validation.get("status") == "not_reproduced":
                 st.warning("完整实验已运行，论文数值验收未通过：" + validation.get("reason", "查看指标差异"))
             elif validation.get("status") == "reference_not_met":
@@ -1050,7 +1057,8 @@ with tab1:
             elif validation.get("status") in {"prepared", "environment_prepared", "smoke_passed"}:
                 st.info(validation.get("reason", "流程已结束，请查看实验结论"))
             elif validation.get('status') == 'author_code_completed':
-                st.success('所选仓库代码已运行完成，命令已正常退出。')
+                if not workflow_completed:
+                    st.success('所选仓库代码已运行完成，命令已正常退出。')
                 if assessment:
                     st.caption('AI 复现判断尚未完成：' + str(assessment.get('reason') or '详见报告。'))
                 if validation.get('training_observed') is False:
@@ -1058,10 +1066,12 @@ with tab1:
                 for warning in validation.get('warnings', []):
                     st.warning(warning)
                 comparison = validation.get('author_claim_comparison') or {}
-                if comparison.get('comparisons'):
-                    st.caption('已对比作者输出与论文宣称，详见报告中的差值和实验设置；本次未进行论文数值审核。')
+                if workflow_completed:
+                    st.caption('已将作者实际输出与论文指标比较；数值是否达标及设置差异见报告。')
+                elif comparison.get('comparisons'):
+                    st.caption('已保存部分论文指标配对；实际数值或来源仍待补齐，详见报告。')
                 else:
-                    st.caption('本次完成的是代码运行，论文数值未做验收。')
+                    st.caption('代码运行已完成，论文指标比较尚未完成。')
             elif validation.get("status") == "method_experiment_completed":
                 optimization = data.get("optimization") or {}
                 st.success(("基线方法实验已完成" if optimization.get("mode") == "validate"

@@ -32,7 +32,9 @@ def accepted(passed=True):
 def author_comparison(data, verdict=True):
     data['validation']['author_claim_comparison'] = {
         'status': 'compared', 'basis': 'author_output',
-        'comparisons': [{'status': 'comparable', 'meets_reference': verdict}]}
+        'comparisons': [{'status': 'comparable', 'meets_reference': verdict,
+                         'actual': {'id': 'train:stdout:1', 'source': 'train:stdout:1', 'value': .82},
+                         'reference': {'value': .81}}]}
 
 
 @pytest.mark.parametrize('passed', [True, False])
@@ -102,7 +104,9 @@ def test_successful_repair_round_replaces_old_failure_but_is_not_original_source
     assert result['execution']['status'] == 'completed'
     assert result['scope']['source_modified'] is True
     assert result['is_reproduced'] is None
-    assert 'source_modified' in {row['code'] for row in result['blockers']}
+    assert 'source_modified' not in {row['code'] for row in result['blockers']}
+    assert 'source_modified' in {row['code'] for row in result['limitations']}
+    assert result['workflow']['completed'] is True
 
 
 @pytest.mark.parametrize('stage,expected', [('train', 'incomplete'), ('smoke', 'smoke_passed')])
@@ -205,7 +209,7 @@ def test_model_hypotheses_cannot_outrank_deterministic_checks_or_become_blockers
     hypothesis = next(row for row in result['next_steps'] if row.get('basis') == 'model_hypothesis')
     assert hypothesis['priority'] == 3
     assert result['next_steps'].index(hypothesis) > next(
-        index for index, row in enumerate(result['next_steps']) if row['category'] == 'independent')
+        index for index, row in enumerate(result['next_steps']) if row['category'] == 'comparison')
     assert all(row['check'] != '无来源建议' for row in result['next_steps'])
     assert all(row['reason'] != '待核查解释' for row in result['blockers'])
 
@@ -276,3 +280,158 @@ def test_empty_and_malformed_historical_fields_cannot_become_success():
         result = build_reproduction_conclusion(data)
         assert result['is_reproduced'] is None
         assert result['execution']['status'] == 'incomplete'
+
+
+@pytest.mark.parametrize('met', [True, False])
+def test_default_workflow_completion_is_separate_from_reference_and_independent_acceptance(met):
+    data = completed()
+    author_comparison(data, met)
+    original = deepcopy(data)
+    result = build_reproduction_conclusion(data)
+    assert result['version'] == 2
+    assert result['workflow'] == {
+        'standard': 'author_execution_and_metric_comparison', 'status': 'completed',
+        'label': '作者实验与论文指标比较已完成', 'completed': True,
+        'execution_complete': True, 'comparison_complete': True,
+        'compared_metrics': 1, 'pending_metrics': 0,
+        'reason': '完整作者执行与真实数值对照已记录；比较达标和增强独立核验另行说明。'}
+    assert result['comparison']['status'] == ('met' if met else 'not_met')
+    assert result['is_reproduced'] is None
+    assert result['independent']['status'] == 'unavailable'
+    assert result['independent']['requested'] is False
+    assert result['blockers'] == []
+    assert all(row['category'] != 'independent' for row in result['next_steps'])
+    assert data == original
+    if not met:
+        assert 'numeric_gap' in {row['code'] for row in result['limitations']}
+        assert '未全部达到论文参考' in result['summary']
+
+
+def test_reference_only_comparison_completes_workflow_and_keeps_protocol_differences():
+    data = completed()
+    author_comparison(data)
+    comparison = data['validation']['author_claim_comparison']
+    comparison['status'] = 'partial'
+    comparison['comparisons'][0].update(
+        status='reference_only', meets_reference=None,
+        settings={'status': 'different', 'reason': '论文报告100次均值，本次为单次运行。'},
+        limitations=['本次测试仅覆盖 Cora。'])
+    # A second unknown row is reported as incomplete coverage; it does not
+    # invalidate the actual/reference pair that was genuinely compared.
+    comparison['comparisons'].append({'status': 'not_comparable'})
+    result = build_reproduction_conclusion(data)
+    assert result['workflow']['completed'] is True
+    assert result['workflow']['compared_metrics'] == 1
+    assert result['workflow']['pending_metrics'] == 1
+    assert result['comparison']['status'] == 'reference_only'
+    assert result['is_reproduced'] is None
+    assert result['blockers'] == []
+    limitation = next(row for row in result['limitations'] if row['code'] == 'comparison_context')
+    assert limitation['details'] == ['论文报告100次均值，本次为单次运行。', '本次测试仅覆盖 Cora。']
+    from src.result_conclusion import conclusion_markdown
+    report = conclusion_markdown(result)
+    assert '作者实验与论文指标比较已完成' in report
+    assert '论文报告100次均值，本次为单次运行。' in report
+    assert '独立模型重载' not in report
+
+
+@pytest.mark.parametrize('defect', [
+    'missing', 'unavailable', 'no_reference', 'no_actual', 'no_source', 'nonfinite', 'boolean', 'flags_only',
+])
+def test_workflow_needs_real_observed_and_reference_values_not_success_flags(defect):
+    data = completed()
+    author_comparison(data)
+    comparison = data['validation']['author_claim_comparison']
+    row = comparison['comparisons'][0]
+    if defect == 'missing':
+        data['validation'].pop('author_claim_comparison')
+    elif defect == 'unavailable':
+        comparison['status'] = 'unavailable'
+    elif defect == 'no_reference':
+        row['reference'].pop('value')
+    elif defect == 'no_actual':
+        row['actual'].pop('value')
+    elif defect == 'no_source':
+        row['actual'] = {'value': .82}
+    elif defect == 'nonfinite':
+        row['actual']['value'] = float('nan')
+    elif defect == 'boolean':
+        row['actual']['value'] = True
+    else:
+        comparison['comparisons'] = [{'status': 'comparable', 'meets_reference': True}]
+    data['validation']['reproduction_assessment'] = {
+        'status': 'completed', 'verdict': 'reproduced', 'reason': 'AI 判断已完成。'}
+    result = build_reproduction_conclusion(data)
+    assert result['workflow']['status'] == 'comparison_pending'
+    assert result['workflow']['completed'] is False
+    assert result['assessment']['verdict'] == 'reproduced'
+    assert result['is_reproduced'] is None
+    assert 'comparison' in {row['code'] for row in result['blockers']}
+    assert 'independent' not in {row['code'] for row in result['blockers']}
+    json.dumps(result, allow_nan=False)
+
+
+@pytest.mark.parametrize('change', [
+    {'cancelled': True}, {'timed_out': True}, {'cleanup_unconfirmed': True},
+    {'process_alive': True}, {'success': False},
+])
+def test_workflow_rechecks_live_completion_and_ignores_saved_workflow_success(change):
+    data = completed()
+    author_comparison(data)
+    data['reproduction_conclusion'] = build_reproduction_conclusion(data)
+    data['execution'].update(change)
+    result = build_reproduction_conclusion(data)
+    assert result['workflow']['status'] == 'execution_pending'
+    assert result['workflow']['completed'] is False
+    assert result['workflow']['comparison_complete'] is True
+
+
+def test_requested_strict_verification_stays_separate_and_retains_its_blocker():
+    data = completed()
+    author_comparison(data)
+    data['strict_validation'] = {'requested': True, 'status': 'unavailable', 'reason': '模型独立重载尚未完成。'}
+    data['source_repair'] = {'status': 'succeeded'}
+    result = build_reproduction_conclusion(data)
+    assert result['workflow']['completed'] is True
+    assert result['independent']['requested'] is True
+    assert result['is_reproduced'] is None
+    assert result['summary'] == '作者实验与论文指标比较已完成；另行请求的增强独立核验尚未完成。'
+    assert {'independent', 'source_modified'} <= {row['code'] for row in result['blockers']}
+
+
+def test_default_workflow_can_use_numeric_independent_rows_without_promoting_saved_flags():
+    data = accepted()
+    data['validation']['comparisons'][0].update(actual=.82, reference=.81)
+    assert build_reproduction_conclusion(data)['workflow']['completed'] is True
+    data['validation']['comparisons'][0].pop('actual')
+    assert build_reproduction_conclusion(data)['workflow']['completed'] is False
+
+
+def test_optional_independent_advice_is_not_required_by_default_workflow():
+    data = completed()
+    author_comparison(data)
+    data['outcome_diagnosis'] = {
+        'evidence': [{'id': 'comparison'}],
+        'next_steps': [{'category': 'independent', 'priority': 1,
+                        'check': '重新加载模型并独立复算。', 'evidence_ids': ['comparison']}]}
+    result = build_reproduction_conclusion(data)
+    assert result['workflow']['completed'] is True
+    assert all(row['category'] != 'independent' for row in result['next_steps'])
+
+
+@pytest.mark.parametrize('defect', ['best_effort', 'fallback_used', 'unvalidated',
+                                  'invalid_metrics', 'inner_invalid', 'missing_metrics'])
+def test_unvalidated_or_substitute_metrics_do_not_complete_default_author_workflow(defect):
+    data = completed()
+    data['validation'].update(status='reproduced', metrics_comparison={
+        'paper': {'accuracy': .81}, 'actual': {'accuracy': .82}})
+    if defect in {'best_effort', 'fallback_used'}:
+        data['execution'][defect] = True
+    elif defect == 'unvalidated':
+        data['validation']['status'] = 'author_code_completed'
+    elif defect == 'invalid_metrics':
+        data['validation']['invalid_metrics'] = ['accuracy']
+    else:
+        data['validation']['validation'] = {
+            'invalid_metrics' if defect == 'inner_invalid' else 'missing_metrics': ['accuracy']}
+    assert build_reproduction_conclusion(data)['workflow']['completed'] is False

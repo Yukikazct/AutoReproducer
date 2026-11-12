@@ -41,7 +41,7 @@ V6_HEADER = ['指标', '论文参考', '实际值', '单位（参考 / 实际）
 def v6_report(rows, matched=None):
     reference = ('仅供参考，尚不可验收' if matched is None else
                  '已有核验指标达到参考规则' if matched else '已有核验指标未全部达到参考规则')
-    independent = '独立核验尚未完成' if matched is None else '协议与独立指标复算已核验'
+    independent = '未进行增强独立核验（可选）' if matched is None else '协议与独立指标复算已核验'
     conclusion = ('# Report\n- **是否达到参考**: ' + reference + '\n- **论文参考比较**: ' + reference +
                   '\n- **独立核验状态**: ' + independent + '\n- **独立核验**: ' + independent + '\n')
     escaped = [[re.sub(r'([\\`*_{}\[\]()<>!|])', r'\\\1', cell) for cell in row] for row in rows]
@@ -315,7 +315,7 @@ class Page:
             "API Key": Field(),
             "Mock 演示模式（无需 API）": Field(checked=True),
             "Docker 沙箱执行（暂未开放）": Field(checked=False),
-            "严格核验：重载模型并独立复算指标": Field(),
+            "增强独立核验（可选）：重载模型并复算指标": Field(),
             "AI 自动修复：失败后修复并重试": Field(checked=True),
             "智能调查与排障": Field(checked=True),
             "调查方式": Field('collaborative'),
@@ -438,9 +438,9 @@ def test_browser_is_portable_and_accepts_explicit_configuration():
 @pytest.mark.parametrize('strict', [False, True])
 def test_pdf_mode_controls_are_set_explicitly_and_exclude_source_repair(strict):
     page = Page()
-    page.fields['严格核验：重载模型并独立复算指标'].checked = not strict
+    page.fields['增强独立核验（可选）：重载模型并复算指标'].checked = not strict
     audit.configure_execution_mode(page, strict)
-    assert page.fields['严格核验：重载模型并独立复算指标'].checked is strict
+    assert page.fields['增强独立核验（可选）：重载模型并复算指标'].checked is strict
     assert page.fields['AI 自动修复：失败后修复并重试'].checked is False
     assert page.fields['智能调查与排障'].checked is False
 
@@ -648,12 +648,33 @@ def test_live_terminal_view_checks_actual_numeric_or_author_conclusion(strict, m
     validation = {'is_reproduced': matched, 'training_observed': False}
     audit.verify_terminal_page(TerminalPage(), validation, strict)
     if not strict:
-        assert '本次完成的是代码运行，论文数值未做验收。' in labels
+        assert '代码运行已完成，论文指标比较尚未完成。' in labels
     elif matched:
         assert '完整实验已完成，论文数值验收通过。' in labels
     else:
         assert any('独立评估数值未达到固定参考' in label for label in labels)
     assert labels[-1] == '任务完成'
+
+
+def test_terminal_page_uses_completed_default_workflow_for_reference_only_pair():
+    result = compared_result()
+    data = result['data']
+    data['execution'] = {'mode': 'repository', 'executed': True, 'success': True,
+                         'final': {'success': True, 'exit_code': 0}}
+    validation = data['validation']
+    validation['training_observed'] = False
+    labels = []
+
+    class TerminalPage:
+        def get_by_text(self, name, **kwargs):
+            labels.append(name.pattern if isinstance(name, re.Pattern) else name)
+            return SimpleNamespace(wait_for=lambda **kwargs: None)
+
+    audit.verify_terminal_page(TerminalPage(), validation, result_data=data)
+    assert '作者实验与论文指标比较已完成' in labels
+    assert '已将作者实际输出与论文指标比较；数值是否达标及设置差异见报告。' in labels
+    assert '所选仓库代码已运行完成，命令已正常退出。' not in labels
+    assert validation['paper_metrics_verified'] is False and validation['is_reproduced'] is None
 
 
 @pytest.mark.parametrize('verdict,label', [
@@ -678,7 +699,7 @@ def test_ordinary_ai_assessment_preserves_execution_and_independent_boundaries(c
 
     audit.verify_terminal_page(TerminalPage(), validation)
     assert any(re.escape(label) in text for text in labels)
-    assert '严格独立复算为可选核验，本次未完成该项。' in labels
+    assert '增强独立核验为可选项，本次未完成该项。' in labels
     assert labels[-1] == '任务完成'
     validation['paper_metrics_verified'] = True
     with pytest.raises(AssertionError):
@@ -898,7 +919,7 @@ def test_reference_only_download_retains_delta_and_does_not_claim_acceptance(com
     elif wrong == 'reference_conclusion':
         report = report.replace('仅供参考，尚不可验收', '已配对指标达到参考规则')
     elif wrong == 'independent_conclusion':
-        report = report.replace('独立核验尚未完成', '协议与独立指标复算已核验')
+        report = report.replace('未进行增强独立核验（可选）', '协议与独立指标复算已核验')
     save_report(result, report)
     if wrong:
         with pytest.raises(AssertionError):
