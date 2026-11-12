@@ -108,7 +108,8 @@ def test_readable_report_keeps_settings_metrics_analysis_and_moves_unabridged_ev
     assert 'Table 2' in report or '第 3 页' in report
     assert experiment_data['result_analysis']['summary'] in report
     assert '仅覆盖所选实验，不能推广到整篇论文。' in report
-    assert '尚未独立核验' in report or '独立核验尚未完成' in report
+    assert '作者实验与论文指标比较已完成' in report
+    assert '未进行增强独立核验（可选）' in report
     for marker in ('逐字原文长段第0句', '逐字原文长段第599句',
                    'final-output-marker-0', 'final-output-marker-599',
                    'only-detail-code-0', 'only-detail-code-599', 'raw diagnostic detail marker'):

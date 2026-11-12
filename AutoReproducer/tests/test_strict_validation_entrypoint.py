@@ -161,6 +161,8 @@ def test_generic_real_pdf_checkbox_requests_strict_validation_only_when_selected
     app = make()
     checkbox = app.sidebar.checkbox(key='pdf_strict_validation')
     assert checkbox.value is False
+    assert checkbox.label == '增强独立核验（可选）：重载模型并复算指标'
+    assert any('运行完成、比较完成和数值达标分别报告' in row.value for row in app.caption)
     if strict:
         checkbox.check().run()
         assert any('结果以实际检查为准' in row.value for row in app.caption)

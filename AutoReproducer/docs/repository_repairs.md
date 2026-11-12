@@ -2,7 +2,7 @@
 
 普通真实 PDF 的网页入口默认启用“兼容性源码修复：失败后自动重试”，可手动关闭。文件列表留空时，真实执行失败后按 traceback 自动定位最多三个固定作者源码文件；也可填写精确 Python 文件路径来限定修复范围。标题、Mock、语料对照、外部代码和固定预设不使用此入口。直接调用服务的默认值仍为关闭。
 
-后台线程与独立 worker 传递 `source_repair`、`source_repair_auto` 和 `source_repair_editable`，由 `src/source_repair.py` 衔接作者执行、事务补丁与结果核对。源码修复与 `strict_validation` 互斥：网页切换选项时关闭另一项，服务请求同时开启时拒绝执行。
+后台线程与独立 worker 传递 `source_repair`、`source_repair_auto` 和 `source_repair_editable`，由 `src/source_repair.py` 衔接作者执行、事务补丁与结果核对。源码修复与可选的增强独立核验 `strict_validation` 互斥：网页切换选项时关闭另一项，服务请求同时开启时拒绝执行。默认完成目标是完整运行作者实验并与论文指标比较，增强独立核验另行记录。
 
 ## 白名单与独立副本
 
@@ -40,7 +40,7 @@ README 环境中指向原工作区的绝对路径（例如 `PYTHONPATH`、数据
 
 服务还尝试生成 `source_repair_evidence.zip`，汇集上述记录、原模型响应和原运行、各轮运行的完整文本日志；附件内 `evidence_manifest.json` 记录每个成员的原件摘要、归档摘要、字节数与是否脱敏。归档输入上限为 64 MiB，失败记录 `evidence_error`，完整原件继续保留在运行目录。报告旁的证据附件和网页报告下载核对附件 SHA256，下载包包含已绑定的 ZIP；不能仅靠报告中的任意本地链接加入文件。复制准备期间的失败或取消也写入终态；附件通过原子替换写入，避免沿已有硬链接改写外部文件。
 
-命令完成时使用 `execution_source=patched_author_repository`、`reproduction_scope=patched_author_code_execution` 和 `source_modified=true` 标明补丁来源；最多给出 `author_code_completed`。此路径保留 `paper_metrics_verified=false`、`is_reproduced=null`、`training_observed=false`，不计作原始源码严格验收或独立数值复现。后续论文参考比较使用修复副本及实际源码摘要，并以 `basis=patched_author_output` 记录依据和修复清单摘要。
+命令完成时使用 `execution_source=patched_author_repository`、`reproduction_scope=patched_author_code_execution` 和 `source_modified=true` 标明补丁来源，执行状态为 `author_code_completed`。后续论文参考比较使用修复副本及实际源码摘要，并以 `basis=patched_author_output` 记录依据和修复清单摘要。完整运行且有实际指标与论文数值形成有效配对时，版本 2 结论中的 `workflow` 可标记默认“运行与比较已完成”；数值是否达标、统计与设置差异继续单独报告。此路径仍保留 `paper_metrics_verified=false`、`is_reproduced=null`、`training_observed=false`，不据此声称原始源码的增强独立核验已经通过。
 
 最终冻结源码专项 **248 项通过，零失败、零跳过**，包含 Streamlit 控件及实际后台→服务→所属子进程→报告附件的合成机制测试，详见 [来源绑定记录](evidence/issue20_web_repairs_20261021.json)。模型回复及网络来源为 fixture；真实模型 API / 外部论文的完整网页验收需另行记录，机制测试不构成 #41 或论文数值通过证据。
 

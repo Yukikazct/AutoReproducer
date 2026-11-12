@@ -66,7 +66,7 @@ def test_author_execution_completion_is_displayed_without_numerical_reproduction
     app.run()
     assert not app.exception
     assert any('所选仓库代码已运行完成' in item.value for item in app.success)
-    assert any('论文数值未做验收' in item.value for item in app.caption)
+    assert any('论文指标比较尚未完成' in item.value for item in app.caption)
     assert not any('论文数值复现通过' in item.value for item in app.success)
 
 
@@ -98,7 +98,7 @@ def test_ai_assessment_takes_precedence_over_code_completion_and_optional_strict
     assert '相对误差 2.00%' in captions and '综合单次与均值的差异' in captions
     assert '模型置信度：87%' in captions
     assert '单次运行与论文多次均值' in captions
-    assert '严格独立复算为可选核验' in captions
+    assert '增强独立核验为可选项' in captions
     assert not any('所选仓库代码已运行完成' in item.value for item in app.success)
 
 

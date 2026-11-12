@@ -172,7 +172,7 @@ def test_pdf_execution_modes_are_mutually_exclusive(strict_app, last_selected):
     assert app.sidebar.checkbox(key=f'pdf_{last_selected}').value is True
     if last_selected == 'source_repair':
         app.sidebar.text_area(key='pdf_source_repair_editable').set_value('train.py').run()
-        assert any('源码修复与严格核验互斥' in row.value for row in app.caption)
+        assert any('源码修复与增强独立核验互斥' in row.value for row in app.caption)
     _start(app)
     request = capture.call_args.kwargs
     assert request['source_repair'] is (last_selected == 'source_repair')

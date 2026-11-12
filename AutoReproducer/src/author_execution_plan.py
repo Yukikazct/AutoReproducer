@@ -482,6 +482,38 @@ steps:[{id,kind:'train|eval',argv:['python','original.py',...] OR ['python','-m'
                                'failure_kind': category}) from exc
 
 
+def _author_command_documents(packet):
+    """Include only READMEs and guides actually followed from frozen evidence."""
+    files = packet['repository']['files']
+    names = {name for name in packet['file_inventory'] if Path(name).name.lower().startswith('readme')}
+    for name in (packet.get('program_detected_author_commands') or {}).get('documentation_sources', []):
+        if (isinstance(name, str) and Path(name).suffix.lower() in {'.md', '.markdown', '.rst', '.txt'}
+                and name in files and name in packet['file_inventory']
+                and files[name]['sha256'] == packet['file_inventory'][name]['sha256']):
+            names.add(name)
+    return names
+
+
+def _packaging_invocation(argv):
+    position = 2 if len(argv) > 1 and argv[1] == '-u' else 1
+    if position >= len(argv):
+        return False
+    if argv[position] == '-m':
+        return len(argv) > position + 1 and argv[position + 1] in {'pip', 'build', 'ensurepip', 'setup'}
+    return Path(argv[position]).name.lower() == 'setup.py'
+
+
+def _has_documented_experiment(text):
+    prefixes = re.finditer(r'\bpython3?\s+(?:-u\s+)?(?:-m\s+[^\s`]+|[^\s`]+\.py)\b', text)
+    for match in prefixes:
+        try:
+            if not _packaging_invocation(shlex.split(match[0])):
+                return True
+        except ValueError:
+            return True
+    return False
+
+
 def _plan_from_available_sources(packet, workspace, discovery, **completion):
     """Try literal launchers first, then a uniquely source-supported invocation."""
     required_argv = completion.get('required_argv')
@@ -508,9 +540,9 @@ def _plan_from_available_sources(packet, workspace, discovery, **completion):
             raise
         # An incomplete documented invocation must not silently lose its mode,
         # working directory or hyperparameters by switching to native defaults.
-        documented = any(re.search(r'\bpython3?\s+(?:-u\s+)?(?:-m\s+\S+|\S+\.py)\b', source['text'])
+        documented = any(_has_documented_experiment(source['text'])
                          for name, source in packet['repository']['files'].items()
-                         if Path(name).name.lower().startswith('readme') or name.endswith('.sh'))
+                         if name in _author_command_documents(packet) or name.endswith('.sh'))
         if documented and not completion.get('required_entrypoint'):
             raise
         from src.author_command_inference import select_author_command
@@ -603,10 +635,11 @@ def plan_from_author_commands(packet, workspace, *, required_entrypoint=None,
     """A model outage or unsupported quotation must not hide literal launchers."""
     if packet.get('author_execution_only') is not True:
         raise PlanEvidenceError('Literal command fallback requires an explicit execution objective')
+    documents = _author_command_documents(packet)
     readmes = '\n'.join(source['text'] for name, source in packet['repository']['files'].items()
-                        if Path(name).name.lower().startswith('readme'))
+                        if name in documents)
     names = [name for name in packet['file_inventory']
-             if Path(name).name.lower().startswith('readme') or name.endswith('.sh')]
+             if name in documents or name.endswith('.sh')]
     names.sort(key=lambda name: (0 if name in readmes else 1,
         0 if Path(name).name.lower().startswith('readme') else 1,
         len(Path(name).parts), name))
@@ -621,7 +654,7 @@ def plan_from_author_commands(packet, workspace, *, required_entrypoint=None,
         bindings, loop_choices = {}, {}
         for line in source['text'].replace('\\\r\n', ' ').replace('\\\n', ' ').splitlines():
             stripped = line.strip().removeprefix('$ ').strip('`').strip()
-            if Path(name).name.lower().startswith('readme'):
+            if name in documents:
                 directory_hint = re.search(
                     r'\b(?:navigate\s+(?:into|to)|change\s+(?:the\s+)?(?:working\s+)?directory\s+to)'
                     r'\s+`([^`\r\n]+)`', line, re.I)
@@ -659,6 +692,8 @@ def plan_from_author_commands(packet, workspace, *, required_entrypoint=None,
                         for arg in argv]
                 if any('$' in arg or '<' in arg or '>' in arg for arg in argv):
                     continue  # Unresolved shell templates need an actual planner.
+                if _packaging_invocation(argv):
+                    continue  # Dependency setup cannot replace the original training step.
                 directory = workspace_path(workspace, cwd, 'author working directory',
                                            must_exist=True, forbid_git=True)
                 # A launcher may be invoked from the repository root instead

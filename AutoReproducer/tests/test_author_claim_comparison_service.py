@@ -13,6 +13,7 @@ from discovered_fixtures import PlannedLLM
 from src import discovered_repository_reproduction as service
 from src.discovered_repository_runtime import CAPTURE_DIR
 from src.method_adapters import digest, read_json
+from src.result_conclusion import build_reproduction_conclusion
 from test_discovered_repository_service import (
     cpu_dependency_cache, setup_service, use_preinstalled_cache,
 )
@@ -103,7 +104,7 @@ def assert_code_completed(result):
     assert validation['paper_metrics_verified'] is False and validation['is_reproduced'] is None
     assert result['data']['execution']['success'] is True
     assert validation['reviews_removed'] is True
-    assert '独立核验论文数值' in result['data']['report'] or '未进行论文数值审核' in result['data']['report']
+    assert build_reproduction_conclusion(result['data'])['summary'] in result['data']['report']
     return validation['author_claim_comparison']
 
 

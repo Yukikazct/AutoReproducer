@@ -14,10 +14,12 @@ from src.safety.paths import workspace_path
 
 _ENTRY = re.compile(r'^(?:train(?:ing)?|main|run|fit)(?:[_-].*)?\.py$', re.I)
 _CONFIG_SUFFIXES = {'.yaml', '.yml', '.json', '.toml', '.cfg'}
+_DOCUMENT_SUFFIXES = {'.md', '.rst', '.txt'}
+_PATH_MENTION_END = r'(?:(?![\w./-])|(?=\.(?:\s|$)))'
 
 
 def _mentioned(text, path):
-    return bool(re.search(r'(?<![\w./-])' + re.escape(path) + r'(?![\w./-])', text))
+    return bool(re.search(r'(?<![\w./-])' + re.escape(path) + _PATH_MENTION_END, text))
 
 
 def _mentioned_paths(text, paths):
@@ -42,7 +44,7 @@ class _PathMentionMatcher:
                 self.aliases.setdefault(basename, set()).update(names)
         tokens = sorted(self.aliases, key=lambda item: (-len(item), item))
         self.pattern = re.compile(r'(?<![\w./-])(?:' + '|'.join(re.escape(token) for token in tokens)
-                                  + r')(?![\w./-])') if tokens else None
+                                  + r')' + _PATH_MENTION_END) if tokens else None
         self.cache = {}
 
     def __call__(self, text):
@@ -68,7 +70,7 @@ class _PathMentionMatcher:
 
 
 def _local_readme_links(name, text, inventory):
-    """Resolve relative documentation links against real frozen files only."""
+    """Resolve local source and guide links against real frozen files only."""
     targets = []
     links = re.findall(r'\[[^\]\r\n]*\]\(([^\s)#]+)(?:#[^\s)]*)?(?:\s+[^)]*)?\)', text)
     for value in links:
@@ -91,10 +93,24 @@ def _source(packet, workspace, name, *, publish=True):
                         max_bytes=2 * 1024 * 1024)
 
 
+def _deferred_function(function):
+    """A direct call creates a coroutine/generator without running its body."""
+    if isinstance(function, ast.AsyncFunctionDef):
+        return True
+    pending = list(function.body)
+    while pending:
+        node = pending.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+            continue
+        if isinstance(node, (ast.Yield, ast.YieldFrom)):
+            return True
+        pending.extend(ast.iter_child_nodes(node))
+    return False
+
+
 def _reachable(tree, defaults=()):
     """Walk executed module statements and local functions they actually call."""
     functions = {node.name: node for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
-    pending = [node for node in tree.body if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))]
     visited, result = set(), []
     values = {item['dest']: item['value'] for item in defaults}
     namespaces = {node.targets[0].id for node in ast.walk(tree) if isinstance(node, ast.Assign)
@@ -122,33 +138,86 @@ def _reachable(tree, defaults=()):
                     return left != right
         return unknown
 
+    def block(statements):
+        # A lexical block cannot execute statements after an unconditional
+        # transfer of control. Do not let a dead fit/backward call establish a
+        # runnable training invocation.
+        selected = []
+        for statement in statements:
+            selected.append(statement)
+            if isinstance(statement, (ast.Return, ast.Raise, ast.Break, ast.Continue)):
+                break
+        return selected
+
+    def children(node):
+        for _, value in ast.iter_fields(node):
+            if isinstance(value, list):
+                values = block(value) if value and all(isinstance(item, ast.stmt) for item in value) else value
+                yield from (item for item in values if isinstance(item, ast.AST))
+            elif isinstance(value, ast.AST):
+                yield value
+
+    pending = block(tree.body)
     while pending:
         node = pending.pop()
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             continue
         result.append(node)
+        if isinstance(node, ast.Lambda):
+            # Constructing a lambda evaluates its defaults, not its body. A
+            # possible later call needs source reasoning, never an automatic
+            # command selected from the deferred body alone.
+            pending.extend(node.args.defaults)
+            pending.extend(item for item in node.args.kw_defaults if item is not None)
+            continue
+        if isinstance(node, ast.GeneratorExp):
+            # Only the outer iterator expression is evaluated at construction;
+            # element expressions and subsequent generators remain deferred.
+            pending.append(node.generators[0].iter)
+            continue
         if isinstance(node, (ast.If, ast.While)):
             condition = literal(node.test)
             # Unknown control flow is model navigation evidence, not proof that
             # a default invocation reaches training. Resolve only static branches.
             if condition is not unknown:
-                pending.extend(node.body if condition else node.orelse)
+                pending.extend(block(node.body if condition else node.orelse))
             continue
+        if isinstance(node, ast.For):
+            try:
+                iterable = ast.literal_eval(node.iter)
+            except (ValueError, TypeError, SyntaxError, MemoryError, RecursionError):
+                iterable = unknown
+            if isinstance(iterable, (list, tuple, set, dict, str, bytes)) and not iterable:
+                pending.append(node.iter)
+                pending.extend(block(node.orelse))
+                continue
+        if isinstance(node, (ast.ListComp, ast.SetComp, ast.DictComp)):
+            try:
+                iterable = ast.literal_eval(node.generators[0].iter)
+            except (ValueError, TypeError, SyntaxError, MemoryError, RecursionError):
+                iterable = unknown
+            if isinstance(iterable, (list, tuple, set, dict, str, bytes)) and not iterable:
+                pending.append(node.generators[0].iter)
+                continue
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
             function = functions.get(node.func.id)
-            if function and function.name not in visited:
+            if function and function.name not in visited and not _deferred_function(function):
                 visited.add(function.name)
-                pending.extend(function.body)
-        pending.extend(ast.iter_child_nodes(node))
+                pending.extend(block(function.body))
+        pending.extend(children(node))
     return result
 
 
 def _training_evidence(tree, text, defaults=()):
     result = []
+    deferred = {node.name for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and _deferred_function(node)}
     for node in _reachable(tree, defaults):
         if not isinstance(node, ast.Call):
             continue
         function = node.func
+        if isinstance(function, ast.Name) and function.id in deferred:
+            continue
         name = function.id if isinstance(function, ast.Name) else function.attr if isinstance(function, ast.Attribute) else ''
         if name in {'backward', 'fit', 'fit_generator', 'train', 'training', 'train_model', 'train_and_eval'}:
             # model.train() only changes module mode; it does not prove training.
@@ -268,6 +337,12 @@ def discover_author_commands(packet, workspace, *, max_files=24, max_bytes=1024 
         size = inventory[name].get('bytes', 0)
         if size > 100000 or consumed + size > max_bytes:
             continue
+        if not Path(name).name.lower().startswith('readme') and name not in packet['repository']['files']:
+            files = packet['repository']['files']
+            limits = packet['limits']
+            if (len(files) >= limits['source_files'] or
+                    sum(item.get('bytes', 0) for item in files.values()) + size > limits['source_bytes']):
+                continue
         try:
             source = _source(packet, workspace, name)
         except (ValueError, OSError, UnicodeError):
@@ -276,10 +351,17 @@ def discover_author_commands(packet, workspace, *, max_files=24, max_bytes=1024 
         consumed += size
         links = _local_readme_links(name, source['text'], inventory)
         linked_paths.update(links)
-        linked_readmes = [path for path in links if path in inventory
-                          and Path(path).name.lower().startswith('readme')]
-        # Follow root documentation before unrelated nested project READMEs.
-        pending = linked_readmes + pending
+        linked_documents = []
+        for path in links:
+            if path not in inventory:
+                continue
+            is_readme = Path(path).name.lower().startswith('readme')
+            if not is_readme and Path(path).suffix.lower() not in _DOCUMENT_SUFFIXES:
+                continue
+            linked_documents.append(path)
+        # Follow explicitly linked guides before unrelated project READMEs;
+        # the same document count, byte limit and visited set bound traversal.
+        pending = linked_documents + pending
     prose = '\n'.join(source['text'] for _, source in readmes)
     mention_paths = _PathMentionMatcher(inventory)
     mentioned = mention_paths(prose)
@@ -404,6 +486,7 @@ def discover_author_commands(packet, workspace, *, max_files=24, max_bytes=1024 
     candidates.sort(key=lambda item: (-item['selection_score'], item['source_path']))
     review_candidates.sort(key=lambda item: (-item['selection_score'], item['source_path']))
     return {'candidates': candidates[:8], 'review_candidates': review_candidates[:8],
+            'documentation_sources': [name for name, _ in readmes],
             'files_examined': min(len(names), max_files),
             'bytes_examined': consumed, 'failures': failures[:8]}
 
