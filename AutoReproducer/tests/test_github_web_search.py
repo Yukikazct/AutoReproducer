@@ -61,7 +61,7 @@ def test_successful_api_does_not_request_public_page(monkeypatch):
         {'full_name': 'a/Example-MLP', 'description': 'Example MLP', 'stargazers_count': 1}]}, ''))
     page = Mock(side_effect=AssertionError('unnecessary fallback'))
     monkeypatch.setattr(web, 'search_repository_page', page)
-    assert rd._search_github('Example MLP')[0][0].source == 'github_search'
+    assert rd._search_github('Example MLP')[0][0].source == 'github_search_readme'
     page.assert_not_called()
 
 

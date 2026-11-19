@@ -87,6 +87,8 @@ class RepoCandidate:
     stars: int = 0
     paper_id: str = ""
     evidence_url: str = ""
+    search_query: str = ""
+    search_rank: int = 0
 
     def to_dict(self) -> Dict:
         payload = {
@@ -94,7 +96,8 @@ class RepoCandidate:
             "source": self.source,
             "score_hint": self.score_hint,
         }
-        for key in ("title", "repo_name", "description", "stars", "paper_id", "evidence_url"):
+        for key in ("title", "repo_name", "description", "stars", "paper_id", "evidence_url",
+                    "search_query", "search_rank"):
             value = getattr(self, key)
             if value:
                 payload[key] = value
@@ -127,6 +130,23 @@ def is_trusted_repo_candidate(query: str, candidate: RepoCandidate) -> bool:
     if candidate.source == "user_preference" \
             or candidate.source == "curated_fallback":
         return True
+    if candidate.source == 'github_search_readme':
+        # An observed exact-title README result can be relevant even when its
+        # abbreviated repository name and absent description contain no title
+        # tokens. This establishes a search candidate, never author identity.
+        expected = build_github_readme_query(query)
+        try:
+            parsed = urllib.parse.urlsplit(candidate.evidence_url)
+            parameters = urllib.parse.parse_qs(parsed.query)
+        except (TypeError, ValueError):
+            return False
+        return bool(expected and candidate.search_query == expected
+            and parsed.scheme == 'https' and parsed.netloc == 'api.github.com'
+            and parsed.path == '/search/repositories'
+            and parameters.get('q') == [expected]
+            and not {'sort', 'order'} & parameters.keys()
+            and type(candidate.search_rank) is int and 1 <= candidate.search_rank <= 100
+            and candidate.repo_urls)
     lower_query = clean_paper_title(query).lower()
     lower_text = candidate_search_text(candidate).lower()
     if not lower_query or not lower_text:
@@ -264,6 +284,15 @@ def build_github_fallback_queries(title: str) -> List[str]:
     return queries[:4]
 
 
+def build_github_readme_query(title: str) -> str:
+    """Quote a complete multiword title as one literal README search phrase."""
+    title = normalize_search_query(title)
+    if not title or len(title.split()) < 2 or ARXIV_ID_RE.fullmatch(title):
+        return ''
+    title = title.replace('\\', '\\\\').replace('"', '\\"')
+    return '"' + title + '" in:readme'
+
+
 # ---------------- 网络调用（尽力而为） ----------------
 
 def _http_json(url: str, timeout: float, headers: Optional[Dict] = None):
@@ -292,11 +321,15 @@ def _search_pwc(query: str, limit: int = 5,
         return [], err or "search failed"
     items = [] if not isinstance(data, list) else data[:limit]
     candidates: List[RepoCandidate] = []
+    arxiv_query = query.strip() if ARXIV_ID_RE.fullmatch(query.strip()) else ''
     for item in items:
         paper = (item or {}).get("paper", {}) or {}
         paper_id = str(paper.get("id", "")).strip()
         title = str(paper.get("title", "")).strip()
         if not paper_id:
+            continue
+        if arxiv_query and (not ARXIV_ID_RE.fullmatch(paper_id)
+                            or paper_id.split('v', 1)[0] != arxiv_query.split('v', 1)[0]):
             continue
         info, _err = _http_json(
             f"{base}/api/papers/{urllib.parse.quote(paper_id)}", timeout)
@@ -320,34 +353,78 @@ def _search_github(query: str, limit: int = 5,
     headers = {"Accept": "application/vnd.github+json"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
+    errors = []
+    exact_query = build_github_readme_query(query)
+    if exact_query:
+        # Default GitHub relevance order searches README text, unlike the
+        # broad star-sorted metadata query. Preserve the observed result rank.
+        exact_url = 'https://api.github.com/search/repositories?' + urllib.parse.urlencode(
+            {'q': exact_query, 'per_page': limit})
+        exact_data, exact_error = _http_json(exact_url, timeout, headers)
+        items = exact_data.get('items') if isinstance(exact_data, dict) else None
+        exact_candidates = []
+        if not exact_error and isinstance(items, list):
+            seen = set()
+            for rank, repo in enumerate(items[:limit], 1):
+                if not isinstance(repo, dict) or repo.get('private') is True:
+                    continue
+                full_name = repo.get('full_name')
+                if (not isinstance(full_name, str)
+                        or not re.fullmatch(r'[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}', full_name)
+                        or any(part in {'.', '..'} for part in full_name.split('/'))
+                        or full_name.casefold() in seen):
+                    continue
+                seen.add(full_name.casefold())
+                stars = repo.get('stargazers_count')
+                exact_candidates.append(RepoCandidate(
+                    title=full_name.split('/')[1], repo_name=full_name,
+                    description=repo.get('description') if isinstance(repo.get('description'), str) else '',
+                    repo_urls=['https://github.com/' + full_name], source='github_search_readme',
+                    stars=stars if type(stars) is int and stars >= 0 else 0,
+                    score_hint=1000 - rank, evidence_url=exact_url,
+                    search_query=exact_query, search_rank=rank))
+        if exact_candidates:
+            return exact_candidates, ''
+        if exact_error:
+            errors.append('Exact-title README search: ' + exact_error)
     data, err = _http_json(
         "https://api.github.com/search/repositories"
         f"?q={urllib.parse.quote(query)}&sort=stars&order=desc"
         f"&per_page={limit}",
         timeout, headers)
-    if err or data is None or not (isinstance(data, dict) and data.get('items')):
+    repos = data.get('items') if isinstance(data, dict) else None
+    if err or not isinstance(repos, list) or not repos:
         candidates, web_error = _search_github_web(query, limit=limit, timeout=timeout)
-        return candidates, ' | '.join(filter(None, [err, web_error]))
-    repos = data.get("items", []) if isinstance(data, dict) else []
+        return candidates, ' | '.join(filter(None, [*errors, err, web_error]))
     candidates: List[RepoCandidate] = []
     for repo in repos[:limit]:
-        full_name = str(repo.get("full_name", "") or "")
-        url = f"https://github.com/{full_name}" if full_name else ""
-        if not url:
+        if not isinstance(repo, dict) or repo.get('private') is True:
             continue
+        full_name = repo.get('full_name')
+        if (not isinstance(full_name, str)
+                or not re.fullmatch(r'[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}', full_name)
+                or any(part in {'.', '..'} for part in full_name.split('/'))):
+            continue
+        url = 'https://github.com/' + full_name
+        name = repo.get('name')
+        description = repo.get('description')
+        description = description if isinstance(description, str) else ''
+        stars = repo.get('stargazers_count')
+        stars = stars if type(stars) is int and stars >= 0 else 0
         candidates.append(RepoCandidate(
-            title=str(repo.get("name", "") or ""),
+            title=name if isinstance(name, str) else full_name.split('/')[1],
             repo_name=full_name,
-            description=str(repo.get("description", "") or ""),
+            description=description,
             repo_urls=[url],
             source="github_search",
-            stars=int(repo.get("stargazers_count") or 0),
-            score_hint=github_repo_search_score(
-                query, full_name,
-                str(repo.get("description", "") or ""),
-                int(repo.get("stargazers_count") or 0)),
+            stars=stars,
+            score_hint=github_repo_search_score(query, full_name, description, stars),
         ))
-    return candidates, ""
+    if not candidates:
+        candidates, web_error = _search_github_web(query, limit=limit, timeout=timeout)
+        return candidates, ' | '.join(filter(None, [*errors,
+            'GitHub API returned no valid repository entries', web_error]))
+    return candidates, ' | '.join(errors)
 
 
 def _search_github_web(query, limit=5, timeout=8.0):
@@ -385,12 +462,14 @@ def discover_repositories(query: str,
                           preferred_url: str = "",
                           max_results: int = 8,
                           timeout: float = 8.0,
-                          offline: bool = False) -> Dict:
+                          offline: bool = False,
+                          *, paper_title: str = "") -> Dict:
     """确定性仓库发现链主入口（无 LLM）。返回结构化结果。
 
     链：用户URL（最高优先，直接采用） -> PwC -> GitHub 搜索 ->
     curated 回退。前一层有可用候选（带 URL）即停。严格信任筛选：
     非 arxiv id 查询时，只有可信匹配（词面重合）的候选才能被选为主仓库。
+    同时有 arXiv 编号和标题时，论文索引用编号，GitHub 回退用标题。
     offline=True 时跳过 PwC/GitHub 网络层（模拟模式/断网演示），
     仅用户 URL 与 curated 回退可用。
     """
@@ -429,15 +508,18 @@ def discover_repositories(query: str,
         candidates.extend(pwc_candidates)
 
     # 3. GitHub 搜索回退（PwC 无有效 URL 时）
+    selection_query = query
     if not any(c.repo_urls for c in candidates):
+        if ARXIV_ID_RE.fullmatch(query.strip()) and isinstance(paper_title, str):
+            selection_query = normalize_search_query(paper_title) or query
         chain.append("github_search")
         if offline:
             gh_error = "offline: github_search skipped"
         else:
-            gh_candidates, gh_error = _search_github(
-                build_github_fallback_queries(query)[0] or query,
-                timeout=timeout)
+            gh_candidates, gh_error = _search_github(clean_paper_title(selection_query), timeout=timeout)
             if gh_candidates:
+                if any(candidate.source == 'github_search_readme' for candidate in gh_candidates):
+                    chain.append('github_search_readme')
                 if any(candidate.source == 'github_search_web' for candidate in gh_candidates):
                     chain.append('github_search_web')
                 fallback_used = True
@@ -447,17 +529,19 @@ def discover_repositories(query: str,
     if not any(c.repo_urls for c in candidates):
         chain.append("curated_fallback")
         curated = curated_repo_fallback_candidates(query)
+        if not curated and selection_query != query:
+            curated = curated_repo_fallback_candidates(selection_query)
         if curated:
             fallback_used = True
             candidates.extend(curated)
 
     # 排序与选择：非 arxiv id 查询用可信匹配筛选，否则取分数最高
     candidates.sort(key=lambda c: c.score_hint, reverse=True)
-    strict_trusted = ARXIV_ID_RE.search(query) is None
+    strict_trusted = ARXIV_ID_RE.fullmatch(selection_query.strip()) is None
     if strict_trusted:
         selected = next(
             (c.repo_urls[0] for c in candidates
-             if c.repo_urls and is_trusted_repo_candidate(query, c)),
+             if c.repo_urls and is_trusted_repo_candidate(selection_query, c)),
             "")
     else:
         selected = next((c.repo_urls[0] for c in candidates

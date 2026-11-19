@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_on": "2026-11-01",
+  "updated_on": "2026-11-19",
   "policy": "Paper identity spans aliases and PDF versions. Trial outcomes never imply independent numerical verification.",
   "papers": [
     {
@@ -1952,6 +1952,27 @@
           "source_audit_evidence": ".tmp/p1_dropgnn_runtime_source_audit_20261101/receipt.json",
           "run_evidence": "data/recovery/684f2d79e4204f32a95b95196ce278c0/runs/repository_11a0d08dcf2942c09a69a81917ec961c/result.json",
           "note": "Real PDF discovery and AI planning retained the original README LCC argv/cwd and default ten seeds x 1000 epochs. CPU author training naturally returned exit 0 after 145 seconds with 10000 observed optimizer updates; all nine original author files and 212 frozen product files remained unchanged. Original stdout retained Test Mean 0.9100000262260437 and Test Std 0.1147192046046257, but these bare aggregate labels were not extracted by the frozen metric parser; registered Train/Test Acc 1.0 came only from the final seed. Two AI pairing attempts failed with Quoted method row does not match the requested method variant; comparison remained unavailable and paper_metrics_verified=false, is_reproduced=null. Cleanup audit passed all 18 checks with released status, no errors or remaining dependency/training environments. This is author-command completion with failed automated comparison, not independent numerical reproduction."
+        }
+      ]
+    },
+    {
+      "id": "empirical-evaluation-generic-convolutional-recurrent-sequence-modeling-tcn",
+      "title": "An Empirical Evaluation of Generic Convolutional and Recurrent Networks for Sequence Modeling",
+      "aliases": ["TCN"],
+      "source_ids": ["arxiv:1803.01271v2"],
+      "pdf_sha256": ["f7e5df08b234f1c395ff4f7b3597b28f170fc9d70af388be5b645bfc4456f42b"],
+      "repository_url": "https://github.com/locuslab/TCN",
+      "repository_revision": "2f8c2b817050206397458dfd1f5a25ce8a32fe65",
+      "status": "regression",
+      "retirement_reason": "This paper exposed and verified the nested README working directory repair for #74; it is not an unused independent candidate.",
+      "history": [
+        {
+          "outcome": "nested_readme_plans_resolved_browser_interrupted_author_gpu_completed",
+          "recorded_at": "2026-11-19T19:06:00+08:00",
+          "source_sha256": "49423bd21b8eec4a553648b14af57126dcf80d235f1acfc039421f144900ea50",
+          "evidence": "docs/issue74_tcn_20261119.md",
+          "run_id": "repository_070402b439b04ed1935cf9d9ab859a34",
+          "note": "Three unchanged nested README commands now resolve against pinned source. Real PDF/DeepSeek browser run entered original TCN Adding Problem T=600 training on CPU because --cuda disables CUDA; interrupted and released. Separate manual original CUDA command completed 10 epochs (exit 0), final test MSE 0.000044 versus 0.000058 reference, outside the two-sided 5% band; no independent numerical verification or complete browser delivery."
         }
       ]
     }
