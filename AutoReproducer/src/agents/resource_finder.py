@@ -82,7 +82,7 @@ class ResourceFinderAgent(BaseAgent):
         preferred = user_repo or (paper_link["url"] if paper_link else "")
         selection_evidence = next((link for link in repository_links if link["url"] == preferred), None)
         discovery = discover_repositories(
-            query, preferred_url=preferred,
+            query, preferred_url=preferred, paper_title=paper_info.get("title") or "",
             timeout=_int_env("PWC_HTTP_TIMEOUT", 8),
             offline=self.offline)
         selected = discovery.get("selected_repo", "")
