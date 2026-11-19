@@ -12,7 +12,6 @@ from src.discovered_repository_plan import (
     _json_response, _load_execution_source, _planning_excerpts, _planning_view, _requirements, _steps,
 )
 from src.method_adapters import digest, read_json, write_json
-from src.safety.paths import workspace_path
 
 
 SCOPE = 'author_code_execution'
@@ -503,6 +502,25 @@ def _packaging_invocation(argv):
     return Path(argv[position]).name.lower() == 'setup.py'
 
 
+def _command_document_cwd(name, argv, packet, workspace):
+    from src.author_entrypoints import resolve_entrypoint
+
+    parent = Path(name).parent.as_posix()
+    matches = []
+    for directory in dict.fromkeys((parent, '.')):
+        try:
+            resolve_entrypoint({'argv': argv, 'cwd': directory}, packet, workspace)
+        except (ValueError, OSError):
+            continue
+        matches.append(directory)
+    if len(matches) > 1 and not name.endswith('.sh'):
+        raise PlanEvidenceError(f'Author command in {name!r} resolves under both the document directory '
+                                'and repository root; an explicit working directory is required')
+    if matches:
+        return matches[0]
+    return parent if name.endswith('.sh') else '.'
+
+
 def _has_documented_experiment(text):
     prefixes = re.finditer(r'\bpython3?\s+(?:-u\s+)?(?:-m\s+[^\s`]+|[^\s`]+\.py)\b', text)
     for match in prefixes:
@@ -649,7 +667,7 @@ def plan_from_author_commands(packet, workspace, *, required_entrypoint=None,
             source = _load_execution_source(packet, workspace, name)
         except (ValueError, OSError, UnicodeError):
             continue
-        cwd = Path(name).parent.as_posix() if name.endswith('.sh') else '.'
+        cwd = None
         cwd_quote = None
         bindings, loop_choices = {}, {}
         for line in source['text'].replace('\\\r\n', ' ').replace('\\\n', ' ').splitlines():
@@ -694,16 +712,10 @@ def plan_from_author_commands(packet, workspace, *, required_entrypoint=None,
                     continue  # Unresolved shell templates need an actual planner.
                 if _packaging_invocation(argv):
                     continue  # Dependency setup cannot replace the original training step.
-                directory = workspace_path(workspace, cwd, 'author working directory',
-                                           must_exist=True, forbid_git=True)
-                # A launcher may be invoked from the repository root instead
-                # of its own directory. An explicit author cwd takes precedence.
-                if (cwd_quote is None and len(argv) > 1 and not (directory / argv[1]).is_file()
-                        and (Path(workspace) / argv[1]).is_file()):
-                    cwd = '.'
+                command_cwd = cwd if cwd is not None else _command_document_cwd(name, argv, packet, workspace)
                 if loop_choices:
                     from src.author_experiment_selection import select_dataset_loop_bindings
-                    bindings = select_dataset_loop_bindings(template, loop_choices, packet, workspace, cwd)
+                    bindings = select_dataset_loop_bindings(template, loop_choices, packet, workspace, command_cwd)
                     argv = [re.sub(r'\$(?:\{([A-Za-z_]\w*)\}|([A-Za-z_]\w*))',
                                    lambda match: bindings.get(match[1] or match[2], match[0]), arg)
                             for arg in template]
@@ -711,7 +723,7 @@ def plan_from_author_commands(packet, workspace, *, required_entrypoint=None,
                 proposal = {'version': 1, 'scope': SCOPE,
                     'repository': {key: packet['repository'][key] for key in ('url', 'revision')},
                     'device': 'cpu', 'datasets': [], 'requirements': {'author': list(dict.fromkeys(declarations))},
-                    'steps': [{'id': 'train', 'kind': 'train', 'argv': argv, 'cwd': cwd, 'timeout_s': None}]}
+                    'steps': [{'id': 'train', 'kind': 'train', 'argv': argv, 'cwd': command_cwd, 'timeout_s': None}]}
                 if required_entrypoint:
                     from src.author_entrypoints import resolve_entrypoint
                     entrypoint, _, arguments = resolve_entrypoint(proposal['steps'][0], packet, workspace)
@@ -728,6 +740,8 @@ def plan_from_author_commands(packet, workspace, *, required_entrypoint=None,
                                           'template_bindings': dict(bindings)}
                 if cwd_quote is not None:
                     plan['command_source']['cwd_quote'] = cwd_quote
+                elif command_cwd != '.' and name in documents:
+                    plan['command_source']['cwd_evidence'] = 'document_relative_entrypoint'
                 if ((packet.get('experiment_request') or {}).get('dataset')
                         and plan['experiment_selection']['dataset_status'] == 'unverified'):
                     if unverified is None:
